@@ -31,11 +31,20 @@ class Component:
     rotation: int
     """Clockwise rotation in degrees. Must be one of {0, 90, 180, 270}."""
 
-    labels: dict[str, str]
-    """label slot name → LaTeX string, e.g. {"l": "$R_1$"}."""
+    options: str
+    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$"."""
 
     mirror: bool = False
     """Horizontal mirror applied before rotation."""
+
+    label_offset: tuple[float, float] | None = None
+    """Position of the options label in component-local pixel coordinates.
+
+    ``None`` means the label has not been manually positioned; the canvas
+    places it automatically when options are first set (see §8.3).  Once the
+    user drags the label this is set to the chosen (dx, dy) offset and
+    persisted to the file.
+    """
 
 
 @dataclass
@@ -332,4 +341,24 @@ def wire_splits_at(
             if _point_strictly_on_segment(point, pts[i], pts[i + 1]):
                 out.append((wire.id, i + 1))
                 break       # at most one split per wire per point
+    return out
+
+
+def wire_corner_splits_at(
+    schematic: "Schematic", point: tuple[float, float]
+) -> list[tuple[str, int]]:
+    """Find wires that have *point* as an intermediate (corner) vertex.
+
+    Returns ``(wire_id, vertex_index)`` for each wire whose point list
+    contains *point* at an interior position (not the first or last vertex).
+    Used to split L-shaped wires at their elbow when a new wire connects to
+    that corner.
+    """
+    out: list[tuple[str, int]] = []
+    for wire in schematic.wires:
+        pts = wire.points
+        for i in range(1, len(pts) - 1):   # skip endpoints
+            if pts[i] == point:
+                out.append((wire.id, i))
+                break   # at most one interior match per wire
     return out

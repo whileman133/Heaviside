@@ -10,14 +10,17 @@ the model.
 
 Command set and inverses (spec §6.6):
 
-    | Command        | Inverse                                          |
-    | -------------- | ------------------------------------------------ |
-    | PlaceCommand   | Remove component                                 |
-    | DeleteCommand  | Restore component(s) and connected wires         |
-    | MoveCommand    | Move back to original position                   |
-    | WireCommand    | Remove wire                                       |
-    | EditCommand    | Restore previous label values                    |
-    | MacroCommand   | Composite of the above (undone in reverse order) |
+    | Command          | Inverse                                          |
+    | ---------------- | ------------------------------------------------ |
+    | PlaceCommand     | Remove component                                 |
+    | DeleteCommand    | Restore component(s) and connected wires         |
+    | MoveCommand      | Move back to original position                   |
+    | WireCommand      | Remove wire                                      |
+    | SplitWireCommand | Restore original wire (remove two halves)        |
+    | MergeWireCommand | Split merged wire back into two originals        |
+    | EditCommand            | Restore previous options string                  |
+    | MoveOptionsLabelCommand| Restore previous label_offset                    |
+    | MacroCommand           | Composite of the above (undone in reverse order) |
 
 Each command exposes ``do(schematic)`` and ``undo(schematic)``. A command must
 be idempotent with respect to repeated do/undo cycles: ``do`` then ``undo``
@@ -30,6 +33,7 @@ model cannot corrupt the undo history.
 from __future__ import annotations
 
 import copy
+import uuid
 from abc import ABC, abstractmethod
 
 from app.schematic.model import (
@@ -48,8 +52,10 @@ __all__ = [
     "MoveCommand",
     "MoveWireVertexCommand",
     "SplitWireCommand",
+    "MergeWireCommand",
     "WireCommand",
     "EditCommand",
+    "MoveOptionsLabelCommand",
     "RotateCommand",
     "MirrorCommand",
     "MacroCommand",
@@ -317,9 +323,13 @@ class MoveCommand(Command):
         self,
         component_ids: list[str],
         delta: tuple[float, float],
+        wire_ids: list[str] | None = None,
     ) -> None:
         self._component_ids = list(component_ids)
         self._dx, self._dy = delta
+        # Wires that are explicitly selected for rigid translation (in addition
+        # to the wires that follow via pin connectivity).
+        self._explicit_wire_ids: frozenset[str] = frozenset(wire_ids or [])
         # wire id -> original points, captured at first do() for exact undo.
         self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
         # wire ids that were removed because they collapsed; restored on undo.
@@ -351,12 +361,20 @@ class MoveCommand(Command):
     def _reshape_wires(self, schematic: Schematic) -> None:
         """Drag connected endpoints by the delta, inserting elbows as needed.
 
+        When every component in the schematic is being moved (select-all drag)
+        every wire translates rigidly so free endpoints (open-circle nodes)
+        move with the rest of the circuit.  Otherwise only endpoints that sit on
+        a moving pin are shifted; free endpoints stay anchored.
+
         Wires that collapse to a single point (both endpoints moved to the same
         coordinate) are removed from the schematic. Their original points are
         still captured so undo can restore them.
         """
+        all_dragged = (
+            set(self._component_ids) >= {c.id for c in schematic.components}
+        )
         pins = self._connected_pin_set(schematic)
-        if not pins:
+        if not pins and not all_dragged and not self._explicit_wire_ids:
             return
         to_remove: list[str] = []
         for wire in schematic.wires:
@@ -364,10 +382,13 @@ class MoveCommand(Command):
             if len(pts) < 2:
                 continue
 
-            start_hit = pts[0] in pins
-            end_hit = pts[-1] in pins
-            if not start_hit and not end_hit:
-                continue
+            if all_dragged or wire.id in self._explicit_wire_ids:
+                start_hit = end_hit = True
+            else:
+                start_hit = pts[0] in pins
+                end_hit = pts[-1] in pins
+                if not start_hit and not end_hit:
+                    continue
 
             # Capture the pristine path once, for undo.
             if wire.id not in self._orig_wire_points:
@@ -445,15 +466,15 @@ class WireCommand(Command):
 
 
 class SplitWireCommand(Command):
-    """Insert a vertex into an existing wire, splitting one of its segments.
+    """Split an existing wire into two at a mid-segment point.
 
     Used when a new wire connects to the middle of an existing wire's segment:
-    the existing wire gains an explicit vertex at the connection point so the
-    junction is real topology (and the junction-dot detector, which counts
-    vertices, registers it). Pairs with a :class:`WireCommand` inside a
-    :class:`MacroCommand` so the split + add is one undoable action.
+    the existing wire is replaced by two new wires that meet at the connection
+    point, so each half is independently selectable and deletable.  Pairs with
+    a :class:`WireCommand` inside a :class:`MacroCommand` so the split + add is
+    one undoable action.
 
-    Inverse: restore the wire's exact original point list.
+    Inverse: remove the two halves and restore the original wire.
     """
 
     label = "Split wire"
@@ -463,36 +484,132 @@ class SplitWireCommand(Command):
         wire_id: str,
         index: int,
         point: tuple[float, float],
+        new_id1: str | None = None,
+        new_id2: str | None = None,
     ) -> None:
         self._wire_id = wire_id
         self._index = index
         self._point = point
+        self._new_id1 = new_id1 or str(uuid.uuid4())
+        self._new_id2 = new_id2 or str(uuid.uuid4())
         self._orig_points: list[tuple[float, float]] | None = None
+        self._orig_index: int | None = None   # position in schematic.wires
 
-    def _find_wire(self, schematic: Schematic) -> Wire | None:
-        for w in schematic.wires:
-            if w.id == self._wire_id:
-                return w
+    def _find(self, schematic: Schematic, wire_id: str) -> tuple[int, Wire] | None:
+        for i, w in enumerate(schematic.wires):
+            if w.id == wire_id:
+                return i, w
         return None
 
     def do(self, schematic: Schematic) -> None:
-        wire = self._find_wire(schematic)
-        if wire is None:
+        result = self._find(schematic, self._wire_id)
+        if result is None:
             return
+        pos, wire = result
         if self._orig_points is None:
             self._orig_points = list(wire.points)
-        # Guard: don't insert a duplicate vertex if the point is already there.
-        if self._point in wire.points:
-            return
+            self._orig_index = pos
         pts = list(self._orig_points)
         idx = max(0, min(self._index, len(pts)))
-        pts.insert(idx, self._point)
-        wire.points = pts
+        if 0 < idx < len(pts) and pts[idx] == self._point:
+            # Point is already the intermediate vertex at idx (corner split):
+            # split without inserting a duplicate.
+            split_pts = pts
+        elif self._point in pts:
+            # Point coincides with an endpoint — nothing to split.
+            return
+        else:
+            # Normal mid-segment case: insert the new vertex.
+            split_pts = pts[:idx] + [self._point] + pts[idx:]
+        half1 = Wire(id=self._new_id1, points=split_pts[:idx + 1])
+        half2 = Wire(id=self._new_id2, points=split_pts[idx:])
+        schematic.wires[pos:pos + 1] = [half1, half2]
 
     def undo(self, schematic: Schematic) -> None:
-        wire = self._find_wire(schematic)
-        if wire is not None and self._orig_points is not None:
-            wire.points = list(self._orig_points)
+        if self._orig_points is None:
+            return
+        # Remove both halves (they may be anywhere in the list now).
+        new_ids = {self._new_id1, self._new_id2}
+        pos = next(
+            (i for i, w in enumerate(schematic.wires) if w.id in new_ids),
+            None,
+        )
+        schematic.wires[:] = [w for w in schematic.wires if w.id not in new_ids]
+        orig = Wire(id=self._wire_id, points=list(self._orig_points))
+        insert_at = pos if pos is not None else self._orig_index or 0
+        insert_at = min(insert_at, len(schematic.wires))
+        schematic.wires.insert(insert_at, orig)
+
+
+class MergeWireCommand(Command):
+    """Merge two wires that share a free endpoint into one wire.
+
+    Used when deleting a wire dissolves a T-junction, leaving two wire stubs
+    whose shared endpoint has degree 2 (no component pin, no third wire).
+    Bundled after a :class:`DeleteCommand` inside a :class:`MacroCommand` so
+    the delete + merge is one undoable action.
+
+    Inverse: split the merged wire back into the two originals.
+    """
+
+    label = "Merge wires"
+
+    def __init__(
+        self,
+        wire_id1: str,
+        wire_id2: str,
+        merge_point: tuple[float, float],
+        new_id: str | None = None,
+    ) -> None:
+        self._wire_id1 = wire_id1
+        self._wire_id2 = wire_id2
+        self._merge_point = merge_point
+        self._new_id = new_id or str(uuid.uuid4())
+        self._orig_pts1: list[tuple[float, float]] | None = None
+        self._orig_pts2: list[tuple[float, float]] | None = None
+        self._orig_index: int | None = None
+
+    def _find(self, schematic: Schematic, wire_id: str) -> tuple[int, Wire] | None:
+        for i, w in enumerate(schematic.wires):
+            if w.id == wire_id:
+                return i, w
+        return None
+
+    def do(self, schematic: Schematic) -> None:
+        r1 = self._find(schematic, self._wire_id1)
+        r2 = self._find(schematic, self._wire_id2)
+        if r1 is None or r2 is None:
+            return
+        pos1, w1 = r1
+        _,   w2 = r2
+        if self._orig_pts1 is None:
+            self._orig_pts1 = list(w1.points)
+            self._orig_pts2 = list(w2.points)
+            self._orig_index = pos1
+        p = self._merge_point
+        # Orient w1 so that p is its last point.
+        pts1 = list(w1.points) if w1.points[-1] == p else list(reversed(w1.points))
+        # Orient w2 so that p is its first point.
+        pts2 = list(w2.points) if w2.points[0] == p else list(reversed(w2.points))
+        merged_pts = simplify_points(pts1 + pts2[1:])
+        merged = Wire(id=self._new_id, points=merged_pts)
+        # Remove both originals and insert the merged wire where w1 was.
+        old_ids = {self._wire_id1, self._wire_id2}
+        schematic.wires[:] = [w for w in schematic.wires if w.id not in old_ids]
+        insert_at = min(pos1, len(schematic.wires))
+        schematic.wires.insert(insert_at, merged)
+
+    def undo(self, schematic: Schematic) -> None:
+        if self._orig_pts1 is None:
+            return
+        result = self._find(schematic, self._new_id)
+        pos = result[0] if result is not None else (self._orig_index or 0)
+        schematic.wires[:] = [w for w in schematic.wires if w.id != self._new_id]
+        w1 = Wire(id=self._wire_id1, points=list(self._orig_pts1))
+        w2 = Wire(id=self._wire_id2, points=list(self._orig_pts2))
+        insert_at = min(pos, len(schematic.wires))
+        schematic.wires.insert(insert_at, w1)
+        schematic.wires.insert(insert_at + 1, w2)
 
     def redo(self, schematic: Schematic) -> None:
         self.do(schematic)
@@ -587,10 +704,9 @@ class MoveWireVertexCommand(Command):
 
 
 class EditCommand(Command):
-    """Replace the label dict of a single component.
+    """Replace the options string of a single component.
 
-    Inverse: restore the previous label dict. Both old and new label maps are
-    deep-copied so external mutation cannot corrupt the history.
+    Inverse: restore the previous options string.
     """
 
     label = "Edit"
@@ -598,26 +714,54 @@ class EditCommand(Command):
     def __init__(
         self,
         component_id: str,
-        new_labels: dict[str, str],
-        old_labels: dict[str, str] | None = None,
+        new_options: str,
+        old_options: str | None = None,
     ) -> None:
         self._component_id = component_id
-        self._new_labels = copy.deepcopy(new_labels)
-        # If old_labels is not supplied, it is captured on first do().
-        self._old_labels: dict[str, str] | None = (
-            copy.deepcopy(old_labels) if old_labels is not None else None
-        )
+        self._new_options = new_options
+        # If old_options is not supplied, it is captured on first do().
+        self._old_options: str | None = old_options
 
     def do(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        if self._old_labels is None:
-            self._old_labels = copy.deepcopy(comp.labels)
-        comp.labels = copy.deepcopy(self._new_labels)
+        if self._old_options is None:
+            self._old_options = comp.options
+        comp.options = self._new_options
 
     def undo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        # _old_labels is guaranteed set after do(); guard for safety.
-        comp.labels = copy.deepcopy(self._old_labels or {})
+        comp.options = self._old_options or ""
+
+
+class MoveOptionsLabelCommand(Command):
+    """Set (or clear) the label_offset of a single component's options label.
+
+    Inverse: restore the previous label_offset value.
+    """
+
+    label = "Move Label"
+
+    # Sentinel distinguishing "old value not yet captured" from explicit None.
+    _UNSET: tuple[()] = ()
+
+    def __init__(
+        self,
+        component_id: str,
+        new_offset: tuple[float, float] | None,
+    ) -> None:
+        self._component_id = component_id
+        self._new_offset = new_offset
+        self._old_offset: object = self._UNSET
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._old_offset is self._UNSET:
+            self._old_offset = comp.label_offset
+        comp.label_offset = self._new_offset
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.label_offset = self._old_offset  # type: ignore[assignment]
 
 
 class RotateCommand(Command):

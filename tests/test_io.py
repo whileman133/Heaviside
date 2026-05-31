@@ -41,7 +41,7 @@ def _one_of_each() -> Schematic:
                 kind=kind,
                 position=(float(i * 3), 0.0),
                 rotation=0,
-                labels={slot: f"$X_{{{i}}}$" for slot in defn.label_slots[:1]},
+                options=f"l=$X_{{{i}}}$",
                 mirror=False,
             )
         )
@@ -59,22 +59,18 @@ def _schematic_with_wires() -> Schematic:
     )
 
 
-def _schematic_with_labels() -> Schematic:
-    """Labels containing LaTeX special characters."""
+def _schematic_with_options() -> Schematic:
+    """Options string containing LaTeX special characters."""
     return Schematic(
         version="0.1",
-        name="labels",
+        name="options",
         components=[
             Component(
                 id=_uid(),
                 kind="R",
                 position=(0.0, 0.0),
                 rotation=0,
-                labels={
-                    "l":  r"$\frac{R_2}{R_1}$",
-                    "v":  r"$V_{\mathrm{out}}$",
-                    "i":  r"$i_{\alpha} + i_{\beta}$",
-                },
+                options=r"l=$\frac{R_2}{R_1}$, v=$V_{\mathrm{out}}$, i=$i_{\alpha} + i_{\beta}$",
             )
         ],
     )
@@ -116,7 +112,7 @@ def test_roundtrip_components(tmp_path: Path) -> None:
         assert load_c.position == orig_c.position
         assert load_c.rotation == orig_c.rotation
         assert load_c.mirror   == orig_c.mirror
-        assert load_c.labels   == orig_c.labels
+        assert load_c.options  == orig_c.options
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +136,40 @@ def test_roundtrip_wires(tmp_path: Path) -> None:
 # test_roundtrip_labels
 # ---------------------------------------------------------------------------
 
-def test_roundtrip_labels(tmp_path: Path) -> None:
-    """Labels with LaTeX special characters survive a save/load cycle unchanged."""
-    original = _schematic_with_labels()
-    p = tmp_path / "labels.ctikz"
+def test_roundtrip_options(tmp_path: Path) -> None:
+    """Options string with LaTeX special characters survives a save/load cycle unchanged."""
+    original = _schematic_with_options()
+    p = tmp_path / "options.ctikz"
     save(original, p)
     loaded = load(p)
 
-    assert loaded.components[0].labels == original.components[0].labels
+    assert loaded.components[0].options == original.components[0].options
+
+
+def test_roundtrip_legacy_labels_migration(tmp_path: Path) -> None:
+    """Old files with a 'labels' dict are loaded and migrated to an options string."""
+    data = {
+        "version": "0.1",
+        "name": "legacy",
+        "components": [
+            {
+                "id": "abc",
+                "kind": "R",
+                "position": [0.0, 0.0],
+                "rotation": 0,
+                "mirror": False,
+                "labels": {"l": "$R_1$", "v": "$V$"},
+            }
+        ],
+        "wires": [],
+        "metadata": {},
+    }
+    p = tmp_path / "legacy.ctikz"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    loaded = load(p)
+    # Both slot=value pairs must appear in the migrated string.
+    assert "l=$R_1$" in loaded.components[0].options
+    assert "v=$V$" in loaded.components[0].options
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +255,7 @@ def test_save_creates_file(tmp_path: Path) -> None:
 
 def test_save_is_utf8(tmp_path: Path) -> None:
     """Saved .ctikz files are valid UTF-8 and contain no byte-order mark."""
-    schematic = _schematic_with_labels()  # contains non-ASCII-safe LaTeX
+    schematic = _schematic_with_options()  # contains non-ASCII-safe LaTeX
     p = tmp_path / "utf8.ctikz"
     save(schematic, p)
 
@@ -245,3 +267,91 @@ def test_save_is_utf8(tmp_path: Path) -> None:
     # Must be valid JSON
     parsed = json.loads(text)
     assert parsed["name"] == schematic.name
+
+
+# ---------------------------------------------------------------------------
+# label_offset round-trip
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_label_offset(tmp_path: Path) -> None:
+    """label_offset is serialised and restored correctly."""
+    comp = Component(
+        id=_uid(),
+        kind="R",
+        position=(0.0, 0.0),
+        rotation=0,
+        options="l=$R_1$",
+        label_offset=(12.5, -30.0),
+    )
+    original = Schematic(version="0.1", name="lo_test", components=[comp])
+    p = tmp_path / "lo.ctikz"
+    save(original, p)
+    loaded = load(p)
+
+    assert loaded.components[0].label_offset == (12.5, -30.0)
+
+
+def test_label_offset_none_not_serialised(tmp_path: Path) -> None:
+    """When label_offset is None the key is omitted from the JSON."""
+    comp = Component(
+        id=_uid(),
+        kind="R",
+        position=(0.0, 0.0),
+        rotation=0,
+        options="",
+        label_offset=None,
+    )
+    original = Schematic(version="0.1", name="lo_none", components=[comp])
+    p = tmp_path / "lo_none.ctikz"
+    save(original, p)
+    raw = json.loads(p.read_text())
+    assert "label_offset" not in raw["components"][0]
+
+
+def test_label_offset_missing_loads_as_none(tmp_path: Path) -> None:
+    """Old files without label_offset deserialise with label_offset=None."""
+    data = {
+        "version": "0.1",
+        "name": "old",
+        "components": [
+            {
+                "id": _uid(),
+                "kind": "R",
+                "position": [0.0, 0.0],
+                "rotation": 0,
+                "mirror": False,
+                "options": "",
+            }
+        ],
+        "wires": [],
+        "metadata": {},
+    }
+    p = tmp_path / "old.ctikz"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    loaded = load(p)
+    assert loaded.components[0].label_offset is None
+
+
+def test_label_offset_bad_type_raises(tmp_path: Path) -> None:
+    """label_offset with wrong type raises SchematicLoadError."""
+    data = {
+        "version": "0.1",
+        "name": "bad",
+        "components": [
+            {
+                "id": _uid(),
+                "kind": "R",
+                "position": [0.0, 0.0],
+                "rotation": 0,
+                "mirror": False,
+                "options": "",
+                "label_offset": "not_a_list",
+            }
+        ],
+        "wires": [],
+        "metadata": {},
+    }
+    p = tmp_path / "bad.ctikz"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="label_offset"):
+        load(p)

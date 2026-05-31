@@ -810,20 +810,24 @@ def test_click_near_endpoint_selects_short_wire(scene: SchematicScene):
     selects the wire.
     """
     # 1-GU stub from a free open end to a T-junction on a vertical wire.
-    scene.add_wire([(0.0, 0.0), (0.0, 2.0)])          # vertical
-    stub = scene.add_wire([(-1.0, 1.0), (0.0, 1.0)])  # stub T-ing into it
-    assert (-1.0, 1.0) in scene._open_circle_items     # free end is an ocirc
+    through = scene.add_wire([(0.0, 0.0), (0.0, 2.0)])  # vertical
+    stub = scene.add_wire([(-1.0, 1.0), (0.0, 1.0)])    # stub T-ing into it
+    # With split-on-join the vertical wire is now two halves + the stub = 3 wires.
+    assert len(scene.schematic.wires) == 3
+    assert (-1.0, 1.0) in scene._open_circle_items       # free end is an ocirc
 
     # Click right on the open-circle end (well inside the vertex-grab zone).
     _sel_press(scene, (-1.0, 1.0))
     _sel_release(scene, (-1.0, 1.0))
     assert scene.selected_wire_ids() == [stub.id]
 
-    # And it can now be deleted.
-    before = len(scene.schematic.wires)
+    # Deleting the stub dissolves the junction → the two halves merge back into
+    # one wire whose ID is NOT the original stub id.
     scene.delete_selected()
-    assert len(scene.schematic.wires) == before - 1
+    assert len(scene.schematic.wires) == 1
     assert stub.id not in {w.id for w in scene.schematic.wires}
+    assert through.id not in {w.id for w in scene.schematic.wires}  # original split away
+    assert scene.schematic.wires[0].points == [(0.0, 0.0), (0.0, 2.0)]
 
 
 def test_click_on_segment_near_vertex_does_not_move_it(scene: SchematicScene):
@@ -855,34 +859,32 @@ def test_click_on_segment_near_vertex_does_not_move_it(scene: SchematicScene):
     assert scene.selected_wire_ids() == [stub.id]          # selected instead
 
 
-def test_click_at_t_junction_selects_through_wire(scene: SchematicScene):
-    """Clicking at a T-junction selects the through wire, not the stub.
+def test_click_at_t_junction_selects_through_wire_half(scene: SchematicScene):
+    """Each half of a split through wire is independently selectable.
 
-    Bug: when a wire is split at a T-junction, the intermediate vertex is
-    shared by two adjacent segments.  Each segment reports at_end=True for that
-    vertex, giving the through wire the same proximity rank as the stub's
-    endpoint.  The tie-break then incorrectly returned the stub (grabbed wire).
-    After the fix, an intermediate vertex hit is promoted to rank 0 so the
-    through wire wins.
+    With split-on-join, a T-junction creates two separate wire objects for the
+    through wire's halves.  Clicking on the body of each half selects that half
+    and not the stub.
     """
-    through = scene.add_wire([(0.0, 0.0), (0.0, 2.0)])  # vertical
-    stub = scene.add_wire([(1.0, 1.0), (0.0, 1.0)])      # horizontal stub T-ing in
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0)])          # vertical through wire
+    stub = scene.add_wire([(1.0, 1.0), (0.0, 1.0)])   # stub T-ing in at (0,1)
 
-    # The through wire must have been split at (0,1) to form the junction
-    # (WireCommand deep-copies, so look it up in the schematic).
-    through_live = next(w for w in scene.schematic.wires if w.id == through.id)
-    assert (0.0, 1.0) in [tuple(p) for p in through_live.points]
+    # Split-on-join: now 3 wires (lower half, upper half, stub).
+    assert len(scene.schematic.wires) == 3
+    half_ids = {w.id for w in scene.schematic.wires if w.id != stub.id}
 
-    # Click exactly at the T-junction: the through wire should be selected.
-    _sel_press(scene, (0.0, 1.0))
-    _sel_release(scene, (0.0, 1.0))
-    assert scene.selected_wire_ids() == [through.id]
-
-    # Click on the through wire's body away from the junction: still works.
-    scene.clearSelection()
+    # Click on the lower half body (0,0)→(0,1) at (0,0.3).
     _sel_press(scene, (0.0, 0.3))
     _sel_release(scene, (0.0, 0.3))
-    assert scene.selected_wire_ids() == [through.id]
+    sel = scene.selected_wire_ids()
+    assert len(sel) == 1 and sel[0] in half_ids and sel[0] != stub.id
+
+    # Click on the upper half body (0,1)→(0,2) at (0,1.7).
+    scene.clearSelection()
+    _sel_press(scene, (0.0, 1.7))
+    _sel_release(scene, (0.0, 1.7))
+    sel = scene.selected_wire_ids()
+    assert len(sel) == 1 and sel[0] in half_ids and sel[0] != stub.id
 
 
 def test_vertex_drag_only_in_select_mode(scene: SchematicScene):
@@ -1130,6 +1132,84 @@ def test_double_click_on_pin_returns_to_select(scene: SchematicScene):
     assert len(scene.schematic.wires) == 1
 
 
+def _dbl_click(scene: SchematicScene, gu):
+    e = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseDoubleClick)
+    e.setButton(Qt.LeftButton)
+    e.setScenePos(scene.gu_to_scene(*gu))
+    scene.mouseDoubleClickEvent(e)
+
+
+def test_double_click_wire_body_enters_wire_mode(scene: SchematicScene):
+    """Double-clicking on a wire segment in SELECT mode starts a new wire."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    assert scene.mode == Mode.SELECT
+
+    # Double-click at a grid point on the wire body.
+    _dbl_click(scene, (2.0, 0.0))
+
+    assert scene.mode == Mode.WIRE
+    assert scene._wire_pts == [(2.0, 0.0)]
+    assert scene._wire_preview is not None
+
+
+def test_double_click_wire_commits_splits_on_add(scene: SchematicScene):
+    """A wire started via double-click on a wire body splits the target on commit.
+
+    Double-clicking a wire body enters WIRE mode; routing away and finalizing
+    (via a second double-click to a free endpoint) splits the original wire.
+    """
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+
+    _dbl_click(scene, (2.0, 0.0))   # enter WIRE mode from (2,0) on the wire
+    assert scene.mode == Mode.WIRE
+
+    # Double-click in WIRE mode commits to a free endpoint.
+    _dbl_click(scene, (2.0, 3.0))   # finalize wire (2,0)→(2,3)
+    # Mode stays WIRE (free-endpoint finalization).
+
+    # The target wire is now split + the new stub = 3 wires; junction at (2,0).
+    assert len(scene.schematic.wires) == 3
+    assert (2.0, 0.0) in scene._junction_items
+
+
+def test_double_click_wire_vertex_enters_wire_mode(scene: SchematicScene):
+    """Double-clicking exactly on an existing wire vertex also enters WIRE mode."""
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0), (4.0, 2.0)])  # L-wire; corner at (0,2)
+
+    _dbl_click(scene, (0.0, 2.0))
+
+    assert scene.mode == Mode.WIRE
+    assert scene._wire_pts == [(0.0, 2.0)]
+
+
+def test_double_click_empty_space_enters_wire_mode(scene: SchematicScene):
+    """Double-clicking blank canvas enters WIRE mode from the snapped grid point."""
+    _dbl_click(scene, (2.0, 5.0))   # empty space
+
+    assert scene.mode == Mode.WIRE
+    assert scene._wire_pts == [(2.0, 5.0)]
+    assert scene._wire_preview is not None
+
+
+def test_double_click_wire_near_component_enters_wire_mode(scene: SchematicScene):
+    """A wire inside a component's bounding box is reachable by double-click.
+
+    Regression: the component double-click check ran first and swallowed the
+    event, preventing wire mode from being entered on wires that overlap with
+    a component's bounding rect (e.g. the side wires of a series R-L loop).
+    """
+    # Resistor with pins at (0,0) and (2,0); its bbox spans that area.
+    scene.place_component("R", (0.0, 0.0))
+    # Vertical wire inside the component's vertical extent, close to the left pin.
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0)])
+
+    # Double-click on the wire body at (0, 1.0) — inside the component bbox.
+    _dbl_click(scene, (0.0, 1.0))
+
+    assert scene.mode == Mode.WIRE
+    assert scene._wire_pts == [(0.0, 1.0)]
+
+
 def test_vertex_drag_still_wins_over_pin_autostart(scene: SchematicScene):
     """A press on a draggable wire vertex must not auto-start a new wire."""
     scene.place_component("R", (0.0, 0.0))         # pin (2,0)
@@ -1259,29 +1339,69 @@ def test_connect_to_mid_segment_splits_target(scene: SchematicScene):
     # New wire T's into the middle at (2,2).
     scene.add_wire([(2.0, 2.0), (2.0, 5.0)])
 
-    # The existing wire gained a vertex at (2,2); a junction dot appears.
-    split = next(w for w in scene.schematic.wires if w.id == a.id)
-    assert split.points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]
+    # The existing wire is now two independent halves; original ID is gone.
+    assert len(scene.schematic.wires) == 3
+    assert all(w.id != a.id for w in scene.schematic.wires)
+    pts = sorted([w.points for w in scene.schematic.wires])
+    assert [(0.0, 2.0), (2.0, 2.0)] in pts
+    assert [(2.0, 2.0), (4.0, 2.0)] in pts
     assert (2.0, 2.0) in scene._junction_items
 
 
 def test_mid_segment_split_is_one_undo(scene: SchematicScene):
     a = scene.add_wire([(0.0, 2.0), (4.0, 2.0)])
     scene.add_wire([(2.0, 2.0), (2.0, 5.0)])
-    assert len(scene.schematic.wires) == 2
+    assert len(scene.schematic.wires) == 3
 
     scene.undo()   # single undo reverses split + new wire
     assert len(scene.schematic.wires) == 1
+    assert scene.schematic.wires[0].id == a.id
     assert scene.schematic.wires[0].points == [(0.0, 2.0), (4.0, 2.0)]
     assert scene._junction_items == {}
 
 
-def test_connect_to_existing_vertex_does_not_split(scene: SchematicScene):
-    """Connecting at an existing endpoint must not insert a duplicate vertex."""
+def test_connect_to_existing_endpoint_does_not_split(scene: SchematicScene):
+    """Connecting at an existing wire endpoint does not split the wire."""
     a = scene.add_wire([(0.0, 2.0), (2.0, 2.0)])         # endpoint at (2,2)
     scene.add_wire([(2.0, 2.0), (2.0, 5.0)])             # meet at the endpoint
-    split = next(w for w in scene.schematic.wires if w.id == a.id)
-    assert split.points == [(0.0, 2.0), (2.0, 2.0)]      # unchanged
+    wire_a = next(w for w in scene.schematic.wires if w.id == a.id)
+    assert wire_a.points == [(0.0, 2.0), (2.0, 2.0)]     # unchanged, still 2 wires
+    assert len(scene.schematic.wires) == 2
+
+
+def test_connect_to_wire_corner_splits_l_wire(scene: SchematicScene):
+    """Connecting a new wire to the elbow of an L-wire splits it into two straights.
+
+    An L-wire (78,0)→(78,2)→(81,2) has a corner at (78,2).  A new wire
+    connecting at that corner must split the L-wire so each leg becomes
+    independently selectable and deletable.
+    """
+    elbow = scene.add_wire([(78.0, 0.0), (78.0, 2.0), (81.0, 2.0)])  # L-wire
+    assert len(scene.schematic.wires) == 1
+
+    scene.add_wire([(78.0, 2.0), (75.0, 2.0)])   # connects at the elbow
+
+    # L-wire is now two independent straight wires.
+    assert len(scene.schematic.wires) == 3
+    assert all(w.id != elbow.id for w in scene.schematic.wires)
+    endpoint_sets = [frozenset(w.points) for w in scene.schematic.wires]
+    assert frozenset([(75.0, 2.0), (78.0, 2.0)]) in endpoint_sets
+    assert frozenset([(78.0, 0.0), (78.0, 2.0)]) in endpoint_sets
+    assert frozenset([(78.0, 2.0), (81.0, 2.0)]) in endpoint_sets
+    assert (78.0, 2.0) in scene._junction_items
+
+
+def test_connect_to_wire_corner_split_is_one_undo(scene: SchematicScene):
+    """Corner-split + new wire is a single undoable action."""
+    elbow = scene.add_wire([(78.0, 0.0), (78.0, 2.0), (81.0, 2.0)])
+    scene.add_wire([(78.0, 2.0), (75.0, 2.0)])
+    assert len(scene.schematic.wires) == 3
+
+    scene.undo()
+    assert len(scene.schematic.wires) == 1
+    assert scene.schematic.wires[0].id == elbow.id
+    assert scene.schematic.wires[0].points == [(78.0, 0.0), (78.0, 2.0), (81.0, 2.0)]
+    assert scene._junction_items == {}
 
 
 def test_mid_segment_split_codegen_has_circ(scene: SchematicScene):
@@ -1306,9 +1426,14 @@ def test_drag_vertex_onto_segment_splits_target(scene: SchematicScene):
     assert scene._vertex_drag is not None
     _sel_release(scene, (2.0, 2.1))                      # snaps onto (2,2)
 
-    tgt = next(w for w in scene.schematic.wires if w.id == target.id)
+    # Target is now two independent halves; original ID is gone.
+    assert all(w.id != target.id for w in scene.schematic.wires)
+    half_pts = sorted([
+        w.points for w in scene.schematic.wires if w.id != mover.id
+    ])
+    assert [(0.0, 2.0), (2.0, 2.0)] in half_pts
+    assert [(2.0, 2.0), (4.0, 2.0)] in half_pts
     mov = next(w for w in scene.schematic.wires if w.id == mover.id)
-    assert tgt.points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]   # split
     assert mov.points[-1] == (2.0, 2.0)                          # moved onto it
     assert (2.0, 2.0) in scene._junction_items
 
@@ -1348,3 +1473,109 @@ def test_drag_vertex_onto_existing_vertex_no_duplicate(scene: SchematicScene):
     _sel_release(scene, (2.0, 2.1))                      # snaps to the (2,2) endpoint
     tgt = next(w for w in scene.schematic.wires if w.id == target.id)
     assert tgt.points == [(0.0, 2.0), (2.0, 2.0)]        # unchanged, no split
+
+
+# ---------------------------------------------------------------------------
+# Options child item (LabelTextItem)
+# ---------------------------------------------------------------------------
+
+def test_options_item_created(scene: SchematicScene):
+    """Each ComponentItem has a single LabelTextItem child for the options string."""
+    from app.canvas.items import LabelTextItem
+
+    comp = scene.place_component("R", (0.0, 0.0))
+    item = scene._comp_items[comp.id]
+    assert isinstance(item._options_item, LabelTextItem)
+
+
+def test_empty_options_item_hidden(scene: SchematicScene):
+    """The options child is hidden when options is empty."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    item = scene._comp_items[comp.id]
+    assert not item._options_item.isVisible()
+
+
+def test_non_empty_options_item_visible(scene: SchematicScene):
+    """Setting options makes the child visible with the raw string as text."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$, v=$5V$")
+    item = scene._comp_items[comp.id]
+    assert item._options_item.isVisible()
+    assert item._options_item.toPlainText() == "l=$R_1$, v=$5V$"
+
+
+def test_cleared_options_hides_child(scene: SchematicScene):
+    """Setting options to empty hides the child item."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    scene.edit_component_options(comp.id, "")
+    item = scene._comp_items[comp.id]
+    assert not item._options_item.isVisible()
+
+
+def test_options_item_above_bbox(scene: SchematicScene):
+    """The options child is positioned above the component bbox."""
+    from app.canvas.style import GRID_PX
+
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    bbox_top_px = -0.5 * GRID_PX  # resistor bbox y0 = -0.5 GU
+    assert item._options_item.pos().y() < bbox_top_px
+
+
+def test_options_undo_hides_child(scene: SchematicScene):
+    """Undoing an options edit hides the child item again."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    assert scene._comp_items[comp.id]._options_item.isVisible()
+    scene.undo()
+    assert not scene._comp_items[comp.id]._options_item.isVisible()
+
+
+def test_options_item_begin_edit(scene: SchematicScene):
+    """begin_options_edit activates the in-place editor."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    item.begin_options_edit()
+    assert item._options_item.is_editing
+
+
+def test_options_commit_updates_model(scene: SchematicScene):
+    """Committing an in-place edit pushes an EditCommand and updates the model."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+
+    item._options_item.begin_edit()
+    item._options_item.setPlainText("l=$R_2$, v=$10V$")
+    item._options_item.end_edit(commit=True)
+
+    updated = next(c for c in scene.schematic.components if c.id == comp.id)
+    assert updated.options == "l=$R_2$, v=$10V$"
+
+
+def test_options_cancel_does_not_update_model(scene: SchematicScene):
+    """Cancelling an in-place edit leaves the model unchanged."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+
+    item._options_item.begin_edit()
+    item._options_item.setPlainText("CHANGED")
+    item._options_item.end_edit(commit=False)
+
+    unchanged = next(c for c in scene.schematic.components if c.id == comp.id)
+    assert unchanged.options == "l=$R_1$"
+
+
+def test_ghost_hides_options_item(scene: SchematicScene):
+    """The options child is hidden in ghost (placement preview) state."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    item.set_ghost(True)
+    assert not item._options_item.isVisible()
+    item.set_ghost(False)
+    assert item._options_item.isVisible()

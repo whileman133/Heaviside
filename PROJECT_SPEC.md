@@ -30,7 +30,7 @@ This document specifies a graphical editor for creating publication-quality circ
 - Provide a grid-disciplined, fixed-component-size canvas for schematic entry
 - Emit clean, human-readable CircuiTikZ source as the primary output format
 - Support lossless save/load via a JSON schematic format
-- Support LaTeX equation strings in all component label slots
+- Support arbitrary CircuiTikZ options strings on components (e.g. labels, colors, styles)
 - Provide a rendered PDF preview of the current schematic
 - Support wire-to-wire connectivity with automatic junction (connection) dots
 - Be extensible: adding a new component type requires adding one registry entry and one `ComponentItem` subclass
@@ -60,7 +60,7 @@ This document specifies a graphical editor for creating publication-quality circ
 | **Wire** | A Manhattan-routed (horizontal + vertical segments only) polyline connecting pins, other wires, and/or open grid points. |
 | **Junction** | A coordinate where wires/pins are electrically tied together such that a connection must be marked — defined by the degree rule in §6.4. Rendered as a solid dot on the canvas and emitted as `\node[circ]` in the output. |
 | **Open endpoint** | A wire endpoint that does not coincide with any component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. |
-| **Label slot** | A named annotation site on a component (e.g., `l`, `l_`, `v`, `v^`, `i`, `i_`) that accepts an arbitrary LaTeX string. |
+| **Options string** | A raw CircuiTikZ option string stored on a component, passed verbatim into the `to[]` or `node[]` argument (e.g. `l=$R_1$, v=$V_s$, color=red`). Replaces the former per-slot label dict. |
 | **Schematic** | The complete logical description of a circuit: a list of components, a list of wires, and metadata. |
 | **Registry** | The global static dictionary mapping CircuiTikZ keywords to `ComponentDef` objects. |
 | **Origin** | The canvas coordinate (0, 0), located at the top-left of the canvas grid. Y increases downward, consistent with Qt's coordinate system. |
@@ -121,7 +121,7 @@ class ComponentDef:
     category: str                    # e.g. "Passives", "Amplifiers", "Sources"
     bbox: tuple[float, float, float, float]  # (x0, y0, x1, y1) relative to origin, in GU
     pins: list[PinDef]
-    label_slots: list[str]           # e.g. ["l", "l_", "v", "v^", "i", "i_"]
+    label_slots: list[str]           # valid slot names for this kind, shown as UI hint
     tikz_keyword: str                # CircuiTikZ node/path keyword
     default_span: tuple[float, float]  # (dx, dy) from origin to terminal pin, in GU
 ```
@@ -133,13 +133,16 @@ One instance per placed component.
 ```python
 @dataclass
 class Component:
-    id: str                          # UUID, assigned at placement
-    kind: str                        # Must exist as key in REGISTRY
-    position: tuple[float, float]    # (x, y) of origin pin in schematic coordinates
-    rotation: int                    # 0, 90, 180, or 270 degrees
-    labels: dict[str, str]           # slot_name → LaTeX string, e.g. {"l": "$R_1$"}
-    mirror: bool = False             # horizontal mirror before rotation
+    id: str                                       # UUID, assigned at placement
+    kind: str                                     # Must exist as key in REGISTRY
+    position: tuple[float, float]                 # (x, y) of origin pin in schematic coordinates
+    rotation: int                                 # 0, 90, 180, or 270 degrees
+    options: str                                  # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
+    mirror: bool = False                          # horizontal mirror before rotation
+    label_offset: tuple[float, float] | None = None  # component-local px offset of options label; None = auto
 ```
+
+`label_offset` is `None` until the user manually drags the options label or the auto-placement algorithm sets it (see §8.3). Once set it is persisted in the file as a two-element JSON array; absent or `null` values load as `None`.
 
 ### 4.3 `Wire`
 
@@ -260,7 +263,10 @@ Each `ComponentItem` subclass:
 - Implements `paint()` drawing the component symbol as `QPainterPath` geometry translated from the SVG reference.
 - Renders pin indicator dots at all `PinDef` offsets.
 - Adjusts pen color and style based on item state: normal, selected (highlight color), hover, and ghost (semi-transparent, used during placement).
-- Renders label text from `Component.labels` as plain text adjacent to the appropriate pin. LaTeX markup is shown verbatim on the canvas (e.g., `$R_1$`); the LaTeX preview panel shows the rendered result.
+- Renders `Component.options` via a single child `LabelTextItem` (`QGraphicsTextItem`). The item is hidden when options is empty and visible otherwise. The options string is shown verbatim (e.g. `l=$R_1$, v=$V_s$`). Child items are never clipped by the parent's bounding rect.
+- **Label position**: if `Component.label_offset` is set, the label is placed at that `(dx, dy)` offset in component-local pixel coordinates; otherwise it falls back to the default above-centre position (`cx − w/2`, `bbox_top − gap − line_height`). See §8.3 for auto-placement.
+- **Label hover**: hovering over the label text turns it the hover colour (`COLOR_HOVER`) to signal that it is editable and draggable. The colour resets to normal on leave or when editing begins.
+- **Label drag**: `LabelTextItem` has `ItemIsMovable=True`. After a drag completes, a `MoveOptionsLabelCommand` is pushed so the new position is undoable. The label is only draggable in **Select** mode; `_apply_item_flags` sets `ItemIsMovable` to match the parent component's interactive state.
 
 ### 5.3 Palette Thumbnails
 
@@ -462,7 +468,7 @@ The canvas operates in one of the following mutually exclusive modes at any time
 1. User clicks a component in the palette → canvas enters **Place** mode.
 2. A ghost (semi-transparent) rendering of the component follows the cursor, snapping to 0.5 GU.
 3. Left-click places the component at the snapped position and records an undoable `PlaceCommand`.
-4. Right-click or `Escape` cancels placement and returns to **Select** mode.
+4. Right-click or `Escape` cancels placement and returns to **Select** mode. `Escape` is registered as a **window-level shortcut** so it fires regardless of which widget (palette, canvas, etc.) currently holds keyboard focus — clicking a palette entry to start placement does not require a subsequent click on the canvas before Escape works.
 5. After placement, the canvas remains in **Place** mode for rapid repeated placement of the same component type.
 
 ### 6.3 Component Selection and Movement
@@ -474,7 +480,7 @@ The canvas operates in one of the following mutually exclusive modes at any time
 - Rubber-band drag (drag on empty canvas) selects all components and wire segments within the rectangle.
 - `Ctrl+A` selects all.
 - Selected components can be dragged; the component item snaps to 0.5 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
-- **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
+- **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
 - Arrow keys nudge selected components by 0.5 GU per keypress.
 - `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
 
@@ -532,14 +538,17 @@ targets are what finalize the wire.
 #### Finalizing and mode transitions
 
 - In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
+- In **Select** mode, **double-clicking on a wire** (segment body or existing vertex) auto-switches to **Wire** mode and begins routing from the clicked point. The start point snaps to the nearest wire vertex (within `PIN_SNAP_GU`) or the nearest point on a wire segment (projected to the segment, grid-snapped to 0.5 GU). Any split needed by the connecting wire is applied automatically when the new wire is committed. The wire check takes priority over the component double-click check so that wires near or inside a component's bounding box remain reachable.
 - A wire that terminates on a **connectable** target — a pin, an existing wire vertex, or a wire segment — finalizes and returns to **Select** mode.
+- In **Select** mode, a **double-click on blank canvas** (no wire or component hit) also enters **Wire** mode, starting a free wire from the snapped 0.5 GU grid point.
 - A **double-click** on an empty grid node finalizes the wire (its end becomes an open `ocirc` endpoint) but **stays in Wire** mode so the user can immediately draw another wire.
 
 #### Junctions and segment splitting
 
 - Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.)
 - Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints.
-- When a wire connects to the **middle of another wire's segment** — whether by drawing a new wire onto it or by dragging an existing wire vertex onto it — the target wire is **split**: a vertex is inserted at the connection point so the junction is real topology. The split is bundled with the triggering command (`WireCommand` or `MoveWireVertexCommand`) inside a `MacroCommand` so it is one undoable action.
+- When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it or by dragging an existing wire vertex onto it — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand` or `MoveWireVertexCommand`) inside a `MacroCommand` so it is one undoable action.
+- When a wire is **deleted** and the deletion dissolves a T-junction (a free endpoint now has exactly two remaining wire neighbors and is not a component pin), those two stubs are automatically **merged** into a single wire. The merge is bundled with the `DeleteCommand` inside a `MacroCommand` so delete + merge is one undoable action. Undoing restores the deleted wire and re-splits the merged wire back into its two halves.
 
 Connectivity is **purely geometric and never stored**: two coordinates are
 electrically joined precisely when they are equal. Junction dots, open-circle
@@ -552,7 +561,7 @@ connects it and dragging it away disconnects it, with no bookkeeping.
 - In **Select** mode a wire's draggable vertices (intermediate corners and free, non-pin endpoints) show grab handles. Dragging one moves that vertex, re-routing each adjacent segment through `route()` to stay Manhattan and simplifying afterward; recorded as a `MoveWireVertexCommand`. The **live drag preview** mirrors this exactly — segments are re-routed and `simplify_points` is applied on every mouse-move, so the ghost never shows redundant collinear vertices and no diagonal segments appear before the mouse is released. A dropped vertex snaps to a connectable target (pin / other wire) just like a drawn endpoint. Endpoints sitting on a component pin are locked (they are owned by component wire-following) and have no handle.
 - A vertex grab is a **drag** only if the cursor moves to a different snapped grid node between press and release; otherwise it is a plain **click** that **selects the wire** (and pushes no command). The click/drag test is on cursor *movement*, **not** on whether the snapped cursor differs from the vertex's old position — a vertex may be grabbed from up to `VERTEX_HIT_GU` away, so a stationary click whose snapped position differs from the vertex must not be misread as a drag (which would teleport the vertex onto the cursor, e.g. onto a pin, spuriously inserting a junction dot). This also makes a short wire — whose vertex-grab zones can cover most of its length — selectable and deletable by clicking near its ends, where a free open-circle endpoint sits.
 - Wire **selection hit-testing** uses a thin band along the actual segments (and the vertex handles), not the wire's bounding rectangle, so a wire does not steal clicks from nearby components.
-- When two wires overlap at a click point (e.g. a T-junction where a stub's endpoint lies on the interior of a through wire), the **through wire is preferred**. The proximity key ranks a click at a through wire's interior as better than a click at a stub's endpoint. A click that lands at an **intermediate vertex** (shared by two adjacent segments of the same wire) is treated as an interior hit (rank 0), not an endpoint touch, so the through wire wins over an adjacent stub even after the through wire has been split to form the junction.
+- A click that lands at an **intermediate vertex** (an L-corner shared by two adjacent segments of the same wire) is treated as an interior hit (rank 0), not an endpoint touch, so that wire wins selection over an adjacent wire stub whose endpoint happens to coincide with the corner.
 
 #### Wires follow the components they connect to
 
@@ -577,12 +586,12 @@ Wires do not auto-route around components in v1 — the user routes manually.
 
 ### 6.5 Component Properties
 
-- Double-clicking a component in **Select** mode emits `SchematicScene.component_double_clicked(component_id)` and opens the **Properties Panel** (right panel, not a modal dialog).
-- The panel shows editable fields for each label slot accepted by that `ComponentDef`.
-- Label slot fields accept arbitrary text; content is treated as a LaTeX string verbatim.
-- A small per-slot preview renders the LaTeX equation inline using the preview pipeline (see Section 8).
-- Rotation and mirror controls are also in this panel and in the right-click context menu.
-- Changes to properties are applied immediately and record an `EditCommand`.
+- **Double-clicking the options label** on the canvas (the `LabelTextItem` child) activates in-place text editing of the full options string. Committing with **Enter**, **Return**, or by clicking away (focus loss) fires an `EditCommand`; committing empty text clears the options. **Escape** cancels without changes. The label double-click check runs before the component check.
+- **Dragging the options label** repositions it freely within the parent component's coordinate system. On mouse release a `MoveOptionsLabelCommand` is pushed, storing the new `(dx, dy)` component-local pixel offset as `Component.label_offset`. The drag is only possible in **Select** mode.
+- **Double-clicking the component body** in **Select** mode opens the in-place options editor **and** emits `SchematicScene.component_double_clicked(component_id)` to open the **Properties Panel** simultaneously. While editing, all key events (Backspace, Delete, arrows, Escape) are routed to the editor rather than the canvas hotkeys.
+- The **Properties Panel** shows a single `QLineEdit` for the options string, with the component's valid `label_slots` shown as hint text below the field. The field accepts any CircuiTikZ option string verbatim.
+- Rotation and mirror controls are also in this panel.
+- Changes are applied immediately (300 ms debounce) and record an `EditCommand`.
 
 ### 6.6 Undo / Redo
 
@@ -597,9 +606,11 @@ Wires do not auto-route around components in v1 — the user routes manually.
 | `DeleteCommand` | Restore component(s) and removed wires (connected and directly-selected) |
 | `MoveCommand` | Move component(s) back and restore reshaped wires' original points |
 | `WireCommand` | Remove wire |
-| `SplitWireCommand` | Restore the split wire's original point list (remove the inserted vertex) |
+| `SplitWireCommand` | Remove the two half-wires and restore the original wire |
+| `MergeWireCommand` | Split the merged wire back into the two original halves |
 | `MoveWireVertexCommand` | Restore the wire's original point list |
-| `EditCommand` | Restore previous label values |
+| `EditCommand` | Restore previous options string |
+| `MoveOptionsLabelCommand` | Restore previous `label_offset` value |
 | `RotateCommand` | Restore previous rotation value |
 | `MirrorCommand` | Restore previous mirror state |
 | `MacroCommand` | Composite of the above (e.g. a split + add, or a multi-component move) |
@@ -607,7 +618,8 @@ Wires do not auto-route around components in v1 — the user routes manually.
 Notes:
 
 - `MoveCommand` also drags connected wire endpoints with the component and captures each affected wire's original points so undo restores them exactly (see §6.3).
-- `SplitWireCommand` inserts a vertex into an existing wire when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
+- `SplitWireCommand` replaces a wire with two independent halves when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
+- `MergeWireCommand` merges two wire stubs that share a free endpoint into one wire; it is bundled after a `DeleteCommand` inside a `MacroCommand` when the deletion dissolves a T-junction (see §6.4).
 - `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
 
 ### 6.7 Copy / Paste
@@ -642,7 +654,7 @@ Each two-terminal component with origin at `(x0, y0)` and terminal pin at `(x1, 
 (x0, y0) to[KIND, LABELS] (x1, y1)
 ```
 
-Where `LABELS` is the comma-separated list of non-empty label slot assignments, e.g.:
+Where `OPTIONS` is the component's raw options string passed verbatim, e.g.:
 
 ```latex
 (0,0) to[R, l=$R_1$, v=$V_R$] (2,0)
@@ -764,17 +776,23 @@ The preview is triggered by:
 
 Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never blocked. While compiling, a spinner is shown in the preview panel. If `pdflatex` returns a non-zero exit code, the error log is shown in the preview panel in place of the image.
 
-### 8.2 Equation Preview (Per Label Slot)
+### 8.2 Equation Preview
 
-Individual label slot fields in the Properties Panel show a small inline equation preview:
+The Properties Panel does not provide per-field equation previews. The full schematic preview (§8.1) serves as the authoritative rendered view of all component annotations.
 
-1. Wrap the label string in a minimal math-mode `.tex` document.
-2. Run `pdflatex` + `pdf2image` on just the equation.
-3. Display the resulting image inline beside the text field.
+### 8.3 Options Label Auto-Placement
 
-Equation previews use a 500ms debounce after the user stops typing. Failures (invalid LaTeX) show a red border on the text field with no preview.
+When a component's options string transitions from empty to non-empty for the first time (i.e. `Component.label_offset` is still `None`), the scene runs an auto-placement pass before committing the `EditCommand`. The algorithm:
 
-### 8.3 LaTeX Template
+1. Builds eight candidate positions (above-centre, right-middle, below-centre, left-middle, and the four diagonal corners) at a fixed clearance distance from the component bbox in component-local pixel coordinates.
+2. Maps each candidate label rect to scene coordinates and scores it by total overlap area with every other component's bounding box.
+3. Selects the lowest-overlap candidate, preferring above-centre when there is a tie.
+4. If the default above-centre position has zero overlap, no `label_offset` is set (the default fallback continues to apply).
+5. Otherwise the chosen offset is recorded via a `MoveOptionsLabelCommand` bundled with the `EditCommand` inside a `MacroCommand` so both are undone together.
+
+The auto-placement fires only once per options string lifetime. Subsequent edits to the options text leave `label_offset` unchanged. The user can always drag the label to a preferred position afterward.
+
+### 8.4 LaTeX Template
 
 The minimal template used for full schematic preview:
 
@@ -832,10 +850,7 @@ Schematics are saved as UTF-8 JSON files with the extension `.ctikz`.
       "position": [0.0, 0.0],
       "rotation": 0,
       "mirror": false,
-      "labels": {
-        "l": "$R_1$",
-        "v": "$V_R$"
-      }
+      "options": "l=$R_1$, v=$V_R$"
     }
   ],
   "wires": [
@@ -899,7 +914,7 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 
 - Right panel, fixed width ~240px.
 - Shows the `ComponentDef.display_name` and `kind` of the selected component.
-- One text field per `label_slot`, labelled with the slot name and a LaTeX preview image below it.
+- A single `QLineEdit` for the raw CircuiTikZ options string, with valid slot names shown as hint text.
 - Rotation control: four buttons (0°, 90°, 180°, 270°) or a cycle button.
 - Mirror toggle checkbox.
 - Empty when no component is selected; shows multi-select count when multiple are selected.
@@ -1119,7 +1134,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | Test | Description |
 |------|-------------|
 | `test_resistor_horizontal` | A single resistor at (0,0), rotation 0, no labels → produces `(0,0) to[R] (2,0)`. |
-| `test_resistor_with_labels` | A resistor with `labels={"l": "$R_1$", "v": "$V$"}` → produces `to[R, l=$R_1$, v=$V$]`. |
+| `test_resistor_with_options` | A resistor with `options="l=$R_1$, v=$V$"` → produces `to[R, l=$R_1$, v=$V$]`. |
 | `test_resistor_rotated_90` | A resistor at (0,0), rotation 90 → origin and terminal pins are correctly rotated; output uses correct coordinates. |
 | `test_capacitor_horizontal` | A capacitor at (2,0), rotation 0 → produces `(2,0) to[C] (4,0)`. |
 | `test_inductor_horizontal` | An inductor at (0,0), rotation 0 → produces `(0,0) to[L] (2,0)`. |
@@ -1145,7 +1160,12 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_roundtrip_empty` | Save and reload an empty schematic → loaded schematic equals original. |
 | `test_roundtrip_components` | Save and reload a schematic with one of each v1 component type → all fields preserved exactly. |
 | `test_roundtrip_wires` | Save and reload a schematic containing wires → all wire points preserved exactly. |
-| `test_roundtrip_labels` | Save and reload a schematic with LaTeX label strings including special characters → labels preserved exactly. |
+| `test_roundtrip_options` | Save and reload a schematic with a LaTeX-containing options string → options preserved exactly. |
+| `test_roundtrip_label_offset` | Save and reload a component with `label_offset=(12.5, -30.0)` → offset preserved exactly. |
+| `test_label_offset_none_not_serialised` | When `label_offset` is `None` the `label_offset` key is absent from the JSON. |
+| `test_label_offset_missing_loads_as_none` | Old files without `label_offset` field deserialise with `label_offset=None`. |
+| `test_label_offset_bad_type_raises` | `label_offset` with wrong type (string instead of two-element array) raises `SchematicLoadError`. |
+| `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
 | `test_load_unknown_version` | Loading a `.ctikz` file with an unrecognized `version` string raises a descriptive error. |
 | `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
 | `test_load_missing_field` | Loading a JSON file missing a required field raises a descriptive error. |
@@ -1170,12 +1190,13 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
 | `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a pin-connected end is excluded. |
-| `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not a split site; a point off the line returns nothing. |
+| `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
+| `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo); `SplitWireCommand` insert/undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; and `MacroCommand` composing split + add as one unit.
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; and `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`.
 
 ### 13.3 Integration Tests
 
@@ -1201,14 +1222,18 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_route_manhattan` | `route()` returns a two-point path for axis-aligned targets and a single dominant-axis corner otherwise. |
 | `test_grid_node_anchor_adds_vertex` | Clicking empty space mid-wire drops an intermediate anchor; a collinear anchor is simplified away. |
 | `test_click_free_pin_enters_wire_mode` / `test_terminate_on_pin_returns_to_select` | Auto-enter on a free-pin click; auto-exit when ending on a pin; connected-pin clicks and empty-space double-clicks behave per §6.4. |
+| `test_double_click_wire_body_enters_wire_mode` / `test_double_click_wire_commits_splits_on_add` / `test_double_click_wire_vertex_enters_wire_mode` / `test_double_click_empty_space_enters_wire_mode` | Double-clicking a wire, wire vertex, or blank canvas in SELECT mode auto-enters WIRE mode from the snapped grid point; routing away and finalizing splits any target wire as normal. |
+| `test_double_click_wire_near_component_enters_wire_mode` | Wire double-click is detected even when the wire is inside a component's bounding box — the wire check runs before the component check (regression: component bbox previously swallowed the event). |
 | `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
 | `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
 | `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
 | `test_drag_release_at_same_spot_is_noop` / `test_click_near_endpoint_selects_short_wire` / `test_click_on_segment_near_vertex_does_not_move_it` | A vertex grab is a drag only if the snapped cursor moves between press and release; a stationary click selects the wire (no command, no geometry change), so a short wire with an open-circle end is selectable/deletable near its ends and clicking a segment near a vertex never relocates the vertex or inserts a spurious junction (regression). |
-| `test_click_at_t_junction_selects_through_wire` | Clicking at a T-junction (where a stub's endpoint lies on the interior of a through wire) selects the through wire, not the stub. An intermediate vertex of the through wire is treated as an interior hit so the through wire's proximity rank wins over the stub's endpoint rank (regression: after a split the through wire previously tied with the stub and lost the tie-break). |
+| `test_click_at_t_junction_selects_through_wire_half` | With split-on-join, each half of a split through wire is a separate wire object; clicking on the body of each half selects that half (not the stub). |
 | `test_junction_dot_item_appears_for_three_wires` / `…removed_when_wire_deleted` | Junction dot items appear/disappear as wire connectivity changes. |
 | `test_snap_to_existing_wire_vertex` / `test_snap_onto_wire_segment` | Wire routing snaps to existing wire vertices and segment points (pin snap takes priority). |
-| `test_connect_to_mid_segment_splits_target` / `test_drag_vertex_onto_segment_splits_target` | Connecting (by drawing or by dragging a vertex) onto a wire's mid-segment splits the target, forms a junction, and is one undoable action. |
+| `test_connect_to_mid_segment_splits_target` / `test_drag_vertex_onto_segment_splits_target` | Connecting (by drawing or by dragging a vertex) onto a wire's mid-segment splits the target into two independent wire objects, forms a junction, and is one undoable action that restores the original single wire. |
+| `test_connect_to_wire_corner_splits_l_wire` / `test_connect_to_wire_corner_split_is_one_undo` | Connecting a new wire at an L-wire's corner (intermediate vertex) splits the L-wire into two straight wires, forms a junction, and is one undoable action. Connecting at an existing endpoint leaves the wire unchanged. |
+| `test_click_near_endpoint_selects_short_wire` | After split-on-join the stub is selectable/deletable; deleting it merges the through-wire halves back into one wire (regression + merge-on-delete behavior). |
 | `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
 
 ### 13.4 Acceptance Criteria
@@ -1250,9 +1275,9 @@ The following criteria define v1 completion. Each must be verified manually by t
 
 #### AC-4: Properties
 - [ ] Double-clicking a component opens the Properties Panel.
-- [ ] All label slots for that component type are shown as text fields.
+- [ ] The options string field is shown, pre-populated with the component's current options.
 - [ ] Typing a LaTeX string (e.g., `$R_1$`) into a label field updates the canvas label display.
-- [ ] A rendered equation preview appears below each label field within 1 second of the user stopping typing.
+- [ ] The full schematic preview updates within 1.5 seconds of any change.
 - [ ] Rotation and mirror controls change the component orientation on the canvas immediately.
 
 #### AC-5: Undo / Redo

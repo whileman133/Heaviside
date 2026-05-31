@@ -338,7 +338,10 @@ def _multi_terminal_line(
         else:
             kind_arg = f"{kind_arg}, xscale=-1"
 
-    label_text = comp.labels.get("l", "")
+    # Append user options to the node[] argument.
+    user_opts = _label_args(comp)
+    if user_opts:
+        kind_arg = f"{kind_arg}, {user_opts}"
 
     # Determine placement coordinate and anchor option.
     anchor_info = _MULTI_TERMINAL_ANCHOR_PIN.get(comp.kind)
@@ -358,7 +361,7 @@ def _multi_terminal_line(
         x, y = comp.position
         coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
 
-    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{label_text}}}"
+    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
 
     # Append lead wires if defined for this kind.
     leads = _MULTI_TERMINAL_LEADS.get(comp.kind, [])
@@ -492,14 +495,8 @@ def _rotate(span: tuple[float, float], rotation: int) -> tuple[float, float]:
 
 
 def _label_args(comp: Component) -> str:
-    """
-    Build the label portion of a to[] argument from comp.labels.
-
-    Only non-empty label values are included. Order follows the order keys
-    appear in comp.labels (insertion order in Python 3.7+).
-    """
-    parts = [f"{slot}={value}" for slot, value in comp.labels.items() if value]
-    return ", ".join(parts)
+    """Return the raw options string from comp.options, stripped of whitespace."""
+    return comp.options.strip()
 
 
 def _fmt(value: float) -> str:

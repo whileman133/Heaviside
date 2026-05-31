@@ -32,13 +32,13 @@ def _schematic(*components, wires=()) -> Schematic:
     )
 
 
-def _comp(kind: str, position=(0.0, 0.0), rotation=0, labels=None, mirror=False) -> Component:
+def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False) -> Component:
     return Component(
         id=_uid(),
         kind=kind,
         position=position,
         rotation=rotation,
-        labels=labels or {},
+        options=options,
         mirror=mirror,
     )
 
@@ -61,9 +61,9 @@ def test_resistor_horizontal() -> None:
 # test_resistor_with_labels
 # ---------------------------------------------------------------------------
 
-def test_resistor_with_labels() -> None:
-    """Resistor with labels → to[R, l=$R_1$, v=$V$]."""
-    comp = _comp("R", labels={"l": "$R_1$", "v": "$V$"})
+def test_resistor_with_options() -> None:
+    """Resistor with options string → to[R, l=$R_1$, v=$V$]."""
+    comp = _comp("R", options="l=$R_1$, v=$V$")
     src = generate(_schematic(comp))
     assert "to[R, l=$R_1$, v=$V$]" in src
 
@@ -211,7 +211,7 @@ def test_empty_schematic() -> None:
 def test_generate_is_pure() -> None:
     """Calling generate() twice on the same Schematic produces identical output."""
     s = _schematic(
-        _comp("R", position=(0.0, 0.0), labels={"l": "$R_1$"}),
+        _comp("R", position=(0.0, 0.0), options="l=$R_1$"),
         _comp("C", position=(2.0, 0.0)),
         wires=[_wire([(0.0, 0.0), (2.0, 0.0)])],
     )

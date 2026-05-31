@@ -36,7 +36,7 @@ from PySide6.QtGui import (
     QPen,
     QTransform,
 )
-from PySide6.QtWidgets import QGraphicsItem
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
 
 from app.canvas.style import (
     COLOR_GHOST,
@@ -70,6 +70,134 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
 
 
 # ---------------------------------------------------------------------------
+# Label child item
+# ---------------------------------------------------------------------------
+
+_LABEL_FONT_SIZE = 10.0
+_LABEL_LINE_H = 17   # px height per label row for 10pt font
+_LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
+
+
+class LabelTextItem(QGraphicsTextItem):
+    """Editable, draggable options label child of a ComponentItem.
+
+    Displays ``comp.options`` verbatim (e.g. ``l=$R_1$, v=$V_s$``).
+    Call :meth:`begin_edit` to activate in-place editing.  Commits via its
+    callback on focus-loss, Enter, or Return; Escape cancels without changes.
+
+    The label can be dragged freely within the parent's coordinate system.
+    After a drag completes the move callback is fired with the new QPointF
+    position so the scene can persist the offset via an undoable command.
+    """
+
+    def __init__(self, parent: "ComponentItem") -> None:
+        super().__init__(parent)
+        self._editing = False
+        self._hovered = False
+        self._saved_text: str = ""
+        self._commit_cb = None  # callable(text: str) -> None
+        self._move_cb = None    # callable(QPointF) -> None
+        self._drag_origin: QPointF | None = None  # pos at mouse-press
+
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.setFlag(QGraphicsItem.ItemIsSelectable, False)
+        self.setFlag(QGraphicsItem.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
+        self.setAcceptHoverEvents(True)
+        f = self.font()
+        f.setPointSizeF(_LABEL_FONT_SIZE)
+        self.setFont(f)
+        self.setDefaultTextColor(QColor(COLOR_NORMAL))
+
+    def set_commit_callback(self, cb) -> None:  # noqa: ANN001
+        self._commit_cb = cb
+
+    def set_move_callback(self, cb) -> None:  # noqa: ANN001
+        """Set callback fired with the final QPointF position after a drag."""
+        self._move_cb = cb
+
+    @property
+    def is_editing(self) -> bool:
+        return self._editing
+
+    def begin_edit(self) -> None:
+        """Activate the text editor, selecting all existing text."""
+        self._saved_text = self.toPlainText()
+        self._editing = True
+        self._apply_text_color()
+        self.setTextInteractionFlags(Qt.TextEditorInteraction)
+        self.setFocus(Qt.MouseFocusReason)
+        cursor = self.textCursor()
+        cursor.select(cursor.SelectionType.Document)
+        self.setTextCursor(cursor)
+
+    def end_edit(self, commit: bool = True) -> None:
+        """Deactivate editing, optionally committing the new text."""
+        if not self._editing:
+            return
+        self._editing = False
+        new_text = self.toPlainText().strip()
+        self.setTextInteractionFlags(Qt.NoTextInteraction)
+        self.clearFocus()
+        self._apply_text_color()
+        if commit:
+            if self._commit_cb is not None:
+                self._commit_cb(new_text)
+        else:
+            self.setPlainText(self._saved_text)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        self.end_edit(commit=True)
+        super().focusOutEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self.end_edit(commit=True)
+            return
+        if event.key() == Qt.Key_Escape:
+            self.end_edit(commit=False)
+            return
+        super().keyPressEvent(event)
+
+    def _apply_text_color(self) -> None:
+        """Set text colour based on current interactive/hover/edit state."""
+        parent = self.parentItem()
+        draggable = bool(self.flags() & QGraphicsItem.ItemIsMovable)
+        parent_selected = parent is not None and parent.isSelected()
+        show_hover = (
+            self._hovered
+            and draggable
+            and not parent_selected
+            and not self._editing
+        )
+        self.setDefaultTextColor(QColor(COLOR_HOVER if show_hover else COLOR_NORMAL))
+
+    def hoverEnterEvent(self, event) -> None:  # noqa: N802
+        self._hovered = True
+        self._apply_text_color()
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:  # noqa: N802
+        self._hovered = False
+        self._apply_text_color()
+        super().hoverLeaveEvent(event)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if not self._editing:
+            self._drag_origin = self.pos()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        if not self._editing and self._drag_origin is not None:
+            new_pos = self.pos()
+            if new_pos != self._drag_origin:
+                if self._move_cb is not None:
+                    self._move_cb(new_pos)
+            self._drag_origin = None
+
+
+# ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
 
@@ -81,11 +209,15 @@ class ComponentItem(QGraphicsItem):
     manifest via :func:`app.canvas.svgsym.symbol_paths`.  Subclasses only set
     the component ``kind`` (implicitly, via the Component they wrap) and may
     override :meth:`extra_leads` to add connector stubs.
+
+    A single child :class:`LabelTextItem` shows the component's raw options
+    string (e.g. ``l=$R_1$, v=$V_s$``) above the bbox when non-empty.
+    Double-clicking the label or the component body activates in-place editing.
     """
 
     def __init__(self, component: "Component", parent: QGraphicsItem | None = None):
         super().__init__(parent)
-        self.component = component
+        self._component = component
         self._defn = REGISTRY[component.kind]
 
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
@@ -107,12 +239,88 @@ class ComponentItem(QGraphicsItem):
         t.rotate(component.rotation)
         self.setTransform(t)
 
+        # Single child item for the whole options string.
+        self._options_item = LabelTextItem(self)
+        self._options_item.set_commit_callback(self._on_options_commit)
+        self._options_item.set_move_callback(self._on_options_label_moved)
+        self._sync_options_item()
+
+    # ------------------------------------------------------------------
+    # component property — setter syncs the options child item
+    # ------------------------------------------------------------------
+
+    @property
+    def component(self) -> "Component":
+        return self._component
+
+    @component.setter
+    def component(self, comp: "Component") -> None:
+        if self._options_item.is_editing:
+            self._options_item.end_edit(commit=False)
+        self._component = comp
+        self._sync_options_item()
+
+    def _on_options_commit(self, text: str) -> None:
+        """Called by the LabelTextItem when the user commits an in-place edit."""
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "edit_component_options"):
+            scene.edit_component_options(self._component.id, text)
+
+    def _on_options_label_moved(self, new_pos: QPointF) -> None:
+        """Called by the LabelTextItem after the user drags it to a new position."""
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "move_options_label"):
+            scene.move_options_label(self._component.id, (new_pos.x(), new_pos.y()))
+
+    def _default_label_pos(self) -> QPointF:
+        """Default above-centre position for the options label (component-local px)."""
+        x0, y0, x1, y1 = self._defn.bbox
+        cx = (x0 + x1) / 2 * GRID_PX
+        bbox_top = y0 * GRID_PX
+        w = self._options_item.boundingRect().width()
+        return QPointF(cx - w / 2, bbox_top - _LABEL_GAP - _LABEL_LINE_H)
+
+    def _sync_options_item(self) -> None:
+        """Update position and visibility of the child options LabelTextItem."""
+        if self._options_item.is_editing:
+            return
+        options = self._component.options
+        if options and not self._ghost:
+            self._options_item.setPlainText(options)
+            if self._component.label_offset is not None:
+                dx, dy = self._component.label_offset
+                self._options_item.setPos(dx, dy)
+            else:
+                self._options_item.setPos(self._default_label_pos())
+            self._options_item.setVisible(True)
+        else:
+            self._options_item.setVisible(False)
+
+    def begin_options_edit(self) -> None:
+        """Show and activate in-place editing for the options string."""
+        if self._options_item.is_editing:
+            return
+        if not self._options_item.isVisible():
+            self._options_item.setPlainText("")
+            self._options_item.setPos(self._default_label_pos())
+            self._options_item.setVisible(True)
+        self._options_item.begin_edit()
+
     # ------------------------------------------------------------------
     # State helpers
     # ------------------------------------------------------------------
 
+    def set_label_interactive(self, interactive: bool) -> None:
+        """Allow or block label dragging (mirrors parent's SELECT-mode flag)."""
+        self._options_item.setFlag(QGraphicsItem.ItemIsMovable, interactive)
+        self._options_item._apply_text_color()
+
     def set_ghost(self, ghost: bool) -> None:
         self._ghost = ghost
+        if ghost:
+            self._options_item.setVisible(False)
+        elif self._component.options:
+            self._options_item.setVisible(True)
         self.update()
 
     def hoverEnterEvent(self, event):  # noqa: N802
@@ -195,27 +403,8 @@ class ComponentItem(QGraphicsItem):
                     QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R
                 )
 
-        # --- labels (verbatim LaTeX string) ------------------------------
-        if not self._ghost and self.component.labels:
-            painter.setPen(_pen(COLOR_NORMAL, 1.0))
-            font = painter.font()
-            font.setPointSizeF(8.0)
-            painter.setFont(font)
-            fm = painter.fontMetrics()
-            line_h = fm.height() + 2
-            x0, y0, x1, y1 = self._defn.bbox
-            cx = (x0 + x1) / 2 * GRID_PX
-            # Start above the bounding box, one line per non-empty slot.
-            non_empty = [(s, t) for s, t in self.component.labels.items() if t]
-            # Position so the bottom of the last line sits just above the bbox top.
-            ty = y0 * GRID_PX - 6 - (len(non_empty) - 1) * line_h
-            for slot, text in non_empty:
-                label_str = f"{slot}: {text}"
-                tw = fm.horizontalAdvance(label_str)
-                painter.drawText(QPointF(cx - tw / 2, ty), label_str)
-                ty += line_h
 
-    # ------------------------------------------------------------------
+# ------------------------------------------------------------------
     # Subclass hook
     # ------------------------------------------------------------------
 

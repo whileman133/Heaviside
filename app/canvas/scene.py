@@ -40,8 +40,10 @@ from app.canvas.commands import (
     DeleteCommand,
     EditCommand,
     MacroCommand,
+    MergeWireCommand,
     MirrorCommand,
     MoveCommand,
+    MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
     RotateCommand,
@@ -53,6 +55,7 @@ from app.canvas.commands import (
 from app.canvas.items import (
     ComponentItem,
     JunctionItem,
+    LabelTextItem,
     OpenCircleItem,
     WireItem,
     WirePreviewItem,
@@ -68,6 +71,7 @@ from app.schematic.model import (
     open_endpoints,
     route,
     simplify_points,
+    wire_corner_splits_at,
     wire_splits_at,
 )
 
@@ -93,6 +97,8 @@ centre falls through to selection/drag while a press right on a pin wires.
 
 _GRID_NORMAL = QColor("#FFD0D0D0")   # integer grid lines
 _GRID_SUB = QColor("#22808080")      # 0.5 GU sub-grid lines (reduced opacity)
+
+_LABEL_CLEARANCE = 6  # px gap used by auto-placement candidates (§8.3)
 
 
 class Mode(Enum):
@@ -155,6 +161,8 @@ class SchematicScene(QGraphicsScene):
 
         # Drag-move bookkeeping: id -> position at drag start (GU)
         self._drag_start: dict[str, tuple[float, float]] = {}
+        # Wire IDs selected at drag-start, captured before super() may deselect them.
+        self._drag_wire_ids: set[str] = set()
 
         # Wire-vertex drag: (wire_id, index, original_point_gu) or None.
         self._vertex_drag: tuple[str, int, tuple[float, float]] | None = None
@@ -298,7 +306,7 @@ class SchematicScene(QGraphicsScene):
         position: tuple[float, float],
         rotation: int = 0,
         mirror: bool = False,
-        labels: dict[str, str] | None = None,
+        options: str = "",
     ) -> Component:
         """Place a component at *position* (GU) via an undoable PlaceCommand."""
         comp = Component(
@@ -306,7 +314,7 @@ class SchematicScene(QGraphicsScene):
             kind=kind,
             position=(self.snap_gu(position[0]), self.snap_gu(position[1])),
             rotation=rotation,
-            labels=labels or {},
+            options=options,
             mirror=mirror,
         )
         self._push(PlaceCommand(comp))
@@ -317,18 +325,19 @@ class SchematicScene(QGraphicsScene):
         points: set[tuple[float, float]],
         exclude_wire_id: str | None = None,
     ) -> list[SplitWireCommand]:
-        """Build SplitWireCommands for any *points* that land mid-segment.
+        """Build SplitWireCommands for any *points* that land mid-segment or at a corner.
 
         For each point that lies strictly inside an existing wire's segment
-        (per :func:`wire_splits_at`), produce a command inserting a vertex
-        there so the connection becomes real topology (and a junction dot
-        appears). *exclude_wire_id* skips a wire that must not split itself
-        (e.g. the wire whose own vertex is being dragged).
+        (per :func:`wire_splits_at`) or at an existing wire's intermediate
+        vertex (per :func:`wire_corner_splits_at`), produce a split command so
+        the connection becomes real topology and a junction dot appears.
+        *exclude_wire_id* skips a wire that must not split itself.
         """
         cmds: list[SplitWireCommand] = []
         seen: set[tuple[str, tuple[float, float]]] = set()
         for pt in points:
-            for wire_id, idx in wire_splits_at(self._schematic, pt):
+            hits = wire_splits_at(self._schematic, pt) + wire_corner_splits_at(self._schematic, pt)
+            for wire_id, idx in hits:
                 if wire_id == exclude_wire_id:
                     continue
                 key = (wire_id, pt)
@@ -364,18 +373,212 @@ class SchematicScene(QGraphicsScene):
         """Delete the current selection via DeleteCommand.
 
         Removes selected components (and any wires connected to their pins) and
-        any directly-selected wires.
+        any directly-selected wires.  If the deletion dissolves a T-junction
+        (leaving exactly two wire endpoints at a free point), the two remaining
+        stubs are automatically merged into one wire as part of the same
+        undoable action.
         """
         comp_ids = self.selected_component_ids()
         wire_ids = self.selected_wire_ids()
-        if comp_ids or wire_ids:
-            self._push(DeleteCommand(comp_ids, wire_ids))
+        if not comp_ids and not wire_ids:
+            return
+        merge_cmds = self._merge_commands_after_delete(comp_ids, wire_ids)
+        delete_cmd = DeleteCommand(comp_ids, wire_ids)
+        if merge_cmds:
+            self._push(MacroCommand([delete_cmd] + merge_cmds, label="Delete"))
+        else:
+            self._push(delete_cmd)
 
-    def edit_component_labels(
-        self, component_id: str, new_labels: dict[str, str]
+    def _merge_commands_after_delete(
+        self,
+        comp_ids: list[str],
+        wire_ids: list[str],
+    ) -> list[MergeWireCommand]:
+        """Return MergeWireCommands for endpoints that become degree-2 after deletion.
+
+        Simulates removing the given components and wires (including pin-connected
+        wires) to find shared endpoints that are no longer junctions.  A
+        MergeWireCommand is emitted for each such point where exactly two wires
+        remain, neither endpoint is a component pin, and the two wires are not
+        themselves being deleted.
+        """
+        # Collect all pin positions for the components being deleted.
+        deleted_pin_positions: set[tuple[float, float]] = set()
+        comp_id_set = set(comp_ids)
+        for comp in self._schematic.components:
+            if comp.id in comp_id_set:
+                for pos in _component_pin_positions(comp):
+                    deleted_pin_positions.add(pos)
+
+        # Wire IDs being removed: explicit selection + pin-connected.
+        explicit = set(wire_ids)
+        removed_ids: set[str] = set(explicit)
+        for wire in self._schematic.wires:
+            if any(wire.points[0] == p or wire.points[-1] == p for p in deleted_pin_positions):
+                removed_ids.add(wire.id)
+
+        # Collect all free endpoints of the wires being removed.
+        candidate_points: set[tuple[float, float]] = set()
+        for wire in self._schematic.wires:
+            if wire.id in removed_ids:
+                candidate_points.add(wire.points[0])
+                candidate_points.add(wire.points[-1])
+
+        # Pin positions of ALL surviving components.
+        surviving_pins: set[tuple[float, float]] = set()
+        for comp in self._schematic.components:
+            if comp.id not in comp_id_set:
+                for pos in _component_pin_positions(comp):
+                    surviving_pins.add(pos)
+
+        # For each candidate point, count surviving wire endpoints there.
+        merge_cmds: list[MergeWireCommand] = []
+        seen_points: set[tuple[float, float]] = set()
+        for pt in candidate_points:
+            if pt in seen_points:
+                continue
+            if pt in surviving_pins:
+                continue
+            neighbors = [
+                w for w in self._schematic.wires
+                if w.id not in removed_ids
+                and (w.points[0] == pt or w.points[-1] == pt)
+            ]
+            if len(neighbors) == 2:
+                seen_points.add(pt)
+                merge_cmds.append(
+                    MergeWireCommand(neighbors[0].id, neighbors[1].id, pt)
+                )
+        return merge_cmds
+
+    def edit_component_options(self, component_id: str, new_options: str) -> None:
+        """Replace the options string of a component via an undoable EditCommand.
+
+        When options transition from empty to non-empty and no label position has
+        been set yet, auto-placement runs first so the label avoids overlapping
+        other component bounding boxes.
+        """
+        comp = next((c for c in self._schematic.components if c.id == component_id), None)
+        if comp is None:
+            return
+        was_empty = not comp.options
+        cmds = [EditCommand(component_id, new_options)]
+        if was_empty and new_options and comp.label_offset is None:
+            offset = self._auto_place_label(component_id, new_options)
+            if offset is not None:
+                cmds.append(MoveOptionsLabelCommand(component_id, offset))
+        if len(cmds) == 1:
+            self._push(cmds[0])
+        else:
+            self._push(MacroCommand(cmds, label="Edit"))
+
+    def move_options_label(
+        self, component_id: str, new_offset: tuple[float, float]
     ) -> None:
-        """Replace the label dict of a component via an undoable EditCommand."""
-        self._push(EditCommand(component_id, new_labels))
+        """Persist a label drag via an undoable MoveOptionsLabelCommand."""
+        self._push(MoveOptionsLabelCommand(component_id, new_offset))
+
+    def _auto_place_label(
+        self, component_id: str, options_text: str
+    ) -> tuple[float, float] | None:
+        """Find a label position near the component that avoids existing bboxes.
+
+        Tries eight candidate offsets around the component (above, below, left,
+        right, and the four diagonals), scores each by overlap area with other
+        component bboxes in scene coordinates, and returns the component-local
+        (dx, dy) for the best candidate.  Returns ``None`` if the default
+        above-centre position is already clear (no change needed).
+        """
+        from app.canvas.items import LabelTextItem as _LabelTextItem  # local to avoid circular at module level
+
+        comp = next((c for c in self._schematic.components if c.id == component_id), None)
+        if comp is None:
+            return None
+
+        item = self._comp_items.get(component_id)
+        if item is None:
+            return None
+
+        # Approximate label size from a temporary text measurement.
+        # Use the options_item child which already has the right font.
+        options_item = next(
+            (ch for ch in item.childItems() if isinstance(ch, _LabelTextItem)), None
+        )
+        if options_item is None:
+            return None
+        options_item.setPlainText(options_text)
+        lw = options_item.boundingRect().width()
+        lh = options_item.boundingRect().height()
+
+        # Component bbox in component-local pixel coords.
+        defn = item._defn
+        x0, y0, x1, y1 = defn.bbox
+        bx0 = x0 * GRID_PX
+        by0 = y0 * GRID_PX
+        bx1 = x1 * GRID_PX
+        by1 = y1 * GRID_PX
+        cx = (bx0 + bx1) / 2
+        bw = bx1 - bx0
+        bh = by1 - by0
+
+        gap = _LABEL_CLEARANCE
+
+        # Eight candidate positions (dx, dy) in component-local px,
+        # ordered by preference: above, right, below, left, then diagonals.
+        candidates: list[tuple[float, float]] = [
+            (cx - lw / 2, by0 - gap - lh),           # above-centre (default)
+            (bx1 + gap, (by0 + by1) / 2 - lh / 2),  # right-middle
+            (cx - lw / 2, by1 + gap),                 # below-centre
+            (bx0 - gap - lw, (by0 + by1) / 2 - lh / 2),  # left-middle
+            (bx1 + gap, by0 - gap - lh),              # top-right
+            (bx1 + gap, by1 + gap),                   # bottom-right
+            (bx0 - gap - lw, by0 - gap - lh),        # top-left
+            (bx0 - gap - lw, by1 + gap),              # bottom-left
+        ]
+
+        # Build scene-space rects for every OTHER component's bbox.
+        obstacle_rects: list[QRectF] = []
+        for other_comp in self._schematic.components:
+            if other_comp.id == component_id:
+                continue
+            other_item = self._comp_items.get(other_comp.id)
+            if other_item is None:
+                continue
+            # Map other item's bbox to scene coords.
+            obstacle_rects.append(
+                other_item.mapToScene(other_item.boundingRect()).boundingRect()
+            )
+
+        # Map the candidate label rects from component-local to scene coords,
+        # then score by total overlap area.
+        def overlap_area(dx: float, dy: float) -> float:
+            label_scene = item.mapToScene(
+                QRectF(dx, dy, lw, lh)
+            ).boundingRect()
+            total = 0.0
+            for obs in obstacle_rects:
+                inter = label_scene.intersected(obs)
+                if not inter.isEmpty():
+                    total += inter.width() * inter.height()
+            return total
+
+        default_dx, default_dy = candidates[0]
+        best_dx, best_dy = default_dx, default_dy
+        best_score = overlap_area(default_dx, default_dy)
+
+        if best_score == 0.0:
+            # Default position is already clear — signal no override needed.
+            return None
+
+        for dx, dy in candidates[1:]:
+            score = overlap_area(dx, dy)
+            if score < best_score:
+                best_score = score
+                best_dx, best_dy = dx, dy
+                if score == 0.0:
+                    break
+
+        return (best_dx, best_dy)
 
     def rotate_component(self, component_id: str, new_rotation: int) -> None:
         """Set the rotation of a component via an undoable RotateCommand."""
@@ -553,6 +756,7 @@ class SchematicScene(QGraphicsScene):
         for item in self._comp_items.values():
             item.setFlag(QGraphicsItem.ItemIsMovable, interactive)
             item.setFlag(QGraphicsItem.ItemIsSelectable, interactive)
+            item.set_label_interactive(interactive)
             if not interactive:
                 item.setSelected(False)
         for item in self._wire_items.values():
@@ -572,7 +776,7 @@ class SchematicScene(QGraphicsScene):
         cls = ITEM_CLASSES.get(kind, ComponentItem)
         ghost_comp = Component(
             id="__ghost__", kind=kind, position=(0.0, 0.0),
-            rotation=self._place_rotation, mirror=self._place_mirror, labels={}
+            rotation=self._place_rotation, mirror=self._place_mirror, options=""
         )
         ghost = cls(ghost_comp)
         ghost.set_ghost(True)
@@ -640,6 +844,22 @@ class SchematicScene(QGraphicsScene):
         if seg is not None:
             return seg, True
         return gu, False
+
+    def _wire_snap_point(
+        self, scene_pt: QPointF
+    ) -> tuple[float, float] | None:
+        """Return the nearest wire vertex or segment point if within snap range.
+
+        Like :meth:`wire_snap_target` but ignores component pins and the bare
+        grid fallback — returns non-None only when the cursor is genuinely on
+        or very close to an existing wire.  Used by the double-click-on-wire
+        gesture to locate the start point for a new wire.
+        """
+        gu = self.snap_point_gu(scene_pt)
+        vtx = self._nearest_wire_vertex_gu(gu)
+        if vtx is not None:
+            return vtx
+        return self._nearest_wire_segment_point_gu(gu)
 
     def _nearest_wire_vertex_gu(
         self, gu: tuple[float, float], exclude_wire_id: str | None = None
@@ -1032,15 +1252,26 @@ class SchematicScene(QGraphicsScene):
         # A single representative delta (all co-dragged items share it).
         dx, dy = next(iter(deltas.values()))
 
+        # When every component is being dragged the whole circuit translates
+        # rigidly, so free wire endpoints (open-circle nodes) move too.
+        all_dragged = (
+            set(self._drag_start.keys()) >= {c.id for c in self._schematic.components}
+        )
+
         previewed: set[str] = set()
         for wire in self._schematic.wires:
             pts = wire.points
             if len(pts) < 2:
                 continue
-            start_hit = (round(pts[0][0], 6), round(pts[0][1], 6)) in start_pins
-            end_hit = (round(pts[-1][0], 6), round(pts[-1][1], 6)) in start_pins
-            if not (start_hit or end_hit):
-                continue
+            # Mirror MoveCommand._reshape_wires exactly: selected wires and
+            # all_dragged both force a rigid translate so free endpoints follow.
+            if all_dragged or wire.id in self._drag_wire_ids:
+                start_hit = end_hit = True
+            else:
+                start_hit = (round(pts[0][0], 6), round(pts[0][1], 6)) in start_pins
+                end_hit = (round(pts[-1][0], 6), round(pts[-1][1], 6)) in start_pins
+                if not (start_hit or end_hit):
+                    continue
             new_pts = reshape_wire_points(
                 pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy,
                 simplify=True,
@@ -1289,6 +1520,13 @@ class SchematicScene(QGraphicsScene):
 
         # SELECT mode: record drag-start positions for a possible MoveCommand.
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            # Capture wire selection NOW — super() can deselect non-movable items
+            # (WireItem has ItemIsMovable=False) when it sets up the component drag.
+            self._drag_wire_ids = {
+                item.wire.id
+                for item in self.selectedItems()
+                if isinstance(item, WireItem)
+            }
             super().mousePressEvent(event)
             self._drag_start = {
                 item.component.id: item.component.position
@@ -1363,9 +1601,14 @@ class SchematicScene(QGraphicsScene):
                 d = (new_gu[0] - start[0], new_gu[1] - start[1])
                 if d != (0.0, 0.0):
                     per_delta.setdefault(d, []).append(cid)
+            drag_wire_ids = list(self._drag_wire_ids)
             self._drag_start = {}
+            self._drag_wire_ids = set()
 
-            move_cmds = [MoveCommand(ids, d) for d, ids in per_delta.items()]
+            move_cmds = [
+                MoveCommand(ids, d, wire_ids=drag_wire_ids)
+                for d, ids in per_delta.items()
+            ]
             if len(move_cmds) == 1:
                 self._push(move_cmds[0])
             elif move_cmds:
@@ -1388,14 +1631,51 @@ class SchematicScene(QGraphicsScene):
                 self.set_mode(Mode.SELECT)
             event.accept()
             return
-        # In SELECT mode, a double-click on a component opens the Properties Panel.
+        # In SELECT mode, a double-click on a wire body enters WIRE mode.
+        # This check runs before the component check so that wires near (or
+        # overlapping with) a component bounding box are not shadowed by the
+        # component's hit area.
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            start = self._wire_snap_point(event.scenePos())
+            if start is not None:
+                self.clearSelection()
+                self._mode = Mode.WIRE
+                self._apply_item_flags()
+                self.mode_changed.emit(Mode.WIRE)
+                self._wire_pts = [start]
+                self._refresh_wire_preview(start, start in self._all_pin_positions())
+                event.accept()
+                return
+
+        # In SELECT mode, a double-click on a label activates in-place editing;
+        # a double-click on the component body opens the Properties Panel.
         if self._mode == Mode.SELECT:
             items = self.items(event.scenePos())
             for it in items:
+                if isinstance(it, LabelTextItem):
+                    it.begin_edit()
+                    event.accept()
+                    return
                 if isinstance(it, ComponentItem):
+                    # Start in-place options editing and open the Properties Panel.
+                    it.begin_options_edit()
                     self.component_double_clicked.emit(it.component.id)
                     event.accept()
                     return
+
+        # In SELECT mode, a double-click on blank canvas enters WIRE mode from
+        # the snapped grid point (no wire or component was hit above).
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            gu = self.snap_point_gu(event.scenePos())
+            self.clearSelection()
+            self._mode = Mode.WIRE
+            self._apply_item_flags()
+            self.mode_changed.emit(Mode.WIRE)
+            self._wire_pts = [gu]
+            self._refresh_wire_preview(gu, False)
+            event.accept()
+            return
+
         super().mouseDoubleClickEvent(event)
 
     # ------------------------------------------------------------------

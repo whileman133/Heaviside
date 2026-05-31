@@ -29,6 +29,7 @@ from app.canvas.commands import (
     EditCommand,
     MacroCommand,
     MoveCommand,
+    MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
     SplitWireCommand,
@@ -57,7 +58,7 @@ def _resistor(comp_id: str | None = None, position=(0.0, 0.0), **kw) -> Componen
         kind="R",
         position=position,
         rotation=kw.get("rotation", 0),
-        labels=kw.get("labels", {}),
+        options=kw.get("options", ""),
         mirror=kw.get("mirror", False),
     )
 
@@ -83,14 +84,14 @@ def test_place_command_updates_model():
 def test_place_inserts_independent_copy():
     """Mutating the original after placement must not affect the model."""
     stack = _stack()
-    comp = _resistor(labels={"l": "$R_1$"})
+    comp = _resistor(options="l=$R_1$")
     stack.push(PlaceCommand(comp))
 
-    comp.labels["l"] = "MUTATED"
+    comp.options = "MUTATED"
     comp.position = (99.0, 99.0)
 
     placed = stack.schematic.components[0]
-    assert placed.labels == {"l": "$R_1$"}
+    assert placed.options == "l=$R_1$"
     assert placed.position == (0.0, 0.0)
 
 
@@ -107,7 +108,7 @@ def test_undo_place():
 
 def test_undo_redo_place():
     stack = _stack()
-    comp = _resistor(labels={"l": "$R_1$"}, rotation=90, mirror=True)
+    comp = _resistor(options="l=$R_1$", rotation=90, mirror=True)
     original = copy.deepcopy(comp)
     stack.push(PlaceCommand(comp))
 
@@ -122,7 +123,7 @@ def test_undo_redo_place():
     assert restored.position == original.position
     assert restored.rotation == original.rotation
     assert restored.mirror == original.mirror
-    assert restored.labels == original.labels
+    assert restored.options == original.options
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +295,18 @@ def test_undo_wire():
 # SplitWireCommand
 # ---------------------------------------------------------------------------
 
-def test_split_wire_inserts_vertex():
+def test_split_wire_creates_two_wires():
+    """SplitWireCommand replaces the original wire with two independent halves."""
     s = Schematic(
         version="0.1", name="t",
         wires=[Wire(id="w", points=[(0.0, 2.0), (4.0, 2.0)])],
     )
     SplitWireCommand("w", 1, (2.0, 2.0)).do(s)
-    assert s.wires[0].points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]
+    assert len(s.wires) == 2
+    pts = sorted([w.points for w in s.wires])
+    assert pts == [[(0.0, 2.0), (2.0, 2.0)], [(2.0, 2.0), (4.0, 2.0)]]
+    # Original wire ID is gone.
+    assert all(w.id != "w" for w in s.wires)
 
 
 def test_split_wire_undo_restores():
@@ -310,22 +316,38 @@ def test_split_wire_undo_restores():
     )
     cmd = SplitWireCommand("w", 1, (2.0, 2.0))
     cmd.do(s)
+    assert len(s.wires) == 2
     cmd.undo(s)
+    assert len(s.wires) == 1
+    assert s.wires[0].id == "w"
     assert s.wires[0].points == [(0.0, 2.0), (4.0, 2.0)]
     cmd.redo(s)
-    assert s.wires[0].points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]
+    assert len(s.wires) == 2
 
 
-def test_split_wire_unknown_or_duplicate_is_safe():
+def test_split_wire_corner_and_endpoint_edge_cases():
+    """Corner (intermediate vertex) is split; endpoint coincidence is a no-op."""
     s = Schematic(
         version="0.1", name="t",
         wires=[Wire(id="w", points=[(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)])],
     )
     # Unknown wire → no-op.
     SplitWireCommand("nope", 1, (1.0, 2.0)).do(s)
-    # Point already a vertex → no duplicate inserted.
+    assert len(s.wires) == 1
+
+    # Splitting at the intermediate vertex (2,2) IS a valid corner split.
     SplitWireCommand("w", 1, (2.0, 2.0)).do(s)
-    assert s.wires[0].points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]
+    assert len(s.wires) == 2
+    pts = sorted([w.points for w in s.wires])
+    assert pts == [[(0.0, 2.0), (2.0, 2.0)], [(2.0, 2.0), (4.0, 2.0)]]
+
+    # Splitting at an endpoint of an existing wire → no-op (point is at pts[0] or pts[-1]).
+    s2 = Schematic(
+        version="0.1", name="t",
+        wires=[Wire(id="x", points=[(0.0, 2.0), (4.0, 2.0)])],
+    )
+    SplitWireCommand("x", 0, (0.0, 2.0)).do(s2)
+    assert len(s2.wires) == 1   # endpoint → no split
 
 
 def test_split_plus_wire_macro_is_one_undo():
@@ -343,44 +365,48 @@ def test_split_plus_wire_macro_is_one_undo():
         label="Wire",
     )
     stack.push(macro)
-    assert stack.schematic.wires[0].points == [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)]
-    assert len(stack.schematic.wires) == 2
+    # Two halves + new wire = 3 wires total.
+    assert len(stack.schematic.wires) == 3
+    all_pts = sorted([w.points for w in stack.schematic.wires])
+    assert [(0.0, 2.0), (2.0, 2.0)] in all_pts
+    assert [(2.0, 2.0), (4.0, 2.0)] in all_pts
     assert stack.undo_count == 1
 
     stack.undo()
-    assert stack.schematic.wires[0].points == [(0.0, 2.0), (4.0, 2.0)]
     assert len(stack.schematic.wires) == 1
+    assert stack.schematic.wires[0].id == "a"
+    assert stack.schematic.wires[0].points == [(0.0, 2.0), (4.0, 2.0)]
 
 
 # ---------------------------------------------------------------------------
 # EditCommand
 # ---------------------------------------------------------------------------
 
-def test_undo_edit_label():
+def test_undo_edit_options():
     stack = _stack()
-    comp = _resistor(comp_id="r1", labels={"l": "$R_1$"})
+    comp = _resistor(comp_id="r1", options="l=$R_1$")
     stack.push(PlaceCommand(comp))
 
-    stack.push(EditCommand("r1", new_labels={"l": "$R_2$", "v": "$V$"}))
-    assert stack.schematic.components[0].labels == {"l": "$R_2$", "v": "$V$"}
+    stack.push(EditCommand("r1", new_options="l=$R_2$, v=$V$"))
+    assert stack.schematic.components[0].options == "l=$R_2$, v=$V$"
 
     stack.undo()
-    assert stack.schematic.components[0].labels == {"l": "$R_1$"}
+    assert stack.schematic.components[0].options == "l=$R_1$"
 
     stack.redo()
-    assert stack.schematic.components[0].labels == {"l": "$R_2$", "v": "$V$"}
+    assert stack.schematic.components[0].options == "l=$R_2$, v=$V$"
 
 
-def test_edit_with_explicit_old_labels():
+def test_edit_with_explicit_old_options():
     stack = _stack()
-    comp = _resistor(comp_id="r1", labels={"l": "x"})
+    comp = _resistor(comp_id="r1", options="l=x")
     stack.push(PlaceCommand(comp))
 
-    cmd = EditCommand("r1", new_labels={"l": "y"}, old_labels={"l": "x"})
+    cmd = EditCommand("r1", new_options="l=y", old_options="l=x")
     stack.push(cmd)
-    assert stack.schematic.components[0].labels == {"l": "y"}
+    assert stack.schematic.components[0].options == "l=y"
     stack.undo()
-    assert stack.schematic.components[0].labels == {"l": "x"}
+    assert stack.schematic.components[0].options == "l=x"
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +504,7 @@ def test_undo_stack_depth():
         ops.append(MoveCommand([cid], delta=(1.0, 0.5)))
     # 4 edits
     for cid in comp_ids[:4]:
-        ops.append(EditCommand(cid, new_labels={"l": f"${cid}$"}))
+        ops.append(EditCommand(cid, new_options=f"l=${cid}$"))
     # 2 wires
     ops.append(WireCommand(Wire(id="w0", points=[(0.0, 0.0), (3.0, 0.0)])))
     ops.append(WireCommand(Wire(id="w1", points=[(0.0, 0.0), (0.0, 3.0)])))
@@ -508,7 +534,7 @@ def test_full_undo_then_full_redo_roundtrip():
     a = _resistor(comp_id="a", position=(0.0, 0.0))
     stack.push(PlaceCommand(a))
     stack.push(MoveCommand(["a"], delta=(2.0, 0.0)))
-    stack.push(EditCommand("a", new_labels={"l": "$R_a$"}))
+    stack.push(EditCommand("a", new_options="l=$R_a$"))
 
     after = copy.deepcopy(stack.schematic)
 
@@ -765,3 +791,146 @@ def test_vertex_move_via_stack():
     assert validate(stack.schematic) == []
     stack.undo()
     assert stack.schematic.wires[0].points == [(0.0, 0.0), (2.0, 0.0), (2.0, 3.0)]
+
+
+# ---------------------------------------------------------------------------
+# MoveOptionsLabelCommand
+# ---------------------------------------------------------------------------
+
+def test_move_options_label_sets_offset():
+    stack = _stack()
+    comp = _resistor(comp_id="r1")
+    stack.push(PlaceCommand(comp))
+    assert stack.schematic.components[0].label_offset is None
+
+    stack.push(MoveOptionsLabelCommand("r1", (10.0, -20.0)))
+    assert stack.schematic.components[0].label_offset == (10.0, -20.0)
+
+
+def test_move_options_label_undo():
+    stack = _stack()
+    comp = _resistor(comp_id="r1")
+    stack.push(PlaceCommand(comp))
+    stack.push(MoveOptionsLabelCommand("r1", (5.0, 3.0)))
+    assert stack.schematic.components[0].label_offset == (5.0, 3.0)
+
+    stack.undo()
+    assert stack.schematic.components[0].label_offset is None
+
+
+def test_move_options_label_undo_preserves_prior_offset():
+    stack = _stack()
+    comp = _resistor(comp_id="r1")
+    stack.push(PlaceCommand(comp))
+    stack.push(MoveOptionsLabelCommand("r1", (5.0, 3.0)))
+    stack.push(MoveOptionsLabelCommand("r1", (9.0, 1.0)))
+
+    stack.undo()
+    assert stack.schematic.components[0].label_offset == (5.0, 3.0)
+
+    stack.undo()
+    assert stack.schematic.components[0].label_offset is None
+
+
+def test_move_options_label_redo():
+    stack = _stack()
+    comp = _resistor(comp_id="r1")
+    stack.push(PlaceCommand(comp))
+    stack.push(MoveOptionsLabelCommand("r1", (7.0, -4.0)))
+    stack.undo()
+    stack.redo()
+    assert stack.schematic.components[0].label_offset == (7.0, -4.0)
+
+
+def test_move_options_label_clears_offset():
+    stack = _stack()
+    comp = _resistor(comp_id="r1")
+    stack.push(PlaceCommand(comp))
+    stack.push(MoveOptionsLabelCommand("r1", (5.0, 5.0)))
+    stack.push(MoveOptionsLabelCommand("r1", None))
+    assert stack.schematic.components[0].label_offset is None
+
+    stack.undo()
+    assert stack.schematic.components[0].label_offset == (5.0, 5.0)
+
+
+# ---------------------------------------------------------------------------
+# MoveCommand — free-endpoint (open-circle) wires follow select-all drags
+# ---------------------------------------------------------------------------
+
+def test_move_all_translates_free_endpoint():
+    """Dragging all components rigidly translates free wire endpoints too.
+
+    Two-component schematic: moving both (select-all) translates the free end;
+    moving only one (partial) leaves the free end anchored.
+    """
+    stack = _stack()
+    a = _resistor(comp_id="a", position=(0.0, 0.0))   # pins at (0,0) and (2,0)
+    b = _resistor(comp_id="b", position=(4.0, 0.0))   # pins at (4,0) and (6,0)
+    stack.push(PlaceCommand(a))
+    stack.push(PlaceCommand(b))
+    # Wire from b's 'out' pin (6,0) to a free end at (8,0).
+    stack.push(WireCommand(Wire(id="w1", points=[(6.0, 0.0), (8.0, 0.0)])))
+
+    # Moving only 'b' — partial drag — free end stays anchored.
+    stack.push(MoveCommand(["b"], delta=(1.0, 0.0)))
+    assert stack.schematic.wires[0].points[-1] == (8.0, 0.0)
+    stack.undo()
+
+    # Moving both (select-all) — free end moves with the circuit.
+    stack.push(MoveCommand(["a", "b"], delta=(1.0, 0.0)))
+    assert stack.schematic.wires[0].points[-1] == (9.0, 0.0)
+
+
+def test_move_all_free_endpoint_undo():
+    """Undo of a select-all move restores the free endpoint to its original position."""
+    stack = _stack()
+    comp = _resistor(comp_id="r1", position=(0.0, 0.0))
+    stack.push(PlaceCommand(comp))
+    stack.push(WireCommand(Wire(id="w1", points=[(2.0, 0.0), (4.0, 0.0)])))
+
+    stack.push(MoveCommand(["r1"], delta=(2.0, 0.0)))
+    assert stack.schematic.wires[0].points[-1] == (6.0, 0.0)
+
+    stack.undo()
+    assert stack.schematic.wires[0].points[-1] == (4.0, 0.0)
+
+
+def test_partial_move_leaves_free_endpoint():
+    """Dragging a subset of components does NOT move unconnected free endpoints."""
+    stack = _stack()
+    a = _resistor(comp_id="a", position=(0.0, 0.0))
+    b = _resistor(comp_id="b", position=(4.0, 0.0))
+    stack.push(PlaceCommand(a))
+    stack.push(PlaceCommand(b))
+    # Wire from b's 'out' pin (6,0) to a free end at (8,0).
+    stack.push(WireCommand(Wire(id="w1", points=[(6.0, 0.0), (8.0, 0.0)])))
+
+    # Move only 'a' — free end of w1 (not touching a) should not move.
+    stack.push(MoveCommand(["a"], delta=(1.0, 0.0)))
+    wire = stack.schematic.wires[0]
+    assert wire.points[-1] == (8.0, 0.0)   # free end stays
+
+
+def test_explicit_wire_ids_translate_rigidly():
+    """Explicitly passing wire_ids causes those wires to translate rigidly."""
+    # Two components so dragging only 'a' is a genuine partial drag.
+    stack = _stack()
+    a = _resistor(comp_id="a", position=(0.0, 0.0))
+    b = _resistor(comp_id="b", position=(4.0, 0.0))
+    stack.push(PlaceCommand(a))
+    stack.push(PlaceCommand(b))
+    # Free wire not connected to any component pin.
+    stack.push(WireCommand(Wire(id="w_free", points=[(8.0, 0.0), (10.0, 0.0)])))
+
+    # Partial drag of 'a' without wire_ids: free wire stays.
+    stack.push(MoveCommand(["a"], delta=(1.0, 0.0)))
+    assert stack.schematic.wires[0].points == [(8.0, 0.0), (10.0, 0.0)]
+    stack.undo()
+
+    # Same drag but with w_free explicitly included: free wire translates.
+    stack.push(MoveCommand(["a"], delta=(1.0, 0.0), wire_ids=["w_free"]))
+    assert stack.schematic.wires[0].points == [(9.0, 0.0), (11.0, 0.0)]
+
+    stack.undo()
+    assert stack.schematic.wires[0].points == [(8.0, 0.0), (10.0, 0.0)]

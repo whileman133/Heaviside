@@ -25,7 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -75,6 +75,14 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._build_central()
         self._build_statusbar()
+
+        # -- Window-level Escape: cancel placement/wire regardless of focus ----
+        # The view's keyPressEvent also handles Escape when the view has focus,
+        # but clicking a palette entry shifts focus to the palette widget.  A
+        # window-level QShortcut fires regardless of which child widget is focused.
+        esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
+        esc.setContext(Qt.WindowShortcut)
+        esc.activated.connect(self._scene.cancel_current)
 
         # -- Wire signals ---------------------------------------------------
         self._connect_signals()
@@ -314,6 +322,11 @@ class MainWindow(QMainWindow):
     def _on_schematic_changed(self) -> None:
         self._modified = True
         self._update_title()
+        # Keep the properties panel in sync when a single component is selected
+        # (e.g. after an in-place options edit that doesn't change the selection).
+        comp_ids = self._scene.selected_component_ids()
+        if len(comp_ids) == 1:
+            self._props.show_component(comp_ids[0])
 
     def _on_selection_changed(self, comp_ids: list[str]) -> None:
         if len(comp_ids) == 0:

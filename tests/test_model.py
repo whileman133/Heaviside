@@ -41,7 +41,7 @@ def _make_schematic(*components, wires=()) -> Schematic:
 
 
 def _resistor(**kwargs) -> Component:
-    defaults = dict(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, labels={})
+    defaults = dict(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, options="")
     defaults.update(kwargs)
     return Component(**defaults)
 
@@ -273,7 +273,7 @@ def _W(wid, pts):
 
 
 def _R(cid, pos):
-    return Component(id=cid, kind="R", position=pos, rotation=0, labels={})
+    return Component(id=cid, kind="R", position=pos, rotation=0, options="")
 
 
 def test_junction_three_wires_meeting() -> None:

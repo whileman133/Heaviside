@@ -97,14 +97,17 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
 
 
 def _component_to_dict(c: Component) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "id": c.id,
         "kind": c.kind,
         "position": list(c.position),
         "rotation": c.rotation,
         "mirror": c.mirror,
-        "labels": c.labels,
+        "options": c.options,
     }
+    if c.label_offset is not None:
+        d["label_offset"] = list(c.label_offset)
+    return d
 
 
 def _wire_to_dict(w: Wire) -> dict[str, Any]:
@@ -187,11 +190,33 @@ def _dict_to_component(data: Any, index: int) -> Component:
         raise SchematicLoadError(f"{ctx}.position values must be numbers") from exc
 
     mirror = bool(data.get("mirror", False))
-    labels = data.get("labels", {})
-    if not isinstance(labels, dict):
-        raise SchematicLoadError(f"{ctx}.labels must be an object")
-    if not all(isinstance(k, str) and isinstance(v, str) for k, v in labels.items()):
-        raise SchematicLoadError(f"{ctx}.labels keys and values must all be strings")
+
+    if "options" in data:
+        options = data["options"]
+        if not isinstance(options, str):
+            raise SchematicLoadError(f"{ctx}.options must be a string")
+    elif "labels" in data:
+        # Migrate v0.1 files that stored a labels dict instead of an options string.
+        old_labels = data["labels"]
+        if not isinstance(old_labels, dict):
+            raise SchematicLoadError(f"{ctx}.labels must be an object")
+        options = ", ".join(
+            f"{k}={v}" for k, v in old_labels.items() if isinstance(v, str) and v
+        )
+    else:
+        options = ""
+
+    label_offset: tuple[float, float] | None = None
+    raw_lo = data.get("label_offset")
+    if raw_lo is not None:
+        if not (isinstance(raw_lo, list) and len(raw_lo) == 2):
+            raise SchematicLoadError(f"{ctx}.label_offset must be a two-element array")
+        try:
+            label_offset = (float(raw_lo[0]), float(raw_lo[1]))
+        except (TypeError, ValueError) as exc:
+            raise SchematicLoadError(
+                f"{ctx}.label_offset values must be numbers"
+            ) from exc
 
     return Component(
         id=comp_id,
@@ -199,7 +224,8 @@ def _dict_to_component(data: Any, index: int) -> Component:
         position=position,
         rotation=rot_raw,
         mirror=mirror,
-        labels=labels,
+        options=options,
+        label_offset=label_offset,
     )
 
 

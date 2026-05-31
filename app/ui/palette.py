@@ -42,7 +42,7 @@ def _render_thumbnail(kind: str) -> QPixmap:
         position=(0.0, 0.0),
         rotation=0,
         mirror=False,
-        labels={},
+        options="",
     )
     cls = ITEM_CLASSES.get(kind, ComponentItem)
     item = cls(comp)

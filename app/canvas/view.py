@@ -23,6 +23,7 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QGraphicsView
 
+from app.canvas.items import LabelTextItem
 from app.canvas.scene import Mode, SchematicScene
 from app.canvas.style import GRID_PX
 
@@ -166,6 +167,12 @@ class SchematicView(QGraphicsView):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
+        # When a label is being in-place edited, let all key events route to
+        # the focused QGraphicsTextItem instead of being intercepted here.
+        if isinstance(self._scene.focusItem(), LabelTextItem):
+            super().keyPressEvent(event)
+            return
+
         key = event.key()
         mods = event.modifiers()
 
