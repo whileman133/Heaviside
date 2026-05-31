@@ -1,0 +1,32 @@
+[project]
+name = "heaviside"
+version = "0.1.0"
+description = "Graphical editor for CircuiTikZ circuit diagrams"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.5",
+    "pydantic>=2.0",
+    "pdf2image>=1.16",
+]
+
+[project.scripts]
+heaviside = "main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.2",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing"
+
+[tool.coverage.run]
+omit = [
+    "app/ui/*",
+    "app/canvas/scene.py",
+    "app/canvas/view.py",
+    "app/canvas/items.py",
+]

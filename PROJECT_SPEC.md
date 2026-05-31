@@ -1,0 +1,1207 @@
+# Heaviside — Specification
+
+**Version:** 0.2  
+**Status:** Draft  
+**Author:** Wes H.
+
+---
+
+## 0. Spec Maintenance (Mandatory)
+
+**This specification is a living document and must stay in sync with the implementation at all times.**
+
+Whenever a feature is **added, changed, or removed** — by a human or an AI agent — the same change set MUST also update this specification so that the spec always describes the software as it actually behaves. A change is not complete until the spec reflects it. Specifically:
+
+- **Adding a feature:** document its behavior in the relevant section(s) (data model, canvas behavior, code generation, UI, etc.), add or update any affected invariants, commands, keyboard shortcuts, and acceptance criteria, and add corresponding test entries in Section 13.
+- **Changing a feature:** edit every section that describes the old behavior so no stale description remains. Search the whole document for affected terms.
+- **Removing a feature:** delete its description (do not leave orphaned references) and move it to Section 15 (Out of Scope) if it is deferred rather than abandoned.
+- **Version bump:** increment the spec **Version** field for any substantive behavioral change, and note new behavior under the appropriate section.
+
+AI agents working on this project are explicitly required to follow this rule on every task that touches behavior. If a requested change would make the code and spec disagree, update both in the same change; if that is not possible, flag the discrepancy rather than silently letting them diverge (see Section 14.3).
+
+---
+
+## 1. Purpose and Scope
+
+This document specifies a graphical editor for creating publication-quality circuit diagrams that output valid CircuiTikZ LaTeX markup. The tool targets researchers and engineers who author documents in LaTeX or LyX and require schematics with typeset mathematical annotations (e.g., component labels containing equations).
+
+### 1.1 Goals
+
+- Provide a grid-disciplined, fixed-component-size canvas for schematic entry
+- Emit clean, human-readable CircuiTikZ source as the primary output format
+- Support lossless save/load via a JSON schematic format
+- Support LaTeX equation strings in all component label slots
+- Provide a rendered PDF preview of the current schematic
+- Support wire-to-wire connectivity with automatic junction (connection) dots
+- Be extensible: adding a new component type requires adding one registry entry and one `ComponentItem` subclass
+
+### 1.2 Non-Goals (v1)
+
+- Netlist export or circuit simulation
+- PCB layout or component footprints
+- SPICE integration
+- LyX/LaTeX editor plugin or inset integration
+- Round-trip parsing of existing CircuiTikZ source into the visual canvas
+- Arbitrary free-rotation (only 0°, 90°, 180°, 270°)
+- Hierarchical or multi-sheet schematics
+- Bus wiring
+
+---
+
+## 2. Glossary
+
+| Term | Definition |
+|------|------------|
+| **Grid unit (GU)** | The fundamental spatial unit of the canvas. 1 GU = 1 CircuiTikZ coordinate unit. All coordinates, component sizes, and wire endpoints are integer multiples of 0.5 GU. |
+| **Component** | A placed instance of a component type on the canvas (e.g., a specific resistor at a specific location). |
+| **ComponentDef** | A static definition of a component type: its CircuiTikZ keyword, bounding box, pin locations, and label slots. Lives in the component registry. |
+| **ComponentItem** | A `QGraphicsItem` subclass responsible for painting one component type on the canvas using `QPainter`. One subclass per component type. |
+| **Pin** | A named connection point on a component, located at a fixed offset from the component origin, always on a 0.5 GU boundary. |
+| **Wire** | A Manhattan-routed (horizontal + vertical segments only) polyline connecting pins, other wires, and/or open grid points. |
+| **Junction** | A coordinate where wires/pins are electrically tied together such that a connection must be marked — defined by the degree rule in §6.4. Rendered as a solid dot on the canvas and emitted as `\node[circ]` in the output. |
+| **Open endpoint** | A wire endpoint that does not coincide with any component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. |
+| **Label slot** | A named annotation site on a component (e.g., `l`, `l_`, `v`, `v^`, `i`, `i_`) that accepts an arbitrary LaTeX string. |
+| **Schematic** | The complete logical description of a circuit: a list of components, a list of wires, and metadata. |
+| **Registry** | The global static dictionary mapping CircuiTikZ keywords to `ComponentDef` objects. |
+| **Origin** | The canvas coordinate (0, 0), located at the top-left of the canvas grid. Y increases downward, consistent with Qt's coordinate system. |
+| **GRID_PX** | The number of screen pixels per grid unit at 1:1 zoom. All `QPainter` drawing coordinates are expressed as multiples of this constant. |
+
+---
+
+## 3. Grid and Coordinate System
+
+### 3.1 Grid Definition
+
+- The canvas grid has spacing of **1.0 GU**.
+- All component placements and wire vertices snap to **0.5 GU** increments (half-grid snap).
+- The grid is rendered as a light dotted or solid line pattern in the canvas background.
+- Grid lines at integer GU intervals are drawn at normal weight; sub-grid lines at 0.5 GU intervals are drawn at reduced opacity.
+
+### 3.2 Coordinate Convention
+
+- X increases to the right.
+- Y increases downward (Qt native convention).
+- Component position is defined as the location of its **origin pin** (the `in` or leftmost pin for two-terminal devices) in grid coordinates.
+- All pin offsets in `ComponentDef` are relative to the component origin, before rotation is applied.
+
+### 3.3 Rotation
+
+- Rotation is restricted to **0°, 90°, 180°, 270°** (multiples of 90°).
+- Rotation is applied about the component origin pin.
+- Pin positions are rotated accordingly at placement time.
+- CircuiTikZ direction keywords (`right`, `up`, `left`, `down`) are derived from the rotation angle at code generation time.
+
+### 3.4 Zoom and Pan
+
+- The canvas supports continuous zoom via scroll wheel and pinch gesture.
+- Pan via middle-mouse drag or spacebar + left-mouse drag.
+- A "fit to schematic" action zooms to show all placed components with a fixed margin.
+- Zoom does not affect grid unit size or snap behavior — those remain in schematic coordinates.
+
+---
+
+## 4. Data Model
+
+All persistent state is represented by plain Python dataclasses. The UI layer holds no schematic state independently; it derives all display from the model.
+
+### 4.1 `ComponentDef`
+
+Defined once per component type in the registry. Never instantiated per placed component.
+
+```python
+@dataclass(frozen=True)
+class PinDef:
+    name: str                        # e.g. "in", "out", "plus", "minus"
+    offset: tuple[float, float]      # (dx, dy) from component origin, in GU
+
+@dataclass(frozen=True)
+class ComponentDef:
+    kind: str                        # CircuiTikZ keyword, e.g. "R", "C", "op amp"
+    display_name: str                # Human-readable, e.g. "Resistor"
+    category: str                    # e.g. "Passives", "Amplifiers", "Sources"
+    bbox: tuple[float, float, float, float]  # (x0, y0, x1, y1) relative to origin, in GU
+    pins: list[PinDef]
+    label_slots: list[str]           # e.g. ["l", "l_", "v", "v^", "i", "i_"]
+    tikz_keyword: str                # CircuiTikZ node/path keyword
+    default_span: tuple[float, float]  # (dx, dy) from origin to terminal pin, in GU
+```
+
+### 4.2 `Component`
+
+One instance per placed component.
+
+```python
+@dataclass
+class Component:
+    id: str                          # UUID, assigned at placement
+    kind: str                        # Must exist as key in REGISTRY
+    position: tuple[float, float]    # (x, y) of origin pin in schematic coordinates
+    rotation: int                    # 0, 90, 180, or 270 degrees
+    labels: dict[str, str]           # slot_name → LaTeX string, e.g. {"l": "$R_1$"}
+    mirror: bool = False             # horizontal mirror before rotation
+```
+
+### 4.3 `Wire`
+
+```python
+@dataclass
+class Wire:
+    id: str                          # UUID
+    points: list[tuple[float, float]]  # Ordered Manhattan path vertices, in schematic coords
+    # All vertices lie on 0.5 GU boundaries
+    # All consecutive segment pairs are strictly horizontal or vertical
+    # The point list is kept minimal: no consecutive duplicates and no
+    # redundant collinear interior vertices (see §6.4 "Wire Simplification")
+```
+
+**Connectivity.** Wires connect to component pins, to other wires, and to bare
+grid points purely by **coincident coordinates** — there is no explicit
+endpoint-reference field. Two wires are electrically joined wherever they share
+a vertex coordinate, and a wire is connected to a pin when one of its vertices
+equals that pin's coordinate. Connection (junction) dots are derived from this
+geometry, not stored (see §6.4 "Junctions and segment splitting" and §7.6).
+
+### 4.4 `Schematic`
+
+The root document object.
+
+```python
+@dataclass
+class Schematic:
+    version: str                     # Spec version this was created under, e.g. "0.1"
+    name: str                        # User-visible schematic name
+    components: list[Component]
+    wires: list[Wire]
+    metadata: dict[str, Any]         # Arbitrary key-value store for future use
+```
+
+### 4.5 Invariants
+
+The following must hold at all times for a valid schematic:
+
+1. All `Component.kind` values exist as keys in `REGISTRY`.
+2. All `Component.rotation` values are in `{0, 90, 180, 270}`.
+3. All `Wire.points` vertices lie on 0.5 GU boundaries.
+4. All consecutive wire segment pairs are strictly horizontal or vertical (Manhattan constraint).
+5. No two components share the same `id`; no two wires share the same `id`.
+
+Note: distinct wires **may** share vertex coordinates — that is how connections
+and multi-wire junctions are formed (see §6.4). Sharing a coordinate is a valid
+connection, not an id collision.
+
+---
+
+## 5. Component Registry and Painting
+
+### 5.1 Registry Structure
+
+The registry is a module-level dictionary:
+
+```python
+REGISTRY: dict[str, ComponentDef] = { ... }
+```
+
+It is populated at import time from static definitions. No runtime mutation.
+
+### 5.2 ComponentItem and Painting
+
+Each component type has a corresponding `QGraphicsItem` subclass that implements `paint()` using `QPainter`. All drawing coordinates are expressed in pixels, derived from a shared set of constants defined in `app/canvas/style.py`:
+
+```python
+GRID_PX  = 60     # pixels per grid unit at 1:1 zoom
+LINE_W   = 2.0    # stroke width for component bodies and wires
+PIN_R    = 3.0    # radius of pin indicator dot
+LEAD_LEN = 15     # length of lead-in/lead-out wire stubs, in pixels
+```
+
+All `ComponentItem` subclasses import these constants, ensuring consistent proportions across all component types regardless of zoom level (Qt's `QGraphicsView` scales the painter automatically).
+
+#### Symbol Source — SVG Reference Files
+
+Component symbols are derived from **CircuiTikZ SVG exports** generated by the script at `tools/export_circuitikz_svgs.sh`. The script renders each component using `latex` + `dvisvgm` with the `[american]` CircuiTikZ option and collects the resulting `<path d="...">` elements into `tools/circuitikz_svgs/manifest.json`.
+
+To implement a new `ComponentItem`, look up the component in `manifest.json`, read the `paths` array, and translate each SVG path `d` string into `QPainterPath` calls:
+
+| SVG command | `QPainterPath` equivalent |
+|-------------|--------------------------|
+| `M x y` | `path.moveTo(x, y)` |
+| `L x y` | `path.lineTo(x, y)` |
+| `H x` | `path.lineTo(x, path.currentPosition().y())` |
+| `V y` | `path.lineTo(path.currentPosition().x(), y)` |
+| `C x1 y1 x2 y2 x y` | `path.cubicTo(x1, y1, x2, y2, x, y)` |
+| `Z` | `path.closeSubpath()` |
+
+Coordinates are scaled from SVG pt units to `GRID_PX` by dividing by the SVG `viewBox` height and multiplying by the component's height in pixels. The SVG y-axis matches Qt's (y-down), so no axis flip is required.
+
+Paths with `fill='none'` are stroked only; paths with no `fill` attribute (or `fill='#000'`) are filled. `stroke_width` values in the manifest are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`.
+
+The mapping from `kind` to item class is:
+
+```python
+ITEM_CLASSES: dict[str, type[ComponentItem]] = {
+    "R":       ResistorItem,
+    "C":       CapacitorItem,
+    "L":       InductorItem,
+    "D":       DiodeItem,
+    "op amp":  OpAmpItem,
+    "nigfete": NigfeteItem,
+    "V":       VoltageSourceItem,
+    "I":       CurrentSourceItem,
+    "vsource": AcVoltageSourceItem,
+    "isource": AcCurrentSourceItem,
+    "cV":      VcvsItem,
+    "cI":      VccsItem,
+}
+```
+
+Each `ComponentItem` subclass:
+
+- Implements `boundingRect()` based on `ComponentDef.bbox` scaled by `GRID_PX`.
+- Implements `paint()` drawing the component symbol as `QPainterPath` geometry translated from the SVG reference.
+- Renders pin indicator dots at all `PinDef` offsets.
+- Adjusts pen color and style based on item state: normal, selected (highlight color), hover, and ghost (semi-transparent, used during placement).
+- Renders label text from `Component.labels` as plain text adjacent to the appropriate pin. LaTeX markup is shown verbatim on the canvas (e.g., `$R_1$`); the LaTeX preview panel shows the rendered result.
+
+### 5.3 Palette Thumbnails
+
+The component palette renders each component's thumbnail by instantiating its `ComponentItem` and painting it into a `QPixmap` at a fixed small scale. No separate thumbnail assets are needed.
+
+### 5.4 v1 Component Set
+
+#### Passives
+
+| Kind | Display Name | Pins | Default Span | Label Slots |
+|------|-------------|------|-------------|-------------|
+| `R` | Resistor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+| `C` | Capacitor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+| `L` | Inductor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+| `D` | Diode | `anode` (0,0), `cathode` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+
+#### Amplifiers
+
+| Kind | Display Name | Pins | Label Slots |
+|------|-------------|------|-------------|
+| `op amp` | Op-Amp | `+` (-1.5,0.5), `-` (-1.5,-0.5), `out` (1.5,0) | `l` |
+
+#### Sources (Fixed)
+
+| Kind | Display Name | Pins | Label Slots |
+|------|-------------|------|-------------|
+| `V` | Voltage Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
+| `I` | Current Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
+| `vsource` | AC Voltage Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
+| `isource` | AC Current Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
+
+#### Sources (Dependent)
+
+| Kind | Display Name | Pins | Label Slots |
+|------|-------------|------|-------------|
+| `cV` | VCVS | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
+| `cI` | VCCS | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
+
+#### MOSFETs
+
+| Kind | Display Name | Pins | Label Slots |
+|------|-------------|------|-------------|
+| `nigfete` | NMOS | `gate` (0,0), `drain` (1.5,-1), `source` (1.5,1) | `l` |
+
+The symbol matches CircuiTikZ's `nigfete` node: enhancement-mode broken channel line (three dashes), gate electrode with oxide gap, bulk/substrate line with arrow, and internal source-bulk short with solder dot.
+
+### 5.5 Extensibility
+
+To add a new component type:
+
+1. Run `tools/export_circuitikz_svgs.sh` (or add the component name to its lists and re-run) to generate the SVG reference and update `manifest.json`.
+2. Add a `ComponentDef` entry to `REGISTRY` in `app/components/registry.py`, with `bbox` and `pins` derived from the SVG `viewBox` dimensions and CircuiTikZ anchor positions.
+3. Add a `ComponentItem` subclass to `app/canvas/items.py`, translating the manifest `paths` array to `QPainterPath` calls as described in §5.2.
+4. Add the mapping entry to `ITEM_CLASSES` in `app/canvas/items.py`.
+5. No changes to the schematic model, code generator, or UI layout are required.
+
+### 5.6 Component Symbol Conventions
+
+All canvas symbols follow **American/IEEE style**, matching the `[american]` CircuiTikZ option used to generate the SVG reference files. This ensures pixel-accurate visual correspondence between the canvas and the compiled LaTeX output.
+
+#### General Drawing Rules
+
+- All symbols are drawn as `QPainterPath` geometry translated from `tools/circuitikz_svgs/manifest.json`. No external image assets are used.
+- Stroke width is `LINE_W` for normal strokes and `LINE_W * 2` for thick strokes (e.g. gate electrodes). At palette thumbnail scale (32×32px), stroke width is reduced to `LINE_W_THIN` to prevent fine detail from filling in.
+- Pin indicator dots of radius `PIN_R` are drawn at every `PinDef` offset. They are visible in normal and selected states; suppressed in ghost (placement preview) state.
+- No label text is drawn inside palette thumbnails. Component identity is conveyed by shape alone.
+- Each symbol is scaled so its bounding box fills the `ComponentDef.bbox` area with consistent padding on all sides.
+
+#### Junction (Connection) Dots
+
+A solid filled dot (radius slightly larger than `PIN_R`) is drawn on the canvas
+at every junction coordinate derived per §6.4 (degree ≥ 3). Junction dots are
+non-interactive overlay items, drawn above wires, and correspond exactly to the
+`\node[circ]` connection nodes emitted by the code generator (§7.6). They are
+recomputed from wire/pin geometry whenever the schematic changes; they are not
+stored in the model.
+
+#### Open-Circle Nodes (Unconnected Wire Endpoints)
+
+An open circle (same radius as a junction dot, unfilled) is drawn on the canvas
+at every wire endpoint that does not coincide with any component pin. Open-circle
+nodes are non-interactive overlay items drawn above wires, and correspond exactly
+to the `\node[ocirc]` nodes emitted by the code generator (§7.6). Only the first
+and last point of each wire are candidates; interior vertices are never open
+endpoints. Like junction dots, they are recomputed whenever the schematic changes
+and are not stored in the model. During a **live drag preview** (vertex drag or
+component drag), open-circle items track the previewed endpoint positions in
+real time — they do not wait for the drag to be committed.
+
+---
+
+## 6. Canvas Behavior
+
+### 6.1 Interaction Modes
+
+The canvas operates in one of the following mutually exclusive modes at any time:
+
+| Mode | Trigger | Cursor |
+|------|---------|--------|
+| **Select** | Default; press `Escape` | Arrow |
+| **Place** | Click component in palette | Crosshair + ghost component |
+| **Wire** | Press `W` or click wire tool | Pen |
+| **Pan** | Hold `Space` + drag | Hand |
+
+### 6.2 Component Placement
+
+1. User clicks a component in the palette → canvas enters **Place** mode.
+2. A ghost (semi-transparent) rendering of the component follows the cursor, snapping to 0.5 GU.
+3. Left-click places the component at the snapped position and records an undoable `PlaceCommand`.
+4. Right-click or `Escape` cancels placement and returns to **Select** mode.
+5. After placement, the canvas remains in **Place** mode for rapid repeated placement of the same component type.
+
+### 6.3 Component Selection and Movement
+
+- Left-click a component to select it (deselects others). Pressing on a
+  component's **body** selects/drags it; pressing on a free pin instead starts a
+  wire (see §6.4 "Auto-enter wire mode").
+- `Ctrl+click` adds to or removes from the selection.
+- Rubber-band drag (drag on empty canvas) selects all components and wire segments within the rectangle.
+- `Ctrl+A` selects all.
+- Selected components can be dragged; the component item snaps to 0.5 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
+- **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
+- Arrow keys nudge selected components by 0.5 GU per keypress.
+- `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
+
+### 6.4 Wire Routing
+
+#### Drawing
+
+1. In **Wire** mode, left-click a pin, an existing wire, or any grid point to begin a wire.
+2. Move cursor → the router previews a two-segment Manhattan path (horizontal-first, then vertical) as a semi-transparent **wire ghost** that follows the cursor and updates live.
+3. Press/hold `Shift` to toggle vertical-first routing; the ghost updates immediately.
+4. Left-click on an empty grid point places an intermediate **anchor** vertex and continues routing. Double-clicking, or clicking a pin/another wire, terminates the wire and records a `WireCommand`.
+5. `Escape` cancels the current wire in progress (clearing the ghost) without leaving Wire mode.
+
+#### Snapping
+
+Wire endpoints snap (within `PIN_SNAP_GU` = 0.25 GU) with this priority:
+
+1. **Component pin** — connects to the pin.
+2. **Existing wire vertex** — connects to that wire, forming a junction.
+3. **Point on an existing wire segment** — connects mid-segment (see "Junctions and segment splitting").
+4. Otherwise the bare **0.5 GU grid node** under the cursor.
+
+The ghost's end marker distinguishes a connectable snap (pin / wire) from a plain grid-node anchor.
+
+#### Auto-enter / auto-exit wire mode
+
+- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
+- Terminating a wire **on a pin or on existing wire geometry** auto-returns to **Select** mode. Double-clicking to end in empty space stays in Wire mode for continued routing.
+
+#### Junctions and segment splitting
+
+- Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.)
+- Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints.
+- When a wire connects to the **middle of another wire's segment** — whether by drawing a new wire onto it or by dragging an existing wire vertex onto it — the target wire is **split**: a vertex is inserted at the connection point so the junction is real topology. The split is bundled with the triggering command (`WireCommand` or `MoveWireVertexCommand`) inside a `MacroCommand` so it is one undoable action.
+
+#### Editing existing wires
+
+- In **Select** mode a wire's draggable vertices (intermediate corners and free, non-pin endpoints) show grab handles. Dragging one moves that vertex, auto-elbowing adjacent segments to stay Manhattan and simplifying afterward; recorded as a `MoveWireVertexCommand`. The **live drag preview** mirrors this exactly — elbows are inserted and `simplify_points` is applied on every mouse-move, so the ghost never shows redundant collinear vertices and no diagonal segments appear before the mouse is released. Endpoints sitting on a component pin are locked (they are owned by component wire-following) and have no handle.
+- Wire **selection hit-testing** uses a thin band along the actual segments (and the vertex handles), not the wire's bounding rectangle, so a wire does not steal clicks from nearby components.
+
+#### Wire Simplification
+
+Wire point lists are kept minimal at all times: consecutive duplicate points are removed and redundant collinear interior vertices are collapsed (e.g. `(0,0)–(2,0)–(5,0)` becomes `(0,0)–(5,0)`). Simplification runs when a wire is created, when an endpoint follows a moved component, and when a vertex is dragged; the code generator also simplifies defensively so output is always minimal.
+
+Wires do not auto-route around components in v1 — the user routes manually.
+
+### 6.5 Component Properties
+
+- Double-clicking a component opens the **Properties Panel** (right panel, not a modal dialog).
+- The panel shows editable fields for each label slot accepted by that `ComponentDef`.
+- Label slot fields accept arbitrary text; content is treated as a LaTeX string verbatim.
+- A small per-slot preview renders the LaTeX equation inline using the preview pipeline (see Section 8).
+- Rotation and mirror controls are also in this panel and in the right-click context menu.
+- Changes to properties are applied immediately and record an `EditCommand`.
+
+### 6.6 Undo / Redo
+
+- Full undo/redo stack using the **Command pattern**.
+- `Ctrl+Z` undoes the last command; `Ctrl+Shift+Z` or `Ctrl+Y` redoes.
+- The undo stack is per-session and is not persisted to the JSON save file.
+- Commands:
+
+| Command | Inverse |
+|---------|---------|
+| `PlaceCommand` | Remove component |
+| `DeleteCommand` | Restore component(s) and removed wires (connected and directly-selected) |
+| `MoveCommand` | Move component(s) back and restore reshaped wires' original points |
+| `WireCommand` | Remove wire |
+| `SplitWireCommand` | Restore the split wire's original point list (remove the inserted vertex) |
+| `MoveWireVertexCommand` | Restore the wire's original point list |
+| `EditCommand` | Restore previous label values |
+| `RotateCommand` | Restore previous rotation value |
+| `MirrorCommand` | Restore previous mirror state |
+| `MacroCommand` | Composite of the above (e.g. a split + add, or a multi-component move) |
+
+Notes:
+
+- `MoveCommand` also drags connected wire endpoints with the component and captures each affected wire's original points so undo restores them exactly (see §6.3).
+- `SplitWireCommand` inserts a vertex into an existing wire when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
+- `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
+
+### 6.7 Copy / Paste
+
+- `Ctrl+C` copies selected components and the wires entirely within the selection.
+- `Ctrl+V` enters **Place** mode with the copied group as a ghost; left-click places it and assigns new UUIDs to all pasted items.
+- `Ctrl+D` duplicates with a fixed offset of (1, 1) GU.
+
+---
+
+## 7. Code Generation
+
+### 7.1 Output Format
+
+The code generator produces a self-contained `circuitikz` environment:
+
+```latex
+\begin{circuitikz}
+  \draw
+    % wires and components
+  ;
+\end{circuitikz}
+```
+
+### 7.2 Mapping Rules
+
+#### Two-Terminal Components (R, C, L, D, sources)
+
+Each two-terminal component with origin at `(x0, y0)` and terminal pin at `(x1, y1)` (after rotation) maps to:
+
+```latex
+(x0, y0) to[KIND, LABELS] (x1, y1)
+```
+
+Where `LABELS` is the comma-separated list of non-empty label slot assignments, e.g.:
+
+```latex
+(0,0) to[R, l=$R_1$, v=$V_R$] (2,0)
+```
+
+#### Multi-Terminal Components (op amp, MOSFETs)
+
+These map to CircuiTikZ `node` syntax:
+
+```latex
+(x, y) node[KIND, rotate=ROT] (NODEID) {LABEL}
+```
+
+Where `(x, y)` is the component's anchor point as defined by CircuiTikZ for that component type, `ROT` is the rotation angle, and `NODEID` is a sanitized version of the component's UUID (used for wire endpoint references).
+
+#### Wires
+
+Each wire maps to a bare `\draw` path. The wire's point list is **simplified**
+(consecutive duplicates and redundant collinear vertices removed) before output,
+so a straight run is always emitted as a single segment:
+
+```latex
+(x0, y0) -- (x1, y1) -- ... -- (xn, yn)
+```
+
+### 7.3 Coordinate Output
+
+- Coordinates are output as decimal numbers rounded to 2 decimal places.
+- If all coordinates are integers or half-integers, they are output without trailing zeros (e.g., `2` not `2.00`, `1.5` not `1.50`).
+
+### 7.4 Node Labels
+
+- The CircuiTikZ node name for a multi-terminal component is derived from its UUID prefix: `node_<first8charsofUUID>`.
+- Wire endpoints that connect to named pins reference these node names.
+
+### 7.5 Code Generator Interface
+
+```python
+def generate(schematic: Schematic) -> str:
+    """
+    Pure function. Takes a Schematic and returns a CircuiTikZ string.
+    Raises ValueError if the schematic violates any invariant.
+    """
+```
+
+No side effects. No global state. The same `Schematic` always produces the same output.
+
+### 7.6 Junction and Open-Endpoint Nodes
+
+After the `\draw` path, the generator emits standalone node statements — first
+junction dots, then open-endpoint circles — before `\end{circuitikz}`.
+
+**Junction dots** — one per coordinate with degree ≥ 3 (§6.4):
+
+```latex
+\node[circ] at (x, y) {};
+```
+
+**Open-endpoint circles** — one per wire endpoint not coinciding with any
+component pin (§6.4):
+
+```latex
+\node[ocirc] at (x, y) {};
+```
+
+Both sets of nodes are placed after the path's terminating `;`. Coordinates use
+the same formatting rules as §7.3. Both sets are **derived** from the schematic
+geometry at generation time — they are not stored in the model.
+
+### 8.1 Full Schematic Preview
+
+A rendered PDF preview of the complete schematic is produced by:
+
+1. Wrapping the generated CircuiTikZ in a minimal `.tex` document.
+2. Running `pdflatex` in a temporary directory via `subprocess`.
+3. Converting the output PDF page to a `QImage` using `pdf2image`.
+4. Displaying the image in the preview panel.
+
+The preview is triggered by:
+- A **Compile** button (toolbar)
+- Automatically, with a 1.5-second debounce, after any schematic edit
+
+Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never blocked. While compiling, a spinner is shown in the preview panel. If `pdflatex` returns a non-zero exit code, the error log is shown in the preview panel in place of the image.
+
+### 8.2 Equation Preview (Per Label Slot)
+
+Individual label slot fields in the Properties Panel show a small inline equation preview:
+
+1. Wrap the label string in a minimal math-mode `.tex` document.
+2. Run `pdflatex` + `pdf2image` on just the equation.
+3. Display the resulting image inline beside the text field.
+
+Equation previews use a 500ms debounce after the user stops typing. Failures (invalid LaTeX) show a red border on the text field with no preview.
+
+### 8.3 LaTeX Template
+
+The minimal template used for full schematic preview:
+
+```latex
+\documentclass[tikz,border=4pt]{standalone}
+\usepackage[american]{circuitikz}
+\begin{document}
+% CIRCUITIKZ_SOURCE
+\end{document}
+```
+
+The string `% CIRCUITIKZ_SOURCE` is replaced by the generated code with three
+adjustments applied in `build_tex()`:
+
+- **Y-axis flip** — all Y coordinates in the generated source are negated before
+  embedding.  Using `yscale=-1` on the environment would flip the visual output
+  but leave path directions unchanged, causing polarised components (voltage
+  sources, diodes, etc.) to render with inverted polarity markers.  Negating Y
+  in the coordinates themselves corrects both orientation and path direction.
+- **Coordinate normalization** — all `(x, y)` pairs in the source are scanned
+  to find the bounding-box minimum; a `shift` transform is injected alongside
+  `yscale=-1` to translate the circuit to near the origin.  Without this,
+  schematics placed at large canvas coordinates (e.g. (78, 79)) would render as
+  a tiny circuit in the corner of a huge blank page.
+- **American style** — `\usepackage[american]{circuitikz}` ensures component
+  symbols match the canvas (§5.6).
+
+The `border=4pt` option on `standalone` provides a small uniform margin.
+
+### 8.4 Dependencies
+
+- `pdflatex` must be on the system `PATH`. Checked at startup; a warning dialog is shown if not found.
+- `pdf2image` Python package (wraps `pdftoppm` from Poppler).
+- The `circuitikz` LaTeX package must be installed in the TeX distribution.
+
+---
+
+## 9. File Format
+
+### 9.1 Save Format
+
+Schematics are saved as UTF-8 JSON files with the extension `.ctikz`.
+
+### 9.2 Schema
+
+```json
+{
+  "version": "0.1",
+  "name": "My Schematic",
+  "components": [
+    {
+      "id": "3f2a1b4c-...",
+      "kind": "R",
+      "position": [0.0, 0.0],
+      "rotation": 0,
+      "mirror": false,
+      "labels": {
+        "l": "$R_1$",
+        "v": "$V_R$"
+      }
+    }
+  ],
+  "wires": [
+    {
+      "id": "9a8b7c6d-...",
+      "points": [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]]
+    }
+  ],
+  "metadata": {}
+}
+```
+
+### 9.3 Validation on Load
+
+On file load, the application:
+
+1. Validates JSON schema structure.
+2. Verifies `version` field is a known spec version.
+3. Validates all invariants listed in Section 4.5.
+4. On validation failure, shows an error dialog with a description of the first failing check and does not load the file.
+
+### 9.4 Versioning
+
+The `version` field in the JSON corresponds to the spec version. Future spec versions must document migration rules for loading files from older versions.
+
+---
+
+## 10. UI Layout
+
+### 10.1 Main Window
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Menu Bar: File | Edit | View | Help                        │
+├─────────────────────────────────────────────────────────────┤
+│  Toolbar: New | Open | Save | | Undo | Redo | | Compile     │
+├──────────┬──────────────────────────────┬───────────────────┤
+│ Palette  │                              │  Properties       │
+│          │         Canvas               │  Panel            │
+│ Passives │    (QGraphicsView)           │                   │
+│ Amps     │                              │  (context-        │
+│ Sources  │                              │   sensitive)      │
+│ MOSFETs  │                              │                   │
+│          │                              │                   │
+├──────────┴──────────────────────────────┴───────────────────┤
+│  Source Panel (read-only CircuiTikZ output)  [Copy] button  │
+├─────────────────────────────────────────────────────────────┤
+│  Status bar: cursor coords | zoom level | compile status    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 10.2 Component Palette
+
+- Left panel, fixed width ~180px.
+- Components grouped by `category` in collapsible sections.
+- Each entry shows a thumbnail rendered from the component's `ComponentItem` at 32×32px, alongside the `display_name`.
+- Clicking an entry enters **Place** mode.
+- A search field at the top filters by `display_name`.
+
+### 10.3 Properties Panel
+
+- Right panel, fixed width ~240px.
+- Shows the `ComponentDef.display_name` and `kind` of the selected component.
+- One text field per `label_slot`, labelled with the slot name and a LaTeX preview image below it.
+- Rotation control: four buttons (0°, 90°, 180°, 270°) or a cycle button.
+- Mirror toggle checkbox.
+- Empty when no component is selected; shows multi-select count when multiple are selected.
+
+### 10.4 Source Panel
+
+- Bottom panel, collapsible, default height ~120px.
+- Read-only `QPlainTextEdit` showing the current generated CircuiTikZ source.
+- Updates live (debounced 300ms) as the schematic changes.
+- **Copy** button copies the full source to clipboard.
+- Syntax is not highlighted in v1.
+
+### 10.5 Preview Panel
+
+- Integrated into the canvas area as a floating overlay (bottom-right corner), or as a separate dockable panel.
+- Shows the rendered PDF preview image, scaled to fit.
+- Compile button triggers a new render.
+- Shows spinner during compilation; shows error text on failure.
+
+### 10.6 Keyboard Shortcuts
+
+| Action | Shortcut |
+|--------|----------|
+| New schematic | `Ctrl+N` |
+| Open | `Ctrl+O` |
+| Save | `Ctrl+S` |
+| Save As | `Ctrl+Shift+S` |
+| Undo | `Ctrl+Z` |
+| Redo | `Ctrl+Shift+Z` |
+| Copy | `Ctrl+C` |
+| Paste | `Ctrl+V` |
+| Duplicate | `Ctrl+D` |
+| Delete | `Delete` / `Backspace` |
+| Select All | `Ctrl+A` |
+| Wire mode | `W` |
+| Cancel / Select mode | `Escape` |
+| Compile preview | `Ctrl+Return` |
+| Fit to schematic | `Ctrl+0` |
+| Zoom in / out | `Ctrl++` / `Ctrl+-` |
+
+---
+
+## 11. Project Structure
+
+```
+heaviside/
+├── main.py                        # Entry point; constructs QApplication and MainWindow
+├── scratch_canvas.py              # THROWAWAY harness: drops SchematicView into a bare
+│                                  #   window for manual canvas testing before the UI
+│                                  #   shell (Phase 9) exists. Delete once Phase 9 lands.
+├── app/
+│   ├── canvas/
+│   │   ├── scene.py               # SchematicScene(QGraphicsScene) + interaction state machine
+│   │   ├── view.py                # SchematicView(QGraphicsView)
+│   │   ├── items.py               # ComponentItem subclasses, WireItem, WirePreviewItem,
+│   │   │                          #   JunctionItem, ITEM_CLASSES map
+│   │   ├── svgsym.py              # SVG-manifest → QPainterPath symbol geometry loader
+│   │   ├── style.py               # GRID_PX, LINE_W, PIN_R, LEAD_LEN, colors, and constants
+│   │   └── commands.py            # Undo/redo command classes
+│   ├── components/
+│   │   ├── model.py               # ComponentDef, PinDef dataclasses
+│   │   └── registry.py            # REGISTRY dict and all ComponentDef entries
+│   ├── schematic/
+│   │   ├── model.py               # Component, Wire, Schematic dataclasses + geometry helpers
+│   │   │                          #   (simplify_points, component_pin_positions,
+│   │   │                          #    junction_points, wire_splits_at)
+│   │   ├── io.py                  # save(schematic, path) and load(path) → Schematic
+│   │   └── validate.py            # validate(schematic) → list[str] (error messages)
+│   ├── codegen/
+│   │   └── circuitikz.py          # generate(schematic) → str
+│   ├── preview/
+│   │   ├── worker.py              # PreviewWorker(QThread)
+│   │   └── latex.py               # build_tex(source) → str, helpers
+│   └── ui/
+│       ├── mainwindow.py          # MainWindow(QMainWindow)
+│       ├── palette.py             # ComponentPalette(QWidget)
+│       ├── properties.py          # PropertiesPanel(QWidget)
+│       └── sourcepanel.py         # SourcePanel(QWidget)
+└── tests/
+    ├── test_model.py              # model + validation + geometry helpers (simplify,
+    │                              #   junctions, splits)
+    ├── test_codegen.py            # code generation incl. junction \node[circ]
+    ├── test_io.py
+    ├── test_registry.py
+    ├── test_commands.py           # undo/redo for all command classes
+    └── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
+```
+
+Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
+
+`scratch_canvas.py` and the SVG manifest under `tools/` are excluded from version control of the shipped app via `.gitignore` where appropriate; the harness is a temporary scaffold (see §14.4).
+
+---
+
+## 12. Package Management and Development Environment
+
+### 12.1 Tool: uv
+
+All Python dependency management uses **uv**. No `pip`, `virtualenv`, or `conda` commands are used directly. uv manages the virtual environment, dependency resolution, and script execution.
+
+Install uv (once, system-wide):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+### 12.2 Project Initialization
+
+The project uses a standard `pyproject.toml` as its single source of truth for metadata and dependencies. To initialize a fresh clone:
+
+```bash
+uv sync
+```
+
+This creates `.venv/` in the project root, resolves all dependencies from `pyproject.toml`, and installs them. No further setup is required.
+
+### 12.3 `pyproject.toml`
+
+```toml
+[project]
+name = "heaviside"
+version = "0.1.0"
+description = "Graphical editor for CircuiTikZ circuit diagrams"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.5",
+    "pydantic>=2.0",
+    "pdf2image>=1.16",
+]
+
+[project.scripts]
+heaviside = "main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+    "pytest-qt>=4.2",
+    "pytest-cov>=4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing"
+
+[tool.coverage.run]
+omit = [
+    "app/ui/*",
+    "app/canvas/scene.py",
+    "app/canvas/view.py",
+    "app/canvas/items.py",
+]
+```
+
+### 12.4 Common Commands
+
+| Task | Command |
+|------|---------|
+| Install / sync environment | `uv sync` |
+| Install including dev dependencies | `uv sync --group dev` |
+| Run the application | `uv run heaviside` |
+| Run all tests | `uv run pytest` |
+| Run tests, no coverage | `uv run pytest --no-cov` |
+| Add a new dependency | `uv add <package>` |
+| Add a dev-only dependency | `uv add --group dev <package>` |
+| Upgrade all dependencies | `uv sync --upgrade` |
+
+### 12.5 Offscreen Testing
+
+Integration tests that instantiate Qt widgets require a virtual display. Set the following environment variable to use Qt's offscreen platform, which requires no display server:
+
+```bash
+QT_QPA_PLATFORM=offscreen uv run pytest
+```
+
+This is the expected invocation in any headless environment (e.g., a remote machine without a desktop session).
+
+### 12.6 Python Version
+
+The project targets **Python 3.11** or later. This is enforced by the `requires-python` field in `pyproject.toml`. uv will raise an error if the active Python interpreter does not meet this constraint.
+
+### 12.7 System Dependencies
+
+The following must be installed separately from uv — they are not Python packages:
+
+| Dependency | Purpose | Install |
+|------------|---------|---------|
+| `pdflatex` | Compiling LaTeX previews | TeX Live (`texlive-full`) or MiKTeX |
+| `circuitikz` | LaTeX package for circuit diagrams | Included in `texlive-science` or MiKTeX package manager |
+| `pdftoppm` | PDF-to-image conversion (used by `pdf2image`) | Poppler (`poppler-utils` on Debian/Ubuntu) |
+
+The application checks for `pdflatex` and `pdftoppm` on the system `PATH` at startup and shows a warning dialog for any that are missing.
+
+---
+
+## 13. Test Specification and Acceptance Criteria
+
+### 13.1 Philosophy
+
+Tests are organized into three tiers: **unit tests** covering pure logic with no UI or filesystem dependencies, **integration tests** covering interactions between layers, and **acceptance criteria** defining the conditions under which v1 is considered complete. The UI layer (canvas painting, mouse interaction) is not unit-tested; it is covered by the acceptance criteria via manual verification.
+
+### 13.2 Unit Tests
+
+All unit tests live in `tests/` and are run with `pytest`. They must pass with no network access, no display server, and no LaTeX installation.
+
+#### Model and Validation (`test_model.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_component_valid` | A `Component` with a known `kind`, valid rotation, and valid position passes `validate()` with no errors. |
+| `test_component_invalid_kind` | A `Component` with a `kind` not in `REGISTRY` produces a validation error. |
+| `test_component_invalid_rotation` | A `Component` with rotation `45` produces a validation error. |
+| `test_wire_valid` | A `Wire` with a valid Manhattan path on 0.5 GU boundaries passes validation. |
+| `test_wire_off_grid` | A `Wire` with a vertex at `(0.3, 0.0)` produces a validation error. |
+| `test_wire_diagonal` | A `Wire` with a diagonal segment produces a validation error. |
+| `test_schematic_duplicate_ids` | A `Schematic` with two components sharing the same `id` produces a validation error. |
+| `test_schematic_empty_valid` | An empty `Schematic` (no components, no wires) passes validation. |
+
+#### Code Generation (`test_codegen.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_resistor_horizontal` | A single resistor at (0,0), rotation 0, no labels → produces `(0,0) to[R] (2,0)`. |
+| `test_resistor_with_labels` | A resistor with `labels={"l": "$R_1$", "v": "$V$"}` → produces `to[R, l=$R_1$, v=$V$]`. |
+| `test_resistor_rotated_90` | A resistor at (0,0), rotation 90 → origin and terminal pins are correctly rotated; output uses correct coordinates. |
+| `test_capacitor_horizontal` | A capacitor at (2,0), rotation 0 → produces `(2,0) to[C] (4,0)`. |
+| `test_inductor_horizontal` | An inductor at (0,0), rotation 0 → produces `(0,0) to[L] (2,0)`. |
+| `test_diode_horizontal` | A diode at (0,0), rotation 0 → produces `(0,0) to[D] (2,0)`. |
+| `test_voltage_source` | A voltage source at (0,0), rotation 0 → produces `(0,0) to[V] (0,2)`. |
+| `test_opamp_node` | An op-amp produces `node[op amp]` syntax with correct anchor coordinates. |
+| `test_nmos_node` | An NMOS produces `node[nmos]` syntax. |
+| `test_wire_straight` | A two-point wire `[(0,0),(2,0)]` → produces `(0,0) -- (2,0)`. |
+| `test_wire_manhattan` | A three-point wire `[(0,0),(2,0),(2,2)]` → produces `(0,0) -- (2,0) -- (2,2)`. |
+| `test_coordinate_formatting_integer` | Coordinate `2.0` is output as `2`, not `2.0` or `2.00`. |
+| `test_coordinate_formatting_half` | Coordinate `1.5` is output as `1.5`, not `1.50`. |
+| `test_empty_schematic` | An empty schematic produces a valid (empty) `circuitikz` environment. |
+| `test_generate_is_pure` | Calling `generate()` twice on the same `Schematic` produces identical output. |
+| `test_junction_emits_circ_node` / `test_no_junction_no_circ_node` / `test_junction_node_count_matches` | Junction coordinates emit `\node[circ]`; non-junctions do not; count matches the number of junction points. |
+| `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
+| `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
+| `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
+
+#### File I/O (`test_io.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_roundtrip_empty` | Save and reload an empty schematic → loaded schematic equals original. |
+| `test_roundtrip_components` | Save and reload a schematic with one of each v1 component type → all fields preserved exactly. |
+| `test_roundtrip_wires` | Save and reload a schematic containing wires → all wire points preserved exactly. |
+| `test_roundtrip_labels` | Save and reload a schematic with LaTeX label strings including special characters → labels preserved exactly. |
+| `test_load_unknown_version` | Loading a `.ctikz` file with an unrecognized `version` string raises a descriptive error. |
+| `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
+| `test_load_missing_field` | Loading a JSON file missing a required field raises a descriptive error. |
+| `test_load_invalid_invariant` | Loading a JSON file that violates an invariant (e.g., diagonal wire) raises a descriptive error. |
+| `test_save_creates_file` | `save()` creates a file at the specified path. |
+| `test_save_is_utf8` | Saved `.ctikz` files are valid UTF-8 and contain no byte-order marks. |
+
+#### Registry (`test_registry.py`)
+
+| Test | Description |
+|------|-------------|
+| `test_all_kinds_have_item_class` | Every `kind` in `REGISTRY` has a corresponding entry in `ITEM_CLASSES`. |
+| `test_all_pins_on_half_grid` | Every `PinDef.offset` in every `ComponentDef` lies on a 0.5 GU boundary. |
+| `test_default_span_matches_terminal_pin` | For two-terminal components, `default_span` equals the offset of the terminal pin. |
+| `test_no_duplicate_kinds` | No two `ComponentDef` entries share the same `kind`. |
+
+#### Geometry Helpers (`test_model.py`)
+
+| Test | Description |
+|------|-------------|
+| `simplify_points` / `test_simplify_u_turn_collapses_to_straight` | Collapses consecutive duplicates and redundant collinear interior vertices; preserves endpoints and genuine elbows; does not mutate its input. A second dedup pass after collinear collapse handles the A–B–A → A case where collapsing B (same-y) would otherwise leave a consecutive duplicate at A. |
+| `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
+| `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
+| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a pin-connected end is excluded. |
+| `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not a split site; a point off the line returns nothing. |
+| `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
+
+#### Commands (`test_commands.py`)
+
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo); `SplitWireCommand` insert/undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; and `MacroCommand` composing split + add as one unit.
+
+### 13.3 Integration Tests
+
+Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail.
+
+| Test | Description |
+|------|-------------|
+| `test_place_component_updates_model` | Simulating a placement action on `SchematicScene` results in the component appearing in the scene's internal `Schematic`. |
+| `test_undo_place` | Placing a component then calling undo removes it from the model. |
+| `test_undo_redo_place` | Place → undo → redo restores the component with identical field values. |
+| `test_undo_move` | Moving a component then calling undo restores its original position. |
+| `test_undo_delete` | Deleting a component then calling undo restores it and any connected wires. |
+| `test_undo_edit_label` | Editing a label then calling undo restores the previous label value. |
+| `test_undo_stack_depth` | Performing 20 sequential operations then undoing all 20 returns the schematic to its original empty state. |
+| `test_source_reflects_scene` | After placing a component, `generate()` of the scene's model contains the expected CircuiTikZ keyword (proxy for the Phase-9 source panel). |
+| `test_snap_to_grid` | A component dragged to a position between grid points snaps to the nearest 0.5 GU point on release. |
+| `test_component_drag_snaps_to_grid_mid_drag` | Component item position is snapped to 0.5 GU on every mouse-move during a drag, not only on release (regression: previously the visual was unsnapped mid-drag). |
+| `test_pin_snap` | Beginning a wire near a pin snaps the wire start point to the exact pin coordinates. |
+| `test_component_survives_repeated_moves` | A component dragged multiple times in succession stays visible and position-synced (regression: item reconciliation, not destroy/recreate). |
+| `test_items_movable_only_in_select_mode` | Component drag/selection is enabled only in Select mode. |
+| `test_wire_ghost_appears_during_component_drag` | Dragging a connected component shows a live ghost of the reshaped wires; the model is untouched until release. |
+| `test_wire_preview_*` | The in-progress wire ghost spawns, tracks the cursor, switches its snap marker for pin vs. grid node, and flips routing on Shift. |
+| `test_grid_node_anchor_adds_vertex` | Clicking empty space mid-wire drops an intermediate anchor; a collinear anchor is simplified away. |
+| `test_click_free_pin_enters_wire_mode` / `test_terminate_on_pin_returns_to_select` | Auto-enter on a free-pin click; auto-exit when ending on a pin; connected-pin clicks and empty-space double-clicks behave per §6.4. |
+| `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
+| `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
+| `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
+| `test_junction_dot_item_appears_for_three_wires` / `…removed_when_wire_deleted` | Junction dot items appear/disappear as wire connectivity changes. |
+| `test_snap_to_existing_wire_vertex` / `test_snap_onto_wire_segment` | Wire routing snaps to existing wire vertices and segment points (pin snap takes priority). |
+| `test_connect_to_mid_segment_splits_target` / `test_drag_vertex_onto_segment_splits_target` | Connecting (by drawing or by dragging a vertex) onto a wire's mid-segment splits the target, forms a junction, and is one undoable action. |
+| `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
+
+### 13.4 Acceptance Criteria
+
+The following criteria define v1 completion. Each must be verified manually by the author against a working build on the development machine.
+
+#### AC-1: Component Placement
+- [ ] All 13 v1 component types appear in the palette, grouped by category.
+- [ ] Each component can be placed on the canvas by clicking the palette entry and clicking the canvas.
+- [ ] Placed components snap to the 0.5 GU grid visibly and consistently.
+- [ ] A ghost preview follows the cursor during placement.
+- [ ] Pressing `Escape` cancels placement without modifying the schematic.
+
+#### AC-2: Canvas Interaction
+- [ ] Components can be selected by clicking and deselected by clicking elsewhere.
+- [ ] Multiple components can be selected with rubber-band drag and `Ctrl+click`.
+- [ ] Selected components can be moved by dragging; movement snaps to 0.5 GU.
+- [ ] Arrow key nudging moves selected components by 0.5 GU per keypress.
+- [ ] Delete key removes selected components and their connected wires.
+- [ ] Canvas pan and zoom work via scroll wheel and middle-mouse drag.
+- [ ] "Fit to schematic" correctly frames all placed components.
+
+#### AC-3: Wiring
+- [ ] Pressing `W` enters wire mode.
+- [ ] Clicking a pin starts a wire anchored to that pin.
+- [ ] The wire preview (ghost) shows a two-segment Manhattan path following the cursor.
+- [ ] `Shift` toggles between horizontal-first and vertical-first routing.
+- [ ] Double-clicking or clicking a second pin terminates the wire.
+- [ ] The resulting wire is rendered correctly on the canvas.
+- [ ] `Escape` cancels a wire in progress without adding it to the schematic.
+- [ ] Clicking an empty grid point mid-wire drops an intermediate anchor and continues routing.
+- [ ] Clicking a free pin in Select mode auto-enters Wire mode; terminating on a pin returns to Select mode.
+- [ ] Wires snap to existing wire vertices and to points on existing wire segments.
+- [ ] Connecting to the middle of a wire splits it and shows a solid junction dot; the same dot appears wherever 3+ wire ends (or a pin + a pass-through wire) meet.
+- [ ] Dragging a wire's draggable vertex reshapes it while staying Manhattan; pin-locked endpoints have no handle.
+- [ ] Moving a component drags its connected wire endpoints along (with a live ghost during the drag).
+- [ ] A directly-selected wire can be deleted with `Delete`.
+- [ ] Clicking near a wire selects it only when near the line itself, not anywhere in its bounding box.
+
+#### AC-4: Properties
+- [ ] Double-clicking a component opens the Properties Panel.
+- [ ] All label slots for that component type are shown as text fields.
+- [ ] Typing a LaTeX string (e.g., `$R_1$`) into a label field updates the canvas label display.
+- [ ] A rendered equation preview appears below each label field within 1 second of the user stopping typing.
+- [ ] Rotation and mirror controls change the component orientation on the canvas immediately.
+
+#### AC-5: Undo / Redo
+- [ ] `Ctrl+Z` undoes the last action for all command types (place, move, delete, wire, edit).
+- [ ] `Ctrl+Shift+Z` redoes the last undone action.
+- [ ] Undo and redo work correctly through a sequence of at least 10 mixed operations.
+
+#### AC-6: Code Generation
+- [ ] The source panel shows valid CircuiTikZ source at all times.
+- [ ] The source updates within 300ms of any schematic change.
+- [ ] The generated source compiles without error in a standard TeX Live installation with `circuitikz` installed.
+- [ ] Component labels containing LaTeX math (e.g., `$\frac{V}{2}$`) appear correctly in the compiled output.
+
+#### AC-7: Preview
+- [ ] Pressing `Ctrl+Return` or the Compile button triggers a preview render.
+- [ ] The rendered PDF preview appears in the preview panel within 5 seconds on a standard machine.
+- [ ] The preview matches the source panel output visually.
+- [ ] A LaTeX compilation error is reported in the preview panel with the relevant error text visible.
+- [ ] The main UI remains responsive during compilation (main thread not blocked).
+
+#### AC-8: Save and Load
+- [ ] `Ctrl+S` saves the schematic to a `.ctikz` file.
+- [ ] The saved file is valid UTF-8 JSON readable in a text editor.
+- [ ] Loading a saved file restores all components, wires, labels, rotations, and mirror states exactly.
+- [ ] Loading a corrupted or invalid file shows an error dialog and leaves the current schematic unchanged.
+
+#### AC-9: End-to-End Smoke Test
+The following scenario must complete without error:
+1. Launch the application.
+2. Place a voltage source, two resistors, an op-amp, and connecting wires to form a simple inverting amplifier circuit.
+3. Assign LaTeX labels to all components, including at least one equation of the form `$\frac{R_2}{R_1}$`.
+4. Compile the preview and verify it matches the intended circuit visually.
+5. Save the schematic to a `.ctikz` file.
+6. Close and relaunch the application.
+7. Load the saved file and verify all components, wires, and labels are restored identically.
+8. Compile the preview again and verify it matches the pre-save output.
+
+### 13.5 Test Coverage Target
+
+- Unit tests: **≥ 90% line coverage** on `app/schematic/`, `app/components/`, and `app/codegen/`.
+- Integration tests: **≥ 70% line coverage** on `app/canvas/commands.py`.
+- The UI layer (`app/ui/`, `app/canvas/scene.py`, `app/canvas/view.py`, `app/canvas/items.py`) is excluded from coverage requirements and covered by acceptance criteria only.
+
+Coverage is measured with `pytest-cov` and reported as part of the test run:
+
+```bash
+pytest --cov=app --cov-report=term-missing
+```
+
+---
+
+## 14. AI-Assisted Implementation Guide
+
+This section records recommended practices for implementing this project with Claude as a coding assistant. It is intended to be provided alongside this spec at the start of each implementation session.
+
+### 14.1 Model Selection
+
+| Task | Recommended Model |
+|------|------------------|
+| Registry entries, dataclass definitions | Claude Sonnet 4.6 |
+| Unit test implementation | Claude Sonnet 4.6 |
+| Code generation layer (`codegen/`) | Claude Sonnet 4.6 |
+| File I/O and validation layer | Claude Sonnet 4.6 |
+| Preview pipeline (`preview/`) | Claude Sonnet 4.6 |
+| UI panels (`app/ui/`) | Claude Sonnet 4.6 |
+| Canvas interaction state machine (`scene.py`, `view.py`) | Claude Opus 4.6 |
+| Undo/redo command stack (`commands.py`) | Claude Opus 4.6 |
+| Coordinate transform and rotation/mirror math | Claude Opus 4.6 |
+| Debugging sessions with non-obvious root causes | Claude Opus 4.6 |
+
+### 14.2 Extended Thinking
+
+Enable extended thinking for:
+- Designing the canvas interaction state machine (Place / Select / Wire / Pan modes and their transitions)
+- Getting the rotation and mirror transform math consistent between `items.py` (canvas painting) and `codegen/circuitikz.py` (coordinate output) before either is implemented
+- The `DeleteCommand` inverse logic (restoring wires connected to a deleted component)
+
+Leave extended thinking off for all other tasks. The spec has already resolved the key design decisions; extended thinking adds latency and cost without benefit for tasks where the path is clear.
+
+### 14.3 Session Setup
+
+At the start of each implementation session, provide:
+1. This spec file in full
+2. The current contents of any files directly relevant to the session's task
+3. A one-line statement of what the session should accomplish (e.g., "implement `app/codegen/circuitikz.py` and its unit tests")
+
+The spec is the authoritative reference. If anything in the generated code contradicts the spec, the spec takes precedence and the discrepancy should be flagged.
+
+**Keep the spec in sync (mandatory).** Per Section 0, every task that adds,
+changes, or removes a feature MUST update this specification in the same change
+set. Before finishing a task, re-read the sections your change touches and
+confirm they describe the new behavior; update Section 13 with corresponding
+test entries and bump the **Version** field for substantive changes. Treat "the
+spec still matches the code" as part of the definition of done.
+
+### 14.4 Recommended Implementation Order
+
+Work bottom-up, layer by layer. Each layer is independently testable before the next begins.
+
+| Phase | Files | Verification |
+|-------|-------|-------------|
+| 1 | `app/components/model.py`, `app/components/registry.py` | `test_registry.py` passes |
+| 2 | `app/schematic/model.py`, `app/schematic/validate.py` | `test_model.py` passes |
+| 3 | `app/schematic/io.py` | `test_io.py` passes |
+| 4 | `app/codegen/circuitikz.py` | `test_codegen.py` passes |
+| 5 | `app/canvas/style.py`, `app/canvas/items.py` | Visual inspection: each component renders correctly |
+| 6 | `app/canvas/commands.py` | Integration undo/redo tests pass |
+| 7 | `app/canvas/scene.py`, `app/canvas/view.py` | Remaining integration tests pass |
+| 8 | `app/preview/latex.py`, `app/preview/worker.py` | Preview compiles and displays for a simple schematic |
+| 9 | `app/ui/` (all panels), `main.py` | Acceptance criteria AC-1 through AC-9 |
+
+Do not proceed to the next phase until the current phase's verification condition is met. This keeps debugging localized to the layer most recently added.
+
+### 14.5 Cross-Layer Consistency Checks
+
+Two pairs of files must stay in sync with each other. Flag any divergence immediately:
+
+- **`app/components/registry.py` ↔ `app/canvas/items.py`**: Every `kind` in `REGISTRY` must have an entry in `ITEM_CLASSES`, and every `PinDef` offset in the registry must correspond to a pin indicator drawn at the same position in the matching `ComponentItem.paint()`.
+- **`app/canvas/items.py` ↔ `app/codegen/circuitikz.py`**: Rotation and mirror transforms must produce identical coordinate results in both files. A component rotated 90° on the canvas must generate CircuiTikZ coordinates that match what is visually shown.
+
+---
+
+## 15. Out of Scope (v1)
+
+The following are explicitly deferred to future versions:
+
+- LyX/LaTeX editor integration
+- Round-trip parsing of existing `.tex` files into the canvas
+- Free-angle rotation
+- Auto-routing wires around placed components
+- Bus wiring and net labels
+- Circuit simulation or netlist export
+- Component parameter sweep or annotation from simulation results
+- Dark mode
+- Collaborative editing
+- Printing directly from the application
