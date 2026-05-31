@@ -186,7 +186,14 @@ class _EquationCompileWorker(QObject):
             pdf_bytes = compile_tex(tex)
             image = pdf_to_qimage(pdf_bytes, dpi=self._dpi)
             self.preview_ready.emit(image)
-        except (CompileError, Exception):
+        except CompileError:
+            self.preview_error.emit()
+        except Exception:
+            import sys
+            print(f"EquationPreviewWorker: unexpected error for label {self.label!r}",
+                  file=sys.stderr)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
             self.preview_error.emit()
 
 

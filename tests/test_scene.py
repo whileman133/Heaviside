@@ -162,9 +162,14 @@ def test_add_wire_rejects_single_point(scene: SchematicScene):
 
 
 def test_route_manhattan(scene: SchematicScene):
-    # horizontal-first by default
-    assert scene._route((0.0, 0.0), (2.0, 3.0)) == [(0.0, 0.0), (2.0, 0.0), (2.0, 3.0)]
-    # straight segments stay two-point
+    # Dominant axis: travel the longer leg first (spec §6.4 routing primitive).
+    # |dy|=3 > |dx|=2 → vertical-first, corner at (ax, by).
+    assert scene._route((0.0, 0.0), (2.0, 3.0)) == [(0.0, 0.0), (0.0, 3.0), (2.0, 3.0)]
+    # |dx|=3 > |dy|=2 → horizontal-first, corner at (bx, ay).
+    assert scene._route((0.0, 0.0), (3.0, 2.0)) == [(0.0, 0.0), (3.0, 0.0), (3.0, 2.0)]
+    # Equal legs tie to horizontal-first (|dx| >= |dy|).
+    assert scene._route((0.0, 0.0), (2.0, 2.0)) == [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]
+    # Straight segments stay two-point.
     assert scene._route((0.0, 0.0), (2.0, 0.0)) == [(0.0, 0.0), (2.0, 0.0)]
 
 
@@ -503,23 +508,38 @@ def test_wire_preview_pin_marker(scene: SchematicScene):
     assert scene._wire_preview.cursor_is_pin is True
 
 
-def test_wire_preview_shift_toggles_route(scene: SchematicScene):
+def test_wire_preview_dominant_axis_route(scene: SchematicScene):
+    """The ghost corner follows the longer leg (spec §6.4); no key flips it."""
     scene.place_component("R", (0.0, 0.0))
     scene.enter_wire_mode()
     _wire_press(scene, (2.0, 0.0))
 
-    _wire_move(scene, (4.0, 2.0), shift=False)
+    # |dy|=3 > |dx|=2 → vertical-first: corner at (2,3).
+    _wire_move(scene, (4.0, 3.0))
     p = scene._wire_preview
-    horiz = list(p.points) + [p.cursor]
+    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (2.0, 3.0), (4.0, 3.0)]
 
-    _wire_move(scene, (4.0, 2.0), shift=True)
+    # |dx|=3 > |dy|=2 → horizontal-first: corner at (5,0).
+    _wire_move(scene, (5.0, 2.0))
     p = scene._wire_preview
-    vert = list(p.points) + [p.cursor]
+    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (5.0, 0.0), (5.0, 2.0)]
 
-    assert horiz != vert
-    # horizontal-first turns at (4,0); vertical-first turns at (2,2)
-    assert (4.0, 0.0) in horiz
-    assert (2.0, 2.0) in vert
+
+def test_wire_preview_ignores_shift(scene: SchematicScene):
+    """Regression: the Shift route-toggle was removed; modifier has no effect."""
+    scene.place_component("R", (0.0, 0.0))
+    scene.enter_wire_mode()
+    _wire_press(scene, (2.0, 0.0))
+
+    _wire_move(scene, (4.0, 3.0), shift=False)
+    p = scene._wire_preview
+    without = list(p.points) + [p.cursor]
+
+    _wire_move(scene, (4.0, 3.0), shift=True)
+    p = scene._wire_preview
+    with_shift = list(p.points) + [p.cursor]
+
+    assert without == with_shift
 
 
 def test_grid_node_anchor_adds_vertex_without_terminating(scene: SchematicScene):
@@ -775,6 +795,94 @@ def test_drag_release_at_same_spot_is_noop(scene: SchematicScene):
     assert scene.schematic.wires[0].points == original
     # No extra command pushed for a zero-distance drag.
     assert scene.undo_stack.undo_count == count_before
+    # A press+release on a vertex without moving is a plain click: it selects
+    # the wire (so it can be deleted) rather than leaving nothing selected.
+    assert scene.selected_wire_ids() == [w.id]
+
+
+def test_click_near_endpoint_selects_short_wire(scene: SchematicScene):
+    """A click near a short wire's open end selects it (regression).
+
+    Bug: on a short stub whose vertex-grab zones (±VERTEX_HIT_GU) cover most of
+    its length, clicking near either end started a zero-distance vertex "drag"
+    that cleared the selection and selected nothing — so wires with open-circle
+    ends could not be selected or deleted. A press+release without movement now
+    selects the wire.
+    """
+    # 1-GU stub from a free open end to a T-junction on a vertical wire.
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0)])          # vertical
+    stub = scene.add_wire([(-1.0, 1.0), (0.0, 1.0)])  # stub T-ing into it
+    assert (-1.0, 1.0) in scene._open_circle_items     # free end is an ocirc
+
+    # Click right on the open-circle end (well inside the vertex-grab zone).
+    _sel_press(scene, (-1.0, 1.0))
+    _sel_release(scene, (-1.0, 1.0))
+    assert scene.selected_wire_ids() == [stub.id]
+
+    # And it can now be deleted.
+    before = len(scene.schematic.wires)
+    scene.delete_selected()
+    assert len(scene.schematic.wires) == before - 1
+    assert stub.id not in {w.id for w in scene.schematic.wires}
+
+
+def test_click_on_segment_near_vertex_does_not_move_it(scene: SchematicScene):
+    """Clicking a segment near a vertex must not relocate the vertex (regression).
+
+    Bug: a vertex can be grabbed from up to VERTEX_HIT_GU away, but the
+    click-vs-drag test compared the snapped cursor to the vertex's *old*
+    position. So clicking the segment between a corner and a pin-locked endpoint
+    grabbed the corner and, because the snapped cursor differed from it, "moved"
+    the corner onto the pin — spuriously inserting a junction dot and pushing a
+    MoveWireVertexCommand. A stationary click (no grid movement) must select
+    only, leaving geometry and the undo stack untouched.
+    """
+    scene.place_component("R", (0.0, 0.0))             # pin at (0,0)
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0)])           # vertical through the pin
+    stub = scene.add_wire([(-1.0, 0.5), (0.0, 0.5), (0.0, 0.0)])  # corner (0,0.5) → pin
+    original = [tuple(p) for p in stub.points]
+    junctions_before = sorted(scene._junction_items.keys())
+    count_before = scene.undo_stack.undo_count
+
+    # Click on the (0,0.5)→(0,0) segment at (0,0.22): grabs the corner (0,0.5)
+    # (the endpoint (0,0) is pin-locked) but the cursor snaps to (0,0).
+    _sel_press(scene, (0.0, 0.22))
+    _sel_release(scene, (0.0, 0.22))
+
+    assert scene.schematic.wires[-1].points == original   # geometry untouched
+    assert scene.undo_stack.undo_count == count_before     # no spurious command
+    assert sorted(scene._junction_items.keys()) == junctions_before  # no new dot
+    assert scene.selected_wire_ids() == [stub.id]          # selected instead
+
+
+def test_click_at_t_junction_selects_through_wire(scene: SchematicScene):
+    """Clicking at a T-junction selects the through wire, not the stub.
+
+    Bug: when a wire is split at a T-junction, the intermediate vertex is
+    shared by two adjacent segments.  Each segment reports at_end=True for that
+    vertex, giving the through wire the same proximity rank as the stub's
+    endpoint.  The tie-break then incorrectly returned the stub (grabbed wire).
+    After the fix, an intermediate vertex hit is promoted to rank 0 so the
+    through wire wins.
+    """
+    through = scene.add_wire([(0.0, 0.0), (0.0, 2.0)])  # vertical
+    stub = scene.add_wire([(1.0, 1.0), (0.0, 1.0)])      # horizontal stub T-ing in
+
+    # The through wire must have been split at (0,1) to form the junction
+    # (WireCommand deep-copies, so look it up in the schematic).
+    through_live = next(w for w in scene.schematic.wires if w.id == through.id)
+    assert (0.0, 1.0) in [tuple(p) for p in through_live.points]
+
+    # Click exactly at the T-junction: the through wire should be selected.
+    _sel_press(scene, (0.0, 1.0))
+    _sel_release(scene, (0.0, 1.0))
+    assert scene.selected_wire_ids() == [through.id]
+
+    # Click on the through wire's body away from the junction: still works.
+    scene.clearSelection()
+    _sel_press(scene, (0.0, 0.3))
+    _sel_release(scene, (0.0, 0.3))
+    assert scene.selected_wire_ids() == [through.id]
 
 
 def test_vertex_drag_only_in_select_mode(scene: SchematicScene):

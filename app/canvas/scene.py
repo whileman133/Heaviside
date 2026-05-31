@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.commands import (
     DeleteCommand,
+    EditCommand,
     MacroCommand,
     MirrorCommand,
     MoveCommand,
@@ -62,8 +63,10 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    component_pin_positions as _component_pin_positions,
     junction_points,
     open_endpoints,
+    route,
     simplify_points,
     wire_splits_at,
 )
@@ -121,6 +124,9 @@ class SchematicScene(QGraphicsScene):
     selection_changed_gu = Signal(list)
     """Emitted with the list of selected Component ids when selection changes."""
 
+    component_double_clicked = Signal(str)
+    """Emitted with the component id when a component is double-clicked (spec §6.5)."""
+
     def __init__(self, schematic: Schematic | None = None, parent=None):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
@@ -145,7 +151,6 @@ class SchematicScene(QGraphicsScene):
 
         # Wire-routing state
         self._wire_pts: list[tuple[float, float]] = []
-        self._wire_vfirst = False  # Shift toggles vertical-first (read live)
         self._wire_preview: WirePreviewItem | None = None
 
         # Drag-move bookkeeping: id -> position at drag start (GU)
@@ -153,6 +158,9 @@ class SchematicScene(QGraphicsScene):
 
         # Wire-vertex drag: (wire_id, index, original_point_gu) or None.
         self._vertex_drag: tuple[str, int, tuple[float, float]] | None = None
+        # Snapped cursor position where the vertex grab began, to tell a click
+        # (no grid movement → select) from a real drag (→ move the vertex).
+        self._vertex_press_gu: tuple[float, float] | None = None
 
         # Wire ids currently showing a drag-preview (during a component drag),
         # so they can be cleared precisely on release.
@@ -362,6 +370,12 @@ class SchematicScene(QGraphicsScene):
         wire_ids = self.selected_wire_ids()
         if comp_ids or wire_ids:
             self._push(DeleteCommand(comp_ids, wire_ids))
+
+    def edit_component_labels(
+        self, component_id: str, new_labels: dict[str, str]
+    ) -> None:
+        """Replace the label dict of a component via an undoable EditCommand."""
+        self._push(EditCommand(component_id, new_labels))
 
     def rotate_component(self, component_id: str, new_rotation: int) -> None:
         """Set the rotation of a component via an undoable RotateCommand."""
@@ -763,6 +777,90 @@ class SchematicScene(QGraphicsScene):
                     best = (wire.id, i)
         return best
 
+    @staticmethod
+    def _dist2_to_segment(
+        px: float, py: float,
+        x0: float, y0: float, x1: float, y1: float,
+    ) -> tuple[float, bool]:
+        """Squared distance from (px,py) to segment (x0,y0)-(x1,y1).
+
+        Returns ``(dist2, at_endpoint)`` where *at_endpoint* is True when the
+        closest point is one of the segment's ends (the cursor only touches the
+        tip) rather than its interior (the cursor passes through it).
+        """
+        dx, dy = x1 - x0, y1 - y0
+        seg2 = dx * dx + dy * dy
+        if seg2 == 0.0:
+            return ((px - x0) ** 2 + (py - y0) ** 2, True)
+        t = ((px - x0) * dx + (py - y0) * dy) / seg2
+        at_end = t <= 0.0 or t >= 1.0
+        t = max(0.0, min(1.0, t))
+        cx, cy = x0 + t * dx, y0 + t * dy
+        return ((px - cx) ** 2 + (py - cy) ** 2, at_end)
+
+    def _wire_proximity_key(
+        self, gx: float, gy: float, wire: Wire
+    ) -> tuple[float, int] | None:
+        """Sort key for how close (gx,gy) is to *wire*, or None if empty.
+
+        Key is ``(rounded_dist2, endpoint_rank)`` where endpoint_rank is 0 when
+        the closest point is in a segment interior (cursor passes through) and 1
+        when it is only an endpoint touch. Smaller sorts as "more on the wire".
+
+        A click that lands exactly on an intermediate vertex gets rank 0: the
+        wire passes through that point (the vertex is shared by two adjacent
+        segments), so it is a full interior hit even though both adjacent
+        segments individually report ``at_end=True``.
+        """
+        best: tuple[float, int] | None = None
+        pts = wire.points
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            d2, at_end = self._dist2_to_segment(gx, gy, x0, y0, x1, y1)
+            key = (round(d2, 9), 1 if at_end else 0)
+            if best is None or key < best:
+                best = key
+        # Promote rank to 0 if the best distance matches an intermediate vertex.
+        # Each segment reports at_end=True for its shared endpoint, so without
+        # this correction a click at an intermediate vertex is ranked 1 instead
+        # of 0, losing unfairly to an adjacent wire stub.
+        if best is not None and best[1] == 1:
+            for vx, vy in pts[1:-1]:
+                if round((gx - vx) ** 2 + (gy - vy) ** 2, 9) == best[0]:
+                    best = (best[0], 0)
+                    break
+        return best
+
+    def _click_select_wire_id(
+        self, scene_pt: QPointF, grabbed_id: str
+    ) -> str:
+        """Wire to select for a click that grabbed a vertex of *grabbed_id*.
+
+        Returns the wire the cursor is actually on — the closest segment within
+        VERTEX_HIT_GU, preferring a pass-through over an endpoint-touch. On a
+        true tie the grabbed wire wins, so a click where two wires overlap stays
+        on the grabbed one. Falls back to *grabbed_id* if nothing is in range.
+        """
+        gx, gy = self.scene_to_gu(scene_pt)
+        bound2 = VERTEX_HIT_GU * VERTEX_HIT_GU
+        best_id: str | None = None
+        best_key: tuple[float, int] | None = None
+        for wire in self._schematic.wires:
+            key = self._wire_proximity_key(gx, gy, wire)
+            if key is None or key[0] > bound2:
+                continue
+            if best_key is None or key < best_key:
+                best_key, best_id = key, wire.id
+        if best_id is None:
+            return grabbed_id
+        grabbed = next(
+            (w for w in self._schematic.wires if w.id == grabbed_id), None
+        )
+        if grabbed is not None:
+            gk = self._wire_proximity_key(gx, gy, grabbed)
+            if gk is not None and gk == best_key:
+                return grabbed_id
+        return best_id
+
     def move_wire_vertex(
         self, wire_id: str, index: int, new_point: tuple[float, float]
     ) -> None:
@@ -785,22 +883,14 @@ class SchematicScene(QGraphicsScene):
         self,
         a: tuple[float, float],
         b: tuple[float, float],
-        vfirst: bool | None = None,
     ) -> list[tuple[float, float]]:
-        """Two-segment Manhattan route from a to b (spec §6.4).
+        """Dominant-axis Manhattan route from a to b (spec §6.4).
 
-        *vfirst* selects vertical-first routing; when None it falls back to the
-        scene's ``_wire_vfirst`` flag. The mouse handlers pass the live Shift
-        state so the preview and the committed wire agree.
+        Delegates to the shared :func:`route` primitive with no orientation
+        override, so the corner follows the longer leg (no modifier key flips
+        it). The preview and the committed wire both call this, so they agree.
         """
-        if vfirst is None:
-            vfirst = self._wire_vfirst
-        ax, ay = a
-        bx, by = b
-        if ax == bx or ay == by:
-            return [a, b]
-        corner = (ax, by) if vfirst else (bx, ay)
-        return [a, corner, b]
+        return route(a, b)
 
     # -- wire preview ghost ----------------------------------------------
 
@@ -814,7 +904,6 @@ class SchematicScene(QGraphicsScene):
         self,
         cursor_gu: tuple[float, float] | None,
         cursor_is_pin: bool = False,
-        vfirst: bool = False,
     ) -> None:
         """Update the in-progress wire ghost to follow *cursor_gu*."""
         if not self._wire_pts:
@@ -825,7 +914,7 @@ class SchematicScene(QGraphicsScene):
             preview.set_path(self._wire_pts, None)
             return
         # Pending leg from the last committed vertex to the cursor.
-        legs = self._route(self._wire_pts[-1], cursor_gu, vfirst=vfirst)
+        legs = self._route(self._wire_pts[-1], cursor_gu)
         full = list(self._wire_pts) + legs[1:]
         # Show committed vertices as anchors; the cursor end carries the marker.
         preview.set_path(full[:-1], full[-1], cursor_is_pin)
@@ -853,9 +942,8 @@ class SchematicScene(QGraphicsScene):
             return
 
         if self._mode == Mode.WIRE and self._wire_pts:
-            target, is_pin = self.wire_snap_target(gu)
-            vfirst = bool(event.modifiers() & Qt.ShiftModifier)
-            self._refresh_wire_preview(target, is_pin, vfirst)
+            target, is_connectable = self.wire_snap_target(gu)
+            self._refresh_wire_preview(target, is_connectable)
             event.accept()
             return
 
@@ -891,16 +979,9 @@ class SchematicScene(QGraphicsScene):
         if not (0 <= idx < len(pts)):
             return
         pts[idx] = gu
-        # Insert elbows on the two segments that touch the moved vertex so
-        # the preview path stays Manhattan (mirrors MoveWireVertexCommand.do).
-        def _elbow(a: tuple[float, float], b: tuple[float, float]) -> tuple[float, float] | None:
-            ax, ay = a
-            bx, by = b
-            if ax == bx or ay == by:
-                return None
-            elbow = (bx, ay)
-            return None if (elbow == a or elbow == b) else elbow
-
+        # Re-route the two segments that touch the moved vertex through the
+        # shared horizontal-first primitive so the preview stays Manhattan
+        # (mirrors MoveWireVertexCommand.do — identical corner convention).
         rebuilt: list[tuple[float, float]] = []
         for j, p in enumerate(pts):
             if j == 0:
@@ -908,9 +989,7 @@ class SchematicScene(QGraphicsScene):
                 continue
             prev = pts[j - 1]
             if j == idx or j - 1 == idx:
-                elbow = _elbow(prev, p)
-                if elbow is not None:
-                    rebuilt.append(elbow)
+                rebuilt.extend(route(prev, p, vfirst=False)[1:-1])
             rebuilt.append(p)
         simplified = simplify_points(rebuilt)
         item.set_preview_points(simplified)
@@ -984,8 +1063,8 @@ class SchematicScene(QGraphicsScene):
         preview_pts: dict[str, list[tuple[float, float]]] = {}
         for wire in self._schematic.wires:
             wi = self._wire_items.get(wire.id)
-            if wi is not None and wi._preview_points is not None:
-                preview_pts[wire.id] = wi._preview_points
+            if wi is not None and wi.preview_points is not None:
+                preview_pts[wire.id] = wi.preview_points
 
         dragged_pins: set[tuple[float, float]] = set()
         for cid, start in self._drag_start.items():
@@ -1077,7 +1156,7 @@ class SchematicScene(QGraphicsScene):
         Recomputes junction degree using preview wire points so dots follow
         the dragged topology rather than staying at the pre-drag model positions.
         """
-        from app.schematic.model import junction_points as _junction_points
+        _junction_points = junction_points
 
         # Build a temporary schematic-like view using preview points.
         # We recompute degree manually using the same logic as junction_points().
@@ -1155,26 +1234,26 @@ class SchematicScene(QGraphicsScene):
 
         if self._mode == Mode.WIRE:
             if event.button() == Qt.LeftButton:
-                target, is_pin = self.wire_snap_target(gu)
-                vfirst = bool(event.modifiers() & Qt.ShiftModifier)
+                target, is_connectable = self.wire_snap_target(gu)
                 if not self._wire_pts:
                     # Begin the wire — anchor the first vertex (pin or node).
                     self._wire_pts = [target]
-                    self._refresh_wire_preview(target, is_pin, vfirst)
+                    self._refresh_wire_preview(target, is_connectable)
                 else:
-                    # Append a Manhattan leg (a click on empty space drops an
-                    # intermediate grid-node anchor; a pin click terminates).
-                    route = self._route(self._wire_pts[-1], target, vfirst=vfirst)
-                    self._wire_pts.extend(route[1:])
-                    if is_pin and len(self._wire_pts) >= 2:
+                    # Commit the previewed L (its corner + the target). A click
+                    # on empty space drops an intermediate vertex and keeps
+                    # routing; a connectable target (pin / wire) finalizes.
+                    legs = self._route(self._wire_pts[-1], target)
+                    self._wire_pts.extend(legs[1:])
+                    if is_connectable and len(self._wire_pts) >= 2:
                         pts = self._wire_pts
                         self._wire_pts = []
                         self.add_wire(pts)
                         self._cancel_wire_preview()
-                        # Terminating on a pin returns to SELECT mode.
+                        # Terminating on a pin or existing wire returns to SELECT.
                         self.set_mode(Mode.SELECT)
                     else:
-                        self._refresh_wire_preview(target, is_pin, vfirst)
+                        self._refresh_wire_preview(target, is_connectable)
                 event.accept()
                 return
 
@@ -1189,6 +1268,7 @@ class SchematicScene(QGraphicsScene):
                 )
                 if wire is not None:
                     self._vertex_drag = (wire_id, idx, wire.points[idx])
+                    self._vertex_press_gu = self.snap_point_gu(event.scenePos())
                     self.clearSelection()
                     event.accept()
                     return
@@ -1203,7 +1283,7 @@ class SchematicScene(QGraphicsScene):
                 self._apply_item_flags()
                 self.mode_changed.emit(Mode.WIRE)
                 self._wire_pts = [pin]
-                self._refresh_wire_preview(pin, True, False)
+                self._refresh_wire_preview(pin, True)
                 event.accept()
                 return
 
@@ -1222,18 +1302,38 @@ class SchematicScene(QGraphicsScene):
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         # Commit a wire-vertex drag if one is active.
         if self._vertex_drag is not None and event.button() == Qt.LeftButton:
-            wire_id, idx, orig = self._vertex_drag
+            wire_id, idx, _orig = self._vertex_drag
+            press_gu = self._vertex_press_gu
             self._vertex_drag = None
+            self._vertex_press_gu = None
             gu = self.snap_point_gu(event.scenePos())
-            # Snap the dropped vertex onto a pin / another wire's vertex or
-            # segment (excluding the dragged wire itself), so it lands exactly
-            # on the target and forms a junction.
-            target, _ = self.wire_snap_target(gu, exclude_wire_id=wire_id)
             item = self._wire_items.get(wire_id)
             if item is not None:
                 item.clear_preview_points()  # drop visual preview
-            if target != orig:
+            # Distinguish a click from a drag by whether the *cursor* moved to a
+            # different grid node — NOT by comparing the snap target to the
+            # vertex's old position. A vertex can be grabbed from up to
+            # VERTEX_HIT_GU away, so a stationary click whose snapped cursor
+            # differs from the vertex would otherwise be misread as a drag and
+            # teleport the vertex onto the cursor (e.g. onto a pin, spuriously
+            # inserting a junction dot).
+            if gu != press_gu:
+                # Real drag: move the vertex to the snapped target (a pin or
+                # another wire's vertex/segment forms a junction).
+                target, _ = self.wire_snap_target(gu, exclude_wire_id=wire_id)
                 self.move_wire_vertex(wire_id, idx, target)
+            else:
+                # Plain click (no grid movement): select the wire the cursor is
+                # actually on, not necessarily the wire whose vertex was grabbed.
+                # When a stub's endpoint sits on another wire's through-segment,
+                # the grabbed vertex belongs to the stub, but a click on the
+                # other wire must select that other wire. Selecting by nearest
+                # segment (preferring a pass-through over an endpoint-touch) also
+                # keeps short wires selectable near their ends.
+                sel_id = self._click_select_wire_id(event.scenePos(), wire_id)
+                sel_item = self._wire_items.get(sel_id)
+                if sel_item is not None:
+                    sel_item.setSelected(True)
             event.accept()
             return
 
@@ -1274,21 +1374,28 @@ class SchematicScene(QGraphicsScene):
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._mode == Mode.WIRE and self._wire_pts:
             gu = self.snap_point_gu(event.scenePos())
-            target, is_pin = self.wire_snap_target(gu)
-            vfirst = bool(event.modifiers() & Qt.ShiftModifier)
+            target, is_connectable = self.wire_snap_target(gu)
             if target != self._wire_pts[-1]:
-                route = self._route(self._wire_pts[-1], target, vfirst=vfirst)
-                self._wire_pts.extend(route[1:])
+                legs = self._route(self._wire_pts[-1], target)
+                self._wire_pts.extend(legs[1:])
             pts = self._wire_pts
             self._wire_pts = []
             self.add_wire(pts)
             self._cancel_wire_preview()
-            # Ending on a pin returns to SELECT; ending in empty space stays in
-            # WIRE mode so the user can keep routing.
-            if is_pin:
+            # Ending on a pin or existing wire returns to SELECT; ending in empty
+            # space leaves an open endpoint and stays in WIRE mode for more routing.
+            if is_connectable:
                 self.set_mode(Mode.SELECT)
             event.accept()
             return
+        # In SELECT mode, a double-click on a component opens the Properties Panel.
+        if self._mode == Mode.SELECT:
+            items = self.items(event.scenePos())
+            for it in items:
+                if isinstance(it, ComponentItem):
+                    self.component_double_clicked.emit(it.component.id)
+                    event.accept()
+                    return
         super().mouseDoubleClickEvent(event)
 
     # ------------------------------------------------------------------
@@ -1342,33 +1449,5 @@ class SchematicScene(QGraphicsScene):
             y += GRID_PX
 
 
-# ---------------------------------------------------------------------------
-# Pin geometry (shared transform with commands/codegen)
-# ---------------------------------------------------------------------------
-
-def _component_pin_positions(comp: Component) -> list[tuple[float, float]]:
-    """Absolute (mirror-then-rotate) pin coordinates of *comp*, in GU.
-
-    Mirrors the transform used in :mod:`app.canvas.commands` so wire pin-snap
-    and delete-connectivity agree on where a component's pins actually are.
-    """
-    defn = REGISTRY.get(comp.kind)
-    if defn is None:
-        return []
-    ox, oy = comp.position
-    out: list[tuple[float, float]] = []
-    for pin in defn.pins:
-        dx, dy = pin.offset
-        if comp.mirror:
-            dx = -dx
-        r = comp.rotation % 360
-        if r == 90:
-            rx, ry = (-dy, dx)
-        elif r == 180:
-            rx, ry = (-dx, -dy)
-        elif r == 270:
-            rx, ry = (dy, -dx)
-        else:
-            rx, ry = (dx, dy)
-        out.append((ox + rx, oy + ry))
-    return out
+# _component_pin_positions is the canonical implementation in app.schematic.model.
+# Imported at the top of this module as component_pin_positions.

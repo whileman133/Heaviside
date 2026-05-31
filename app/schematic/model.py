@@ -127,6 +127,42 @@ def simplify_points(
     return result
 
 
+def route(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    vfirst: bool | None = None,
+) -> list[tuple[float, float]]:
+    """Two-segment Manhattan path from *a* to *b* (spec §6.4 "routing primitive").
+
+    Returns ``[a, b]`` when the points already share an x or y coordinate,
+    otherwise ``[a, corner, b]`` with a single auto-corner.
+
+    *vfirst* selects the corner orientation:
+
+    * ``False`` → horizontal-first: corner at ``(b.x, a.y)``.
+    * ``True``  → vertical-first:   corner at ``(a.x, b.y)``.
+    * ``None``  → **dominant axis**: travel the longer leg first
+      (horizontal-first when ``|dx| >= |dy|``, else vertical-first). This is the
+      default used while drawing; there is no modifier key to flip it — the user
+      steers the route by dropping intermediate vertices.
+
+    This is the single routing primitive shared by the drawing preview, the
+    drawing commit, vertex dragging, and component-follow elbows. Callers that
+    need a specific orientation pass *vfirst* explicitly; nobody re-implements
+    the corner math. The intermediate corner (0 or 1 points) is ``route(...)[1:-1]``.
+
+    Pure function: inputs are not modified.
+    """
+    ax, ay = a
+    bx, by = b
+    if ax == bx or ay == by:
+        return [a, b]
+    if vfirst is None:
+        vfirst = abs(by - ay) > abs(bx - ax)
+    corner = (ax, by) if vfirst else (bx, ay)
+    return [a, corner, b]
+
+
 def component_pin_positions(component: "Component") -> list[tuple[float, float]]:
     """Absolute (mirror-then-rotate) pin coordinates of *component*, in GU.
 

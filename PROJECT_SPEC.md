@@ -1,6 +1,6 @@
 # Heaviside — Specification
 
-**Version:** 0.2  
+**Version:** 0.3  
 **Status:** Draft  
 **Author:** Wes H.
 
@@ -480,29 +480,60 @@ The canvas operates in one of the following mutually exclusive modes at any time
 
 ### 6.4 Wire Routing
 
+A wire is an ordered list of Manhattan-routed points (§4.3). The whole feature is
+built on **one** routing primitive and **one** simplification pass, reused by
+every code path (drawing preview, drawing commit, vertex drag, component
+follow). Duplicating the corner/elbow math across paths is the historical source
+of preview-vs-commit disagreement and accumulating vertices, and is prohibited.
+
+#### The routing primitive
+
+`route(a, b)` returns the Manhattan path between two points as either `[a, b]`
+(when they already share an x or y) or `[a, corner, b]` (one auto-corner). The
+corner orientation is **deterministic by dominant axis**: travel along the
+longer axis first — horizontal-first when `|bx − ax| ≥ |by − ay|`, otherwise
+vertical-first. There is **no** modifier key to flip it; the user controls
+routing by dropping intermediate vertices instead. An "elbow" inserted to keep a
+shifted segment Manhattan is simply `route(a, b)` with the corner orientation
+the caller needs — the same function, never a re-implementation.
+
 #### Drawing
 
-1. In **Wire** mode, left-click a pin, an existing wire, or any grid point to begin a wire.
-2. Move cursor → the router previews a two-segment Manhattan path (horizontal-first, then vertical) as a semi-transparent **wire ghost** that follows the cursor and updates live.
-3. Press/hold `Shift` to toggle vertical-first routing; the ghost updates immediately.
-4. Left-click on an empty grid point places an intermediate **anchor** vertex and continues routing. Double-clicking, or clicking a pin/another wire, terminates the wire and records a `WireCommand`.
-5. `Escape` cancels the current wire in progress (clearing the ghost) without leaving Wire mode.
+A wire-in-progress is an ordered list of committed vertices. The first comes
+from the starting click; the live **wire ghost** previews `route(last_vertex,
+cursor)` from the last committed vertex to the snapped cursor and updates on
+every move.
+
+1. In **Wire** mode, left-click a pin, an existing wire, or any grid point to begin a wire (the first vertex).
+2. Move cursor → the ghost shows the dominant-axis `route()` L from the last committed vertex to the cursor.
+3. Left-click on an empty grid point **commits the previewed L** — both its auto-corner (if any) and the clicked point become committed vertices — and routing continues from there. This is how the user places intermediate corners and steers the path.
+4. Left-click on a pin, an existing wire vertex, or a wire segment **finalizes** the wire (committing the previewed L to that target) and returns to **Select** mode (see "Finalizing").
+5. Double-click on an empty grid point finalizes the wire at the cursor as a free (open) endpoint and **stays in Wire** mode for continued routing.
+6. `Escape` discards the wire in progress (clearing the ghost) without leaving Wire mode.
+
+On finalize the committed point list is passed through `simplify_points`; if it
+collapses to fewer than two distinct points the wire is **discarded** (no
+degenerate zero-length wire is created). A committed wire is recorded as a
+`WireCommand` (or a `MacroCommand` when a split is also required).
 
 #### Snapping
 
-Wire endpoints snap (within `PIN_SNAP_GU` = 0.25 GU) with this priority:
+The snapped cursor target is resolved (within `PIN_SNAP_GU` = 0.25 GU) with this priority:
 
 1. **Component pin** — connects to the pin.
 2. **Existing wire vertex** — connects to that wire, forming a junction.
 3. **Point on an existing wire segment** — connects mid-segment (see "Junctions and segment splitting").
 4. Otherwise the bare **0.5 GU grid node** under the cursor.
 
-The ghost's end marker distinguishes a connectable snap (pin / wire) from a plain grid-node anchor.
+Priorities 1–3 are **connectable** targets; the ghost's end marker distinguishes
+a connectable snap (ring) from a plain grid-node anchor (dot), and connectable
+targets are what finalize the wire.
 
-#### Auto-enter / auto-exit wire mode
+#### Finalizing and mode transitions
 
 - In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
-- Terminating a wire **on a pin or on existing wire geometry** auto-returns to **Select** mode. Double-clicking to end in empty space stays in Wire mode for continued routing.
+- A wire that terminates on a **connectable** target — a pin, an existing wire vertex, or a wire segment — finalizes and returns to **Select** mode.
+- A **double-click** on an empty grid node finalizes the wire (its end becomes an open `ocirc` endpoint) but **stays in Wire** mode so the user can immediately draw another wire.
 
 #### Junctions and segment splitting
 
@@ -510,20 +541,43 @@ The ghost's end marker distinguishes a connectable snap (pin / wire) from a plai
 - Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints.
 - When a wire connects to the **middle of another wire's segment** — whether by drawing a new wire onto it or by dragging an existing wire vertex onto it — the target wire is **split**: a vertex is inserted at the connection point so the junction is real topology. The split is bundled with the triggering command (`WireCommand` or `MoveWireVertexCommand`) inside a `MacroCommand` so it is one undoable action.
 
+Connectivity is **purely geometric and never stored**: two coordinates are
+electrically joined precisely when they are equal. Junction dots, open-circle
+ends, and which wires follow a moved component are all *derived* from point
+coincidence whenever the schematic changes — so dragging an endpoint onto a pin
+connects it and dragging it away disconnects it, with no bookkeeping.
+
 #### Editing existing wires
 
-- In **Select** mode a wire's draggable vertices (intermediate corners and free, non-pin endpoints) show grab handles. Dragging one moves that vertex, auto-elbowing adjacent segments to stay Manhattan and simplifying afterward; recorded as a `MoveWireVertexCommand`. The **live drag preview** mirrors this exactly — elbows are inserted and `simplify_points` is applied on every mouse-move, so the ghost never shows redundant collinear vertices and no diagonal segments appear before the mouse is released. Endpoints sitting on a component pin are locked (they are owned by component wire-following) and have no handle.
+- In **Select** mode a wire's draggable vertices (intermediate corners and free, non-pin endpoints) show grab handles. Dragging one moves that vertex, re-routing each adjacent segment through `route()` to stay Manhattan and simplifying afterward; recorded as a `MoveWireVertexCommand`. The **live drag preview** mirrors this exactly — segments are re-routed and `simplify_points` is applied on every mouse-move, so the ghost never shows redundant collinear vertices and no diagonal segments appear before the mouse is released. A dropped vertex snaps to a connectable target (pin / other wire) just like a drawn endpoint. Endpoints sitting on a component pin are locked (they are owned by component wire-following) and have no handle.
+- A vertex grab is a **drag** only if the cursor moves to a different snapped grid node between press and release; otherwise it is a plain **click** that **selects the wire** (and pushes no command). The click/drag test is on cursor *movement*, **not** on whether the snapped cursor differs from the vertex's old position — a vertex may be grabbed from up to `VERTEX_HIT_GU` away, so a stationary click whose snapped position differs from the vertex must not be misread as a drag (which would teleport the vertex onto the cursor, e.g. onto a pin, spuriously inserting a junction dot). This also makes a short wire — whose vertex-grab zones can cover most of its length — selectable and deletable by clicking near its ends, where a free open-circle endpoint sits.
 - Wire **selection hit-testing** uses a thin band along the actual segments (and the vertex handles), not the wire's bounding rectangle, so a wire does not steal clicks from nearby components.
+- When two wires overlap at a click point (e.g. a T-junction where a stub's endpoint lies on the interior of a through wire), the **through wire is preferred**. The proximity key ranks a click at a through wire's interior as better than a click at a stub's endpoint. A click that lands at an **intermediate vertex** (shared by two adjacent segments of the same wire) is treated as an interior hit (rank 0), not an endpoint touch, so the through wire wins over an adjacent stub even after the through wire has been split to form the junction.
+
+#### Wires follow the components they connect to
+
+When a component moves (drag or arrow-key nudge), every wire endpoint coincident
+with one of its pins shifts by the same delta. If only one end of a wire moves,
+its adjacent segment is re-routed through `route()` (an auto-corner is inserted
+if it would otherwise go diagonal); if both ends share the delta the whole
+polyline translates rigidly. A wire that collapses to a single point is removed.
+The reshape is part of the same `MoveCommand` and is fully reversed on undo (see
+§6.3).
 
 #### Wire Simplification
 
-Wire point lists are kept minimal at all times: consecutive duplicate points are removed and redundant collinear interior vertices are collapsed (e.g. `(0,0)–(2,0)–(5,0)` becomes `(0,0)–(5,0)`). Simplification runs when a wire is created, when an endpoint follows a moved component, and when a vertex is dragged; the code generator also simplifies defensively so output is always minimal.
+Wire point lists are kept minimal at all times via the single `simplify_points`
+pass: consecutive duplicate points are removed and redundant collinear interior
+vertices are collapsed (e.g. `(0,0)–(2,0)–(5,0)` becomes `(0,0)–(5,0)`).
+Simplification runs when a wire is created, when an endpoint follows a moved
+component, and when a vertex is dragged; the code generator also simplifies
+defensively so output is always minimal.
 
 Wires do not auto-route around components in v1 — the user routes manually.
 
 ### 6.5 Component Properties
 
-- Double-clicking a component opens the **Properties Panel** (right panel, not a modal dialog).
+- Double-clicking a component in **Select** mode emits `SchematicScene.component_double_clicked(component_id)` and opens the **Properties Panel** (right panel, not a modal dialog).
 - The panel shows editable fields for each label slot accepted by that `ComponentDef`.
 - Label slot fields accept arbitrary text; content is treated as a LaTeX string verbatim.
 - A small per-slot preview renders the LaTeX equation inline using the preview pipeline (see Section 8).
@@ -725,28 +779,29 @@ Equation previews use a 500ms debounce after the user stops typing. Failures (in
 The minimal template used for full schematic preview:
 
 ```latex
-\documentclass[tikz,border=4pt]{standalone}
+\documentclass[border=4pt]{standalone}
 \usepackage[american]{circuitikz}
+\ctikzset{voltage=american, current=american, resistor=american}
 \begin{document}
 % CIRCUITIKZ_SOURCE
 \end{document}
 ```
 
-The string `% CIRCUITIKZ_SOURCE` is replaced by the generated code with three
-adjustments applied in `build_tex()`:
+The string `% CIRCUITIKZ_SOURCE` is replaced verbatim by the output of
+`generate(schematic, y_flip=True)`.  Two conventions govern the two call sites:
 
-- **Y-axis flip** — all Y coordinates in the generated source are negated before
-  embedding.  Using `yscale=-1` on the environment would flip the visual output
-  but leave path directions unchanged, causing polarised components (voltage
-  sources, diodes, etc.) to render with inverted polarity markers.  Negating Y
-  in the coordinates themselves corrects both orientation and path direction.
-- **Coordinate normalization** — all `(x, y)` pairs in the source are scanned
-  to find the bounding-box minimum; a `shift` transform is injected alongside
-  `yscale=-1` to translate the circuit to near the origin.  Without this,
-  schematics placed at large canvas coordinates (e.g. (78, 79)) would render as
-  a tiny circuit in the corner of a huge blank page.
-- **American style** — `\usepackage[american]{circuitikz}` ensures component
-  symbols match the canvas (§5.6).
+- **Source panel** — calls `generate(schematic)` (Y-down, matching Qt canvas
+  convention) so the source is human-readable and consistent with what the user
+  sees on screen.
+- **Preview compilation** — calls `generate(schematic, y_flip=True)` to negate
+  all Y coordinates before passing the source to `build_tex()`.  Using
+  `yscale=-1` on the TikZ environment would flip the visual output but leave
+  path *directions* unchanged, causing polarised components (voltage sources,
+  diodes, etc.) to render with inverted polarity markers.  Negating Y in the
+  coordinates themselves corrects both orientation and path direction.
+- **American style** — `\usepackage[american]{circuitikz}` plus
+  `\ctikzset{voltage=american, current=american, resistor=american}` ensures
+  component symbols match the canvas (§5.6).
 
 The `border=4pt` option on `standalone` provides a small uniform margin.
 
@@ -892,9 +947,6 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 ```
 heaviside/
 ├── main.py                        # Entry point; constructs QApplication and MainWindow
-├── scratch_canvas.py              # THROWAWAY harness: drops SchematicView into a bare
-│                                  #   window for manual canvas testing before the UI
-│                                  #   shell (Phase 9) exists. Delete once Phase 9 lands.
 ├── app/
 │   ├── canvas/
 │   │   ├── scene.py               # SchematicScene(QGraphicsScene) + interaction state machine
@@ -935,7 +987,7 @@ heaviside/
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
 
-`scratch_canvas.py` and the SVG manifest under `tools/` are excluded from version control of the shipped app via `.gitignore` where appropriate; the harness is a temporary scaffold (see §14.4).
+`scratch_canvas.py` was a temporary development harness used during Phases 5–8 and has been removed now that the full UI shell (Phase 9) is in place. The SVG manifest under `tools/` is excluded from version control of the shipped app via `.gitignore`.
 
 ---
 
@@ -1074,7 +1126,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_diode_horizontal` | A diode at (0,0), rotation 0 → produces `(0,0) to[D] (2,0)`. |
 | `test_voltage_source` | A voltage source at (0,0), rotation 0 → produces `(0,0) to[V] (0,2)`. |
 | `test_opamp_node` | An op-amp produces `node[op amp]` syntax with correct anchor coordinates. |
-| `test_nmos_node` | An NMOS produces `node[nmos]` syntax. |
+| `test_nmos_node` | An NMOS (`nigfete`) produces `node[nigfete, xscale=1.0167, anchor=gate]` syntax (with its §7.2 geometry correction). |
 | `test_wire_straight` | A two-point wire `[(0,0),(2,0)]` → produces `(0,0) -- (2,0)`. |
 | `test_wire_manhattan` | A three-point wire `[(0,0),(2,0),(2,2)]` → produces `(0,0) -- (2,0) -- (2,2)`. |
 | `test_coordinate_formatting_integer` | Coordinate `2.0` is output as `2`, not `2.0` or `2.00`. |
@@ -1145,12 +1197,15 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_component_survives_repeated_moves` | A component dragged multiple times in succession stays visible and position-synced (regression: item reconciliation, not destroy/recreate). |
 | `test_items_movable_only_in_select_mode` | Component drag/selection is enabled only in Select mode. |
 | `test_wire_ghost_appears_during_component_drag` | Dragging a connected component shows a live ghost of the reshaped wires; the model is untouched until release. |
-| `test_wire_preview_*` | The in-progress wire ghost spawns, tracks the cursor, switches its snap marker for pin vs. grid node, and flips routing on Shift. |
+| `test_wire_preview_*` | The in-progress wire ghost spawns, tracks the cursor, switches its snap marker for pin vs. grid node, and routes its corner by dominant axis (no modifier key flips it). |
+| `test_route_manhattan` | `route()` returns a two-point path for axis-aligned targets and a single dominant-axis corner otherwise. |
 | `test_grid_node_anchor_adds_vertex` | Clicking empty space mid-wire drops an intermediate anchor; a collinear anchor is simplified away. |
 | `test_click_free_pin_enters_wire_mode` / `test_terminate_on_pin_returns_to_select` | Auto-enter on a free-pin click; auto-exit when ending on a pin; connected-pin clicks and empty-space double-clicks behave per §6.4. |
 | `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
 | `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
 | `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
+| `test_drag_release_at_same_spot_is_noop` / `test_click_near_endpoint_selects_short_wire` / `test_click_on_segment_near_vertex_does_not_move_it` | A vertex grab is a drag only if the snapped cursor moves between press and release; a stationary click selects the wire (no command, no geometry change), so a short wire with an open-circle end is selectable/deletable near its ends and clicking a segment near a vertex never relocates the vertex or inserts a spurious junction (regression). |
+| `test_click_at_t_junction_selects_through_wire` | Clicking at a T-junction (where a stub's endpoint lies on the interior of a through wire) selects the through wire, not the stub. An intermediate vertex of the through wire is treated as an interior hit so the through wire's proximity rank wins over the stub's endpoint rank (regression: after a split the through wire previously tied with the stub and lost the tie-break). |
 | `test_junction_dot_item_appears_for_three_wires` / `…removed_when_wire_deleted` | Junction dot items appear/disappear as wire connectivity changes. |
 | `test_snap_to_existing_wire_vertex` / `test_snap_onto_wire_segment` | Wire routing snaps to existing wire vertices and segment points (pin snap takes priority). |
 | `test_connect_to_mid_segment_splits_target` / `test_drag_vertex_onto_segment_splits_target` | Connecting (by drawing or by dragging a vertex) onto a wire's mid-segment splits the target, forms a junction, and is one undoable action. |
@@ -1180,7 +1235,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] Pressing `W` enters wire mode.
 - [ ] Clicking a pin starts a wire anchored to that pin.
 - [ ] The wire preview (ghost) shows a two-segment Manhattan path following the cursor.
-- [ ] `Shift` toggles between horizontal-first and vertical-first routing.
+- [ ] The preview corner orientation follows the dominant axis (longer leg first); clicking empty space drops an intermediate vertex to steer the route.
 - [ ] Double-clicking or clicking a second pin terminates the wire.
 - [ ] The resulting wire is rendered correctly on the canvas.
 - [ ] `Escape` cancels a wire in progress without adding it to the schematic.
@@ -1307,7 +1362,7 @@ Work bottom-up, layer by layer. Each layer is independently testable before the 
 | 6 | `app/canvas/commands.py` | Integration undo/redo tests pass |
 | 7 | `app/canvas/scene.py`, `app/canvas/view.py` | Remaining integration tests pass |
 | 8 | `app/preview/latex.py`, `app/preview/worker.py` | Preview compiles and displays for a simple schematic |
-| 9 | `app/ui/` (all panels), `main.py` | Acceptance criteria AC-1 through AC-9 |
+| 9 ✓ | `app/ui/` (all panels), `main.py` | Acceptance criteria AC-1 through AC-9 |
 
 Do not proceed to the next phase until the current phase's verification condition is met. This keeps debugging localized to the layer most recently added.
 

@@ -182,42 +182,33 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     # Keys use pre-flip coordinates (canvas space) for lookup; the flip is
     # applied when the reference is emitted, not when the key is stored.
     pin_coord_to_ref: dict[tuple[float, float], str] = {}
-    for comp in schematic.components:
-        anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
-        if anchor_map:
-            node_id = f"node_{comp.id[:8]}"
-            pin_positions = component_pin_positions(comp)
-            defn = REGISTRY[comp.kind]
-            for i, pin in enumerate(defn.pins):
-                ctikz_anchor = anchor_map.get(pin.name)
-                if ctikz_anchor and i < len(pin_positions):
-                    px, py = pin_positions[i]
-                    coord = (round(px, 6), round(py, 6))
-                    pin_coord_to_ref[coord] = f"({node_id}.{ctikz_anchor})"
-
-    for comp in schematic.components:
-        draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
-
-    for wire in schematic.wires:
-        draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
-
-    # Direct pin-to-pin connections between multi-terminal components.
+    # Single pass over components: build pin_coord_to_ref, all_pin_refs,
+    # and emit draw lines — avoids iterating schematic.components three times.
     all_pin_refs: dict[tuple[float, float], list[str]] = {}
     for comp in schematic.components:
         defn = REGISTRY[comp.kind]
-        pin_positions = component_pin_positions(comp)
         node_id = f"node_{comp.id[:8]}"
+        pin_positions = component_pin_positions(comp)
         anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
+
+        # Populate pin_coord_to_ref and all_pin_refs in the same loop.
         for i, pin in enumerate(defn.pins):
             if i >= len(pin_positions):
                 continue
             px, py = pin_positions[i]
             coord = (round(px, 6), round(py, 6))
             if anchor_map and pin.name in anchor_map:
-                ref = f"({node_id}.{anchor_map[pin.name]})"
+                ctikz_anchor = anchor_map[pin.name]
+                ref = f"({node_id}.{ctikz_anchor})"
+                pin_coord_to_ref[coord] = ref
             else:
                 ref = f"({_fmt(px)},{_fmt(_y(py))})"
             all_pin_refs.setdefault(coord, []).append(ref)
+
+        draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
+
+    for wire in schematic.wires:
+        draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
 
     wired_coords: set[tuple[float, float]] = set()
     for wire in schematic.wires:
@@ -420,6 +411,29 @@ _PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = {
     "op amp":  {"+": "+", "-": "-", "out": "out"},
     "nigfete": {"gate": "gate", "drain": "drain", "source": "source"},
 }
+
+
+# ---------------------------------------------------------------------------
+# Startup validation: every multi-terminal kind must have a _PIN_TO_CTIKZ_ANCHOR
+# entry so named anchor references are emitted correctly. Missing entries cause
+# silent fallback to bare coordinates, producing hard-to-diagnose misalignment.
+def _validate_codegen_tables() -> None:
+    """Check that every multi-terminal kind in the registry has a
+    _PIN_TO_CTIKZ_ANCHOR entry.  Kinds in _MULTI_TERMINAL_KINDS that are not
+    yet in the registry are skipped — they may be planned for future use.
+    """
+    from app.components.registry import REGISTRY
+    for kind in _MULTI_TERMINAL_KINDS:
+        if kind not in REGISTRY:
+            continue  # not yet registered; skip
+        if kind not in _PIN_TO_CTIKZ_ANCHOR:
+            raise RuntimeError(
+                f"Multi-terminal kind {kind!r} is in the registry but missing "
+                f"from _PIN_TO_CTIKZ_ANCHOR in app/codegen/circuitikz.py. "
+                f"Add an entry before using this kind."
+            )
+
+_validate_codegen_tables()
 
 
 # ---------------------------------------------------------------------------

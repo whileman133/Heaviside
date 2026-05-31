@@ -32,7 +32,14 @@ from __future__ import annotations
 import copy
 from abc import ABC, abstractmethod
 
-from app.schematic.model import Component, Schematic, Wire, simplify_points
+from app.schematic.model import (
+    Component,
+    Schematic,
+    Wire,
+    component_pin_positions as _component_pin_positions,
+    route,
+    simplify_points,
+)
 
 __all__ = [
     "Command",
@@ -75,53 +82,6 @@ def _wire_touches_position(wire: Wire, pos: tuple[float, float]) -> bool:
     return wire.points[0] == pos or wire.points[-1] == pos
 
 
-def _component_pin_positions(comp: Component) -> list[tuple[float, float]]:
-    """Return the absolute (rotated/mirrored) pin coordinates of *comp*.
-
-    Pin offsets are defined in the registry relative to the component origin.
-    We apply the same mirror-then-rotate transform the canvas and code
-    generator use so that wire-connection tests operate in schematic
-    coordinates.
-    """
-    # Imported lazily to keep this module importable even if the registry is
-    # being constructed; avoids an import cycle during package init.
-    from app.components.registry import REGISTRY
-
-    defn = REGISTRY.get(comp.kind)
-    if defn is None:
-        return []
-
-    ox, oy = comp.position
-    positions: list[tuple[float, float]] = []
-    for pin in defn.pins:
-        dx, dy = pin.offset
-        if comp.mirror:
-            dx = -dx
-        rx, ry = _rotate_offset(dx, dy, comp.rotation)
-        positions.append((ox + rx, oy + ry))
-    return positions
-
-
-def _rotate_offset(dx: float, dy: float, rotation: int) -> tuple[float, float]:
-    """Rotate an (dx, dy) offset clockwise by *rotation* degrees.
-
-    Y increases downward (Qt convention), so a clockwise screen rotation maps:
-        90°  : (x, y) -> (-y,  x)
-        180° : (x, y) -> (-x, -y)
-        270° : (x, y) -> ( y, -x)
-    """
-    r = rotation % 360
-    if r == 0:
-        return (dx, dy)
-    if r == 90:
-        return (-dy, dx)
-    if r == 180:
-        return (-dx, -dy)
-    if r == 270:
-        return (dy, -dx)
-    # Validation elsewhere rejects non-multiples of 90; treat as identity.
-    return (dx, dy)
-
 
 def _seg_elbow(
     moved: tuple[float, float], neighbour: tuple[float, float]
@@ -129,18 +89,14 @@ def _seg_elbow(
     """Elbow vertex between *moved* and *neighbour*, or None if already
     axis-aligned. Keeps the path Manhattan after an endpoint shift.
 
-    Routes through ``(moved.x, neighbour.y)`` — horizontal from the neighbour
-    to under the moved endpoint, then vertical to it. Degenerate elbows
-    (coinciding with an existing vertex) return None.
+    Thin wrapper over the shared :func:`route` primitive (spec §6.4): the elbow
+    is the vertical-first corner ``(moved.x, neighbour.y)`` — i.e. vertical from
+    the moved endpoint, then horizontal into the neighbour. ``route`` returns
+    ``[moved, neighbour]`` (no corner) when the two are already axis-aligned, so
+    slicing the middle yields ``None`` here.
     """
-    mx, my = moved
-    nx, ny = neighbour
-    if mx == nx or my == ny:
-        return None
-    elbow = (mx, ny)
-    if elbow == moved or elbow == neighbour:
-        return None
-    return elbow
+    mid = route(moved, neighbour, vfirst=True)[1:-1]
+    return mid[0] if mid else None
 
 
 def reshape_wire_points(
@@ -582,17 +538,13 @@ class MoveWireVertexCommand(Command):
     ) -> tuple[float, float] | None:
         """Elbow vertex making a–b Manhattan, or None if already axis-aligned.
 
-        Routes through ``(b.x, a.y)`` — i.e. horizontal from *a* then vertical
-        into *b*. Degenerate elbows (coinciding with an endpoint) return None.
+        Thin wrapper over the shared :func:`route` primitive (spec §6.4): the
+        horizontal-first corner ``(b.x, a.y)`` — horizontal from *a*, then
+        vertical into *b*. ``route`` yields no corner when a–b are already
+        axis-aligned, so the sliced middle is empty → None.
         """
-        ax, ay = a
-        bx, by = b
-        if ax == bx or ay == by:
-            return None
-        elbow = (bx, ay)
-        if elbow == a or elbow == b:
-            return None
-        return elbow
+        mid = route(a, b, vfirst=False)[1:-1]
+        return mid[0] if mid else None
 
     def do(self, schematic: Schematic) -> None:
         wire = self._find_wire(schematic)

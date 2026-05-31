@@ -17,6 +17,7 @@ from app.schematic.model import (
     Wire,
     junction_points,
     open_endpoints,
+    route,
     simplify_points,
 )
 from app.schematic.validate import validate
@@ -138,6 +139,45 @@ def test_schematic_empty_valid() -> None:
     """An empty Schematic (no components, no wires) passes validation."""
     errors = validate(_make_schematic())
     assert errors == []
+
+
+# ---------------------------------------------------------------------------
+# route — the single Manhattan routing primitive (spec §6.4)
+# ---------------------------------------------------------------------------
+
+def test_route_axis_aligned_is_two_points() -> None:
+    assert route((0.0, 0.0), (3.0, 0.0)) == [(0.0, 0.0), (3.0, 0.0)]
+    assert route((1.0, 1.0), (1.0, 4.0)) == [(1.0, 1.0), (1.0, 4.0)]
+
+
+def test_route_dominant_axis_horizontal_first() -> None:
+    # |dx|=3 > |dy|=2 → horizontal-first, corner at (b.x, a.y).
+    assert route((0.0, 0.0), (3.0, 2.0)) == [(0.0, 0.0), (3.0, 0.0), (3.0, 2.0)]
+
+
+def test_route_dominant_axis_vertical_first() -> None:
+    # |dy|=3 > |dx|=2 → vertical-first, corner at (a.x, b.y).
+    assert route((0.0, 0.0), (2.0, 3.0)) == [(0.0, 0.0), (0.0, 3.0), (2.0, 3.0)]
+
+
+def test_route_equal_legs_tie_to_horizontal() -> None:
+    # |dx| == |dy| → horizontal-first (the `>=` tie-break).
+    assert route((0.0, 0.0), (2.0, 2.0)) == [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)]
+
+
+def test_route_explicit_orientation_overrides_dominant_axis() -> None:
+    # Same diagonal, opposite forced corners.
+    assert route((0.0, 0.0), (2.0, 3.0), vfirst=False) == [
+        (0.0, 0.0), (2.0, 0.0), (2.0, 3.0),
+    ]
+    assert route((0.0, 0.0), (3.0, 2.0), vfirst=True) == [
+        (0.0, 0.0), (0.0, 2.0), (3.0, 2.0),
+    ]
+
+
+def test_route_corner_slice_is_single_point_or_empty() -> None:
+    assert route((0.0, 0.0), (2.0, 3.0))[1:-1] == [(0.0, 3.0)]
+    assert route((0.0, 0.0), (3.0, 0.0))[1:-1] == []
 
 
 # ---------------------------------------------------------------------------

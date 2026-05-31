@@ -140,10 +140,14 @@ def test_opamp_node() -> None:
 # ---------------------------------------------------------------------------
 
 def test_nmos_node() -> None:
-    """nigfete produces node[nigfete] syntax."""
+    """nigfete is placed as node[nigfete] with its geometry correction (spec §7.2).
+
+    The symbol is anchored at the gate pin and stretched horizontally by
+    xscale=1.0167 to align the drain/source pins to the 0.5-GU grid.
+    """
     comp = _comp("nigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfete]" in src
+    assert "node[nigfete, xscale=1.0167, anchor=gate]" in src
 
 
 # ---------------------------------------------------------------------------

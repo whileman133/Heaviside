@@ -199,14 +199,21 @@ class ComponentItem(QGraphicsItem):
         if not self._ghost and self.component.labels:
             painter.setPen(_pen(COLOR_NORMAL, 1.0))
             font = painter.font()
-            font.setPointSizeF(7.0)
+            font.setPointSizeF(8.0)
             painter.setFont(font)
+            fm = painter.fontMetrics()
+            line_h = fm.height() + 2
             x0, y0, x1, y1 = self._defn.bbox
             cx = (x0 + x1) / 2 * GRID_PX
-            ty = y0 * GRID_PX - 4
-            for i, (slot, text) in enumerate(self.component.labels.items()):
-                if text:
-                    painter.drawText(QPointF(cx - 20, ty - i * 10), f"{slot}: {text}")
+            # Start above the bounding box, one line per non-empty slot.
+            non_empty = [(s, t) for s, t in self.component.labels.items() if t]
+            # Position so the bottom of the last line sits just above the bbox top.
+            ty = y0 * GRID_PX - 6 - (len(non_empty) - 1) * line_h
+            for slot, text in non_empty:
+                label_str = f"{slot}: {text}"
+                tw = fm.horizontalAdvance(label_str)
+                painter.drawText(QPointF(cx - tw / 2, ty), label_str)
+                ty += line_h
 
     # ------------------------------------------------------------------
     # Subclass hook
@@ -332,6 +339,11 @@ class WireItem(QGraphicsItem):
         self.prepareGeometryChange()
         self._preview_points = None
         self.update()
+
+    @property
+    def preview_points(self) -> list[tuple[float, float]] | None:
+        """The current preview point list, or None if no preview is active."""
+        return self._preview_points
 
     def _draw_points(self) -> list[tuple[float, float]]:
         return self._preview_points if self._preview_points is not None else self.wire.points
