@@ -120,6 +120,19 @@ def build_tex(circuitikz_source: str) -> str:
         return f"({x},{y_str})"
 
     adjusted = coord_re.sub(_negate_y, circuitikz_source)
+
+    # Negate rotate=N angles for the same reason: after Y-negation CircuiTikZ's
+    # rotation direction is reversed, so a 90° CW Qt rotation must be emitted
+    # as rotate=-90 (= 270°) to render correctly in the flipped coordinate space.
+    rotate_re = re.compile(r"rotate=(-?\d+(?:\.\d+)?)")
+
+    def _negate_rotate(m: re.Match) -> str:
+        angle = float(m.group(1))
+        neg = -angle
+        a_str = str(int(neg)) if neg == int(neg) else f"{neg:g}"
+        return f"rotate={a_str}"
+
+    adjusted = rotate_re.sub(_negate_rotate, adjusted)
     return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", adjusted)
 
 

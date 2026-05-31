@@ -227,6 +227,15 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
         for p in component_pin_positions(comp):
             pin_positions.add((round(p[0], 6), round(p[1], 6)))
 
+    # Collect all wire vertex positions (every point on every wire).
+    # A wire endpoint that coincides with ANY vertex of ANY other wire is
+    # connected — it should not be shown as an open endpoint.
+    all_wire_points: dict[tuple[float, float], int] = {}
+    for wire in schematic.wires:
+        for pt in wire.points:
+            pt_r = (round(pt[0], 6), round(pt[1], 6))
+            all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
+
     candidates: set[tuple[float, float]] = set()
     for wire in schematic.wires:
         pts = wire.points
@@ -234,8 +243,13 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
             continue
         for pt in (pts[0], pts[-1]):
             pt_r = (round(pt[0], 6), round(pt[1], 6))
-            if pt_r not in pin_positions:
-                candidates.add(pt_r)
+            if pt_r in pin_positions:
+                continue
+            # Connected to another wire if this point appears in more than one
+            # wire's point list, or appears as an interior vertex of any wire.
+            if all_wire_points.get(pt_r, 0) > 1:
+                continue
+            candidates.add(pt_r)
 
     return candidates
 

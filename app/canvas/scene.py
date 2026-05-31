@@ -1001,6 +1001,7 @@ class SchematicScene(QGraphicsScene):
                     dragged_pins.add((round(p[0], 6), round(p[1], 6)))
 
         self._update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)
+        self._update_junction_preview(preview_pts, dragged_pins)
 
     def _update_ocirc_preview(
         self,
@@ -1025,6 +1026,16 @@ class SchematicScene(QGraphicsScene):
         if extra_pin_positions:
             pin_positions |= extra_pin_positions
 
+        # Build a count of how many times each coordinate appears across all
+        # wire point lists (using preview positions where available).  A count
+        # > 1 means the point is shared with another wire — not an open endpoint.
+        all_wire_points: dict[tuple[float, float], int] = {}
+        for wire in self._schematic.wires:
+            pts = preview_pts_by_wire.get(wire.id, wire.points)
+            for pt in pts:
+                pt_r = (round(pt[0], 6), round(pt[1], 6))
+                all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
+
         # Compute the desired ocirc positions from model wires, substituting
         # preview endpoints for any wire that is being previewed.
         desired: set[tuple[float, float]] = set()
@@ -1034,8 +1045,11 @@ class SchematicScene(QGraphicsScene):
                 continue
             for pt in (pts[0], pts[-1]):
                 pt_r = (round(pt[0], 6), round(pt[1], 6))
-                if pt_r not in pin_positions:
-                    desired.add(pt_r)
+                if pt_r in pin_positions:
+                    continue
+                if all_wire_points.get(pt_r, 0) > 1:
+                    continue
+                desired.add(pt_r)
 
         # Remove items no longer needed.
         for coord in list(self._open_circle_items):
@@ -1048,6 +1062,59 @@ class SchematicScene(QGraphicsScene):
                 oc.setPos(self.gu_to_scene(*coord))
                 self.addItem(oc)
                 self._open_circle_items[coord] = oc
+
+    def _update_junction_preview(
+        self,
+        preview_pts_by_wire: dict[str, list[tuple[float, float]]],
+        extra_pin_positions: set[tuple[float, float]] | None = None,
+    ) -> None:
+        """Move junction dot items to match previewed wire positions during drag.
+
+        Recomputes junction degree using preview wire points so dots follow
+        the dragged topology rather than staying at the pre-drag model positions.
+        """
+        from app.schematic.model import junction_points as _junction_points
+
+        # Build a temporary schematic-like view using preview points.
+        # We recompute degree manually using the same logic as junction_points().
+        degree: dict[tuple[float, float], int] = {}
+
+        def add(pt: tuple[float, float], d: int) -> None:
+            pt = (round(pt[0], 6), round(pt[1], 6))
+            degree[pt] = degree.get(pt, 0) + d
+
+        for wire in self._schematic.wires:
+            pts = preview_pts_by_wire.get(wire.id, wire.points)
+            own: dict[tuple[float, float], int] = {}
+            n = len(pts)
+            for i, pt in enumerate(pts):
+                pt_r = (round(pt[0], 6), round(pt[1], 6))
+                own[pt_r] = own.get(pt_r, 0) + (1 if (i == 0 or i == n - 1) else 2)
+            for pt, d in own.items():
+                add(pt, d)
+
+        for comp in self._schematic.components:
+            for p in _component_pin_positions(comp):
+                add(p, 1)
+        # Also count dragged pin positions.
+        for p in (extra_pin_positions or set()):
+            add(p, 1)
+
+        wanted = {pt for pt, d in degree.items() if d >= 3}
+
+        # Remove dots no longer needed.
+        for coord in list(self._junction_items):
+            if coord not in wanted:
+                self.removeItem(self._junction_items.pop(coord))
+        # Add or reposition.
+        for coord in wanted:
+            if coord not in self._junction_items:
+                dot = JunctionItem()
+                dot.setPos(self.gu_to_scene(*coord))
+                self.addItem(dot)
+                self._junction_items[coord] = dot
+            else:
+                self._junction_items[coord].setPos(self.gu_to_scene(*coord))
 
     def _clear_component_drag_preview(self) -> None:
         for wid in self._previewed_wire_ids:
