@@ -221,7 +221,7 @@ _MULTI_ANCHORS: dict[str, Placement] = {
     #
     # op amp: origin = node center.  Terminals (grid units, Qt y-down) are then
     # + (-1.5,+0.5), - (-1.5,-0.5), out (1.5,0).  Power supply pins omitted.
-    "op amp": Placement(anchor=(-19.318, -33.861)),
+    "op amp": Placement(anchor=(-19.3183, -33.8613)),
     # nigfete: origin = gate terminal (end of the gate lead).  Terminals are
     # then drain (1.5,-1), source (1.5,+1), gate (0,0).
     "nigfete": Placement(anchor=(-61.8398, -33.492188)),

@@ -151,11 +151,19 @@ def _two_terminal_line(comp: Component) -> str:
 
 
 def _multi_terminal_line(comp: Component) -> str:
-    """Render a multi-terminal component as: (x,y) node[KIND, rotate=ROT] (NODEID) {LABEL}"""
+    """Render a multi-terminal component with explicit lead wires.
+
+    The node is placed at its center coordinate.  Because CircuiTikZ's internal
+    pin geometry (±1.194 GU) differs from the canvas lead-stub length (±1.5 GU),
+    explicit short lead wires are appended from the node's named anchors out to
+    the registry pin coordinates.  This ensures wires drawn on the canvas connect
+    exactly in the rendered output.
+    """
+    from app.schematic.model import component_pin_positions
+    defn = REGISTRY[comp.kind]
+    node_id = f"node_{comp.id[:8]}"
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y)})"
-
-    node_id = f"node_{comp.id[:8]}"
 
     kind_arg = comp.kind
     if comp.rotation != 0:
@@ -164,8 +172,35 @@ def _multi_terminal_line(comp: Component) -> str:
         kind_arg = f"{kind_arg}, xscale=-1"
 
     label_text = comp.labels.get("l", "")
+    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{label_text}}}"
 
-    return f"{coord} node[{kind_arg}] ({node_id}) {{{label_text}}}"
+    # Append lead wires if defined for this kind.
+    leads = _MULTI_TERMINAL_LEADS.get(comp.kind)
+    if not leads:
+        return node_line
+
+    pin_positions = component_pin_positions(comp)
+    lines = [node_line]
+    for ctikz_anchor, pin_name in leads:
+        pin_index = next(
+            (i for i, p in enumerate(defn.pins) if p.name == pin_name), None
+        )
+        if pin_index is not None and pin_index < len(pin_positions):
+            px, py = pin_positions[pin_index]
+            lines.append(
+                f"({node_id}.{ctikz_anchor}) -- ({_fmt(px)},{_fmt(py)})"
+            )
+    return "\n    ".join(lines)
+
+
+# Map from component kind → list of (circuitikz_anchor_name, registry_pin_name)
+# A short lead wire is drawn from each named CircuiTikZ anchor to the
+# corresponding registry pin coordinate, bridging the gap between the node's
+# internal geometry and the canvas grid.
+_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = {
+    "op amp":  [("+", "+"), ("-", "-"), ("out", "out")],
+    "nigfete": [("gate", "gate"), ("drain", "drain"), ("source", "source")],
+}
 
 
 # ---------------------------------------------------------------------------

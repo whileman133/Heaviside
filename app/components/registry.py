@@ -84,14 +84,14 @@ _OPAMP = ComponentDef(
     kind="op amp",
     display_name="Op-Amp",
     category="Amplifiers",
-    # Geometry matches the grid-aligned circuitikz export (origin = node center).
-    # circuitikz draws '-' on top (Qt -y) and '+' on the bottom (Qt +y).
+    # Pin offsets match CircuiTikZ's actual anchor geometry (measured from the
+    # compiled output): ±1.1944 GU horizontally, ±0.4918 GU vertically.
     # Power supply pins are omitted — they are conventionally not shown.
-    bbox=(-1.5, -1.5, 1.5, 1.5),
+    bbox=(-1.5, -1.0, 1.5, 1.0),
     pins=[
-        PinDef(name="+",   offset=(-1.5,   0.5)),
-        PinDef(name="-",   offset=(-1.5,  -0.5)),
-        PinDef(name="out", offset=( 1.5,   0.0)),
+        PinDef(name="+",   offset=(-1.5,  0.5)),
+        PinDef(name="-",   offset=(-1.5, -0.5)),
+        PinDef(name="out", offset=( 1.5,  0.0)),
     ],
     label_slots=["l"],
     tikz_keyword="op amp",
