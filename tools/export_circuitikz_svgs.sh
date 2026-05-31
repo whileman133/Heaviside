@@ -145,9 +145,10 @@ TEX
 # TRIPOLE_LEADS[slug] holds the \draw lines (";"-free, newline-separated) added
 # after the node.  Parts with no entry export as a bare node (back-compat).
 declare -A TRIPOLE_LEADS
-TRIPOLE_LEADS[nigfete]='\draw (X.drain)  -- (0, 1);
-  \draw (X.source) -- (0,-1);
-  \draw (X.gate)   -| (-1.5,0);'
+TRIPOLE_LEADS[nigfete]='\draw (X.drain)  -- (0.0164,0.7295);
+  \draw (X.source) -- (0.0164,-0.7705);
+  \draw (X.gate)   -| (-0.9836,-0.2705);'
+
 TRIPOLE_LEADS[op_amp]='\draw (X.out)  -- (1.5,0);
   \draw (X.+)    -| (-1.5,-0.5);
   \draw (X.-)    -| (-1.5, 0.5);'

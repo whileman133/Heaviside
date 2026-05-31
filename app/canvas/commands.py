@@ -366,6 +366,8 @@ class MoveCommand(Command):
         self._dx, self._dy = delta
         # wire id -> original points, captured at first do() for exact undo.
         self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
+        # wire ids that were removed because they collapsed; restored on undo.
+        self._removed_wire_ids: set[str] = set()
 
     # -- component motion -------------------------------------------------
 
@@ -391,10 +393,16 @@ class MoveCommand(Command):
     # -- wire reshaping ---------------------------------------------------
 
     def _reshape_wires(self, schematic: Schematic) -> None:
-        """Drag connected endpoints by the delta, inserting elbows as needed."""
+        """Drag connected endpoints by the delta, inserting elbows as needed.
+
+        Wires that collapse to a single point (both endpoints moved to the same
+        coordinate) are removed from the schematic. Their original points are
+        still captured so undo can restore them.
+        """
         pins = self._connected_pin_set(schematic)
         if not pins:
             return
+        to_remove: list[str] = []
         for wire in schematic.wires:
             pts = wire.points
             if len(pts) < 2:
@@ -409,13 +417,24 @@ class MoveCommand(Command):
             if wire.id not in self._orig_wire_points:
                 self._orig_wire_points[wire.id] = list(wire.points)
 
-            wire.points = reshape_wire_points(
+            new_pts = reshape_wire_points(
                 pts,
                 start_hit=start_hit,
                 end_hit=end_hit,
                 dx=self._dx,
                 dy=self._dy,
             )
+            if len(new_pts) < 2:
+                # Wire collapsed to a point — remove it.
+                to_remove.append(wire.id)
+            else:
+                wire.points = new_pts
+
+        if to_remove:
+            self._removed_wire_ids.update(to_remove)
+            schematic.wires[:] = [
+                w for w in schematic.wires if w.id not in to_remove
+            ]
 
     # -- Command API ------------------------------------------------------
 
@@ -431,6 +450,12 @@ class MoveCommand(Command):
             orig = self._orig_wire_points.get(wire.id)
             if orig is not None:
                 wire.points = list(orig)
+        # Re-add any wires that were removed because they collapsed.
+        existing_ids = {w.id for w in schematic.wires}
+        for wid in self._removed_wire_ids:
+            orig = self._orig_wire_points.get(wid)
+            if orig is not None and wid not in existing_ids:
+                schematic.wires.append(Wire(id=wid, points=list(orig)))
 
     def redo(self, schematic: Schematic) -> None:
         # On redo the original points are already captured; reapply directly so

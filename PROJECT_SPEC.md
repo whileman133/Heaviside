@@ -303,11 +303,103 @@ The component palette renders each component's thumbnail by instantiating its `C
 
 | Kind | Display Name | Pins | Label Slots |
 |------|-------------|------|-------------|
-| `nigfete` | NMOS | `gate` (0,0), `drain` (1.5,-1), `source` (1.5,1) | `l` |
+| `nigfete` | NMOS | `gate` (0,0), `drain` (1.0,-1), `source` (1.0,0.5) | `l` |
 
 The symbol matches CircuiTikZ's `nigfete` node: enhancement-mode broken channel line (three dashes), gate electrode with oxide gap, bulk/substrate line with arrow, and internal source-bulk short with solder dot.
 
-### 5.5 Extensibility
+### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
+
+CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
+fall on the 0.5-GU canvas grid. This section documents the procedure for
+aligning them when adding a new component.
+
+#### Step 1 — Measure actual CTikZ pin positions
+
+In a LaTeX document, place the node at `(0,0)` and use `\pgfpointanchor` to
+print each pin's coordinates in pt:
+
+```latex
+\node[KIND] (X) at (0,0) {};
+\path let \p1=(X.pinname) in
+  \pgfextra{\typeout{pinname x=\x1 y=\y1}};
+```
+
+Divide by **28.348 pt/GU** to convert to grid units. Note that these are in
+CircuiTikZ's Y-up space; negate Y to get Qt Y-down offsets.
+
+#### Step 2 — Choose registry pin positions (0.5-GU snap)
+
+Round each measured pin position to the nearest 0.5 GU. These become the
+`PinDef.offset` values in `REGISTRY`. The registry pins define where wires
+connect on the canvas, so they must be on-grid.
+
+#### Step 3 — Check for geometry correction (xscale / yscale)
+
+If the snapped pin positions differ from the measured positions by more than
+~0.05 GU in x or y, apply a scale correction so the rendered symbol body
+visually aligns with the snapped pins. Compute:
+
+```
+xscale = snapped_pin_x / measured_pin_x
+yscale = snapped_pin_y / measured_pin_y
+```
+
+Only apply a scale if the error is visually noticeable (> ~3 px at GRID_PX=60).
+Scales close to 1.0 (< ±2%) can be omitted.
+
+The same scale must be applied in **two places**:
+1. **`app/codegen/circuitikz.py`** — add to `_MULTI_TERMINAL_EXTRA_OPTS`:
+   ```python
+   "KIND": "xscale=1.0167",          # x only
+   "KIND": "xscale=1.02, yscale=0.98",  # both axes
+   ```
+2. **`app/canvas/svgsym.py`** — add to the `Placement` for the component:
+   ```python
+   "KIND": Placement(anchor=(...), xscale=1.0167),
+   ```
+   The `Placement.xscale` field scales the SVG paths on the canvas to match.
+   A `yscale` field can be added to `Placement` similarly if needed.
+
+#### Step 4 — Update the SVG export leads
+
+In `tools/export_circuitikz_svgs.sh`, update `TRIPOLE_LEADS[slug]` to draw
+lead stubs from each CTikZ anchor to the **snapped** registry pin coordinates
+(expressed in CTikZ absolute space with the node at `(0,0)`). Re-run the
+script to regenerate the manifest.
+
+After regeneration, read the new lead endpoint SVG coordinates from
+`manifest.json` to find the correct `svgsym.py` anchor value:
+
+```python
+anchor = (gate_lead_svg_x, gate_lead_svg_y)  # gate lead final point
+```
+
+Verify pin local coordinates:
+```python
+local_x = (pin_svg_x - anchor_x) / 28.348  # should match registry offset
+local_y = (pin_svg_y - anchor_y) / 28.348
+```
+
+#### Step 5 — Update codegen tables
+
+Add entries to `app/codegen/circuitikz.py`:
+
+| Table | Entry |
+|-------|-------|
+| `_MULTI_TERMINAL_LEADS` | lead wires from CTikZ anchors to registry pin coords (if anchors are rectilinearly aligned with pins) |
+| `_MULTI_TERMINAL_ANCHOR_PIN` | which CTikZ anchor to use for node placement |
+| `_PIN_TO_CTIKZ_ANCHOR` | registry pin name → CTikZ anchor name mapping |
+| `_MULTI_TERMINAL_EXTRA_OPTS` | xscale/yscale correction (if needed) |
+
+#### When lead wires are not possible
+
+If the CTikZ anchor positions are not rectilinearly aligned with the registry
+pin positions (i.e. the lead would be diagonal), omit leads for those pins and
+rely on the scale correction alone to bring the symbol body close to the
+grid. The gate/primary anchor will connect exactly; other pins may have a
+sub-pixel gap that is visually acceptable.
+
+### 5.6 Extensibility
 
 To add a new component type:
 
@@ -317,7 +409,7 @@ To add a new component type:
 4. Add the mapping entry to `ITEM_CLASSES` in `app/canvas/items.py`.
 5. No changes to the schematic model, code generator, or UI layout are required.
 
-### 5.6 Component Symbol Conventions
+### 5.7 Component Symbol Conventions
 
 All canvas symbols follow **American/IEEE style**, matching the `[american]` CircuiTikZ option used to generate the SVG reference files. This ensures pixel-accurate visual correspondence between the canvas and the compiled LaTeX output.
 
@@ -504,13 +596,50 @@ Where `LABELS` is the comma-separated list of non-empty label slot assignments, 
 
 #### Multi-Terminal Components (op amp, MOSFETs)
 
-These map to CircuiTikZ `node` syntax:
+These map to CircuiTikZ `node` syntax, placed by a named anchor rather than
+the node center:
 
 ```latex
-(x, y) node[KIND, rotate=ROT] (NODEID) {LABEL}
+(pin_x, pin_y) node[KIND, anchor=ANCHOR, OPTS] (NODEID) {LABEL}
 ```
 
-Where `(x, y)` is the component's anchor point as defined by CircuiTikZ for that component type, `ROT` is the rotation angle, and `NODEID` is a sanitized version of the component's UUID (used for wire endpoint references).
+Where `(pin_x, pin_y)` is the absolute coordinate of the registry pin
+corresponding to `ANCHOR`, and `NODEID` is `node_<first8charsofUUID>`.
+
+Because CircuiTikZ's internal pin geometry does not align with the 0.5-GU
+canvas grid, two strategies are used to make wire connections exact:
+
+**op amp** — placed by center (`comp.position`). Short lead wires are drawn
+from each named CTikZ anchor to the registry pin coordinate:
+
+```latex
+(node_id.+) -- (pin_plus_coord)
+(node_id.-) -- (pin_minus_coord)
+(node_id.out) -- (pin_out_coord)
+```
+
+This bridges the gap between CircuiTikZ's internal ±1.194 GU geometry and
+the canvas's ±1.5 GU lead-stub positions.
+
+**nigfete** — placed with `anchor=gate` at the gate pin coordinate. An
+`xscale=1.0167` is applied to stretch the symbol horizontally so that
+drain/source x aligns with the 1.0 GU grid position (CTikZ internal x is
+0.984 GU from gate; 0.984 × 1.0167 = 1.0 GU). No lead wires are drawn for
+drain/source because their CTikZ anchors are not rectilinearly aligned with
+the registry pin positions.
+
+#### Named Anchor References
+
+Wire endpoints and two-terminal component terminals that coincide with a
+multi-terminal pin are rendered as named anchor references instead of bare
+coordinates:
+
+```latex
+(78.5,80) to[R] (node_abc123.gate)
+(node_abc123.out) -- (node_def456.+)
+```
+
+This makes connections explicit and produces cleaner output.
 
 #### Wires
 

@@ -198,15 +198,15 @@ _NIGFETE = ComponentDef(
     kind="nigfete",
     display_name="NMOS",
     category="MOSFETs",
-    # Geometry matches the grid-aligned circuitikz export (origin = gate pin).
-    # Relative to the circuitikz node center the terminals are gate (-1.5,0),
-    # drain (0,-1), source (0,+1); expressed from the gate origin that is
-    # drain (1.5,-1), source (1.5,+1).
-    bbox=(0.0, -1.0, 1.5, 1.0),
+    # Pin offsets match CircuiTikZ's actual anchor geometry when placed with
+    # anchor=gate, snapped to the nearest 0.5 GU boundary.
+    # Measured from compiled output (pt/28.348):
+    #   gate (0,0), drain (0.984,-1.043)→(1.0,-1.0), source (0.984,0.502)→(1.0,0.5)
+    bbox=(-0.05, -1.1, 1.05, 0.55),
     pins=[
         PinDef(name="gate",   offset=(0.0,  0.0)),
-        PinDef(name="drain",  offset=(1.5, -1.0)),   # Qt y-down: -1 = visual top
-        PinDef(name="source", offset=(1.5,  1.0)),   # Qt y-down: +1 = visual bottom
+        PinDef(name="drain",  offset=(1.0, -1.0)),   # Qt y-down: -1 = visual top
+        PinDef(name="source", offset=(1.0,  0.5)),   # Qt y-down: +0.5 = visual bottom
     ],
     label_slots=["l"],
     tikz_keyword="nigfete",

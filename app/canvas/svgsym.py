@@ -202,6 +202,11 @@ _BIPOLE_OUT_X = -13.1133
 class Placement:
     anchor: tuple[float, float]  # SVG point mapped to local (0, 0)
     rotate_deg: float = 0.0      # rotation about the anchor, applied after translate
+    xscale: float = 1.0          # horizontal scale applied to symbol paths only
+    yscale: float = 1.0          # vertical scale applied to symbol paths only
+                                 # xscale/yscale correct CTikZ internal geometry
+                                 # mismatches; they do not move pin positions.
+                                 # See §5.5 of PROJECT_SPEC.md for the procedure.
 
 
 # Horizontal two-terminal devices: lead axis y read from the manifest at load
@@ -223,8 +228,10 @@ _MULTI_ANCHORS: dict[str, Placement] = {
     # + (-1.5,+0.5), - (-1.5,-0.5), out (1.5,0).  Power supply pins omitted.
     "op amp": Placement(anchor=(-19.3183, -33.8613)),
     # nigfete: origin = gate terminal (end of the gate lead).  Terminals are
-    # then drain (1.5,-1), source (1.5,+1), gate (0,0).
-    "nigfete": Placement(anchor=(-61.8398, -33.492188)),
+    # then drain (1.0,-1), source (1.0,+0.5), gate (0,0).
+    # xscale=1.0167 stretches the symbol to match the codegen output (same
+    # factor used in _MULTI_TERMINAL_EXTRA_OPTS in app/codegen/circuitikz.py).
+    "nigfete": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
 }
 
 
@@ -259,8 +266,8 @@ def _local_transform(kind: str) -> QTransform:
     pl = _placement(kind)
     ax, ay = pl.anchor
     t = QTransform()
-    # Order (Qt applies right-to-left): scale * rotate * translate(-anchor)
-    t.scale(_PX_PER_PT, _PX_PER_PT)
+    # Order (Qt applies right-to-left): scale * xscale * rotate * translate(-anchor)
+    t.scale(_PX_PER_PT * pl.xscale, _PX_PER_PT * pl.yscale)
     if pl.rotate_deg:
         t.rotate(pl.rotate_deg)
     t.translate(-ax, -ay)

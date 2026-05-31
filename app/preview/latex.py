@@ -25,7 +25,6 @@ check_dependencies() -> list[str]
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 import tempfile
@@ -64,76 +63,15 @@ _EQUATION_TEMPLATE = r"""\documentclass[12pt]{standalone}
 
 
 def build_tex(circuitikz_source: str) -> str:
-    r"""
-    Return a complete standalone .tex document containing *circuitikz_source*.
-
-    Three adjustments are made to the raw codegen output before embedding:
-
-    1. **American style** — ``\usepackage[american]{circuitikz}`` so symbols
-       match the canvas (§5.6).
-
-    2. **Y-axis flip** — the canvas uses Qt's Y-down convention; CircuiTikZ
-       uses Y-up.  ``yscale=-1`` is injected so the preview orientation matches.
-
-    3. **Coordinate normalization** — schematic coordinates reflect the absolute
-       canvas position (e.g. (78, 79)) rather than a circuit-relative origin.
-       Without normalization, pdflatex renders a page sized to those coordinates
-       with the tiny circuit in one corner.  We extract all (x, y) pairs from
-       the source, compute the bounding box minimum, and apply a
-       ``shift={(-min_x, min_y)}`` transform (the sign on y is positive because
-       the yscale=-1 flip has already been applied).  The ``standalone`` class
-       then crops tightly to the circuit content.
     """
-    # --- coordinate normalization ----------------------------------------
-    # Schematic coordinates reflect absolute canvas position (e.g. 78, 79).
-    # Without normalization pdflatex renders a page sized to those coordinates
-    # with the circuit as a tiny speck.  We scan all (x,y) pairs, find the
-    # bounding-box minimum, then wrap the content in a scope that translates
-    # it to near the origin.
-    #
-    # We use a \begin{scope} wrapper rather than options on \begin{circuitikz}
-    # because combining yscale=-1 with shift= on the environment itself causes
-    # TikZ to apply the shift in the already-scaled space, producing wrong results.
-    # A scope lets us apply the transforms in the correct order: first translate
-    # (in original coordinates), then scale.
+    Wrap a CircuiTikZ environment string in the minimal standalone template.
 
-    # Negate all Y coordinates in the source so the preview orientation matches
-    # the canvas (Qt Y-down → CircuiTikZ Y-up).
-    #
-    # We do this by substituting coordinates directly rather than using
-    # yscale=-1 on the environment. yscale=-1 flips the visual output but
-    # does NOT change the path direction CircuiTikZ sees — so a voltage source
-    # drawn from (x, y_plus) to (x, y_minus) with yscale=-1 still has its
-    # internal path going in the original direction, causing CircuiTikZ to
-    # place polarity markers at the wrong ends.  Negating Y in the coordinates
-    # themselves corrects both the visual orientation AND the path direction.
-    coord_re = re.compile(
-        r"\(\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*\)"
-    )
-
-    def _negate_y(m: re.Match) -> str:
-        x = m.group(1)
-        y = float(m.group(2))
-        neg_y = -y
-        # Format: integer if whole, else minimal decimals
-        y_str = str(int(neg_y)) if neg_y == int(neg_y) else f"{neg_y:g}"
-        return f"({x},{y_str})"
-
-    adjusted = coord_re.sub(_negate_y, circuitikz_source)
-
-    # Negate rotate=N angles for the same reason: after Y-negation CircuiTikZ's
-    # rotation direction is reversed, so a 90° CW Qt rotation must be emitted
-    # as rotate=-90 (= 270°) to render correctly in the flipped coordinate space.
-    rotate_re = re.compile(r"rotate=(-?\d+(?:\.\d+)?)")
-
-    def _negate_rotate(m: re.Match) -> str:
-        angle = float(m.group(1))
-        neg = -angle
-        a_str = str(int(neg)) if neg == int(neg) else f"{neg:g}"
-        return f"rotate={a_str}"
-
-    adjusted = rotate_re.sub(_negate_rotate, adjusted)
-    return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", adjusted)
+    The source must already be in CircuiTikZ Y-up convention — i.e. generated
+    with ``generate(schematic, y_flip=True)``.  This function is a pure
+    template wrapper; Y-negation and rotation correction are handled in the
+    codegen layer, not here.
+    """
+    return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
 
 
 def build_equation_tex(label: str) -> str:

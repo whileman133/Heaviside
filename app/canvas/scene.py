@@ -1018,9 +1018,13 @@ class SchematicScene(QGraphicsScene):
         (dragged) pin positions, which differ from the model positions and would
         otherwise cause connected wire endpoints to falsely appear as open.
         """
-        # Build the set of all pin positions from the current model.
+        # Build the set of all pin positions, using dragged positions for
+        # components currently being dragged (their model positions are stale).
+        dragged_comp_ids = set(self._drag_start.keys())
         pin_positions: set[tuple[float, float]] = set()
         for comp in self._schematic.components:
+            if comp.id in dragged_comp_ids:
+                continue  # replaced by extra_pin_positions below
             for p in _component_pin_positions(comp):
                 pin_positions.add((round(p[0], 6), round(p[1], 6)))
         if extra_pin_positions:
@@ -1093,10 +1097,14 @@ class SchematicScene(QGraphicsScene):
             for pt, d in own.items():
                 add(pt, d)
 
+        # Add pin positions for all components, but use dragged positions for
+        # components currently being dragged (their model positions are stale).
+        dragged_comp_ids = set(self._drag_start.keys())
         for comp in self._schematic.components:
+            if comp.id in dragged_comp_ids:
+                continue  # replaced by extra_pin_positions below
             for p in _component_pin_positions(comp):
                 add(p, 1)
-        # Also count dragged pin positions.
         for p in (extra_pin_positions or set()):
             add(p, 1)
 
