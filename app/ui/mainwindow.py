@@ -7,12 +7,12 @@ Layout::
     │  Menu Bar: File | Edit | View | Help                        │
     ├─────────────────────────────────────────────────────────────┤
     │  Toolbar: New | Open | Save | | Undo | Redo | | Compile     │
-    ├──────────┬──────────────────────────────┬───────────────────┤
-    │ Palette  │         Canvas               │  Properties       │
-    │          │    (QGraphicsView)           │  Panel            │
-    │          │                              │                   │
-    ├──────────┴──────────────────────────────┴───────────────────┤
-    │  Source Panel (read-only CircuiTikZ)  [Copy]                │
+    ├────┬─────────┬──────────────────────────────┬──────────────┤
+    │Tool│ Palette │         Canvas               │  Properties  │
+    │Rib-│         │    (QGraphicsView)           │  Panel       │
+    │bon │         │                              │              │
+    ├────┴─────────┴──────────────────────────────┴──────────────┤
+    │  Source Panel (read-only CircuiTikZ)                        │
     ├─────────────────────────────────────────────────────────────┤
     │  Status bar: cursor coords | zoom | compile status          │
     └─────────────────────────────────────────────────────────────┘
@@ -24,8 +24,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction, QImage, QKeySequence, QPixmap, QShortcut
+import qtawesome as qta
+
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -41,7 +43,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.canvas.scene import Mode, SchematicScene
+from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
 from app.canvas.view import SchematicView
 from app.codegen.circuitikz import generate
 from app.preview.latex import check_dependencies
@@ -73,6 +75,7 @@ class MainWindow(QMainWindow):
         # -- Build UI -------------------------------------------------------
         self._build_menu()
         self._build_toolbar()
+        self._build_tool_ribbon()
         self._build_central()
         self._build_statusbar()
 
@@ -144,6 +147,18 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        self._act_copy = QAction("&Copy", self)
+        self._act_copy.setShortcut(QKeySequence.Copy)
+        self._act_copy.triggered.connect(self._scene.copy_selection)
+        edit_menu.addAction(self._act_copy)
+
+        self._act_paste = QAction("&Paste", self)
+        self._act_paste.setShortcut(QKeySequence.Paste)
+        self._act_paste.triggered.connect(self._scene.paste)
+        edit_menu.addAction(self._act_paste)
+
+        edit_menu.addSeparator()
+
         act_select_all = QAction("Select &All", self)
         act_select_all.setShortcut(QKeySequence.SelectAll)
         act_select_all.triggered.connect(self._select_all)
@@ -192,7 +207,20 @@ class MainWindow(QMainWindow):
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main")
         tb.setMovable(False)
+        tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        tb.setStyleSheet(
+            "QToolBar { background: #ebebeb; border: none; spacing: 2px; }"
+            "QToolButton { background: transparent; border: none; border-radius: 4px; padding: 3px; }"
+            "QToolButton:hover { background: palette(midlight); }"
+            "QToolButton:pressed { background: palette(mid); }"
+        )
         self.addToolBar(tb)
+
+        self._act_new.setIcon(qta.icon("fa5s.file"))
+        self._act_open.setIcon(qta.icon("fa5s.folder-open"))
+        self._act_save.setIcon(qta.icon("fa5s.save"))
+        self._act_undo.setIcon(qta.icon("fa5s.undo"))
+        self._act_redo.setIcon(qta.icon("fa5s.redo"))
 
         tb.addAction(self._act_new)
         tb.addAction(self._act_open)
@@ -202,10 +230,73 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_redo)
         tb.addSeparator()
 
-        compile_btn = QAction("Compile", self)
+        compile_btn = QAction(qta.icon("fa5s.play"), "Compile", self)
         compile_btn.setShortcut(QKeySequence("Ctrl+Return"))
         compile_btn.triggered.connect(self._on_compile_now)
         tb.addAction(compile_btn)
+
+        for action in (self._act_new, self._act_open, self._act_save,
+                       self._act_undo, self._act_redo, compile_btn):
+            btn = tb.widgetForAction(action)
+            if btn:
+                btn.setCursor(Qt.PointingHandCursor)
+
+    # ------------------------------------------------------------------
+    # Tool ribbon (left vertical strip: Select | Wire | Pan)
+    # ------------------------------------------------------------------
+
+    def _build_tool_ribbon(self) -> None:
+        ribbon = QToolBar("Tools")
+        ribbon.setMovable(False)
+        ribbon.setToolButtonStyle(Qt.ToolButtonIconOnly)
+        ribbon.setIconSize(QSize(22, 22))
+        ribbon.setStyleSheet(
+            "QToolBar { background: #ebebeb; border: none; spacing: 2px; padding: 4px 2px; }"
+            "QToolButton { background: transparent; border: none; border-radius: 4px; padding: 3px;"
+            "              min-width: 32px; min-height: 32px; }"
+            "QToolButton:hover { background: palette(midlight); }"
+            "QToolButton:pressed { background: palette(mid); }"
+            "QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); }"
+            "QToolButton:checked:hover { background: palette(highlight); }"
+        )
+        self.addToolBar(Qt.LeftToolBarArea, ribbon)
+
+        group = QActionGroup(self)
+        group.setExclusive(True)
+
+        self._tool_select = QAction(qta.icon("fa5s.mouse-pointer"), "Select", self)
+        self._tool_select.setToolTip("Select  [S / Esc]")
+        self._tool_select.setCheckable(True)
+        self._tool_select.setChecked(True)
+        self._tool_select.triggered.connect(self._scene.enter_select_mode)
+        group.addAction(self._tool_select)
+        ribbon.addAction(self._tool_select)
+
+        self._tool_wire = QAction(qta.icon("fa5s.pen"), "Wire", self)
+        self._tool_wire.setToolTip("Wire  [W]")
+        self._tool_wire.setCheckable(True)
+        self._tool_wire.triggered.connect(self._scene.enter_wire_mode)
+        group.addAction(self._tool_wire)
+        ribbon.addAction(self._tool_wire)
+
+        self._tool_pan = QAction(qta.icon("fa5s.hand-paper"), "Pan", self)
+        self._tool_pan.setToolTip("Pan  [P / Space+drag]")
+        self._tool_pan.setCheckable(True)
+        self._tool_pan.triggered.connect(self._scene.enter_pan_mode)
+        group.addAction(self._tool_pan)
+        ribbon.addAction(self._tool_pan)
+
+        for action in (self._tool_select, self._tool_wire, self._tool_pan):
+            btn = ribbon.widgetForAction(action)
+            if btn:
+                btn.setCursor(Qt.PointingHandCursor)
+
+        self._scene.mode_changed.connect(self._on_mode_changed_ribbon)
+
+    def _on_mode_changed_ribbon(self, mode: Mode) -> None:
+        self._tool_select.setChecked(mode == Mode.SELECT)
+        self._tool_wire.setChecked(mode == Mode.WIRE)
+        self._tool_pan.setChecked(mode == Mode.PAN)
 
     # ------------------------------------------------------------------
     # Central widget (three-panel + source strip)

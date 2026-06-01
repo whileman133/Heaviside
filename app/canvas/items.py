@@ -280,8 +280,18 @@ class ComponentItem(QGraphicsItem):
         w = self._options_item.boundingRect().width()
         return QPointF(cx - w / 2, bbox_top - _LABEL_GAP - _LABEL_LINE_H)
 
+    def _label_counter_transform(self) -> QTransform:
+        """Inverse of this item's own transform, so the label stays horizontal."""
+        inv, _ = self.transform().inverted()
+        return inv
+
+    def apply_transform(self, t: QTransform) -> None:
+        """Set this item's transform and re-sync the label counter-transform."""
+        self.setTransform(t)
+        self._sync_options_item()
+
     def _sync_options_item(self) -> None:
-        """Update position and visibility of the child options LabelTextItem."""
+        """Update position, transform, and visibility of the child options LabelTextItem."""
         if self._options_item.is_editing:
             return
         options = self._component.options
@@ -292,6 +302,7 @@ class ComponentItem(QGraphicsItem):
                 self._options_item.setPos(dx, dy)
             else:
                 self._options_item.setPos(self._default_label_pos())
+            self._options_item.setTransform(self._label_counter_transform())
             self._options_item.setVisible(True)
         else:
             self._options_item.setVisible(False)
@@ -303,6 +314,7 @@ class ComponentItem(QGraphicsItem):
         if not self._options_item.isVisible():
             self._options_item.setPlainText("")
             self._options_item.setPos(self._default_label_pos())
+            self._options_item.setTransform(self._label_counter_transform())
             self._options_item.setVisible(True)
         self._options_item.begin_edit()
 

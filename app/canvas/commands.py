@@ -58,6 +58,7 @@ __all__ = [
     "MoveOptionsLabelCommand",
     "RotateCommand",
     "MirrorCommand",
+    "GroupRotateCommand",
     "MacroCommand",
     "UndoStack",
 ]
@@ -812,6 +813,152 @@ class MirrorCommand(Command):
     def undo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
         comp.mirror = self._old_mirror if self._old_mirror is not None else False
+
+
+class GroupRotateCommand(Command):
+    """Rotate a group of components and wires 90° CW around a shared centroid.
+
+    Three categories of non-selected wires are handled automatically:
+
+    * **Internal wires** — both endpoints land on selected-component pins.
+      All vertices are rotated with the group.
+    * **Boundary wires** — exactly one endpoint lands on a selected pin.
+      That endpoint follows its new pin position; the wire is reshaped with
+      the same elbow logic used by ``MoveCommand``.
+    * **Unconnected wires** — not touched.
+
+    ``Component.label_offset`` is cleared (reset to auto) for each rotated
+    component because the parent-local coordinate system changes with the
+    rotation.
+    """
+
+    label = "Rotate"
+
+    def __init__(
+        self,
+        component_ids: list[str],
+        wire_ids: list[str],
+        centroid: tuple[float, float],
+    ) -> None:
+        self._component_ids = list(component_ids)
+        self._wire_ids = list(wire_ids)
+        self._cx, self._cy = centroid
+        # Captured at first do() — never overwritten on redo.
+        self._orig_comp: dict[str, tuple] = {}
+        self._orig_wire: dict[str, list] = {}
+
+    @staticmethod
+    def _rot90cw(
+        x: float, y: float, cx: float, cy: float
+    ) -> tuple[float, float]:
+        """Rotate (x, y) 90° CW on screen (Qt Y-down) around (cx, cy).
+
+        component_pin_positions uses rotation=90 → (dx,dy) to (-dy, dx),
+        which is CW on a Y-down canvas.  Geometric position rotation must
+        use the same convention so rotated positions land exactly on the
+        new pin locations.
+        """
+        dx, dy = x - cx, y - cy
+        return (cx - dy, cy + dx)
+
+    def _build_pin_motion(
+        self,
+        schematic: Schematic,
+        comp_id_set: set[str],
+    ) -> dict[tuple[float, float], tuple[float, float]]:
+        """Map old_pin_pos → new_pin_pos for every pin of every selected component."""
+        mapping: dict[tuple[float, float], tuple[float, float]] = {}
+        for comp in schematic.components:
+            if comp.id not in comp_id_set:
+                continue
+            for pin_pos in _component_pin_positions(comp):
+                mapping[pin_pos] = self._rot90cw(
+                    pin_pos[0], pin_pos[1], self._cx, self._cy
+                )
+        return mapping
+
+    def do(self, schematic: Schematic) -> None:
+        comp_id_set = set(self._component_ids)
+        wire_id_set = set(self._wire_ids)
+
+        # Build pin-motion map BEFORE moving anything.
+        pin_motion = self._build_pin_motion(schematic, comp_id_set)
+
+        # Classify non-selected wires.
+        fully_rotate_extra: set[str] = set()
+        boundary: dict[str, tuple[bool, bool]] = {}  # id → (start_hit, end_hit)
+        for wire in schematic.wires:
+            if wire.id in wire_id_set:
+                continue
+            s, e = wire.points[0], wire.points[-1]
+            sh, eh = s in pin_motion, e in pin_motion
+            if sh and eh:
+                fully_rotate_extra.add(wire.id)
+            elif sh or eh:
+                boundary[wire.id] = (sh, eh)
+
+        # Capture original state (idempotent — only on first do()).
+        for comp in schematic.components:
+            if comp.id in comp_id_set and comp.id not in self._orig_comp:
+                self._orig_comp[comp.id] = (
+                    comp.position, comp.rotation, comp.mirror, comp.label_offset
+                )
+        for wire in schematic.wires:
+            wid = wire.id
+            if wid not in self._orig_wire and (
+                wid in wire_id_set
+                or wid in fully_rotate_extra
+                or wid in boundary
+            ):
+                self._orig_wire[wid] = list(wire.points)
+
+        # Rotate components.
+        for comp in schematic.components:
+            if comp.id not in comp_id_set:
+                continue
+            nx, ny = self._rot90cw(
+                comp.position[0], comp.position[1], self._cx, self._cy
+            )
+            comp.position = (nx, ny)
+            comp.rotation = (comp.rotation + 90) % 360
+            comp.label_offset = None
+
+        # Rotate selected + internal wire vertices.
+        for wire in schematic.wires:
+            if wire.id not in wire_id_set and wire.id not in fully_rotate_extra:
+                continue
+            orig = self._orig_wire.get(wire.id, wire.points)
+            wire.points = [
+                self._rot90cw(x, y, self._cx, self._cy) for x, y in orig
+            ]
+
+        # Reshape boundary wires.
+        for wire in schematic.wires:
+            if wire.id not in boundary:
+                continue
+            sh, eh = boundary[wire.id]
+            orig = self._orig_wire[wire.id]
+            moving_pt = orig[0] if sh else orig[-1]
+            new_pt = pin_motion.get(moving_pt)
+            if new_pt is None:
+                continue
+            dx = new_pt[0] - moving_pt[0]
+            dy = new_pt[1] - moving_pt[1]
+            wire.points = reshape_wire_points(
+                orig, start_hit=sh, end_hit=eh, dx=dx, dy=dy
+            )
+
+    def undo(self, schematic: Schematic) -> None:
+        for comp in schematic.components:
+            if comp.id in self._orig_comp:
+                pos, rot, mir, loff = self._orig_comp[comp.id]
+                comp.position = pos
+                comp.rotation = rot
+                comp.mirror = mir
+                comp.label_offset = loff
+        for wire in schematic.wires:
+            if wire.id in self._orig_wire:
+                wire.points = list(self._orig_wire[wire.id])
 
 
 class MacroCommand(Command):

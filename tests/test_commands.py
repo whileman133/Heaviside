@@ -14,6 +14,12 @@ Covered (spec §13.3):
   - test_undo_delete            (restores component AND connected wires)
   - test_undo_edit_label
   - test_undo_stack_depth        (20 mixed ops, undo all → original empty state)
+  - test_group_rotate_single_component
+  - test_group_rotate_two_components_centroid
+  - test_group_rotate_internal_wire
+  - test_group_rotate_boundary_wire
+  - test_group_rotate_undo
+  - test_group_rotate_redo
 """
 
 from __future__ import annotations
@@ -27,6 +33,7 @@ from app.canvas.commands import (
     Command,
     DeleteCommand,
     EditCommand,
+    GroupRotateCommand,
     MacroCommand,
     MoveCommand,
     MoveOptionsLabelCommand,
@@ -934,3 +941,99 @@ def test_explicit_wire_ids_translate_rigidly():
 
     stack.undo()
     assert stack.schematic.wires[0].points == [(8.0, 0.0), (10.0, 0.0)]
+
+
+# ---------------------------------------------------------------------------
+# GroupRotateCommand
+# ---------------------------------------------------------------------------
+
+def test_group_rotate_single_component():
+    """Single component at its own centroid: position unchanged, rotation +90."""
+    stack = _stack()
+    comp = _resistor(comp_id="r1", position=(2.0, 3.0), rotation=0)
+    stack.push(PlaceCommand(comp))
+    stack.push(GroupRotateCommand(["r1"], [], centroid=(2.0, 3.0)))
+    c = stack.schematic.components[0]
+    assert c.position == (2.0, 3.0)
+    assert c.rotation == 90
+
+
+def test_group_rotate_two_components_centroid():
+    """Two resistors rotate around their shared centroid."""
+    stack = _stack()
+    # Place at (0,0) and (2,0); centroid = (1,0).
+    stack.push(PlaceCommand(_resistor(comp_id="a", position=(0.0, 0.0))))
+    stack.push(PlaceCommand(_resistor(comp_id="b", position=(2.0, 0.0))))
+    stack.push(GroupRotateCommand(["a", "b"], [], centroid=(1.0, 0.0)))
+    positions = {c.id: c.position for c in stack.schematic.components}
+    # 90° CW on screen (Qt Y-down): (dx,dy) → (-dy, dx)
+    # a: dx=-1, dy=0  → new = (1-0, 0+(-1)) = (1, -1)
+    # b: dx=1,  dy=0  → new = (1-0, 0+1)    = (1,  1)
+    assert positions["a"] == (1.0, -1.0)
+    assert positions["b"] == (1.0, 1.0)
+    for c in stack.schematic.components:
+        assert c.rotation == 90
+
+
+def test_group_rotate_internal_wire():
+    """A wire between two selected components rotates with the group."""
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="a", position=(0.0, 0.0))))
+    stack.push(PlaceCommand(_resistor(comp_id="b", position=(2.0, 0.0))))
+    stack.push(WireCommand(Wire(id="w1", points=[(0.0, 0.0), (2.0, 0.0)])))
+    stack.push(GroupRotateCommand(["a", "b"], ["w1"], centroid=(1.0, 0.0)))
+    wire = stack.schematic.wires[0]
+    # (0,0): dx=-1,dy=0 → (1-0, 0+(-1)) = (1,-1)
+    # (2,0): dx=1, dy=0 → (1-0, 0+1)   = (1, 1)
+    assert wire.points[0] == (1.0, -1.0)
+    assert wire.points[-1] == (1.0, 1.0)
+
+
+def test_group_rotate_boundary_wire():
+    """A wire connecting a selected component to an unselected one is reshaped."""
+    stack = _stack()
+    # Resistor at (0,0): its 'in' pin is at (0,0) and 'out' pin at (2,0)
+    # (R has span 2 GU, pins at each end).
+    stack.push(PlaceCommand(_resistor(comp_id="r1", position=(0.0, 0.0))))
+    # Free wire from (2,0) — the 'out' pin — going right to (4,0).
+    stack.push(WireCommand(Wire(id="w_boundary", points=[(2.0, 0.0), (4.0, 0.0)])))
+    # Rotate only r1 around its own centroid (0,0).
+    stack.push(GroupRotateCommand(["r1"], [], centroid=(0.0, 0.0)))
+    wire = stack.schematic.wires[0]
+    # After rotating r1 90° CW on screen around (0,0):
+    #   r1's 'out' pin was at (2,0): dx=2,dy=0 → (0-0, 0+2) = (0,2)
+    # The boundary wire's start was at (2,0); it must now start at (0,2).
+    assert wire.points[0] == (0.0, 2.0)
+    # The far end (4,0) is unconnected and should not have moved.
+    assert wire.points[-1] == (4.0, 0.0)
+
+
+def test_group_rotate_undo():
+    """Undo restores all component positions, rotations, and wire points."""
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="a", position=(0.0, 0.0))))
+    stack.push(PlaceCommand(_resistor(comp_id="b", position=(2.0, 0.0))))
+    stack.push(WireCommand(Wire(id="w1", points=[(0.0, 0.0), (2.0, 0.0)])))
+    stack.push(GroupRotateCommand(["a", "b"], ["w1"], centroid=(1.0, 0.0)))
+    stack.undo()
+    positions = {c.id: c.position for c in stack.schematic.components}
+    assert positions["a"] == (0.0, 0.0)
+    assert positions["b"] == (2.0, 0.0)
+    for c in stack.schematic.components:
+        assert c.rotation == 0
+    assert stack.schematic.wires[0].points == [(0.0, 0.0), (2.0, 0.0)]
+
+
+def test_group_rotate_redo():
+    """Redo re-applies the rotation after an undo."""
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="a", position=(0.0, 0.0))))
+    stack.push(PlaceCommand(_resistor(comp_id="b", position=(2.0, 0.0))))
+    stack.push(GroupRotateCommand(["a", "b"], [], centroid=(1.0, 0.0)))
+    stack.undo()
+    stack.redo()
+    positions = {c.id: c.position for c in stack.schematic.components}
+    assert positions["a"] == (1.0, -1.0)
+    assert positions["b"] == (1.0, 1.0)
+    for c in stack.schematic.components:
+        assert c.rotation == 90

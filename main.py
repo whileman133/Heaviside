@@ -7,7 +7,9 @@ Creates the QApplication, shows the MainWindow, and starts the Qt event loop.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.ui.mainwindow import MainWindow
@@ -17,6 +19,10 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Heaviside")
     app.setOrganizationName("Heaviside")
+
+    icon_path = Path(__file__).parent / "assets" / "icon.png"
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     window = MainWindow()
     window.show()

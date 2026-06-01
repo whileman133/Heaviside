@@ -458,10 +458,12 @@ The canvas operates in one of the following mutually exclusive modes at any time
 
 | Mode | Trigger | Cursor |
 |------|---------|--------|
-| **Select** | Default; press `Escape` | Arrow |
+| **Select** | Default; press `S` or `Escape`; click ↖ in tool ribbon | Arrow |
 | **Place** | Click component in palette | Crosshair + ghost component |
-| **Wire** | Press `W` or click wire tool | Pen |
-| **Pan** | Hold `Space` + drag | Hand |
+| **Wire** | Press `W`; click ⌁ in tool ribbon | Pen |
+| **Pan** | Press `P`; click ✋ in tool ribbon; or hold `Space` + drag (transient) | Open/closed hand |
+
+**Select**, **Wire**, and **Pan** are the three primary tools and are always accessible via the tool ribbon (§10.7). **Place** is entered automatically by clicking a palette entry and exits to **Select** on `Escape` or right-click. The tool ribbon buttons stay in sync with keyboard-driven mode changes.
 
 ### 6.2 Component Placement
 
@@ -481,6 +483,7 @@ The canvas operates in one of the following mutually exclusive modes at any time
 - `Ctrl+A` selects all.
 - Selected components can be dragged; the component item snaps to 0.5 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
 - **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
+- `R` rotates the selection 90° CW around the bounding-box centroid of the selected component positions (snapped to 0.5 GU); records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. Connected wires are reshaped or rigidly rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `R` cycles the ghost's rotation instead.
 - Arrow keys nudge selected components by 0.5 GU per keypress.
 - `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
 
@@ -547,7 +550,7 @@ targets are what finalize the wire.
 
 - Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.)
 - Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints.
-- When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it or by dragging an existing wire vertex onto it — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand` or `MoveWireVertexCommand`) inside a `MacroCommand` so it is one undoable action.
+- When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it, by dragging an existing wire vertex onto it, or by **placing or moving a component** such that one of its pins lands mid-segment — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable, and a junction dot is drawn. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand`, `MoveWireVertexCommand`, `PlaceCommand`, or `MoveCommand`) inside a `MacroCommand` so it is one undoable action. Component operations that trigger splits: initial placement, drag-drop, arrow-key nudge, and paste.
 - When a wire is **deleted** and the deletion dissolves a T-junction (a free endpoint now has exactly two remaining wire neighbors and is not a component pin), those two stubs are automatically **merged** into a single wire. The merge is bundled with the `DeleteCommand` inside a `MacroCommand` so delete + merge is one undoable action. Undoing restores the deleted wire and re-splits the merged wire back into its two halves.
 
 Connectivity is **purely geometric and never stored**: two coordinates are
@@ -613,6 +616,7 @@ Wires do not auto-route around components in v1 — the user routes manually.
 | `MoveOptionsLabelCommand` | Restore previous `label_offset` value |
 | `RotateCommand` | Restore previous rotation value |
 | `MirrorCommand` | Restore previous mirror state |
+| `GroupRotateCommand` | Restore component positions, rotations, label offsets, and all affected wire points |
 | `MacroCommand` | Composite of the above (e.g. a split + add, or a multi-component move) |
 
 Notes:
@@ -621,6 +625,7 @@ Notes:
 - `SplitWireCommand` replaces a wire with two independent halves when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
 - `MergeWireCommand` merges two wire stubs that share a free endpoint into one wire; it is bundled after a `DeleteCommand` inside a `MacroCommand` when the deletion dissolves a T-junction (see §6.4).
 - `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
+- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.5 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`.
 
 ### 6.7 Copy / Paste
 
@@ -887,15 +892,15 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 │  Menu Bar: File | Edit | View | Help                        │
 ├─────────────────────────────────────────────────────────────┤
 │  Toolbar: New | Open | Save | | Undo | Redo | | Compile     │
-├──────────┬──────────────────────────────┬───────────────────┤
-│ Palette  │                              │  Properties       │
-│          │         Canvas               │  Panel            │
-│ Passives │    (QGraphicsView)           │                   │
-│ Amps     │                              │  (context-        │
-│ Sources  │                              │   sensitive)      │
-│ MOSFETs  │                              │                   │
-│          │                              │                   │
-├──────────┴──────────────────────────────┴───────────────────┤
+├────┬─────────┬───────────────────────────┬──────────────────┤
+│Tool│ Palette │                           │  Properties      │
+│ ↖  │         │        Canvas             │  Panel           │
+│ ⌁  │Passives │   (QGraphicsView)         │                  │
+│ ✋  │Amps     │                           │  (context-       │
+│    │Sources  │                           │   sensitive)     │
+│    │MOSFETs  │                           │                  │
+│    │         │                           │                  │
+├────┴─────────┴───────────────────────────┴──────────────────┤
 │  Source Panel (read-only CircuiTikZ output)  [Copy] button  │
 ├─────────────────────────────────────────────────────────────┤
 │  Status bar: cursor coords | zoom level | compile status    │
@@ -949,11 +954,29 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 | Duplicate | `Ctrl+D` |
 | Delete | `Delete` / `Backspace` |
 | Select All | `Ctrl+A` |
+| Select mode | `S` |
 | Wire mode | `W` |
+| Pan mode (persistent) | `P` |
 | Cancel / Select mode | `Escape` |
+| Pan (transient) | `Space` + drag |
 | Compile preview | `Ctrl+Return` |
 | Fit to schematic | `Ctrl+0` |
 | Zoom in / out | `Ctrl++` / `Ctrl+-` |
+
+### 10.7 Tool Ribbon
+
+A narrow vertical ribbon toolbar is docked on the **left edge** of the window (Qt `LeftToolBarArea`), between the window edge and the component palette. It contains three exclusive checkable buttons:
+
+| Button | Symbol | Mode | Shortcut |
+|--------|--------|------|----------|
+| Select | ↖ | Select | `S` / `Escape` |
+| Wire | ⌁ | Wire | `W` |
+| Pan | ✋ | Pan | `P` |
+
+- The buttons form an exclusive group — exactly one is checked at all times (Place mode leaves the last-active tool highlighted).
+- Clicking a button invokes the corresponding `enter_*_mode()` on the scene.
+- The scene's `mode_changed` signal keeps the buttons in sync when mode changes originate from the keyboard.
+- The ribbon is non-movable (cannot be dragged to another dock area).
 
 ---
 
@@ -1196,7 +1219,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; and `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`.
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo).
 
 ### 13.3 Integration Tests
 

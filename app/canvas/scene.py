@@ -25,6 +25,7 @@ Helpers :meth:`scene_to_gu` / :meth:`gu_to_scene` convert between them, and
 
 from __future__ import annotations
 
+import copy
 import uuid
 from enum import Enum, auto
 
@@ -37,8 +38,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.canvas.commands import (
+    Command,
     DeleteCommand,
     EditCommand,
+    GroupRotateCommand,
     MacroCommand,
     MergeWireCommand,
     MirrorCommand,
@@ -174,6 +177,10 @@ class SchematicScene(QGraphicsScene):
         # so they can be cleared precisely on release.
         self._previewed_wire_ids: set[str] = set()
 
+        # Copy/paste clipboard: deep copies of components and wires.
+        self._clipboard_components: list[Component] = []
+        self._clipboard_wires: list[Wire] = []
+
         self.setSceneRect(-20 * GRID_PX, -20 * GRID_PX, 200 * GRID_PX, 200 * GRID_PX)
         self._rebuild_items()
 
@@ -273,6 +280,9 @@ class SchematicScene(QGraphicsScene):
     def enter_select_mode(self) -> None:
         self.set_mode(Mode.SELECT)
 
+    def enter_pan_mode(self) -> None:
+        self.set_mode(Mode.PAN)
+
     def set_panning(self, panning: bool) -> None:
         """The view calls this while a pan gesture is active."""
         self._panning = panning
@@ -317,8 +327,36 @@ class SchematicScene(QGraphicsScene):
             options=options,
             mirror=mirror,
         )
-        self._push(PlaceCommand(comp))
+        place_cmd = PlaceCommand(comp)
+        split_cmds = self._split_commands_for(
+            {pos for pos in _component_pin_positions(comp)}
+        )
+        if split_cmds:
+            self._push(MacroCommand([place_cmd] + split_cmds, label="Place"))
+        else:
+            self._push(place_cmd)
         return comp
+
+    def _pin_splits_after_delta(
+        self,
+        comp_ids: list[str],
+        delta: tuple[float, float],
+    ) -> list[SplitWireCommand]:
+        """SplitWireCommands for any pin that will land mid-segment after (dx,dy).
+
+        Computes new pin positions = current + delta, then delegates to
+        _split_commands_for so placement, move, nudge, and paste all get
+        automatic wire splits when a pin arrives on a wire segment.
+        """
+        dx, dy = delta
+        positions: set[tuple[float, float]] = set()
+        comp_id_set = set(comp_ids)
+        for comp in self._schematic.components:
+            if comp.id not in comp_id_set:
+                continue
+            for px, py in _component_pin_positions(comp):
+                positions.add((px + dx, py + dy))
+        return self._split_commands_for(positions)
 
     def _split_commands_for(
         self,
@@ -388,6 +426,63 @@ class SchematicScene(QGraphicsScene):
             self._push(MacroCommand([delete_cmd] + merge_cmds, label="Delete"))
         else:
             self._push(delete_cmd)
+
+    def copy_selection(self) -> None:
+        """Copy selected components and wires to the internal clipboard."""
+        comp_ids = set(self.selected_component_ids())
+        wire_ids = set(self.selected_wire_ids())
+        if not comp_ids and not wire_ids:
+            return
+        self._clipboard_components = [
+            copy.deepcopy(c)
+            for c in self._schematic.components
+            if c.id in comp_ids
+        ]
+        self._clipboard_wires = [
+            copy.deepcopy(w)
+            for w in self._schematic.wires
+            if w.id in wire_ids
+        ]
+
+    def paste(self) -> None:
+        """Paste clipboard contents offset by 1 GU, with new UUIDs."""
+        if not self._clipboard_components and not self._clipboard_wires:
+            return
+        _OFFSET = 1.0
+        cmds: list[Command] = []
+        new_comp_ids: list[str] = []
+        new_wire_ids: list[str] = []
+        new_comps: list = []
+        for comp in self._clipboard_components:
+            new_id = str(uuid.uuid4())
+            new_comp = copy.deepcopy(comp)
+            new_comp.id = new_id
+            new_comp.position = (comp.position[0] + _OFFSET, comp.position[1] + _OFFSET)
+            cmds.append(PlaceCommand(new_comp))
+            new_comp_ids.append(new_id)
+            new_comps.append(new_comp)
+        for wire in self._clipboard_wires:
+            new_wire = copy.deepcopy(wire)
+            new_wire.id = str(uuid.uuid4())
+            new_wire.points = [(x + _OFFSET, y + _OFFSET) for x, y in wire.points]
+            cmds.append(WireCommand(new_wire))
+            new_wire_ids.append(new_wire.id)
+        # Split any existing wires whose segments the pasted pins land on.
+        paste_pin_positions = {
+            pos for nc in new_comps for pos in _component_pin_positions(nc)
+        }
+        cmds.extend(self._split_commands_for(paste_pin_positions))
+        self._push(MacroCommand(cmds, label="Paste"))
+        self.enter_select_mode()
+        self.clearSelection()
+        for cid in new_comp_ids:
+            item = self._comp_items.get(cid)
+            if item:
+                item.setSelected(True)
+        for wid in new_wire_ids:
+            item = self._wire_items.get(wid)
+            if item:
+                item.setSelected(True)
 
     def _merge_commands_after_delete(
         self,
@@ -585,15 +680,39 @@ class SchematicScene(QGraphicsScene):
         self._push(RotateCommand(component_id, new_rotation))
 
     def rotate_selected_cw(self) -> None:
-        """Rotate selected components 90° CW, or rotate the placement ghost."""
+        """Rotate selected components and wires 90° CW around their group centroid."""
         if self._mode == Mode.PLACE:
             self._place_rotation = (self._place_rotation + 90) % 360
             self._update_ghost_transform()
             return
-        for cid in self.selected_component_ids():
-            comp = next((c for c in self._schematic.components if c.id == cid), None)
-            if comp is not None:
-                self._push(RotateCommand(cid, (comp.rotation + 90) % 360))
+        comp_ids = self.selected_component_ids()
+        wire_ids = self.selected_wire_ids()
+        if not comp_ids and not wire_ids:
+            return
+
+        # Centroid = bounding-box centre of selected component positions,
+        # or wire vertices if only wires are selected.
+        # Snapped to 0.5 GU so rotated positions stay on the grid.
+        def _snap(v: float) -> float:
+            return round(v * 2) / 2
+
+        if comp_ids:
+            comp_id_set = set(comp_ids)
+            xs = [c.position[0] for c in self._schematic.components if c.id in comp_id_set]
+            ys = [c.position[1] for c in self._schematic.components if c.id in comp_id_set]
+        else:
+            wire_id_set = set(wire_ids)
+            pts = [
+                p
+                for w in self._schematic.wires if w.id in wire_id_set
+                for p in w.points
+            ]
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+
+        cx = _snap((min(xs) + max(xs)) / 2)
+        cy = _snap((min(ys) + max(ys)) / 2)
+        self._push(GroupRotateCommand(comp_ids, wire_ids, (cx, cy)))
 
     def mirror_component(self, component_id: str, new_mirror: bool) -> None:
         """Set the mirror state of a component via an undoable MirrorCommand."""
@@ -621,8 +740,14 @@ class SchematicScene(QGraphicsScene):
     def nudge_selected(self, dx_gu: float, dy_gu: float) -> None:
         """Move selected components by a delta via MoveCommand (arrow keys)."""
         ids = self.selected_component_ids()
-        if ids:
-            self._push(MoveCommand(ids, (dx_gu, dy_gu)))
+        if not ids:
+            return
+        move_cmd = MoveCommand(ids, (dx_gu, dy_gu))
+        split_cmds = self._pin_splits_after_delta(ids, (dx_gu, dy_gu))
+        if split_cmds:
+            self._push(MacroCommand([move_cmd] + split_cmds, label="Move"))
+        else:
+            self._push(move_cmd)
 
     def selected_component_ids(self) -> list[str]:
         out = []
@@ -684,7 +809,7 @@ class SchematicScene(QGraphicsScene):
                 if comp.mirror:
                     t.scale(-1.0, 1.0)
                 t.rotate(comp.rotation)
-                item.setTransform(t)
+                item.apply_transform(t)
                 # Defensive: a reused item must always be left visible and
                 # fully opaque — never leave a live component invisible.
                 item.setVisible(True)
@@ -1605,14 +1730,16 @@ class SchematicScene(QGraphicsScene):
             self._drag_start = {}
             self._drag_wire_ids = set()
 
-            move_cmds = [
-                MoveCommand(ids, d, wire_ids=drag_wire_ids)
-                for d, ids in per_delta.items()
-            ]
-            if len(move_cmds) == 1:
-                self._push(move_cmds[0])
-            elif move_cmds:
-                self._push(MacroCommand(move_cmds, label="Move"))
+            all_cmds: list = []
+            for d, ids in per_delta.items():
+                move_cmd = MoveCommand(ids, d, wire_ids=drag_wire_ids)
+                split_cmds = self._pin_splits_after_delta(ids, d)
+                all_cmds.append(move_cmd)
+                all_cmds.extend(split_cmds)
+            if len(all_cmds) == 1:
+                self._push(all_cmds[0])
+            elif all_cmds:
+                self._push(MacroCommand(all_cmds, label="Move"))
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._mode == Mode.WIRE and self._wire_pts:

@@ -55,6 +55,8 @@ class SchematicView(QGraphicsView):
         self._pan_active = False
         self._pan_anchor = QPointF()
 
+        self._scene.mode_changed.connect(self._on_mode_changed)
+
     # ------------------------------------------------------------------
     # Accessors
     # ------------------------------------------------------------------
@@ -66,6 +68,18 @@ class SchematicView(QGraphicsView):
     @property
     def zoom(self) -> float:
         return self._zoom
+
+    # ------------------------------------------------------------------
+    # Mode sync
+    # ------------------------------------------------------------------
+
+    def _on_mode_changed(self, mode: Mode) -> None:
+        if mode == Mode.PAN:
+            self.setDragMode(QGraphicsView.ScrollHandDrag)
+            self.setCursor(Qt.OpenHandCursor)
+        else:
+            self.setDragMode(QGraphicsView.RubberBandDrag)
+            self.unsetCursor()
 
     # ------------------------------------------------------------------
     # Zoom
@@ -132,7 +146,8 @@ class SchematicView(QGraphicsView):
     def _end_pan(self) -> None:
         self._pan_active = False
         self._scene.set_panning(False)
-        self.unsetCursor()
+        if self._scene.mode != Mode.PAN:
+            self.unsetCursor()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802, ANN001
         if event.button() == Qt.MiddleButton or (
@@ -187,8 +202,23 @@ class SchematicView(QGraphicsView):
             event.accept()
             return
 
+        if key == Qt.Key_S and mods == Qt.NoModifier:
+            self._scene.enter_select_mode()
+            event.accept()
+            return
+
         if key == Qt.Key_W and mods == Qt.NoModifier:
             self._scene.enter_wire_mode()
+            event.accept()
+            return
+
+        if key == Qt.Key_P and mods == Qt.NoModifier:
+            self._scene.enter_pan_mode()
+            event.accept()
+            return
+
+        if key == Qt.Key_R and mods == Qt.NoModifier:
+            self._scene.rotate_selected_cw()
             event.accept()
             return
 
@@ -242,7 +272,7 @@ class SchematicView(QGraphicsView):
     def keyReleaseEvent(self, event) -> None:  # noqa: N802, ANN001
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_down = False
-            if not self._pan_active:
+            if not self._pan_active and self._scene.mode != Mode.PAN:
                 self.unsetCursor()
             event.accept()
             return

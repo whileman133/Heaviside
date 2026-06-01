@@ -3,7 +3,7 @@ Source Panel (spec §10.4).
 
 A collapsible bottom panel showing the current CircuiTikZ source in a
 read-only ``QPlainTextEdit``.  Updates live (300 ms debounce) after any
-schematic change.  A **Copy** button copies the full source to clipboard.
+schematic change.
 """
 
 from __future__ import annotations
@@ -14,10 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QPushButton,
     QPlainTextEdit,
     QSizePolicy,
-    QApplication,
 )
 
 from app.canvas.scene import SchematicScene
@@ -44,7 +42,7 @@ class SourcePanel(QWidget):
         layout.setContentsMargins(4, 2, 4, 4)
         layout.setSpacing(2)
 
-        # Header row: label + copy button.
+        # Header row: label only.
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
 
@@ -53,12 +51,6 @@ class SourcePanel(QWidget):
         title.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
         header_row.addWidget(title)
         header_row.addStretch(1)
-
-        copy_btn = QPushButton("Copy")
-        copy_btn.setFixedWidth(60)
-        copy_btn.setFixedHeight(22)
-        copy_btn.clicked.connect(self._copy_source)
-        header_row.addWidget(copy_btn)
         layout.addLayout(header_row)
 
         # Read-only source text area.
@@ -90,5 +82,3 @@ class SourcePanel(QWidget):
             source = f"% Error generating source: {exc}"
         self._text.setPlainText(source)
 
-    def _copy_source(self) -> None:
-        QApplication.clipboard().setText(self._text.toPlainText())
