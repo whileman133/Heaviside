@@ -1579,3 +1579,157 @@ def test_ghost_hides_options_item(scene: SchematicScene):
     assert not item._options_item.isVisible()
     item.set_ghost(False)
     assert item._options_item.isVisible()
+
+
+# ---------------------------------------------------------------------------
+# Regression: group-rotate + delete with a junction dot must not crash paint
+# ---------------------------------------------------------------------------
+
+def test_no_index_method():
+    """The scene uses NoIndex so removeItem updates the item list synchronously.
+
+    The default BSP tree index only defers item removal; because _rebuild_items
+    drops the last reference to coordinate-keyed junction/open-circle dots
+    immediately, PySide frees the C++ item before the index is purged, and the
+    next paint dereferences freed memory.
+    """
+    from PySide6.QtWidgets import QGraphicsScene
+    s = SchematicScene()
+    assert s.itemIndexMethod() == QGraphicsScene.ItemIndexMethod.NoIndex
+
+
+def test_group_rotate_then_delete_then_paint_does_not_crash(scene: SchematicScene):
+    """Regression: rotating a selected group containing a junction dot and then
+    deleting it, followed by a repaint, previously segfaulted (dangling pointer
+    in the scene's BSP index). It must now complete cleanly.
+    """
+    from PySide6.QtGui import QImage, QPainter
+
+    view = SchematicView(scene)
+    view.resize(800, 600)
+
+    # A 3-way junction: two stubs meeting a through-wire at (80, 79.5).
+    scene.place_component("R", (78.0, 79.0))
+    scene.place_component("C", (78.0, 80.0))
+    scene.place_component("L", (80.5, 79.5))
+    scene.add_wire([(80.0, 79.0), (80.0, 79.5)])
+    scene.add_wire([(80.0, 80.0), (80.0, 79.5)])
+    scene.add_wire([(80.0, 79.5), (80.5, 79.5)])
+    assert len(scene._junction_items) == 1
+
+    for it in list(scene._comp_items.values()) + list(scene._wire_items.values()):
+        it.setSelected(True)
+    scene.rotate_selected_cw()
+
+    for it in list(scene._comp_items.values()) + list(scene._wire_items.values()):
+        it.setSelected(True)
+    scene.delete_selected()
+
+    # Force the paint path that walked the dangling pointer pre-fix.
+    img = QImage(800, 600, QImage.Format_ARGB32)
+    img.fill(0)
+    painter = QPainter(img)
+    scene.render(painter)
+    painter.end()
+
+    assert not scene.schematic.components
+    assert not scene.schematic.wires
+    assert not scene._junction_items
+
+
+# ---------------------------------------------------------------------------
+# Property/fuzz guard: paint after every mutation must never use freed memory
+# ---------------------------------------------------------------------------
+
+def test_random_mutation_sequences_never_crash_paint():
+    """Drive randomized op sequences, painting the scene through a real view
+    after each step.
+
+    This is a *probabilistic* safety net, not a deterministic check: a
+    use-after-free only faults when the freed memory happens to be reused, so no
+    paint-based test can guarantee a catch (which is exactly why the original
+    junction-dot crash went unnoticed). What this does buy is broad, repeated
+    exercise of the real paint paths — a shown view's ``viewport().repaint()``
+    (which queries the scene's item index for the exposed region) plus a direct
+    ``scene.render`` — across place/move/rotate/wire/delete/undo/redo, including
+    rubber-band selection (``setSelectionArea``, which builds the index). Any
+    regression that frees an item the scene still references is likely to abort
+    the run here rather than reach the field. The deterministic guard that the
+    fix itself stays in place is ``test_no_index_method``.
+    """
+    import random
+
+    from PySide6.QtGui import QImage, QPainter, QPainterPath
+
+    KINDS = ["R", "C", "L", "D", "open", "ground"]
+
+    def select_all_via_rubber_band(scene: SchematicScene) -> None:
+        rect = scene.itemsBoundingRect()
+        if not rect.isValid():
+            return
+        path = QPainterPath()
+        path.addRect(rect.adjusted(-50, -50, 50, 50))
+        scene.setSelectionArea(path)   # builds/queries the item index
+
+    def rand_pt(rng: random.Random) -> tuple[float, float]:
+        return (rng.randint(0, 12) * 0.5, rng.randint(0, 12) * 0.5)
+
+    for seed in range(6):
+        rng = random.Random(seed)
+        scene = SchematicScene()
+        view = SchematicView(scene)
+        view.resize(500, 400)
+        view.show()
+
+        def paint() -> None:
+            rect = scene.itemsBoundingRect()
+            if rect.isValid():
+                view.fitInView(rect.adjusted(-30, -30, 30, 30))
+            view.viewport().repaint()      # real exposed-region paint (index query)
+            _APP.processEvents()
+            img = QImage(400, 320, QImage.Format_ARGB32)
+            img.fill(0)
+            p = QPainter(img)
+            scene.render(p)                # full walk of all items
+            p.end()
+
+        for _ in range(40):
+            op = rng.choice(
+                ["place", "wire", "select_rotate", "delete_some",
+                 "delete_all", "nudge", "undo", "redo"]
+            )
+            try:
+                if op == "place":
+                    scene.place_component(rng.choice(KINDS), rand_pt(rng))
+                elif op == "wire":
+                    a = rand_pt(rng)
+                    b = (a[0] + rng.choice([-2, -1, 1, 2]), a[1])
+                    c = (b[0], b[1] + rng.choice([-2, -1, 1, 2]))
+                    scene.add_wire([a, b, c])
+                elif op == "select_rotate":
+                    select_all_via_rubber_band(scene)
+                    scene.rotate_selected_cw()
+                elif op == "delete_some":
+                    items = list(scene._comp_items.values()) + list(scene._wire_items.values())
+                    scene.clearSelection()
+                    for it in items:
+                        if rng.random() < 0.5:
+                            it.setSelected(True)
+                    scene.delete_selected()
+                elif op == "delete_all":
+                    select_all_via_rubber_band(scene)
+                    scene.delete_selected()
+                elif op == "nudge":
+                    for it in scene._comp_items.values():
+                        it.setSelected(True)
+                    scene.nudge_selected(rng.choice([-0.5, 0.5]), rng.choice([-0.5, 0.5]))
+                elif op == "undo":
+                    scene.undo()
+                elif op == "redo":
+                    scene.redo()
+            except Exception:
+                # Model-level guard rejections (e.g. invalid wire) are fine; the
+                # point of this test is that the *paint* below never crashes.
+                pass
+
+            paint()   # <- would segfault on a dangling item pointer

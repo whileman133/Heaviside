@@ -24,6 +24,8 @@ component kind to its item class without importing Qt everywhere.
 
 from __future__ import annotations
 
+import re
+
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPointF, QRectF, Qt
@@ -54,7 +56,7 @@ from app.canvas.svgsym import is_thick, symbol_paths
 from app.components.registry import REGISTRY
 
 if TYPE_CHECKING:
-    from app.components.model import Component, DrawingComponent, TextNodeComponent
+    from app.components.model import BipoleComponent, Component, DrawingComponent, TextNodeComponent
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +79,34 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
 _LABEL_FONT_SIZE = 10.0
 _LABEL_LINE_H = 17   # px height per label row for 10pt font
 _LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
+
+# LaTeX points per grid unit (1 GU = 1 cm). Canvas pixels = pt * GRID_PX / this.
+_PT_PER_GU = 28.35
+
+# Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
+# uses the first installed face, so at least one matches on any platform.
+_FONT_FAMILY_LISTS: dict[str, list[str]] = {
+    "serif": ["Georgia", "Times New Roman", "Times", "DejaVu Serif"],
+    "sans":  ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
+    "mono":  ["Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono"],
+}
+
+
+def _fonted_qfont(comp) -> "QFont":  # noqa: ANN001
+    """Build a QFont from a FontedComponent's size/bold/italic/family.
+
+    Font size is converted from LaTeX points to canvas pixels. An empty
+    ``font_family`` means the LaTeX document default (serif / Computer Modern),
+    so it falls back to the serif list to keep the canvas matching the output.
+    """
+    font = QFont()
+    font.setPixelSize(max(1, round(comp.font_size * GRID_PX / _PT_PER_GU)))
+    font.setBold(comp.font_bold)
+    font.setItalic(comp.font_italic)
+    families = _FONT_FAMILY_LISTS.get(comp.font_family or "serif")
+    if families:
+        font.setFamilies(families)
+    return font
 
 
 class LabelTextItem(QGraphicsTextItem):
@@ -208,8 +238,7 @@ class ComponentItem(QGraphicsItem):
 
     Painting is fully data-driven: the symbol geometry comes from the SVG
     manifest via :func:`app.canvas.svgsym.symbol_paths`.  Subclasses only set
-    the component ``kind`` (implicitly, via the Component they wrap) and may
-    override :meth:`extra_leads` to add connector stubs.
+    the component ``kind`` (implicitly, via the Component they wrap).
 
     A single child :class:`LabelTextItem` shows the component's raw options
     string (e.g. ``l=$R_1$, v=$V_s$``) above the bbox when non-empty.
@@ -389,10 +418,13 @@ class ComponentItem(QGraphicsItem):
         color = self._body_color()
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
-        from app.components.model import DiodeComponent
-        svg_kind = (self.component.kind + "*") if (
-            isinstance(self.component, DiodeComponent) and self.component.filled
-        ) else self.component.kind
+        from app.components.model import DiodeComponent, MosfetComponent
+        if isinstance(self.component, DiodeComponent) and self.component.filled:
+            svg_kind = self.component.kind + "*"
+        elif isinstance(self.component, MosfetComponent) and self.component.body_diode:
+            svg_kind = self.component.kind + "_bodydiode"
+        else:
+            svg_kind = self.component.kind
         for sym in symbol_paths(svg_kind):
             lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
             pen = _pen(color, lw)
@@ -403,14 +435,6 @@ class ComponentItem(QGraphicsItem):
                 painter.setBrush(Qt.NoBrush)
             painter.drawPath(sym.path)
 
-        # --- connector lead stubs (multi-terminal symbols) ----------------
-        leads = self.extra_leads()
-        if leads:
-            painter.setPen(_pen(color, LINE_W))
-            painter.setBrush(Qt.NoBrush)
-            for a, b in leads:
-                painter.drawLine(a, b)
-
         # --- pin indicator dots ------------------------------------------
         if not self._ghost:
             painter.setPen(self._pin_pen())
@@ -420,17 +444,6 @@ class ComponentItem(QGraphicsItem):
                 painter.drawEllipse(
                     QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R
                 )
-
-
-# ------------------------------------------------------------------
-    # Subclass hook
-    # ------------------------------------------------------------------
-
-    def extra_leads(self) -> list[tuple[QPointF, QPointF]]:
-        """Extra connector segments (pixel coords) bridging pins to symbol
-        terminals.  Two-terminal devices need none (their SVG leads already
-        reach the pins)."""
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -531,19 +544,41 @@ class PnpItem(ComponentItem):
     """PNP BJT (SVG: pnp). Base left, emitter top-right, collector bottom-right."""
 
 
-class NigfeteItem(ComponentItem):
+# Extra x1 extent (GU) added to the bounding rect when body_diode is enabled.
+# The body diode symbol adds ~11 pt = 0.39 GU; rounded up to 0.45 GU for margin.
+_BODYDIODE_EXTRA_X = 0.45
+
+
+class _MosfetItem(ComponentItem):
+    """Base for MOSFET items — extends boundingRect when body_diode is active."""
+
+    def boundingRect(self) -> QRectF:
+        from app.components.model import MosfetComponent
+        x0, y0, x1, y1 = self._defn.bbox
+        if isinstance(self.component, MosfetComponent) and self.component.body_diode:
+            x1 = x1 + _BODYDIODE_EXTRA_X
+        margin = LINE_W_THICK
+        return QRectF(
+            x0 * GRID_PX - margin,
+            y0 * GRID_PX - margin,
+            (x1 - x0) * GRID_PX + 2 * margin,
+            (y1 - y0) * GRID_PX + 2 * margin,
+        )
+
+
+class NigfeteItem(_MosfetItem):
     """N-channel enhancement MOSFET (SVG: nigfete)."""
 
 
-class NigfetdItem(ComponentItem):
+class NigfetdItem(_MosfetItem):
     """N-channel depletion MOSFET (SVG: nigfetd). Solid channel line."""
 
 
-class PigfeteItem(ComponentItem):
+class PigfeteItem(_MosfetItem):
     """P-channel enhancement MOSFET (SVG: pigfete). Source at top."""
 
 
-class PigfetdItem(ComponentItem):
+class PigfetdItem(_MosfetItem):
     """P-channel depletion MOSFET (SVG: pigfetd). Source at top, solid channel."""
 
 
@@ -1013,31 +1048,11 @@ class TextNodeItem(_DrawingAnnotationBase):
     invisible to the connectivity model.
     """
 
-    # Fallback lists passed to QFont.setFamilies() — Qt walks the list and
-    # uses the first installed face, so at least one will match on any platform.
-    _FAMILY_LIST: dict[str, list[str]] = {
-        "serif": ["Georgia", "Times New Roman", "Times", "DejaVu Serif"],
-        "sans":  ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
-        "mono":  ["Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono"],
-    }
-
     def _build_font(self) -> QFont:
         from app.components.model import TextNodeComponent
-        # Convert LaTeX pt → canvas pixels: 1 grid unit = 1 cm = 28.35 pt,
-        # and 1 grid unit = GRID_PX pixels on the canvas.
         comp = self._component
         assert isinstance(comp, TextNodeComponent)
-        fs_px = max(1, round(comp.font_size * GRID_PX / 28.35))
-        font = QFont()
-        font.setPixelSize(fs_px)
-        font.setBold(comp.font_bold)
-        font.setItalic(comp.font_italic)
-        # Empty font_family means "LaTeX document default", which is serif
-        # (Computer Modern). Fall back to the serif list so the canvas matches.
-        families = self._FAMILY_LIST.get(comp.font_family or "serif")
-        if families:
-            font.setFamilies(families)
-        return font
+        return _fonted_qfont(comp)
 
     def _sync_options_item(self) -> None:
         # When not editing: text is drawn inline in paint(); hide the label.
@@ -1068,7 +1083,7 @@ class TextNodeItem(_DrawingAnnotationBase):
         comp = self._component
         assert isinstance(comp, TextNodeComponent)
         text = comp.options or "T"
-        fs_px = max(1, round(comp.font_size * GRID_PX / 28.35))
+        fs_px = max(1, round(comp.font_size * GRID_PX / _PT_PER_GU))
         bold_factor = 1.08 if comp.font_bold else 1.0
         approx_w = max(fs_px * 2.0, len(text) * fs_px * 0.65 * bold_factor)
         h = fs_px * 1.8
@@ -1161,20 +1176,19 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 
     def _parse_options(self) -> tuple[Qt.PenStyle, float, str]:
         """Return (pen_style, line_width_px, fill_color_name) from options."""
-        import re as _re
         opts = self._component.options
 
-        lw_match = _re.search(r"line\s+width\s*=\s*([\d.]+)\s*pt", opts)
+        lw_match = re.search(r"line\s+width\s*=\s*([\d.]+)\s*pt", opts)
         line_width_pt = float(lw_match.group(1)) if lw_match else 0.4
         # Convert pt to pixels: 1 pt ≈ 1.333 px at 96 dpi; keep proportional.
         line_width_px = line_width_pt * 1.333
 
-        fill_match = _re.search(r"fill\s*=\s*([^,]+)", opts)
+        fill_match = re.search(r"fill\s*=\s*([^,]+)", opts)
         fill = fill_match.group(1).strip() if fill_match else ""
 
         # Identify line style keyword (strip line width and fill tokens).
-        remainder = _re.sub(r",?\s*line\s+width\s*=\s*[\d.]+\s*pt", "", opts)
-        remainder = _re.sub(r",?\s*fill\s*=\s*[^,]+", "", remainder).strip(", ")
+        remainder = re.sub(r",?\s*line\s+width\s*=\s*[\d.]+\s*pt", "", opts)
+        remainder = re.sub(r",?\s*fill\s*=\s*[^,]+", "", remainder).strip(", ")
         pen_style = _RECT_STYLE_MAP.get(remainder.strip().lower(), Qt.SolidLine)
 
         return pen_style, line_width_px, fill
@@ -1246,6 +1260,132 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 
 
 # ---------------------------------------------------------------------------
+# Bipole element
+# ---------------------------------------------------------------------------
+
+
+_BIPOLE_HALF_H = 0.25  # half-height of bipole body in GU (matches standard bipole height)
+
+
+def _extract_bipole_label(options: str) -> str:
+    """Extract the t= value from a bipole options string."""
+    m = re.search(r'\bt\s*=\s*([^,]+)', options)
+    return m.group(1).strip() if m else ""
+
+
+class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
+    """Generic labelled bipole: a resizable rectangle with centered label text.
+
+    The body spans from the origin pin (left midpoint) to the terminal pin
+    (right midpoint) with a fixed half-height of ``_BIPOLE_HALF_H`` GU above
+    and below the connecting line.  The ``t=`` option value is drawn centred
+    inside the rectangle.
+    """
+
+    def _sync_options_item(self) -> None:
+        # Label text is drawn inline; hide the floating options child unless editing.
+        if not self._options_item.is_editing:
+            self._options_item.setVisible(False)
+
+    def begin_options_edit(self) -> None:
+        """Activate inline editing of the t= label text centred inside the box."""
+        if self._options_item.is_editing:
+            return
+        from app.components.model import BipoleComponent as _BipoleComponent
+        comp = self._component
+        assert isinstance(comp, _BipoleComponent)
+        font = _fonted_qfont(comp)
+        self._options_item.setFont(font)
+        self._options_item.setTransform(QTransform())
+        label = _extract_bipole_label(comp.options)
+        self._options_item.setPlainText(label)
+        ep = self._endpoint_px()
+        h = _BIPOLE_HALF_H * GRID_PX
+        x0 = min(0.0, ep.x())
+        x1 = max(0.0, ep.x())
+        cx = (x0 + x1) / 2
+        er = self._options_item.boundingRect()
+        self._options_item.setPos(cx - er.width() / 2, -er.height() / 2)
+        self._options_item.setVisible(True)
+        self._options_item.begin_edit()
+
+    def _on_options_commit(self, text: str) -> None:
+        """Wrap the edited label text back into the full options string."""
+        scene = self.scene()
+        if scene is None or not hasattr(scene, "edit_component_options"):
+            return
+        old_opts = self._component.options
+        # Replace (or insert) the t= slot; preserve all other slots.
+        stripped = re.sub(r'\bt\s*=\s*[^,]+(,\s*)?', '', old_opts).strip(', ')
+        new_opts = (f"t={text}" + (f", {stripped}" if stripped else "")) if text else stripped
+        scene.edit_component_options(self._component.id, new_opts)
+
+    def boundingRect(self) -> QRectF:
+        ep = self._endpoint_px()
+        h = _BIPOLE_HALF_H * GRID_PX
+        m = _HANDLE_HALF + LINE_W_THICK
+        x0 = min(0.0, ep.x()) - m
+        x1 = max(0.0, ep.x()) + m
+        return QRectF(x0, -h - m, x1 - x0, 2 * h + 2 * m)
+
+    def shape(self) -> QPainterPath:
+        ep = self._endpoint_px()
+        h = _BIPOLE_HALF_H * GRID_PX
+        x0 = min(0.0, ep.x())
+        x1 = max(0.0, ep.x())
+        rect = QRectF(x0, -h, x1 - x0, 2 * h)
+        path = QPainterPath()
+        path.addRect(rect)
+        handle = QPainterPath()
+        handle.addRect(
+            ep.x() - _HANDLE_HALF - 2, ep.y() - _HANDLE_HALF - 2,
+            (_HANDLE_HALF + 2) * 2, (_HANDLE_HALF + 2) * 2,
+        )
+        return path.united(handle)
+
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        from app.components.model import BipoleComponent as _BipoleComponent
+        h = _BIPOLE_HALF_H * GRID_PX
+        x0 = min(0.0, ep.x())
+        x1 = max(0.0, ep.x())
+        rect = QRectF(x0, -h, x1 - x0, 2 * h)
+        comp = self._component
+        assert isinstance(comp, _BipoleComponent)
+        bw_px = comp.border_width * GRID_PX / _PT_PER_GU
+        painter.setPen(_pen(color, bw_px))
+        if comp.fill_color and not self._ghost:
+            painter.setBrush(QBrush(_resolve_tikz_color(comp.fill_color)))
+        else:
+            painter.setBrush(Qt.NoBrush)
+        painter.drawRect(rect)
+        label = _extract_bipole_label(self._component.options)
+        if label and not self._ghost and not self._options_item.is_editing:
+            from app.components.model import BipoleComponent as _BipoleComponent
+            comp = self._component
+            assert isinstance(comp, _BipoleComponent)
+            painter.setFont(_fonted_qfont(comp))
+            painter.drawText(rect, Qt.AlignCenter, label)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = self._body_color()
+        ep = self._endpoint_px()
+        self._draw_body(painter, color, ep)
+        if not self._ghost:
+            painter.setPen(self._pin_pen())
+            painter.setBrush(self._pin_brush())
+            for pt in (QPointF(0.0, 0.0), ep):
+                painter.drawEllipse(pt, PIN_R, PIN_R)
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.drawRect(
+                ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
+                _HANDLE_HALF * 2, _HANDLE_HALF * 2,
+            )
+
+
+# ---------------------------------------------------------------------------
 # ITEM_CLASSES mapping — registered into the component registry
 # ---------------------------------------------------------------------------
 
@@ -1276,6 +1416,7 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "short":      ShortItem,
     "text_node":  TextNodeItem,
     "rect":       RectItem,
+    "bipole":     BipoleItem,
     "ground":     GroundItem,
     "rground":  RgroundItem,
     "sground":  SgroundItem,

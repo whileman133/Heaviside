@@ -64,6 +64,14 @@ class DiodeComponent(Component):
 
 
 @dataclass
+class MosfetComponent(Component):
+    """A MOSFET — supports the bodydiode CircuiTikZ variant."""
+
+    body_diode: bool = False
+    """Draw the intrinsic body diode when True."""
+
+
+@dataclass
 class DrawingComponent(Component):
     """Non-circuit visual element (text_node, rect). Carries a z-order for layering."""
 
@@ -78,8 +86,8 @@ class DrawingComponent(Component):
 
 
 @dataclass
-class TextNodeComponent(DrawingComponent):
-    """Freestanding text annotation."""
+class FontedComponent(DrawingComponent):
+    """Drawing component that carries font styling (shared by text_node and bipole)."""
 
     font_size: float = 12.0
     """Font size in points for the canvas preview and LaTeX output."""
@@ -97,12 +105,43 @@ class TextNodeComponent(DrawingComponent):
 
 
 @dataclass
+class TextNodeComponent(FontedComponent):
+    """Freestanding text annotation.  Inherits font fields from FontedComponent."""
+
+
+@dataclass
 class RectComponent(DrawingComponent):
     """Rectangle drawing element.
 
     ``options`` holds a TikZ draw-options string (line style, fill, etc.);
     ``span_override`` holds the (width, height) in GU.
     """
+
+
+@dataclass
+class BipoleComponent(FontedComponent):
+    """Generic labelled bipole with resizable width.
+
+    Emitted as a standalone TikZ node (``\\node[draw, minimum width=W,
+    minimum height=H]``) so the box exactly fills the span between the two
+    pin coordinates regardless of size.
+
+    ``options`` holds the raw CircuiTikZ-style option string; the ``t=`` slot
+    sets the label displayed inside the box (e.g. ``"t=Processor"``).
+    Other slots (``l=``, ``v=``, ``i=``) are stored in options but not
+    rendered on the node itself (they are ignored at code-generation time).
+    ``span_override`` overrides the default (1, 0) span when the user drags
+    the terminal endpoint handle to resize.
+    """
+
+    font_size: float = 7.0
+    """Override default: bipole box is smaller so 7 pt fits better than 12 pt."""
+
+    fill_color: str = ""
+    """TikZ fill color string (e.g. ``"yellow!20"``).  Empty = no fill (transparent)."""
+
+    border_width: float = 0.4
+    """Border line width in points.  Default matches TikZ default (0.4 pt)."""
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +199,7 @@ class ComponentDef:
     """The Component subclass to instantiate for placed instances of this kind.
 
     Defaults to :class:`Component` (plain circuit element).  Overridden for
-    kinds that need extra per-instance state:
-    ``DiodeComponent`` for diodes, ``TextNodeComponent`` for text_node,
-    ``RectComponent`` for rect.
+    kinds that need extra per-instance state, e.g. ``DiodeComponent``,
+    ``MosfetComponent``, ``BipoleComponent``, ``TextNodeComponent``, and
+    ``RectComponent``.  See the registry entries for the authoritative mapping.
     """

@@ -11,13 +11,17 @@ No Qt dependency. No side effects beyond filesystem access.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from app.components.model import (
+    BipoleComponent,
     Component,
     DiodeComponent,
     DrawingComponent,
+    FontedComponent,
+    MosfetComponent,
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
@@ -45,8 +49,12 @@ def save(schematic: Schematic, path: str | Path) -> None:
     path = Path(path)
     data = _schematic_to_dict(schematic)
     text = json.dumps(data, ensure_ascii=False, indent=2)
-    # Write without BOM; explicitly UTF-8.
-    path.write_text(text, encoding="utf-8")
+    # Write to a sibling temp file, then atomically replace the target so a
+    # failed/interrupted write never corrupts an existing file. Write without
+    # BOM; explicitly UTF-8.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def load(path: str | Path) -> Schematic:
@@ -120,8 +128,17 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         d["z_order"] = c.z_order
     if isinstance(c, DiodeComponent) and c.filled:
         d["filled"] = True
-    if isinstance(c, TextNodeComponent):
-        if c.font_size != 12.0:
+    if isinstance(c, MosfetComponent) and c.body_diode:
+        d["body_diode"] = True
+    if isinstance(c, BipoleComponent):
+        if c.fill_color:
+            d["fill_color"] = c.fill_color
+        if abs(c.border_width - 0.4) > 1e-6:
+            d["border_width"] = c.border_width
+    if isinstance(c, FontedComponent):
+        # Omit fields equal to the class-level default to keep files compact.
+        cls_default_size = type(c).__dataclass_fields__["font_size"].default
+        if c.font_size != cls_default_size:
             d["font_size"] = c.font_size
         if c.font_bold:
             d["font_bold"] = True
@@ -275,19 +292,30 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if issubclass(cls, DiodeComponent):
         kwargs["filled"] = bool(data.get("filled", False))
 
-    if issubclass(cls, TextNodeComponent):
-        # Migrate: old files stored font_size as span_override[0].
-        if "font_size" in data:
-            kwargs["font_size"] = float(data["font_size"])
-        elif span_override is not None:
-            kwargs["font_size"] = span_override[0]
-            kwargs["span_override"] = None
+    if issubclass(cls, MosfetComponent):
+        kwargs["body_diode"] = bool(data.get("body_diode", False))
+
+    if issubclass(cls, BipoleComponent):
+        kwargs["fill_color"] = str(data.get("fill_color", ""))
+        raw_bw = data.get("border_width", 0.4)
+        try:
+            kwargs["border_width"] = float(raw_bw)
+        except (TypeError, ValueError) as exc:
+            raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
+
+    if issubclass(cls, FontedComponent):
         raw_ff = data.get("font_family", "")
         if not isinstance(raw_ff, str):
             raise SchematicLoadError(f"{ctx}.font_family must be a string")
         kwargs["font_bold"] = bool(data.get("font_bold", False))
         kwargs["font_italic"] = bool(data.get("font_italic", False))
         kwargs["font_family"] = raw_ff
+        if "font_size" in data:
+            kwargs["font_size"] = float(data["font_size"])
+        elif issubclass(cls, TextNodeComponent) and span_override is not None:
+            # Migrate: very old text_node files stored font_size in span_override[0].
+            kwargs["font_size"] = span_override[0]
+            kwargs["span_override"] = None
 
     return cls(**kwargs)
 

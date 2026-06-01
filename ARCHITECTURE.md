@@ -17,6 +17,8 @@ graph TB
 
     subgraph Canvas["Canvas Layer  (app/canvas/)"]
         SCENE["SchematicScene\n─────────────\nmode FSM, undo stack\nmouse events → commands"]
+        GEOM["geometry + WireGeometry\n─────────────\nsnap / coord / rotation\nwire snapping & hit-testing\n(stateless, no Qt scene)"]
+        DRAG["DragPreviewController\n─────────────\ndrag state + live previews\n(move / vertex / endpoint)\nghost wires, junction/ocirc"]
         VIEW["SchematicView\n─────────────\nzoom / pan\nkeyboard dispatch"]
         ITEMS["Graphics Items\n─────────────\nComponentItem subtypes\nWireItem, JunctionItem\nOpenCircleItem, PreviewItem"]
         CMDS["UndoStack + Commands\n─────────────\nPlace/Delete/Move/Wire\nEdit/Rotate/Mirror\nSplit/Merge/MoveVertex\nMacro  (12 total)"]
@@ -35,7 +37,7 @@ graph TB
     end
 
     subgraph Preview["Preview Pipeline  (app/preview/)"]
-        WORKER["PreviewWorker\n─────────────\nQThread + debounce\n5 s schematic / 0.5 s eq"]
+        WORKER["PreviewWorker\n─────────────\nQThread + debounce\n5 s schematic"]
         LATEX["latex.py\n─────────────\nbuild_tex()\ncompile_tex()  ← pdflatex\npdf_to_qimage() ← pdf2image"]
     end
 
@@ -54,6 +56,11 @@ graph TB
 
     SCENE --> CMDS
     SCENE --> ITEMS
+    SCENE --> GEOM
+    SCENE --> DRAG
+    DRAG --> GEOM
+    DRAG --> CMDS
+    GEOM --> SCH
     CMDS --> SCH
     ITEMS --> REG
 
@@ -105,15 +112,12 @@ graph LR
         S14["_wire_preview: WirePreviewItem | None"]
     end
 
-    subgraph DragState["Drag-Move State"]
-        S15["_drag_start: dict[id → xy]\n(positions at drag start)"]
-        S16["_drag_wire_ids: set[id]\n(wires selected at drag start)"]
-        S17["_previewed_wire_ids: set[id]\n(showing live-drag preview)"]
-    end
-
-    subgraph VertexState["Wire-Vertex Drag State"]
-        S18["_vertex_drag: (wire_id, index, orig_xy) | None"]
-        S19["_vertex_press_gu: xy | None\n(press position for click/drag disambiguation)"]
+    subgraph DragCtl["DragPreviewController State  (scene._drag)"]
+        S15["drag_start: dict[id → xy]\n(positions at drag start)"]
+        S16["drag_wire_ids: set[id]\n(wires selected at drag start)"]
+        S17["previewed_wire_ids: set[id]\n(showing live-drag preview)"]
+        S18["vertex_drag / vertex_press_gu\n(wire-vertex drag)"]
+        S19["endpoint_drag / endpoint_press_gu\n(resizable-component endpoint drag)"]
     end
 
     subgraph Clipboard["Clipboard"]

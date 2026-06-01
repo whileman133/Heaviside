@@ -32,9 +32,6 @@ Maps from the thin (~0.3985 pt) strokes in the SVG manifest.
 LINE_W_THICK: float = LINE_W * 2.0
 """Stroke width for thick SVG strokes (~0.797 pt) such as device bodies."""
 
-LINE_W_THIN: float = 1.5
-"""Reduced stroke width used when painting palette thumbnails (32 × 32 px)."""
-
 PIN_R: float = 3.0
 """Radius of pin indicator dots, in pixels."""
 

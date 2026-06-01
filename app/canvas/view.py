@@ -25,7 +25,6 @@ from PySide6.QtWidgets import QGraphicsView
 
 from app.canvas.items import LabelTextItem
 from app.canvas.scene import Mode, SchematicScene
-from app.canvas.style import GRID_PX
 
 _ZOOM_STEP = 1.15
 _ZOOM_MIN = 0.1

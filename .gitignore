@@ -1,3 +1,30 @@
-*.idea
-*.deb
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtualenv
+.venv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.synctex.gz
+
+# Local scratch / generated artifacts
 scratch_canvas.py
+component_gallery.png
+*.deb

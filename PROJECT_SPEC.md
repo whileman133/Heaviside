@@ -118,7 +118,7 @@ class PinDef:
 class ComponentDef:
     kind: str                        # CircuiTikZ keyword, e.g. "R", "C", "op amp"
     display_name: str                # Human-readable, e.g. "Resistor"
-    category: str                    # e.g. "Passives", "Amplifiers", "Sources"
+    category: str                    # e.g. "Bipoles", "Tripoles", "Nodes"
     bbox: tuple[float, float, float, float]  # (x0, y0, x1, y1) relative to origin, in GU
     pins: list[PinDef]
     label_slots: list[str]           # valid slot names for this kind, shown as UI hint
@@ -128,7 +128,7 @@ class ComponentDef:
     component_class: type = Component  # Component subclass to instantiate for placed instances
 ```
 
-`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`. The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
+`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `BipoleComponent` for `bipole`. All of the last group extend `DrawingComponent` (`BipoleComponent` via `FontedComponent`). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
 
 ### 4.2 `Component` hierarchy
 
@@ -151,7 +151,11 @@ class DiodeComponent(Component):        # all diode types
     filled: bool = False                # True → emit KIND* and use filled SVG
 
 @dataclass
-class DrawingComponent(Component):      # text_node, rect
+class MosfetComponent(Component):       # nigfete, nigfetd, pigfete, pigfetd
+    body_diode: bool = False            # True → emit "bodydiode" option and use *_bodydiode SVG
+
+@dataclass
+class DrawingComponent(Component):      # text_node, rect, bipole
     z_order: int = 0                    # layer order (negative = behind circuit elements)
 
 @dataclass
@@ -310,17 +314,17 @@ The component palette renders each component's thumbnail by instantiating its `C
 
 ### 5.4 v1 Component Set
 
-#### Passives
+#### Bipoles
 
-| Kind | Display Name | Pins | Default Span | Label Slots |
-|------|-------------|------|-------------|-------------|
-| `R` | Resistor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
-| `C` | Capacitor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
-| `L` | Inductor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+**Passives** — two-terminal components with pins `in` (0,0) and `out` (2,0), default span (2,0), label slots `l`, `l_`, `v`, `v^`, `i`, `i_`:
 
-#### Diodes
+| Kind | Display Name |
+|------|-------------|
+| `R` | Resistor |
+| `C` | Capacitor |
+| `L` | Inductor |
 
-All diode types share pins `anode` (0,0) and `cathode` (2,0), default span (2,0), and label slots `l`, `l_`, `v`, `v^`, `i`, `i_`. They are instantiated as `DiodeComponent`; when `DiodeComponent.filled` is `True` the canvas uses the `*` SVG and the codegen emits `KIND*`.
+**Diodes** — all share pins `anode` (0,0) and `cathode` (2,0), default span (2,0), and label slots `l`, `l_`, `v`, `v^`, `i`, `i_`. Instantiated as `DiodeComponent`; when `DiodeComponent.filled` is `True` the canvas uses the `*` SVG and the codegen emits `KIND*`.
 
 | Kind | Display Name | Filled variant |
 |------|-------------|----------------|
@@ -331,42 +335,39 @@ All diode types share pins `anode` (0,0) and `cathode` (2,0), default span (2,0)
 | `zzD` | TVS Diode | `zzD*` |
 | `leD` | LED | `leD*` |
 
+**Sources (Fixed)** — pins `+` (0,0) and `-` (0,2), default span (0,2):
+
+| Kind | Display Name | Label Slots |
+|------|-------------|-------------|
+| `V` | Voltage Source | `l`, `l_`, `v`, `v^` |
+| `I` | Current Source | `l`, `l_`, `i`, `i_` |
+| `vsourcesin` | AC Voltage Source | `l`, `l_`, `v`, `v^` |
+| `isourcesin` | AC Current Source | `l`, `l_`, `i`, `i_` |
+
+**Sources (Dependent)** — pins `+` (0,0) and `-` (0,2), default span (0,2):
+
+| Kind | Display Name | Label Slots |
+|------|-------------|-------------|
+| `cV` | VCVS | `l`, `l_`, `v`, `v^` |
+| `cI` | VCCS | `l`, `l_`, `i`, `i_` |
+
+The **Bipole** (`bipole`) component appears last in the Bipoles group — see §7.7.
+
 The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emission arrows.
 
 The **Filled** checkbox appears in the Properties panel for any component that is an instance of `DiodeComponent`. It is backed by an undoable `SetFilledCommand`.
 
-#### Amplifiers
+The **Body diode** checkbox appears in the Properties panel for any component that is an instance of `MosfetComponent` (nigfete, nigfetd, pigfete, pigfetd). When checked, the canvas uses the `*_bodydiode` SVG variant and the codegen emits `bodydiode` as an additional node option (e.g. `node[nigfete, bodydiode, xscale=1.0167, anchor=gate]`). It is backed by an undoable `SetBodyDiodeCommand`.
+
+#### Tripoles
+
+**Amplifiers:**
 
 | Kind | Display Name | Pins | Label Slots |
 |------|-------------|------|-------------|
 | `op amp` | Op-Amp | `+` (-1.5,0.5), `-` (-1.5,-0.5), `out` (1.5,0) | `l` |
 
-#### Sources (Fixed)
-
-| Kind | Display Name | Pins | Label Slots |
-|------|-------------|------|-------------|
-| `V` | Voltage Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
-| `I` | Current Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
-| `vsource` | AC Voltage Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
-| `isource` | AC Current Source | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
-
-#### Sources (Dependent)
-
-| Kind | Display Name | Pins | Label Slots |
-|------|-------------|------|-------------|
-| `cV` | VCVS | `+` (0,0), `-` (0,2) | `l`, `l_`, `v`, `v^` |
-| `cI` | VCCS | `+` (0,0), `-` (0,2) | `l`, `l_`, `i`, `i_` |
-
-#### BJTs
-
-| Kind | Display Name | Pins | Label Slots |
-|------|-------------|------|-------------|
-| `npn` | NPN BJT | `base` (0,0), `collector` (1.0,−1.0), `emitter` (1.0,1.0) | `l` |
-| `pnp` | PNP BJT | `base` (0,0), `emitter` (1.0,−1.0), `collector` (1.0,1.0) | `l` |
-
-Both are placed with `anchor=B` (base pin) at `Component.position`. SVG symbols are exported with TRIPOLE_LEADS (`\draw (X.C) -- (0.0129,1)` etc.) that extend the collector/emitter leads to grid-aligned endpoints so the canvas preview is correct. For the LaTeX output, codegen applies `xscale=1.181, yscale=1.287` (same strategy as MOSFETs) to stretch the symbol so the C/E anchors land exactly on the (1.0, ±1.0) GU grid — no bridge lead wires needed. The scale factors are derived from the unextended CTikZ pin offsets: actual (0.847, 0.777) GU → snapped (1.0, 1.0) GU. For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
-
-#### MOSFETs
+**MOSFETs:**
 
 | Kind | Display Name | Pins | Label Slots |
 |------|-------------|------|-------------|
@@ -375,7 +376,16 @@ Both are placed with `anchor=B` (base pin) at `Component.position`. SVG symbols 
 | `pigfete` | PMOS | `gate` (0,0), `source` (1.0,-0.5), `drain` (1.0,1.0) | `l` |
 | `pigfetd` | PMOS (depletion) | `gate` (0,0), `source` (1.0,-0.5), `drain` (1.0,1.0) | `l` |
 
-All four variants share the same pin x-offset (0.9836 GU from gate, corrected to 1.0 GU via `xscale=1.0167`). N-channel symbols have `drain` at the top (`-1.0` Qt y) and `source` at the bottom (`+0.5` Qt y); P-channel symbols are mirrored with `source` at top (`-0.5` Qt y) and `drain` at bottom (`+1.0` Qt y). Enhancement mode = three channel dashes; depletion mode = solid channel line.
+All four MOSFET variants share the same pin x-offset (0.9836 GU from gate, corrected to 1.0 GU via `xscale=1.0167`). N-channel symbols have `drain` at the top (`-1.0` Qt y) and `source` at the bottom (`+0.5` Qt y); P-channel symbols are mirrored with `source` at top (`-0.5` Qt y) and `drain` at bottom (`+1.0` Qt y). Enhancement mode = three channel dashes; depletion mode = solid channel line.
+
+**BJTs:**
+
+| Kind | Display Name | Pins | Label Slots |
+|------|-------------|------|-------------|
+| `npn` | NPN BJT | `base` (0,0), `collector` (1.0,−1.0), `emitter` (1.0,1.0) | `l` |
+| `pnp` | PNP BJT | `base` (0,0), `emitter` (1.0,−1.0), `collector` (1.0,1.0) | `l` |
+
+Both BJTs are placed with `anchor=B` (base pin) at `Component.position`. SVG symbols are exported with TRIPOLE_LEADS (`\draw (X.C) -- (0.0129,1)` etc.) that extend the collector/emitter leads to grid-aligned endpoints so the canvas preview is correct. For the LaTeX output, codegen applies `xscale=1.181, yscale=1.287` (same strategy as MOSFETs) to stretch the symbol so the C/E anchors land exactly on the (1.0, ±1.0) GU grid — no bridge lead wires needed. The scale factors are derived from the unextended CTikZ pin offsets: actual (0.847, 0.777) GU → snapped (1.0, 1.0) GU. For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
 
 #### Nodes (single-terminal)
 
@@ -403,6 +413,40 @@ Drawing annotations are non-circuit visual elements that appear in the palette u
 |------|-------------|------|-------------|-----------|-------------------|
 | `text_node` | Text | none | (0,0) | No | Text content field, Font size spinbox (6–72 pt), Bold/Italic checkboxes, Font family combo, Z-order spinbox, Rotation buttons (0°/90°/180°/270°) |
 | `rect` | Rectangle | none | (2,2) | Yes (corner drag) | Line style combo, Line width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
+
+#### Bipole Component (`bipole`)
+
+The `bipole` kind is a generic labelled rectangular box representing an arbitrary two-terminal subsystem (named "Bipole" to the user; distinct from the **Bipoles** palette *category* it sits in). Wires connect to its left (`in`) and right (`out`) pins. Although two-terminal, it is **not** emitted via the CircuiTikZ `to[...]` path syntax — it is rendered as a standalone `\node` (see Code generation below), like the other `DrawingComponent` kinds.
+
+| Kind | Display Name | Category | Pins | Default Span | Resizable |
+|------|-------------|----------|------|-------------|-----------|
+| `bipole` | Bipole | Bipoles | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
+
+**Model:** `BipoleComponent(FontedComponent)` — extends `FontedComponent` → `DrawingComponent` (gains `z_order` for layer control and `font_*` for the label). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
+
+**Canvas rendering (`BipoleItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a solid rectangle of half-height `_BIPOLE_HALF_H` (0.25 GU) centered on the connecting line, from the origin pin to the terminal pin. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
+
+**Resizing:** Dragging the right endpoint handle changes `span_override`. The resize directly controls the box width in both the canvas preview and the LaTeX output. Committed via `ResizeCommand`.
+
+**Properties inspector (`_BipolePanel`):** Shows a **Bipole label (t=)** field, an **Other CircuiTikZ options** field, **Font** controls, an **Appearance** section with **Fill** color combo and **Border width (pt)** spinbox, **Rotation** buttons, **Mirror** checkbox, and **Z-order** spinbox.
+
+**Inline label editing:** Double-clicking a `BipoleItem` activates an inline text editor centred inside the box showing only the `t=` label text (not the full options string). On commit the edited text is spliced back into `options` using `_replace_bipole_label`, preserving all other slots. The painted label is suppressed while the editor is active.
+
+**Fill color** (`fill_color: str`, default `""`) — TikZ color string, e.g. `"yellow!20"`. Empty = no fill (transparent). The same palette as rect annotations is offered: None, White, Light gray, Yellow, Blue, Green, Red. Rendered on canvas using `_resolve_tikz_color`. Saved in JSON only when non-empty.
+
+**Border width** (`border_width: float`, default `0.4`) — border line width in points. Saved in JSON only when it differs from the default (0.4 pt). Rendered on canvas with the equivalent pixel width (pt × GRID_PX / 28.35).
+
+**Code generation:** Bipole is NOT in `_TWO_TERMINAL_KINDS`. It is handled in the same background/foreground drawing-annotation passes as `rect` and `text_node`, via `_bipole_node_line()`. Emits a standalone TikZ node whose dimensions are derived from `span_override` so the box exactly fills the pin-to-pin space (example with a 3 cm custom span):
+```latex
+\node[draw, minimum width=3cm, minimum height=0.5cm] at (1.5,0) {Processor};
+% with fill and border width:
+\node[draw, minimum width=3cm, minimum height=0.5cm, ..., fill=yellow!20, line width=1.5pt] at (1.5,0) {Processor};
+% with rotation:
+\node[draw, minimum width=3cm, minimum height=0.5cm, rotate=-90] at (0,1.5) {Processor};
+% empty label:
+\node[draw, minimum width=3cm, minimum height=0.5cm] at (1.5,0) {};
+```
+`minimum width` = `span_override` length in GU (= cm in CircuiTikZ's default coordinate system); `minimum height` = 0.5 cm (2 × `_BIPOLE_HALF_H_GU` = 2 × 0.25 GU, matching standard bipole height). The TikZ `rotate=` value is the negated canvas rotation (TikZ is CCW, canvas is CW). `fill=` and `line width=` are appended when `fill_color` is non-empty or `border_width` differs from 0.4 pt. Wires whose endpoints coincide with the bipole's `in`/`out` pin coordinates connect naturally at the node's left/right edges.
 
 **Text node (`text_node`):**  
 `TextNodeComponent.position` is the `at` coordinate of the `\node`. `TextNodeComponent.options` is the text content (the `{…}` argument). The following fields on `TextNodeComponent` control text appearance:
@@ -442,7 +486,7 @@ Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()
 
 **SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
 
-The palette category display order is: **Passives → Diodes → Amplifiers → Sources → MOSFETs → BJTs → Nodes → Annotations → Drawing**.
+The palette category display order is: **Bipoles → Tripoles → Nodes → Annotations → Drawing**.
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
@@ -593,6 +637,15 @@ non-interactive overlay items, drawn above wires, and correspond exactly to the
 `\node[circ]` connection nodes emitted by the code generator (§7.6). They are
 recomputed from wire/pin geometry whenever the schematic changes; they are not
 stored in the model.
+
+Because junction (and open-circle) overlay items are keyed by coordinate, they
+are destroyed and recreated whenever geometry changes (e.g. a group rotate),
+unlike component/wire items which persist across rebuilds. To avoid a
+use-after-free during painting, the scene sets `QGraphicsScene.NoIndex`: the
+default BSP index defers item removal, but `_rebuild_items` drops the last
+reference to a removed overlay item immediately (PySide then frees the C++
+object), so a deferred index would later paint a dangling pointer. `NoIndex`
+keeps the scene's item list consistent synchronously with `removeItem`.
 
 #### Open-Circle Nodes (Unconnected Wire Endpoints)
 
@@ -791,6 +844,35 @@ Notes:
 - `Ctrl+V` enters **Place** mode with the copied group as a ghost; left-click places it and assigns new UUIDs to all pasted items.
 - `Ctrl+D` duplicates with a fixed offset of (1, 1) GU.
 
+### 6.8 Graphics Item Lifetime (Memory-Safety Invariant)
+
+Because PySide ties a `QGraphicsItem`'s C++ lifetime to its Python reference
+count, the C++ object is freed the instant its last Python reference is dropped.
+If the scene still holds a raw pointer to that item, the next paint dereferences
+freed memory and the process segfaults. To make this class of bug structurally
+impossible, the scene observes the following invariants:
+
+- **Single removal chokepoint.** Every item leaves the scene through
+  `SchematicScene._remove_item(...)`. Callers pass `dict.pop(key)` directly, so
+  the tracking-dict entry and the scene item are dropped together, and the item
+  is always detached from the scene (`removeItem`) *before* its last reference
+  dies. `removeItem` synchronously clears the scene's other internal pointers
+  (selection, focus, mouse grabber, hover).
+- **No lingering references.** Nothing retains a reference to an item after it
+  has been removed; conversely, every live item is owned by exactly one tracking
+  structure (`_comp_items`, `_wire_items`, `_junction_items`,
+  `_open_circle_items`, `_ghost`, or `_wire_preview`).
+- **`NoIndex` item method.** The scene uses `QGraphicsScene.NoIndex` rather than
+  the default BSP tree. The BSP index *defers* item removal, which would let a
+  freed item linger in the index until the next paint; `NoIndex` keeps the item
+  list consistent synchronously with `removeItem`. (This class of frequently
+  mutated scene gains nothing from the BSP index anyway.)
+
+These invariants are guarded by `test_no_index_method` (deterministic) and by a
+randomized paint-after-every-mutation fuzz test (probabilistic — a use-after-free
+only faults nondeterministically, so it cannot be checked deterministically
+without a native memory sanitizer). See §13.
+
 ---
 
 ## 7. Code Generation
@@ -823,7 +905,7 @@ Where `OPTIONS` is the component's raw options string passed verbatim, e.g.:
 (0,0) to[R, l=$R_1$, v=$V_R$] (2,0)
 ```
 
-#### Multi-Terminal Components (op amp, MOSFETs)
+#### Multi-Terminal Components (Tripoles)
 
 These map to CircuiTikZ `node` syntax, placed by a named anchor rather than
 the node center:
@@ -961,9 +1043,11 @@ A rendered PDF preview of the complete schematic is produced by:
 
 The preview is triggered by:
 - A **Compile** button (toolbar)
-- Automatically, with a 1.5-second debounce, after any schematic edit
+- Automatically, with a 5-second debounce (`_SCHEMATIC_DEBOUNCE_MS`), after any schematic edit
 
 Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never blocked. While compiling, a spinner is shown in the preview panel. If `pdflatex` returns a non-zero exit code, the error log is shown in the preview panel in place of the image.
+
+The worker thread is always stopped before the application exits: `PreviewWorker` connects its (idempotent) `shutdown()` to `QApplication.aboutToQuit`, and the main window's `closeEvent` also calls it. This covers every exit path (window close, `app.quit()`, or a teardown that bypasses the window) and prevents Qt's "QThread destroyed while still running" abort.
 
 ### 8.2 Equation Preview
 
@@ -1024,7 +1108,9 @@ The `border=4pt` option on `standalone` provides a small uniform margin.
 
 ### 9.1 Save Format
 
-Schematics are saved as UTF-8 JSON files with the extension `.ctikz`.
+Schematics are saved as UTF-8 JSON files (no byte-order mark) with the extension `.ctikz`.
+
+Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.tmp`) and then renamed over the target via `os.replace`, so an interrupted or failed write never corrupts an existing file.
 
 ### 9.2 Schema
 
@@ -1079,10 +1165,10 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 ├────┬─────────┬───────────────────────────┬──────────────────┤
 │Tool│ Palette │                           │  Properties      │
 │ ↖  │         │        Canvas             │  Panel           │
-│ ⌁  │Passives │   (QGraphicsView)         │                  │
+│ ⌁  │Bipoles  │   (QGraphicsView)         │                  │
 │ ✋  │Amps     │                           │  (context-       │
 │    │Sources  │                           │   sensitive)     │
-│    │MOSFETs  │                           │                  │
+│    │Tripoles │                           │                  │
 │    │         │                           │                  │
 ├────┴─────────┴──────────────┬────────────┴──────────────────┤
 │  Source Panel (CircuiTikZ)  │  LaTeX Preview (~280px wide)  │
@@ -1171,6 +1257,12 @@ heaviside/
 ├── app/
 │   ├── canvas/
 │   │   ├── scene.py               # SchematicScene(QGraphicsScene) + interaction state machine
+│   │   ├── geometry.py            # Pure geometry helpers (snap/coord conversion, span
+│   │   │                          #   rotation mapping, segment proximity) — no Qt scene state
+│   │   ├── wiregeometry.py        # WireGeometry: wire snapping / hit-testing queries over
+│   │   │                          #   the schematic (stateless; used by the scene)
+│   │   ├── drag.py                # DragPreviewController: drag state + live drag previews
+│   │   │                          #   (component move, vertex drag, endpoint resize)
 │   │   ├── view.py                # SchematicView(QGraphicsView)
 │   │   ├── items.py               # ComponentItem subclasses, WireItem, WirePreviewItem,
 │   │   │                          #   JunctionItem, ITEM_CLASSES map
@@ -1203,6 +1295,8 @@ heaviside/
     ├── test_io.py
     ├── test_registry.py
     ├── test_commands.py           # undo/redo for all command classes
+    ├── test_geometry.py           # pure canvas geometry helpers (no Qt scene)
+    ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     └── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
 ```
 
@@ -1355,6 +1449,9 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_nmos_depletion_node` | `nigfetd` uses the same `xscale=1.0167, anchor=gate` geometry correction as `nigfete`. |
 | `test_pmos_node` | `pigfete` is placed with `xscale=1.0167, anchor=gate`. |
 | `test_pmos_depletion_node` | `pigfetd` uses the same geometry correction as `pigfete`. |
+| `test_nmos_bodydiode` | `nigfete` with `body_diode=True` emits `node[nigfete, bodydiode, xscale=1.0167, anchor=gate]`. |
+| `test_nmos_no_bodydiode` | `nigfete` with `body_diode=False` omits the `bodydiode` option entirely. |
+| `test_pmos_bodydiode` | `pigfete` with `body_diode=True` emits `node[pigfete, bodydiode, xscale=1.0167, anchor=gate]`. |
 | `test_pmos_pin_offsets` | PMOS source is at Qt (1.0,-0.5) and drain at (1.0,+1.0) relative to gate — the y-mirror of NMOS. |
 | `test_wire_straight` | A two-point wire `[(0,0),(2,0)]` → produces `(0,0) -- (2,0)`. |
 | `test_wire_manhattan` | A three-point wire `[(0,0),(2,0),(2,2)]` → produces `(0,0) -- (2,0) -- (2,2)`. |
@@ -1375,6 +1472,9 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_rect_dashed` | A `rect` with `options="dashed"` emits `\draw[dashed] … rectangle …;`. |
 | `test_rect_uses_default_span_when_none` | A `rect` with `span_override=None` falls back to `default_span=(2,2)`. |
 | `test_drawing_kinds_not_in_draw_block` | `text_node` and `rect` produce nothing inside the main `\draw … ;` block. |
+| `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
+| `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
+| `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
 
 #### File I/O (`test_io.py`)
 
@@ -1395,6 +1495,12 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_load_invalid_invariant` | Loading a JSON file that violates an invariant (e.g., diagonal wire) raises a descriptive error. |
 | `test_save_creates_file` | `save()` creates a file at the specified path. |
 | `test_save_is_utf8` | Saved `.ctikz` files are valid UTF-8 and contain no byte-order marks. |
+| `test_save_is_atomic_overwrite` | `save()` atomically replaces an existing file (latest write wins) and leaves no `.tmp` file behind. |
+| `test_bipole_fill_color_roundtrip` | `BipoleComponent.fill_color` survives a save/load cycle. |
+| `test_bipole_border_width_roundtrip` | `BipoleComponent.border_width` survives a save/load cycle. |
+| `test_bipole_defaults_not_saved` | Default `fill_color=""` and `border_width=0.4` are omitted from the JSON. |
+| `test_mosfet_body_diode_roundtrip` | `MosfetComponent.body_diode=True` survives a save/load cycle. |
+| `test_mosfet_body_diode_false_not_saved` | Default `body_diode=False` is omitted from the JSON. |
 
 #### Registry (`test_registry.py`)
 
@@ -1417,9 +1523,21 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
 
+#### Canvas Geometry (`test_geometry.py`)
+
+The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested directly: `snap_gu` rounding; `scene_to_gu`/`gu_to_scene` round-trip; `snap_point_gu`; the `local_span_to_world` / `world_delta_to_local` rotation mapping (round-trip across all four rotations and both mirror states, plus known clockwise/mirror values); `dist2_to_segment` interior-vs-endpoint and degenerate cases; and `wire_proximity_key` (empty polyline → None, interior hit outranks endpoint touch, intermediate-vertex hit promoted to rank 0).
+
+#### Wire Geometry (`test_wiregeometry.py`)
+
+`WireGeometry` (wire snapping / hit-testing over a `Schematic`, no Qt scene) is unit-tested directly: `nearest_pin` radius behavior; `all_pin_positions`; `wire_snap_target` priority (pin over wire), grid fallback, snap-onto-segment, and own-wire exclusion; `vertex_is_draggable` (endpoint-on-pin locked, intermediate always draggable); `wire_vertex_at`; `unconnected_pin_at` (free pin detected, connected pin skipped); and `click_select_wire_id` preferring a pass-through wire over the grabbed stub.
+
 #### Commands (`test_commands.py`)
 
 In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo).
+
+#### Preview Worker (`test_worker.py`)
+
+`PreviewWorker` thread lifecycle: `shutdown()` stops the background `QThread`; it is idempotent (safe to call from both `closeEvent` and `aboutToQuit`); and emitting `QApplication.aboutToQuit` stops the thread even when the window's `closeEvent` never fired.
 
 ### 13.3 Integration Tests
 
@@ -1458,6 +1576,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_connect_to_wire_corner_splits_l_wire` / `test_connect_to_wire_corner_split_is_one_undo` | Connecting a new wire at an L-wire's corner (intermediate vertex) splits the L-wire into two straight wires, forms a junction, and is one undoable action. Connecting at an existing endpoint leaves the wire unchanged. |
 | `test_click_near_endpoint_selects_short_wire` | After split-on-join the stub is selectable/deletable; deleting it merges the through-wire halves back into one wire (regression + merge-on-delete behavior). |
 | `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
+| `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). Enforces the §6.8 memory-safety invariant. |
+| `test_random_mutation_sequences_never_crash_paint` | Randomized sequences of place/wire/rotate/delete/nudge/undo/redo, painting through a real view (and `scene.render`) after each step, never crash. A probabilistic safety net for the §6.8 graphics-item-lifetime invariant (a use-after-free faults nondeterministically and cannot be checked deterministically without a native sanitizer). |
 
 ### 13.4 Acceptance Criteria
 
@@ -1500,7 +1620,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] Double-clicking a component opens the Properties Panel.
 - [ ] The options string field is shown, pre-populated with the component's current options.
 - [ ] Typing a LaTeX string (e.g., `$R_1$`) into a label field updates the canvas label display.
-- [ ] The full schematic preview updates within 1.5 seconds of any change.
+- [ ] The full schematic preview updates within 5 seconds of any change (debounced).
 - [ ] Rotation and mirror controls change the component orientation on the canvas immediately.
 
 #### AC-5: Undo / Redo

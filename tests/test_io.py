@@ -250,6 +250,25 @@ def test_save_creates_file(tmp_path: Path) -> None:
     assert p.stat().st_size > 0
 
 
+def test_save_is_atomic_overwrite(tmp_path: Path) -> None:
+    """save() replaces an existing file atomically and leaves no temp file behind."""
+    p = tmp_path / "atomic.ctikz"
+
+    first = _empty_schematic()
+    first.name = "first"
+    save(first, p)
+
+    second = _empty_schematic()
+    second.name = "second"
+    save(second, p)
+
+    # Target reflects the latest write...
+    assert load(p).name == "second"
+    # ...and the sibling temp file used during the atomic replace is gone.
+    assert not (tmp_path / "atomic.ctikz.tmp").exists()
+    assert {f.name for f in tmp_path.iterdir()} == {"atomic.ctikz"}
+
+
 # ---------------------------------------------------------------------------
 # test_save_is_utf8
 # ---------------------------------------------------------------------------
@@ -356,3 +375,88 @@ def test_label_offset_bad_type_raises(tmp_path: Path) -> None:
     p.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(SchematicLoadError, match="label_offset"):
         load(p)
+
+
+# ---------------------------------------------------------------------------
+# BipoleComponent fill_color / border_width round-trip
+# ---------------------------------------------------------------------------
+
+def test_bipole_fill_color_roundtrip(tmp_path: Path) -> None:
+    """BipoleComponent.fill_color survives a save/load cycle."""
+    from app.components.model import BipoleComponent
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="t=Test",
+        span_override=(2.0, 0.0), fill_color="cyan!15",
+    )
+    s = Schematic(version="0.1", name="bipole-fill", components=[comp])
+    p = tmp_path / "bipole_fill.ctikz"
+    save(s, p)
+    s2 = load(p)
+    loaded = s2.components[0]
+    assert isinstance(loaded, BipoleComponent)
+    assert loaded.fill_color == "cyan!15"
+
+
+def test_bipole_border_width_roundtrip(tmp_path: Path) -> None:
+    """BipoleComponent.border_width survives a save/load cycle."""
+    from app.components.model import BipoleComponent
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="",
+        span_override=(2.0, 0.0), border_width=1.5,
+    )
+    s = Schematic(version="0.1", name="bipole-bw", components=[comp])
+    p = tmp_path / "bipole_bw.ctikz"
+    save(s, p)
+    s2 = load(p)
+    loaded = s2.components[0]
+    assert isinstance(loaded, BipoleComponent)
+    assert abs(loaded.border_width - 1.5) < 1e-6
+
+
+def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
+    """fill_color='' and border_width=0.4 are omitted from the saved JSON."""
+    from app.components.model import BipoleComponent
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="",
+        span_override=(1.0, 0.0),
+    )
+    s = Schematic(version="0.1", name="bipole-defaults", components=[comp])
+    p = tmp_path / "bipole_defaults.ctikz"
+    save(s, p)
+    raw = json.loads(p.read_text())
+    comp_dict = raw["components"][0]
+    assert "fill_color" not in comp_dict
+    assert "border_width" not in comp_dict
+
+
+def test_mosfet_body_diode_roundtrip(tmp_path: Path) -> None:
+    """MosfetComponent.body_diode=True survives a save/load cycle."""
+    from app.components.model import MosfetComponent
+    comp = MosfetComponent(
+        id=_uid(), kind="nigfete", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="", body_diode=True,
+    )
+    s = Schematic(version="0.1", name="nmos-bd", components=[comp])
+    p = tmp_path / "nmos_bd.ctikz"
+    save(s, p)
+    s2 = load(p)
+    loaded = s2.components[0]
+    assert isinstance(loaded, MosfetComponent)
+    assert loaded.body_diode is True
+
+
+def test_mosfet_body_diode_false_not_saved(tmp_path: Path) -> None:
+    """body_diode=False (default) is omitted from the saved JSON."""
+    from app.components.model import MosfetComponent
+    comp = MosfetComponent(
+        id=_uid(), kind="nigfete", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="", body_diode=False,
+    )
+    s = Schematic(version="0.1", name="nmos-no-bd", components=[comp])
+    p = tmp_path / "nmos_no_bd.ctikz"
+    save(s, p)
+    raw = json.loads(p.read_text())
+    assert "body_diode" not in raw["components"][0]
