@@ -671,13 +671,13 @@ def test_z_order_sorts_within_foreground_group() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Block component tests
+# Bipole component tests
 # ---------------------------------------------------------------------------
 
 from app.components.model import BipoleComponent
 
 
-def test_block_basic() -> None:
+def test_bipole_basic() -> None:
     r"""bipole emits \node[draw, minimum width=W, minimum height=0.5cm, font=\fontsize{7}{8.4}\selectfont] at (...) {};"""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
@@ -691,7 +691,7 @@ def test_block_basic() -> None:
     assert "at (1.5,0) {};" in src
 
 
-def test_block_with_label() -> None:
+def test_bipole_with_label() -> None:
     r"""bipole with t=Processor → \node[...] at (...) {Processor};"""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
@@ -703,7 +703,7 @@ def test_block_with_label() -> None:
     assert "{Processor};" in src
 
 
-def test_block_default_span() -> None:
+def test_bipole_default_span() -> None:
     """bipole with span_override=None falls back to registry default_span (1,0)."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(1.0, 2.0),
@@ -715,8 +715,8 @@ def test_block_default_span() -> None:
     assert "at (1.5,2)" in src
 
 
-def test_block_resizable_span() -> None:
-    """block with custom span_override uses the overridden width as minimum width."""
+def test_bipole_resizable_span() -> None:
+    """bipole with custom span_override uses the overridden width as minimum width."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
         rotation=0, options="t=ADC", mirror=False,
@@ -727,8 +727,8 @@ def test_block_resizable_span() -> None:
     assert "{ADC}" in src
 
 
-def test_block_outside_draw_block() -> None:
-    """block is emitted as a standalone \\node, not inside the \\draw block."""
+def test_bipole_outside_draw_block() -> None:
+    """bipole is emitted as a standalone \\node, not inside the \\draw block."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
         rotation=0, options="t=DSP", mirror=False,
@@ -740,7 +740,7 @@ def test_block_outside_draw_block() -> None:
     assert r"\node[draw" in src
 
 
-def test_block_fill_color() -> None:
+def test_bipole_fill_color() -> None:
     """bipole with fill_color emits fill=... in the node options."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
@@ -752,7 +752,7 @@ def test_block_fill_color() -> None:
     assert "fill=yellow!20" in src
 
 
-def test_block_border_width() -> None:
+def test_bipole_border_width() -> None:
     """bipole with non-default border_width emits line width=... in the node options."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
@@ -764,7 +764,7 @@ def test_block_border_width() -> None:
     assert "line width=1.5pt" in src
 
 
-def test_block_default_border_width_omitted() -> None:
+def test_bipole_default_border_width_omitted() -> None:
     """bipole at default border_width (0.4pt) does not emit line width."""
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),

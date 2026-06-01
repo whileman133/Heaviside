@@ -128,7 +128,7 @@ class ComponentDef:
     component_class: type = Component  # Component subclass to instantiate for placed instances
 ```
 
-`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `BlockComponent` for `block`. All three of the last group extend `DrawingComponent`. The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
+`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `BipoleComponent` for `bipole`. All of the last group extend `DrawingComponent` (`BipoleComponent` via `FontedComponent`). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
 
 ### 4.2 `Component` hierarchy
 
@@ -155,7 +155,7 @@ class MosfetComponent(Component):       # nigfete, nigfetd, pigfete, pigfetd
     body_diode: bool = False            # True → emit "bodydiode" option and use *_bodydiode SVG
 
 @dataclass
-class DrawingComponent(Component):      # text_node, rect, block
+class DrawingComponent(Component):      # text_node, rect, bipole
     z_order: int = 0                    # layer order (negative = behind circuit elements)
 
 @dataclass
@@ -351,7 +351,7 @@ The component palette renders each component's thumbnail by instantiating its `C
 | `cV` | VCVS | `l`, `l_`, `v`, `v^` |
 | `cI` | VCCS | `l`, `l_`, `i`, `i_` |
 
-The **Block** (`bipole`) component appears last in the Bipoles group — see §7.7.
+The **Bipole** (`bipole`) component appears last in the Bipoles group — see §7.7.
 
 The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emission arrows.
 
@@ -414,21 +414,21 @@ Drawing annotations are non-circuit visual elements that appear in the palette u
 | `text_node` | Text | none | (0,0) | No | Text content field, Font size spinbox (6–72 pt), Bold/Italic checkboxes, Font family combo, Z-order spinbox, Rotation buttons (0°/90°/180°/270°) |
 | `rect` | Rectangle | none | (2,2) | Yes (corner drag) | Line style combo, Line width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
 
-#### Block Component (`block`)
+#### Bipole Component (`bipole`)
 
-The `block` kind is a **two-terminal circuit element** (not a drawing annotation) that represents an arbitrary subsystem as a labelled rectangular box. Wires connect to its left (`in`) and right (`out`) pins like any bipole. It is emitted inside the main `\draw` block using the CircuiTikZ two-terminal path syntax.
+The `bipole` kind is a generic labelled rectangular box representing an arbitrary two-terminal subsystem (named "Bipole" to the user; distinct from the **Bipoles** palette *category* it sits in). Wires connect to its left (`in`) and right (`out`) pins. Although two-terminal, it is **not** emitted via the CircuiTikZ `to[...]` path syntax — it is rendered as a standalone `\node` (see Code generation below), like the other `DrawingComponent` kinds.
 
 | Kind | Display Name | Category | Pins | Default Span | Resizable |
 |------|-------------|----------|------|-------------|-----------|
-| `bipole` | Block | Bipoles | `in` (0,0), `out` (3,0) | (3,0) | Yes (right endpoint drag) |
+| `bipole` | Bipole | Bipoles | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
 
-**Model:** `BlockComponent(DrawingComponent)` — extends `DrawingComponent` (gains `z_order` for layer control). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
+**Model:** `BipoleComponent(FontedComponent)` — extends `FontedComponent` → `DrawingComponent` (gains `z_order` for layer control and `font_*` for the label). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
 
-**Canvas rendering (`BlockItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a solid rectangle of height ±0.75 GU centered on the connecting line, from the origin pin to the terminal pin. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
+**Canvas rendering (`BipoleItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a solid rectangle of half-height `_BIPOLE_HALF_H` (0.25 GU) centered on the connecting line, from the origin pin to the terminal pin. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
 
 **Resizing:** Dragging the right endpoint handle changes `span_override`. The resize directly controls the box width in both the canvas preview and the LaTeX output. Committed via `ResizeCommand`.
 
-**Properties inspector (`_BipolePanel`):** Shows a **Block label (t=)** field, an **Other CircuiTikZ options** field, **Font** controls, an **Appearance** section with **Fill** color combo and **Border width (pt)** spinbox, **Rotation** buttons, **Mirror** checkbox, and **Z-order** spinbox.
+**Properties inspector (`_BipolePanel`):** Shows a **Bipole label (t=)** field, an **Other CircuiTikZ options** field, **Font** controls, an **Appearance** section with **Fill** color combo and **Border width (pt)** spinbox, **Rotation** buttons, **Mirror** checkbox, and **Z-order** spinbox.
 
 **Inline label editing:** Double-clicking a `BipoleItem` activates an inline text editor centred inside the box showing only the `t=` label text (not the full options string). On commit the edited text is spliced back into `options` using `_replace_bipole_label`, preserving all other slots. The painted label is suppressed while the editor is active.
 
@@ -436,17 +436,17 @@ The `block` kind is a **two-terminal circuit element** (not a drawing annotation
 
 **Border width** (`border_width: float`, default `0.4`) — border line width in points. Saved in JSON only when it differs from the default (0.4 pt). Rendered on canvas with the equivalent pixel width (pt × GRID_PX / 28.35).
 
-**Code generation:** Block is NOT in `_TWO_TERMINAL_KINDS`. It is handled in the same background/foreground drawing-annotation passes as `rect` and `text_node`, via `_block_node_line()`. Emits a standalone TikZ node whose dimensions are derived from `span_override` so the box exactly fills the pin-to-pin space:
+**Code generation:** Bipole is NOT in `_TWO_TERMINAL_KINDS`. It is handled in the same background/foreground drawing-annotation passes as `rect` and `text_node`, via `_bipole_node_line()`. Emits a standalone TikZ node whose dimensions are derived from `span_override` so the box exactly fills the pin-to-pin space (example with a 3 cm custom span):
 ```latex
-\node[draw, minimum width=3cm, minimum height=1.5cm] at (1.5,0) {Processor};
+\node[draw, minimum width=3cm, minimum height=0.5cm] at (1.5,0) {Processor};
 % with fill and border width:
-\node[draw, minimum width=3cm, minimum height=1.5cm, ..., fill=yellow!20, line width=1.5pt] at (1.5,0) {Processor};
+\node[draw, minimum width=3cm, minimum height=0.5cm, ..., fill=yellow!20, line width=1.5pt] at (1.5,0) {Processor};
 % with rotation:
-\node[draw, minimum width=3cm, minimum height=1.5cm, rotate=-90] at (0,1.5) {Processor};
+\node[draw, minimum width=3cm, minimum height=0.5cm, rotate=-90] at (0,1.5) {Processor};
 % empty label:
-\node[draw, minimum width=3cm, minimum height=1.5cm] at (1.5,0) {};
+\node[draw, minimum width=3cm, minimum height=0.5cm] at (1.5,0) {};
 ```
-`minimum width` = `span_override` length in GU (= cm in CircuiTikZ's default coordinate system); `minimum height` = 1 cm (2 × `_BLOCK_HALF_H_GU` = 2 × 0.5 GU, matching standard bipole height). The TikZ `rotate=` value is the negated canvas rotation (TikZ is CCW, canvas is CW). `fill=` and `line width=` are appended when `fill_color` is non-empty or `border_width` differs from 0.4 pt. Wires whose endpoints coincide with the block's `in`/`out` pin coordinates connect naturally at the node's left/right edges.
+`minimum width` = `span_override` length in GU (= cm in CircuiTikZ's default coordinate system); `minimum height` = 0.5 cm (2 × `_BIPOLE_HALF_H_GU` = 2 × 0.25 GU, matching standard bipole height). The TikZ `rotate=` value is the negated canvas rotation (TikZ is CCW, canvas is CW). `fill=` and `line width=` are appended when `fill_color` is non-empty or `border_width` differs from 0.4 pt. Wires whose endpoints coincide with the bipole's `in`/`out` pin coordinates connect naturally at the node's left/right edges.
 
 **Text node (`text_node`):**  
 `TextNodeComponent.position` is the `at` coordinate of the `\node`. `TextNodeComponent.options` is the text content (the `{…}` argument). The following fields on `TextNodeComponent` control text appearance:
@@ -1472,9 +1472,9 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_rect_dashed` | A `rect` with `options="dashed"` emits `\draw[dashed] … rectangle …;`. |
 | `test_rect_uses_default_span_when_none` | A `rect` with `span_override=None` falls back to `default_span=(2,2)`. |
 | `test_drawing_kinds_not_in_draw_block` | `text_node` and `rect` produce nothing inside the main `\draw … ;` block. |
-| `test_block_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
-| `test_block_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
-| `test_block_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
+| `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
+| `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
+| `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
 
 #### File I/O (`test_io.py`)
 

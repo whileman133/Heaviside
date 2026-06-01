@@ -25,7 +25,7 @@ from app.components.model import (
 )
 
 # ---------------------------------------------------------------------------
-# Bipoles (passives, diodes, general block)
+# Bipoles (passives, diodes, general bipole)
 # ---------------------------------------------------------------------------
 
 _RESISTOR = ComponentDef(

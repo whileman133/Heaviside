@@ -722,11 +722,11 @@ class _RectPanel(_BasePanel):
 
 
 # ---------------------------------------------------------------------------
-# Block panel helpers
+# Bipole panel helpers
 # ---------------------------------------------------------------------------
 
 def _extract_bipole_label(options: str) -> str:
-    """Return the value of the t= slot in a block options string."""
+    """Return the value of the t= slot in a bipole options string."""
     m = re.search(r'\bt\s*=\s*([^,]+)', options)
     return m.group(1).strip() if m else ""
 
@@ -740,11 +740,11 @@ def _replace_bipole_label(options: str, label: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Block panel
+# Bipole panel
 # ---------------------------------------------------------------------------
 
 class _BipolePanel(_BasePanel):
-    """Panel for the block bipole: label text, CircuiTikZ options, rotation, mirror."""
+    """Panel for the bipole: label text, CircuiTikZ options, rotation, mirror."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -753,7 +753,7 @@ class _BipolePanel(_BasePanel):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        layout.addWidget(_make_section_label("Block label (t=)"))
+        layout.addWidget(_make_section_label("Bipole label (t=)"))
 
         self._label_field = QLineEdit()
         self._label_field.setPlaceholderText("e.g. Processor")

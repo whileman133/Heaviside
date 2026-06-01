@@ -204,7 +204,7 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
         elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
         elif isinstance(comp, BipoleComponent):
-            lines.append("  " + _block_node_line(comp, _y))
+            lines.append("  " + _bipole_node_line(comp, _y))
 
     lines.append(r"  \draw")
 
@@ -284,7 +284,7 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
         elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
         elif isinstance(comp, BipoleComponent):
-            lines.append("  " + _block_node_line(comp, _y))
+            lines.append("  " + _bipole_node_line(comp, _y))
 
     lines.append(r"\end{circuitikz}")
 
@@ -645,8 +645,8 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
 _BIPOLE_HALF_H_GU = 0.25  # must match canvas/items.py _BIPOLE_HALF_H
 
 
-def _block_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
-    r"""Render a block element as \node[draw, minimum width=W, minimum height=H] at (cx,cy) {label};
+def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
+    r"""Render a bipole element as \node[draw, minimum width=W, minimum height=H] at (cx,cy) {label};
 
     The node dimensions are derived from ``span_override`` so the box exactly
     fills the space between the two pin coordinates — resizing the component on

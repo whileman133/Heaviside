@@ -1260,7 +1260,7 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 
 
 # ---------------------------------------------------------------------------
-# Block element
+# Bipole element
 # ---------------------------------------------------------------------------
 
 
