@@ -1221,6 +1221,8 @@ heaviside/
 │   │   │                          #   rotation mapping, segment proximity) — no Qt scene state
 │   │   ├── wiregeometry.py        # WireGeometry: wire snapping / hit-testing queries over
 │   │   │                          #   the schematic (stateless; used by the scene)
+│   │   ├── drag.py                # DragPreviewController: drag state + live drag previews
+│   │   │                          #   (component move, vertex drag, endpoint resize)
 │   │   ├── view.py                # SchematicView(QGraphicsView)
 │   │   ├── items.py               # ComponentItem subclasses, WireItem, WirePreviewItem,
 │   │   │                          #   JunctionItem, ITEM_CLASSES map

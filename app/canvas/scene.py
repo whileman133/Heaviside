@@ -52,31 +52,27 @@ from app.canvas.commands import (
     MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
-    ResizeCommand,
     RotateCommand,
     SplitWireCommand,
     UndoStack,
     WireCommand,
-    reshape_wire_points,
 )
 from app.canvas.items import (
     ComponentItem,
     JunctionItem,
     LabelTextItem,
     OpenCircleItem,
-    _ResizableTwoTerminalItem,
     WireItem,
     WirePreviewItem,
 )
 from app.canvas.geometry import (
     SNAP_GU,
     gu_to_scene as _gu_to_scene,
-    local_span_to_world,
     scene_to_gu as _scene_to_gu,
     snap_gu as _snap_gu,
     snap_point_gu as _snap_point_gu,
-    world_delta_to_local,
 )
+from app.canvas.drag import DragPreviewController
 from app.canvas.style import GRID_PX
 from app.canvas.wiregeometry import WireGeometry
 from app.components.registry import ITEM_CLASSES, REGISTRY
@@ -147,6 +143,10 @@ class SchematicScene(QGraphicsScene):
         # schematic through a getter so it stays valid across set_schematic().
         self._wire_geom = WireGeometry(lambda: self._schematic)
 
+        # Owns drag state and live drag previews (component move, wire-vertex
+        # drag, endpoint resize). The scene's mouse handlers drive it.
+        self._drag = DragPreviewController(self)
+
         self._mode = Mode.SELECT
         self._panning = False
 
@@ -167,26 +167,6 @@ class SchematicScene(QGraphicsScene):
         # Wire-routing state
         self._wire_pts: list[tuple[float, float]] = []
         self._wire_preview: WirePreviewItem | None = None
-
-        # Drag-move bookkeeping: id -> position at drag start (GU)
-        self._drag_start: dict[str, tuple[float, float]] = {}
-        # Wire IDs selected at drag-start, captured before super() may deselect them.
-        self._drag_wire_ids: set[str] = set()
-
-        # Wire-vertex drag: (wire_id, index, original_point_gu) or None.
-        self._vertex_drag: tuple[str, int, tuple[float, float]] | None = None
-        # Snapped cursor position where the vertex grab began, to tell a click
-        # (no grid movement → select) from a real drag (→ move the vertex).
-        self._vertex_press_gu: tuple[float, float] | None = None
-
-        # Endpoint drag for resizable components: (comp_id, handle_index, old_span) or None.
-        # handle_index: 0 = origin handle (moves component), 1 = terminal handle.
-        self._endpoint_drag: tuple[str, int, tuple[float, float]] | None = None
-        self._endpoint_press_gu: tuple[float, float] | None = None
-
-        # Wire ids currently showing a drag-preview (during a component drag),
-        # so they can be cleared precisely on release.
-        self._previewed_wire_ids: set[str] = set()
 
         # Copy/paste clipboard: deep copies of components and wires.
         self._clipboard_components: list[Component] = []
@@ -223,12 +203,22 @@ class SchematicScene(QGraphicsScene):
         trigger after each placement.
         """
         return (
-            bool(self._drag_start)             # component drag in progress
-            or self._vertex_drag is not None   # wire vertex drag in progress
-            or self._endpoint_drag is not None # endpoint resize in progress
+            self._drag.any_active()            # component/vertex/endpoint drag
             or bool(self._wire_pts)            # wire being drawn (has anchored points)
         )
 
+    # Read-only views of drag state, retained for the test suite.
+    @property
+    def _drag_start(self) -> dict[str, tuple[float, float]]:
+        return self._drag.drag_start
+
+    @property
+    def _vertex_drag(self) -> tuple[str, int, tuple[float, float]] | None:
+        return self._drag.vertex_drag
+
+    @property
+    def _previewed_wire_ids(self) -> set[str]:
+        return self._drag.previewed_wire_ids
 
     def set_schematic(self, schematic: Schematic) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
@@ -430,7 +420,7 @@ class SchematicScene(QGraphicsScene):
         """Delete the current selection via DeleteCommand.
 
         Removes selected components (and any wires connected to their pins) and
-        any directly-selected wires.  If the deletion dissolves a T-junction
+        any directly selected wires.  If the deletion dissolves a T-junction
         (leaving exactly two wire endpoints at a free point), the two remaining
         stubs are automatically merged into one wire as part of the same
         undoable action.
@@ -913,7 +903,7 @@ class SchematicScene(QGraphicsScene):
 
         # --- add new / refresh existing wire items ------------------------
         # A rebuild supersedes any in-flight drag ghost.
-        self._previewed_wire_ids = set()
+        self._drag.reset_preview_tracking()
         pins = self._all_pin_positions()
         for wire in self._schematic.wires:
             item = self._wire_items.get(wire.id)
@@ -1144,374 +1134,27 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
-        if self._vertex_drag is not None:
-            self._preview_vertex_drag(gu)
+        if self._drag.vertex_drag is not None:
+            self._drag.preview_vertex_drag(gu)
             event.accept()
             return
 
-        if self._endpoint_drag is not None:
-            self._preview_endpoint_drag(gu)
+        if self._drag.endpoint_drag is not None:
+            self._drag.preview_endpoint_drag(gu)
             event.accept()
             return
 
         # Let Qt move any dragged component items, then snap them to the grid
         # and ghost their connected wires.
         super().mouseMoveEvent(event)
-        if self._mode == Mode.SELECT and self._drag_start:
-            for cid in self._drag_start:
+        if self._mode == Mode.SELECT and self._drag.drag_start:
+            for cid in self._drag.drag_start:
                 item = self._comp_items.get(cid)
                 if item is not None:
                     snapped = self.snap_point_gu(item.pos())
                     item.setPos(self.gu_to_scene(*snapped))
-            self._preview_component_drag()
+            self._drag.preview_component_drag()
 
-    # ------------------------------------------------------------------
-    # Endpoint drag helpers (resizable components)
-    # ------------------------------------------------------------------
-
-    def _endpoint_handle_at(
-        self, scene_pos: "QPointF"
-    ) -> str | None:
-        """Return comp_id if *scene_pos* is over the terminal resize handle of any
-        OpenItem, regardless of selection state.  Checks selected items first."""
-        candidates = list(self.selectedItems()) + [
-            item for item in self._comp_items.values()
-            if isinstance(item, _ResizableTwoTerminalItem) and item not in self.selectedItems()
-        ]
-        for item in candidates:
-            if not isinstance(item, _ResizableTwoTerminalItem):
-                continue
-            local = item.mapFromScene(scene_pos)
-            if item.terminal_handle_hit(local):
-                return item.component.id
-        return None
-
-    def _preview_endpoint_drag(self, gu: tuple[float, float]) -> None:
-        """Live visual update while dragging the terminal endpoint (model untouched)."""
-        if self._endpoint_drag is None:
-            return
-        comp_id, _handle_idx, old_span = self._endpoint_drag
-        item = self._comp_items.get(comp_id)
-        if not isinstance(item, _ResizableTwoTerminalItem):
-            return
-        comp = item.component
-        ox, oy = comp.position
-        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
-        if abs(dx) < 0.5 and abs(dy) < 0.5:
-            return
-
-        # Compute old terminal world position (before preview span is applied).
-        old_rx, old_ry = local_span_to_world(old_span, comp.rotation, comp.mirror)
-        old_pin = (ox + old_rx, oy + old_ry)
-
-        item.set_preview_span((dx, dy))
-
-        # Compute new terminal world position from the snapped drag target.
-        new_pin = gu
-
-        pin_dx = new_pin[0] - old_pin[0]
-        pin_dy = new_pin[1] - old_pin[1]
-        if pin_dx == 0.0 and pin_dy == 0.0:
-            return
-        for wire in self._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            start_hit = pts[0] == old_pin
-            end_hit = pts[-1] == old_pin
-            if not start_hit and not end_hit:
-                continue
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit,
-                dx=pin_dx, dy=pin_dy,
-            )
-            wire_item = self._wire_items.get(wire.id)
-            if wire_item is not None and len(new_pts) >= 2:
-                wire_item.set_preview_points(new_pts)
-
-    def _commit_endpoint_drag(
-        self,
-        comp_id: str,
-        old_span: tuple[float, float],
-        gu: tuple[float, float],
-    ) -> None:
-        """Commit a ResizeCommand for the dragged terminal endpoint."""
-        item = self._comp_items.get(comp_id)
-        if not isinstance(item, _ResizableTwoTerminalItem):
-            return
-        comp = item.component
-        ox, oy = comp.position
-        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
-        dx = round(dx * 2) / 2
-        dy = round(dy * 2) / 2
-        if abs(dx) < 0.5 and abs(dy) < 0.5:
-            item.set_preview_span(old_span)
-            return
-        new_span = (dx, dy)
-        if new_span == old_span:
-            return
-        cmd = ResizeCommand(comp_id, new_span, old_span)
-        self._stack.push(cmd)
-        self._rebuild_items()
-        self.schematic_changed.emit()
-
-    def _preview_vertex_drag(self, gu: tuple[float, float]) -> None:
-        """Live visual feedback while dragging a wire vertex (model untouched).
-
-        Repaints the affected wire item with the dragged vertex moved to *gu*,
-        inserting elbows on adjacent segments so the preview stays Manhattan —
-        matching the behaviour of MoveWireVertexCommand. The model is only
-        updated on release.
-        """
-        wire_id, idx, _orig = self._vertex_drag
-        item = self._wire_items.get(wire_id)
-        if item is None:
-            return
-        pts = list(item.wire.points)
-        if not (0 <= idx < len(pts)):
-            return
-        pts[idx] = gu
-        # Re-route the two segments that touch the moved vertex through the
-        # shared horizontal-first primitive so the preview stays Manhattan
-        # (mirrors MoveWireVertexCommand.do — identical corner convention).
-        rebuilt: list[tuple[float, float]] = []
-        for j, p in enumerate(pts):
-            if j == 0:
-                rebuilt.append(p)
-                continue
-            prev = pts[j - 1]
-            if j == idx or j - 1 == idx:
-                rebuilt.extend(route(prev, p, vfirst=False)[1:-1])
-            rebuilt.append(p)
-        simplified = simplify_points(rebuilt)
-        item.set_preview_points(simplified)
-        self._update_ocirc_preview({wire_id: simplified})
-
-    def _preview_component_drag(self) -> None:
-        """Ghost connected wires as the dragged components move (model untouched).
-
-        Pins of the moving components are taken at their drag-start positions;
-        the live delta comes from each item's current (snapped) position. Each
-        connected wire is reshaped and simplified with the shared helper and
-        pushed to its WireItem as a preview path. On release the real
-        MoveCommand commits.
-        """
-        if not self._drag_start:
-            return
-
-        # Live delta per component, and the union of their start-pos pins.
-        deltas: dict[str, tuple[float, float]] = {}
-        start_pins: set[tuple[float, float]] = set()
-        for cid, start in self._drag_start.items():
-            item = self._comp_items.get(cid)
-            if item is None:
-                continue
-            cur = self.scene_to_gu(item.pos())   # unsnapped, for smooth ghosting
-            deltas[cid] = (cur[0] - start[0], cur[1] - start[1])
-            # Pins at the start position (use a stand-in component at `start`).
-            comp = next(
-                (c for c in self._schematic.components if c.id == cid), None
-            )
-            if comp is not None:
-                from dataclasses import replace
-
-                at_start = replace(comp, position=start)
-                for p in _component_pin_positions(at_start):
-                    start_pins.add((round(p[0], 6), round(p[1], 6)))
-
-        if not deltas:
-            return
-        # A single representative delta (all co-dragged items share it).
-        dx, dy = next(iter(deltas.values()))
-
-        # When every component is being dragged the whole circuit translates
-        # rigidly, so free wire endpoints (open-circle nodes) move too.
-        all_dragged = (
-            set(self._drag_start.keys()) >= {c.id for c in self._schematic.components}
-        )
-
-        previewed: set[str] = set()
-        for wire in self._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            # Mirror MoveCommand._reshape_wires exactly: selected wires and
-            # all_dragged both force a rigid translate so free endpoints follow.
-            if all_dragged or wire.id in self._drag_wire_ids:
-                start_hit = end_hit = True
-            else:
-                start_hit = (round(pts[0][0], 6), round(pts[0][1], 6)) in start_pins
-                end_hit = (round(pts[-1][0], 6), round(pts[-1][1], 6)) in start_pins
-                if not (start_hit or end_hit):
-                    continue
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy,
-                simplify=True,
-            )
-            item = self._wire_items.get(wire.id)
-            if item is not None:
-                item.set_preview_points(new_pts)
-                previewed.add(wire.id)
-
-        # Clear any wire that was previewed last frame but no longer is.
-        for wid in self._previewed_wire_ids - previewed:
-            it = self._wire_items.get(wid)
-            if it is not None:
-                it.clear_preview_points()
-        self._previewed_wire_ids = previewed
-
-        # Keep open-circle items in sync with the previewed wire endpoints.
-        # Also pass the current (dragged) pin positions so endpoints that have
-        # followed a dragged pin are not incorrectly shown as unconnected.
-        preview_pts: dict[str, list[tuple[float, float]]] = {}
-        for wire in self._schematic.wires:
-            wi = self._wire_items.get(wire.id)
-            if wi is not None and wi.preview_points is not None:
-                preview_pts[wire.id] = wi.preview_points
-
-        dragged_pins: set[tuple[float, float]] = set()
-        for cid, start in self._drag_start.items():
-            comp = next((c for c in self._schematic.components if c.id == cid), None)
-            item = self._comp_items.get(cid)
-            if comp is not None and item is not None:
-                cur = self.scene_to_gu(item.pos())
-                ddx = cur[0] - start[0]
-                ddy = cur[1] - start[1]
-                from dataclasses import replace as _replace
-                at_cur = _replace(comp, position=(comp.position[0] + ddx, comp.position[1] + ddy))
-                for p in _component_pin_positions(at_cur):
-                    dragged_pins.add((round(p[0], 6), round(p[1], 6)))
-
-        self._update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)
-        self._update_junction_preview(preview_pts, dragged_pins)
-
-    def _update_ocirc_preview(
-        self,
-        preview_pts_by_wire: dict[str, list[tuple[float, float]]],
-        extra_pin_positions: set[tuple[float, float]] | None = None,
-    ) -> None:
-        """Reposition open-circle items to match wire endpoint preview positions.
-
-        *preview_pts_by_wire* maps wire_id → the preview point list for that
-        wire (only wires whose endpoints are moving need to be included).
-
-        *extra_pin_positions* is an optional set of additional pin coordinates
-        to treat as connected — used during component drag to supply the current
-        (dragged) pin positions, which differ from the model positions and would
-        otherwise cause connected wire endpoints to falsely appear as open.
-        """
-        # Build the set of all pin positions, using dragged positions for
-        # components currently being dragged (their model positions are stale).
-        dragged_comp_ids = set(self._drag_start.keys())
-        pin_positions: set[tuple[float, float]] = set()
-        for comp in self._schematic.components:
-            if comp.id in dragged_comp_ids:
-                continue  # replaced by extra_pin_positions below
-            for p in _component_pin_positions(comp):
-                pin_positions.add((round(p[0], 6), round(p[1], 6)))
-        if extra_pin_positions:
-            pin_positions |= extra_pin_positions
-
-        # Build a count of how many times each coordinate appears across all
-        # wire point lists (using preview positions where available).  A count
-        # > 1 means the point is shared with another wire — not an open endpoint.
-        all_wire_points: dict[tuple[float, float], int] = {}
-        for wire in self._schematic.wires:
-            pts = preview_pts_by_wire.get(wire.id, wire.points)
-            for pt in pts:
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
-                all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
-
-        # Compute the desired ocirc positions from model wires, substituting
-        # preview endpoints for any wire that is being previewed.
-        desired: set[tuple[float, float]] = set()
-        for wire in self._schematic.wires:
-            pts = preview_pts_by_wire.get(wire.id, wire.points)
-            if len(pts) < 2:
-                continue
-            for pt in (pts[0], pts[-1]):
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
-                if pt_r in pin_positions:
-                    continue
-                if all_wire_points.get(pt_r, 0) > 1:
-                    continue
-                desired.add(pt_r)
-
-        # Remove items no longer needed.
-        for coord in list(self._open_circle_items):
-            if coord not in desired:
-                self.removeItem(self._open_circle_items.pop(coord))
-        # Add or reposition items.
-        for coord in desired:
-            if coord not in self._open_circle_items:
-                oc = OpenCircleItem()
-                oc.setPos(self.gu_to_scene(*coord))
-                self.addItem(oc)
-                self._open_circle_items[coord] = oc
-
-    def _update_junction_preview(
-        self,
-        preview_pts_by_wire: dict[str, list[tuple[float, float]]],
-        extra_pin_positions: set[tuple[float, float]] | None = None,
-    ) -> None:
-        """Move junction dot items to match previewed wire positions during drag.
-
-        Recomputes junction degree using preview wire points so dots follow
-        the dragged topology rather than staying at the pre-drag model positions.
-        """
-        _junction_points = junction_points
-
-        # Build a temporary schematic-like view using preview points.
-        # We recompute degree manually using the same logic as junction_points().
-        degree: dict[tuple[float, float], int] = {}
-
-        def add(pt: tuple[float, float], d: int) -> None:
-            pt = (round(pt[0], 6), round(pt[1], 6))
-            degree[pt] = degree.get(pt, 0) + d
-
-        for wire in self._schematic.wires:
-            pts = preview_pts_by_wire.get(wire.id, wire.points)
-            own: dict[tuple[float, float], int] = {}
-            n = len(pts)
-            for i, pt in enumerate(pts):
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
-                own[pt_r] = own.get(pt_r, 0) + (1 if (i == 0 or i == n - 1) else 2)
-            for pt, d in own.items():
-                add(pt, d)
-
-        # Add pin positions for all components, but use dragged positions for
-        # components currently being dragged (their model positions are stale).
-        dragged_comp_ids = set(self._drag_start.keys())
-        for comp in self._schematic.components:
-            if comp.id in dragged_comp_ids:
-                continue  # replaced by extra_pin_positions below
-            for p in _component_pin_positions(comp):
-                add(p, 1)
-        for p in (extra_pin_positions or set()):
-            add(p, 1)
-
-        wanted = {pt for pt, d in degree.items() if d >= 3}
-
-        # Remove dots no longer needed.
-        for coord in list(self._junction_items):
-            if coord not in wanted:
-                self.removeItem(self._junction_items.pop(coord))
-        # Add or reposition.
-        for coord in wanted:
-            if coord not in self._junction_items:
-                dot = JunctionItem()
-                dot.setPos(self.gu_to_scene(*coord))
-                self.addItem(dot)
-                self._junction_items[coord] = dot
-            else:
-                self._junction_items[coord].setPos(self.gu_to_scene(*coord))
-
-    def _clear_component_drag_preview(self) -> None:
-        for wid in self._previewed_wire_ids:
-            item = self._wire_items.get(wid)
-            if item is not None:
-                item.clear_preview_points()
-        self._previewed_wire_ids = set()
 
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._panning:
@@ -1563,13 +1206,13 @@ class SchematicScene(QGraphicsScene):
         # SELECT mode: a press on a resizable component's terminal handle starts
         # an endpoint drag (takes priority over wire-auto-enter and vertex drag).
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
-            comp_id = self._endpoint_handle_at(event.scenePos())
+            comp_id = self._drag.endpoint_handle_at(event.scenePos())
             if comp_id is not None:
                 comp = next((c for c in self._schematic.components if c.id == comp_id), None)
                 if comp is not None:
                     old_span = comp.span_override if comp.span_override is not None else REGISTRY[comp.kind].default_span
-                    self._endpoint_drag = (comp_id, 1, old_span)
-                    self._endpoint_press_gu = self.snap_point_gu(event.scenePos())
+                    self._drag.endpoint_drag = (comp_id, 1, old_span)
+                    self._drag.endpoint_press_gu = self.snap_point_gu(event.scenePos())
                     # Select the item so resize handles become visible.
                     item = self._comp_items.get(comp_id)
                     if item is not None:
@@ -1588,8 +1231,8 @@ class SchematicScene(QGraphicsScene):
                     (w for w in self._schematic.wires if w.id == wire_id), None
                 )
                 if wire is not None:
-                    self._vertex_drag = (wire_id, idx, wire.points[idx])
-                    self._vertex_press_gu = self.snap_point_gu(event.scenePos())
+                    self._drag.vertex_drag = (wire_id, idx, wire.points[idx])
+                    self._drag.vertex_press_gu = self.snap_point_gu(event.scenePos())
                     self.clearSelection()
                     event.accept()
                     return
@@ -1612,13 +1255,13 @@ class SchematicScene(QGraphicsScene):
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
             # Capture wire selection NOW — super() can deselect non-movable items
             # (WireItem has ItemIsMovable=False) when it sets up the component drag.
-            self._drag_wire_ids = {
+            self._drag.drag_wire_ids = {
                 item.wire.id
                 for item in self.selectedItems()
                 if isinstance(item, WireItem)
             }
             super().mousePressEvent(event)
-            self._drag_start = {
+            self._drag.drag_start = {
                 item.component.id: item.component.position
                 for item in self.selectedItems()
                 if isinstance(item, ComponentItem)
@@ -1629,14 +1272,14 @@ class SchematicScene(QGraphicsScene):
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         # Commit an endpoint drag if one is active.
-        if self._endpoint_drag is not None and event.button() == Qt.LeftButton:
-            comp_id, _handle_idx, old_span = self._endpoint_drag
-            press_gu = self._endpoint_press_gu
-            self._endpoint_drag = None
-            self._endpoint_press_gu = None
+        if self._drag.endpoint_drag is not None and event.button() == Qt.LeftButton:
+            comp_id, _handle_idx, old_span = self._drag.endpoint_drag
+            press_gu = self._drag.endpoint_press_gu
+            self._drag.endpoint_drag = None
+            self._drag.endpoint_press_gu = None
             gu = self.snap_point_gu(event.scenePos())
             if gu != press_gu:
-                self._commit_endpoint_drag(comp_id, old_span, gu)
+                self._drag.commit_endpoint_drag(comp_id, old_span, gu)
             else:
                 # No movement: clear any wire preview points set during the drag.
                 for wire_item in self._wire_items.values():
@@ -1646,11 +1289,11 @@ class SchematicScene(QGraphicsScene):
             return
 
         # Commit a wire-vertex drag if one is active.
-        if self._vertex_drag is not None and event.button() == Qt.LeftButton:
-            wire_id, idx, _orig = self._vertex_drag
-            press_gu = self._vertex_press_gu
-            self._vertex_drag = None
-            self._vertex_press_gu = None
+        if self._drag.vertex_drag is not None and event.button() == Qt.LeftButton:
+            wire_id, idx, _orig = self._drag.vertex_drag
+            press_gu = self._drag.vertex_press_gu
+            self._drag.vertex_drag = None
+            self._drag.vertex_press_gu = None
             gu = self.snap_point_gu(event.scenePos())
             item = self._wire_items.get(wire_id)
             if item is not None:
@@ -1682,11 +1325,11 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
-        pending = self._mode == Mode.SELECT and bool(self._drag_start)
+        pending = self._mode == Mode.SELECT and bool(self._drag.drag_start)
 
         # Drop any wire drag-ghosts before committing; the MoveCommand below
         # rebuilds the wire items with their real (snapped) geometry.
-        self._clear_component_drag_preview()
+        self._drag.clear_component_drag_preview()
 
         # Let Qt finish its own mouse-grab / drag bookkeeping FIRST. Pushing a
         # command (which reconciles items) before this returns can run while Qt
@@ -1694,34 +1337,7 @@ class SchematicScene(QGraphicsScene):
         super().mouseReleaseEvent(event)
 
         if pending:
-            # Read each item's final snapped position, then compute its own
-            # delta from its recorded start. Items are grouped by identical
-            # snapped delta so the resulting command is exact.
-            per_delta: dict[tuple[float, float], list[str]] = {}
-            for cid, start in self._drag_start.items():
-                item = self._comp_items.get(cid)
-                if item is None:
-                    continue
-                new_gu = self.snap_point_gu(item.pos())
-                # Reset the item to its model position; the command moves it.
-                item.setPos(self.gu_to_scene(*start))
-                d = (new_gu[0] - start[0], new_gu[1] - start[1])
-                if d != (0.0, 0.0):
-                    per_delta.setdefault(d, []).append(cid)
-            drag_wire_ids = list(self._drag_wire_ids)
-            self._drag_start = {}
-            self._drag_wire_ids = set()
-
-            all_cmds: list = []
-            for d, ids in per_delta.items():
-                move_cmd = MoveCommand(ids, d, wire_ids=drag_wire_ids)
-                split_cmds = self._pin_splits_after_delta(ids, d)
-                all_cmds.append(move_cmd)
-                all_cmds.extend(split_cmds)
-            if len(all_cmds) == 1:
-                self._push(all_cmds[0])
-            elif all_cmds:
-                self._push(MacroCommand(all_cmds, label="Move"))
+            self._drag.commit_component_drag()
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._mode == Mode.WIRE and self._wire_pts:
