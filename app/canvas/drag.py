@@ -462,7 +462,7 @@ class DragPreviewController:
         # Remove items no longer needed.
         for coord in list(scene._open_circle_items):
             if coord not in desired:
-                scene.removeItem(scene._open_circle_items.pop(coord))
+                scene._remove_item(scene._open_circle_items.pop(coord))
         # Add or reposition items.
         for coord in desired:
             if coord not in scene._open_circle_items:
@@ -511,7 +511,7 @@ class DragPreviewController:
         # Remove dots no longer needed.
         for coord in list(scene._junction_items):
             if coord not in wanted:
-                scene.removeItem(scene._junction_items.pop(coord))
+                scene._remove_item(scene._junction_items.pop(coord))
         # Add or reposition.
         for coord in wanted:
             if coord not in scene._junction_items:

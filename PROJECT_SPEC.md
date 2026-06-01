@@ -844,6 +844,35 @@ Notes:
 - `Ctrl+V` enters **Place** mode with the copied group as a ghost; left-click places it and assigns new UUIDs to all pasted items.
 - `Ctrl+D` duplicates with a fixed offset of (1, 1) GU.
 
+### 6.8 Graphics Item Lifetime (Memory-Safety Invariant)
+
+Because PySide ties a `QGraphicsItem`'s C++ lifetime to its Python reference
+count, the C++ object is freed the instant its last Python reference is dropped.
+If the scene still holds a raw pointer to that item, the next paint dereferences
+freed memory and the process segfaults. To make this class of bug structurally
+impossible, the scene observes the following invariants:
+
+- **Single removal chokepoint.** Every item leaves the scene through
+  `SchematicScene._remove_item(...)`. Callers pass `dict.pop(key)` directly, so
+  the tracking-dict entry and the scene item are dropped together, and the item
+  is always detached from the scene (`removeItem`) *before* its last reference
+  dies. `removeItem` synchronously clears the scene's other internal pointers
+  (selection, focus, mouse grabber, hover).
+- **No lingering references.** Nothing retains a reference to an item after it
+  has been removed; conversely, every live item is owned by exactly one tracking
+  structure (`_comp_items`, `_wire_items`, `_junction_items`,
+  `_open_circle_items`, `_ghost`, or `_wire_preview`).
+- **`NoIndex` item method.** The scene uses `QGraphicsScene.NoIndex` rather than
+  the default BSP tree. The BSP index *defers* item removal, which would let a
+  freed item linger in the index until the next paint; `NoIndex` keeps the item
+  list consistent synchronously with `removeItem`. (This class of frequently
+  mutated scene gains nothing from the BSP index anyway.)
+
+These invariants are guarded by `test_no_index_method` (deterministic) and by a
+randomized paint-after-every-mutation fuzz test (probabilistic — a use-after-free
+only faults nondeterministically, so it cannot be checked deterministically
+without a native memory sanitizer). See §13.
+
 ---
 
 ## 7. Code Generation
@@ -1547,7 +1576,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_connect_to_wire_corner_splits_l_wire` / `test_connect_to_wire_corner_split_is_one_undo` | Connecting a new wire at an L-wire's corner (intermediate vertex) splits the L-wire into two straight wires, forms a junction, and is one undoable action. Connecting at an existing endpoint leaves the wire unchanged. |
 | `test_click_near_endpoint_selects_short_wire` | After split-on-join the stub is selectable/deletable; deleting it merges the through-wire halves back into one wire (regression + merge-on-delete behavior). |
 | `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
-| `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). |
+| `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). Enforces the §6.8 memory-safety invariant. |
+| `test_random_mutation_sequences_never_crash_paint` | Randomized sequences of place/wire/rotate/delete/nudge/undo/redo, painting through a real view (and `scene.render`) after each step, never crash. A probabilistic safety net for the §6.8 graphics-item-lifetime invariant (a use-after-free faults nondeterministically and cannot be checked deterministically without a native sanitizer). |
 
 ### 13.4 Acceptance Criteria
 

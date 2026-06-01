@@ -864,6 +864,21 @@ class SchematicScene(QGraphicsScene):
     # Model ↔ item synchronisation
     # ------------------------------------------------------------------
 
+    def _remove_item(self, item: QGraphicsItem | None) -> None:
+        """Single chokepoint for taking a graphics item out of the scene.
+
+        Every removal goes through here so the lifetime rule (spec §6.7) is
+        enforced in one place: detach from the scene with ``removeItem`` before
+        the caller drops its last reference. PySide frees the C++ object the
+        moment that reference dies, and ``removeItem`` synchronously clears all
+        of the scene's internal pointers to the item (selection, focus, mouse
+        grabber, hover, and — under NoIndex — the item list), so the subsequent
+        free can never dangle. Callers pass ``dict.pop(key)`` directly so the
+        tracking entry and the scene item are dropped together.
+        """
+        if item is not None:
+            self.removeItem(item)
+
     def _rebuild_items(self) -> None:
         """Reconcile the scene's graphics items with the current model.
 
@@ -885,10 +900,10 @@ class SchematicScene(QGraphicsScene):
         # --- remove items whose model object is gone ----------------------
         for cid in list(self._comp_items):
             if cid not in model_comp_ids:
-                self.removeItem(self._comp_items.pop(cid))
+                self._remove_item(self._comp_items.pop(cid))
         for wid in list(self._wire_items):
             if wid not in model_wire_ids:
-                self.removeItem(self._wire_items.pop(wid))
+                self._remove_item(self._wire_items.pop(wid))
 
         # --- add new / refresh existing component items -------------------
         for comp in self._schematic.components:
@@ -940,7 +955,7 @@ class SchematicScene(QGraphicsScene):
         wanted = junction_points(self._schematic)
         for coord in list(self._junction_items):
             if coord not in wanted:
-                self.removeItem(self._junction_items.pop(coord))
+                self._remove_item(self._junction_items.pop(coord))
         for coord in wanted:
             if coord not in self._junction_items:
                 dot = JunctionItem()
@@ -952,7 +967,7 @@ class SchematicScene(QGraphicsScene):
         wanted_oc = open_endpoints(self._schematic)
         for coord in list(self._open_circle_items):
             if coord not in wanted_oc:
-                self.removeItem(self._open_circle_items.pop(coord))
+                self._remove_item(self._open_circle_items.pop(coord))
         for coord in wanted_oc:
             if coord not in self._open_circle_items:
                 oc = OpenCircleItem()
@@ -1014,7 +1029,7 @@ class SchematicScene(QGraphicsScene):
 
     def _cancel_ghost(self) -> None:
         if self._ghost is not None:
-            self.removeItem(self._ghost)
+            self._remove_item(self._ghost)
             self._ghost = None
 
     def _cancel_placement(self) -> None:
@@ -1120,7 +1135,7 @@ class SchematicScene(QGraphicsScene):
 
     def _cancel_wire_preview(self) -> None:
         if self._wire_preview is not None:
-            self.removeItem(self._wire_preview)
+            self._remove_item(self._wire_preview)
             self._wire_preview = None
 
     def _cancel_wire(self) -> None:
