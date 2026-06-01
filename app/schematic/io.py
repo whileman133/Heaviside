@@ -14,7 +14,14 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.schematic.model import Component, Schematic, Wire
+from app.components.model import (
+    Component,
+    DiodeComponent,
+    DrawingComponent,
+    TextNodeComponent,
+)
+from app.components.registry import REGISTRY
+from app.schematic.model import Schematic, Wire
 from app.schematic.validate import validate
 
 # Spec versions this loader accepts. Extend when new versions are defined.
@@ -109,14 +116,19 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         d["label_offset"] = list(c.label_offset)
     if c.span_override is not None:
         d["span_override"] = list(c.span_override)
-    if c.z_order != 0:
+    if isinstance(c, DrawingComponent) and c.z_order != 0:
         d["z_order"] = c.z_order
-    if c.font_bold:
-        d["font_bold"] = True
-    if c.font_italic:
-        d["font_italic"] = True
-    if c.font_family:
-        d["font_family"] = c.font_family
+    if isinstance(c, DiodeComponent) and c.filled:
+        d["filled"] = True
+    if isinstance(c, TextNodeComponent):
+        if c.font_size != 12.0:
+            d["font_size"] = c.font_size
+        if c.font_bold:
+            d["font_bold"] = True
+        if c.font_italic:
+            d["font_italic"] = True
+        if c.font_family:
+            d["font_family"] = c.font_family
     return d
 
 
@@ -240,32 +252,44 @@ def _dict_to_component(data: Any, index: int) -> Component:
                 f"{ctx}.span_override values must be numbers"
             ) from exc
 
-    raw_z = data.get("z_order", 0)
-    if not isinstance(raw_z, int):
-        raise SchematicLoadError(f"{ctx}.z_order must be an integer")
-    z_order = raw_z
+    defn = REGISTRY.get(kind)
+    cls = defn.component_class if defn is not None else Component
 
-    font_bold = bool(data.get("font_bold", False))
-    font_italic = bool(data.get("font_italic", False))
-    raw_ff = data.get("font_family", "")
-    if not isinstance(raw_ff, str):
-        raise SchematicLoadError(f"{ctx}.font_family must be a string")
-    font_family = raw_ff
+    kwargs: dict = {
+        "id": comp_id,
+        "kind": kind,
+        "position": position,
+        "rotation": rot_raw,
+        "mirror": mirror,
+        "options": options,
+        "label_offset": label_offset,
+        "span_override": span_override,
+    }
 
-    return Component(
-        id=comp_id,
-        kind=kind,
-        position=position,
-        rotation=rot_raw,
-        mirror=mirror,
-        options=options,
-        label_offset=label_offset,
-        span_override=span_override,
-        z_order=z_order,
-        font_bold=font_bold,
-        font_italic=font_italic,
-        font_family=font_family,
-    )
+    if issubclass(cls, DrawingComponent):
+        raw_z = data.get("z_order", 0)
+        if not isinstance(raw_z, int):
+            raise SchematicLoadError(f"{ctx}.z_order must be an integer")
+        kwargs["z_order"] = raw_z
+
+    if issubclass(cls, DiodeComponent):
+        kwargs["filled"] = bool(data.get("filled", False))
+
+    if issubclass(cls, TextNodeComponent):
+        # Migrate: old files stored font_size as span_override[0].
+        if "font_size" in data:
+            kwargs["font_size"] = float(data["font_size"])
+        elif span_override is not None:
+            kwargs["font_size"] = span_override[0]
+            kwargs["span_override"] = None
+        raw_ff = data.get("font_family", "")
+        if not isinstance(raw_ff, str):
+            raise SchematicLoadError(f"{ctx}.font_family must be a string")
+        kwargs["font_bold"] = bool(data.get("font_bold", False))
+        kwargs["font_italic"] = bool(data.get("font_italic", False))
+        kwargs["font_family"] = raw_ff
+
+    return cls(**kwargs)
 
 
 def _dict_to_wire(data: Any, index: int) -> Wire:

@@ -36,6 +36,7 @@ import copy
 import uuid
 from abc import ABC, abstractmethod
 
+from app.components.model import DiodeComponent, DrawingComponent, TextNodeComponent
 from app.schematic.model import (
     Component,
     Schematic,
@@ -51,6 +52,7 @@ __all__ = [
     "DeleteCommand",
     "MoveCommand",
     "ResizeCommand",
+    "SetFontSizeCommand",
     "SetSpanCommand",
     "SetZOrderCommand",
     "SetTextStyleCommand",
@@ -576,6 +578,32 @@ class SetSpanCommand(Command):
         _find_component(schematic, self._component_id).span_override = self._old_span
 
 
+class SetFontSizeCommand(Command):
+    """Set font_size on a TextNodeComponent."""
+
+    label = "Set Font Size"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_size: float,
+        old_size: float,
+    ) -> None:
+        self._component_id = component_id
+        self._new_size = new_size
+        self._old_size = old_size
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, TextNodeComponent)
+        comp.font_size = self._new_size
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, TextNodeComponent)
+        comp.font_size = self._old_size
+
+
 class SetZOrderCommand(Command):
     """Set z_order on a drawing annotation component (text_node, rect)."""
 
@@ -587,10 +615,14 @@ class SetZOrderCommand(Command):
         self._old_z = old_z
 
     def do(self, schematic: Schematic) -> None:
-        _find_component(schematic, self._component_id).z_order = self._new_z
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, DrawingComponent)
+        comp.z_order = self._new_z
 
     def undo(self, schematic: Schematic) -> None:
-        _find_component(schematic, self._component_id).z_order = self._old_z
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, DrawingComponent)
+        comp.z_order = self._old_z
 
 
 class SetTextStyleCommand(Command):
@@ -610,6 +642,7 @@ class SetTextStyleCommand(Command):
 
     def _apply(self, schematic: Schematic, vals: tuple) -> None:
         comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, TextNodeComponent)
         comp.font_bold, comp.font_italic, comp.font_family = vals
 
     def do(self, schematic: Schematic) -> None:
@@ -990,6 +1023,29 @@ class MirrorCommand(Command):
     def undo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
         comp.mirror = self._old_mirror if self._old_mirror is not None else False
+
+
+class SetFilledCommand(Command):
+    """Set the filled (``*`` variant) state of a component."""
+
+    label = "Set Filled"
+
+    def __init__(self, component_id: str, new_filled: bool, old_filled: bool | None = None) -> None:
+        self._component_id = component_id
+        self._new_filled = new_filled
+        self._old_filled: bool | None = old_filled
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, DiodeComponent)
+        if self._old_filled is None:
+            self._old_filled = comp.filled
+        comp.filled = self._new_filled
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, DiodeComponent)
+        comp.filled = self._old_filled if self._old_filled is not None else False
 
 
 class GroupRotateCommand(Command):

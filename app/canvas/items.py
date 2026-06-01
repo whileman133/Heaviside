@@ -54,7 +54,7 @@ from app.canvas.svgsym import is_thick, symbol_paths
 from app.components.registry import REGISTRY
 
 if TYPE_CHECKING:
-    from app.schematic.model import Component
+    from app.components.model import Component, DrawingComponent, TextNodeComponent
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +389,11 @@ class ComponentItem(QGraphicsItem):
         color = self._body_color()
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
-        for sym in symbol_paths(self.component.kind):
+        from app.components.model import DiodeComponent
+        svg_kind = (self.component.kind + "*") if (
+            isinstance(self.component, DiodeComponent) and self.component.filled
+        ) else self.component.kind
+        for sym in symbol_paths(svg_kind):
             lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
             pen = _pen(color, lw)
             painter.setPen(pen)
@@ -446,7 +450,27 @@ class InductorItem(ComponentItem):
 
 
 class DiodeItem(ComponentItem):
-    """Diode: triangle + cathode bar (SVG: D)."""
+    """Diode: triangle + cathode bar (SVG: D / D*)."""
+
+
+class ZenerDiodeItem(ComponentItem):
+    """Zener diode: diode + bent cathode bar (SVG: zD / zD*)."""
+
+
+class SchottkyDiodeItem(ComponentItem):
+    """Schottky diode: diode + S-shaped cathode bar (SVG: sD / sD*)."""
+
+
+class TunnelDiodeItem(ComponentItem):
+    """Tunnel diode: diode + double bar cathode (SVG: tD / tD*)."""
+
+
+class TVSDiodeItem(ComponentItem):
+    """TVS/bidirectional Zener diode (SVG: zzD / zzD*)."""
+
+
+class LEDItem(ComponentItem):
+    """LED: diode + emission arrows (SVG: leD / leD*)."""
 
 
 # ---------------------------------------------------------------------------
@@ -984,12 +1008,10 @@ _RECT_STYLE_MAP: dict[str, Qt.PenStyle] = {
 class TextNodeItem(_DrawingAnnotationBase):
     """Text annotation placed at a point on the canvas.
 
-    ``component.options`` holds the text string; ``component.span_override[0]``
-    (when set) overrides the font size in points (default 12 pt).  No circuit
-    pins — invisible to the connectivity model.
+    ``component.options`` holds the text string; ``component.font_size``
+    overrides the font size in points (default 12 pt).  No circuit pins —
+    invisible to the connectivity model.
     """
-
-    _DEFAULT_FONT_SIZE = 12.0
 
     # Fallback lists passed to QFont.setFamilies() — Qt walks the list and
     # uses the first installed face, so at least one will match on any platform.
@@ -999,15 +1021,13 @@ class TextNodeItem(_DrawingAnnotationBase):
         "mono":  ["Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono"],
     }
 
-    def _font_size(self) -> float:
-        so = self._component.span_override
-        return float(so[0]) if so is not None else self._DEFAULT_FONT_SIZE
-
     def _build_font(self) -> QFont:
+        from app.components.model import TextNodeComponent
         # Convert LaTeX pt → canvas pixels: 1 grid unit = 1 cm = 28.35 pt,
         # and 1 grid unit = GRID_PX pixels on the canvas.
-        fs_px = max(1, round(self._font_size() * GRID_PX / 28.35))
         comp = self._component
+        assert isinstance(comp, TextNodeComponent)
+        fs_px = max(1, round(comp.font_size * GRID_PX / 28.35))
         font = QFont()
         font.setPixelSize(fs_px)
         font.setBold(comp.font_bold)
@@ -1044,9 +1064,12 @@ class TextNodeItem(_DrawingAnnotationBase):
         self._options_item.begin_edit()
 
     def boundingRect(self) -> QRectF:
-        text = self._component.options or "T"
-        fs_px = max(1, round(self._font_size() * GRID_PX / 28.35))
-        bold_factor = 1.08 if self._component.font_bold else 1.0
+        from app.components.model import TextNodeComponent
+        comp = self._component
+        assert isinstance(comp, TextNodeComponent)
+        text = comp.options or "T"
+        fs_px = max(1, round(comp.font_size * GRID_PX / 28.35))
+        bold_factor = 1.08 if comp.font_bold else 1.0
         approx_w = max(fs_px * 2.0, len(text) * fs_px * 0.65 * bold_factor)
         h = fs_px * 1.8
         return QRectF(-approx_w / 2.0, -h / 2.0, approx_w, h)
@@ -1231,6 +1254,11 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "C":        CapacitorItem,
     "L":        InductorItem,
     "D":        DiodeItem,
+    "zD":       ZenerDiodeItem,
+    "sD":       SchottkyDiodeItem,
+    "tD":       TunnelDiodeItem,
+    "zzD":      TVSDiodeItem,
+    "leD":      LEDItem,
     "op amp":   OpAmpItem,
     "npn":      NpnItem,
     "pnp":      PnpItem,

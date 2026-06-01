@@ -42,12 +42,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.canvas.scene import SchematicScene
+from app.components.model import DiodeComponent, DrawingComponent, RectComponent, TextNodeComponent
 from app.components.registry import REGISTRY
 
 _PANEL_WIDTH = 250
-
-# Drawing annotation kinds that get custom inspector controls.
-_DRAWING_KINDS = frozenset({"text_node", "rect"})
 
 # ── Rect: line style ─────────────────────────────────────────────────────────
 _LINE_STYLE_OPTIONS: list[tuple[str, str]] = [
@@ -294,6 +292,12 @@ class PropertiesPanel(QWidget):
         outer.addWidget(self._z_order_row)
         self._z_order_row.setVisible(False)
 
+        # ── Filled variant (diodes) ──────────────────────────────────────
+        self._filled_cb = QCheckBox("Filled")
+        self._filled_cb.stateChanged.connect(self._on_filled_changed)
+        outer.addWidget(self._filled_cb)
+        self._filled_cb.setVisible(False)
+
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
         sep2.setFrameShadow(QFrame.Sunken)
@@ -353,10 +357,10 @@ class PropertiesPanel(QWidget):
         defn = REGISTRY[comp.kind]
         self._header.setText(f"{defn.display_name}\n({comp.kind})")
 
-        is_drawing = comp.kind in _DRAWING_KINDS
+        is_drawing = isinstance(comp, DrawingComponent)
 
         # ── Options / text field ─────────────────────────────────────────
-        if comp.kind == "text_node":
+        if isinstance(comp, TextNodeComponent):
             self._opts_label.setText("Text content")
             self._opts_field.setPlaceholderText("Your text here")
         elif is_drawing:
@@ -370,8 +374,8 @@ class PropertiesPanel(QWidget):
         self._opts_field.setText(comp.options)
         self._opts_field.blockSignals(False)
 
-        self._opts_label.setVisible(comp.kind != "rect")
-        self._opts_field.setVisible(comp.kind != "rect")
+        self._opts_label.setVisible(not isinstance(comp, RectComponent))
+        self._opts_field.setVisible(not isinstance(comp, RectComponent))
 
         if defn.label_slots:
             self._hint_label.setText("Slots: " + ", ".join(defn.label_slots))
@@ -380,11 +384,10 @@ class PropertiesPanel(QWidget):
         self._hint_label.setVisible(not is_drawing)
 
         # ── Font controls (text_node) ────────────────────────────────────
-        self._font_section.setVisible(comp.kind == "text_node")
-        if comp.kind == "text_node":
-            fs = int(round(comp.span_override[0])) if comp.span_override is not None else 12
+        self._font_section.setVisible(isinstance(comp, TextNodeComponent))
+        if isinstance(comp, TextNodeComponent):
             self._font_size_spin.blockSignals(True)
-            self._font_size_spin.setValue(fs)
+            self._font_size_spin.setValue(int(round(comp.font_size)))
             self._font_size_spin.blockSignals(False)
 
             self._bold_cb.blockSignals(True)
@@ -401,8 +404,8 @@ class PropertiesPanel(QWidget):
             self._font_family_combo.blockSignals(False)
 
         # ── Rect visual properties ───────────────────────────────────────
-        self._rect_section.setVisible(comp.kind == "rect")
-        if comp.kind == "rect":
+        self._rect_section.setVisible(isinstance(comp, RectComponent))
+        if isinstance(comp, RectComponent):
             line_style, line_width, fill = _parse_rect_options(comp.options)
 
             self._line_style_combo.blockSignals(True)
@@ -428,16 +431,23 @@ class PropertiesPanel(QWidget):
             self._z_order_spin.setValue(comp.z_order)
             self._z_order_spin.blockSignals(False)
 
+        # ── Filled variant ───────────────────────────────────────────────
+        self._filled_cb.setVisible(isinstance(comp, DiodeComponent))
+        if isinstance(comp, DiodeComponent):
+            self._filled_cb.blockSignals(True)
+            self._filled_cb.setChecked(comp.filled)
+            self._filled_cb.blockSignals(False)
+
         # ── Rotation / mirror ────────────────────────────────────────────
         # text_node supports rotation but not mirror; circuit components support both.
-        show_rot = not is_drawing or comp.kind == "text_node"
+        show_rot = not is_drawing or isinstance(comp, TextNodeComponent)
         self._rot_section.setVisible(show_rot)
-        self._mirror_cb.setVisible(comp.kind != "text_node")
+        self._mirror_cb.setVisible(not isinstance(comp, TextNodeComponent))
         if show_rot:
             btn = self._rot_buttons.get(comp.rotation)
             if btn:
                 btn.setChecked(True)
-            if comp.kind != "text_node":
+            if not isinstance(comp, TextNodeComponent):
                 self._mirror_cb.blockSignals(True)
                 self._mirror_cb.setChecked(comp.mirror)
                 self._mirror_cb.blockSignals(False)
@@ -456,6 +466,7 @@ class PropertiesPanel(QWidget):
         self._font_section.setVisible(False)
         self._rect_section.setVisible(False)
         self._z_order_row.setVisible(False)
+        self._filled_cb.setVisible(False)
         self._opts_label.setVisible(True)
         self._opts_field.setVisible(True)
         self._hint_label.setVisible(True)
@@ -473,6 +484,7 @@ class PropertiesPanel(QWidget):
         self._font_section.setVisible(False)
         self._rect_section.setVisible(False)
         self._z_order_row.setVisible(False)
+        self._filled_cb.setVisible(False)
         self._opts_label.setVisible(True)
         self._opts_field.setVisible(True)
         self._hint_label.setVisible(True)
@@ -515,15 +527,12 @@ class PropertiesPanel(QWidget):
     def _do_commit_font_size(self) -> None:
         if self._scene is None or self._current_comp_id is None:
             return
-        if self._current_kind != "text_node":
-            return
-        fs = float(self._font_size_spin.value())
-        self._scene.set_component_span(self._current_comp_id, (fs, 0.0))
+        self._scene.set_text_node_font_size(
+            self._current_comp_id, float(self._font_size_spin.value())
+        )
 
     def _on_text_style_changed(self) -> None:
         if self._scene is None or self._current_comp_id is None:
-            return
-        if self._current_kind != "text_node":
             return
         bold = self._bold_cb.isChecked()
         italic = self._italic_cb.isChecked()
@@ -537,8 +546,6 @@ class PropertiesPanel(QWidget):
 
     def _do_commit_rect(self) -> None:
         if self._scene is None or self._current_comp_id is None:
-            return
-        if self._current_kind != "rect":
             return
         label = self._line_style_combo.currentText()
         tikz_style = _LABEL_TO_TIKZ_STYLE.get(label, "")
@@ -588,6 +595,11 @@ class PropertiesPanel(QWidget):
         if self._scene is None or self._current_comp_id is None:
             return
         self._scene.mirror_component(self._current_comp_id, bool(state))
+
+    def _on_filled_changed(self, state: int) -> None:
+        if self._scene is None or self._current_comp_id is None:
+            return
+        self._scene.set_component_filled(self._current_comp_id, bool(state))
 
     def shutdown(self) -> None:
         """Stop background threads.  Call before application exits."""

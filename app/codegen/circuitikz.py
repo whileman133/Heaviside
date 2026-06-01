@@ -106,6 +106,7 @@ _two_terminal_line.
 
 from __future__ import annotations
 
+from app.components.model import DrawingComponent, RectComponent, TextNodeComponent
 from app.components.registry import REGISTRY
 from app.schematic.model import (
     Component,
@@ -124,7 +125,8 @@ from app.schematic.validate import validate
 
 # Two-terminal components use to[] path syntax.
 _TWO_TERMINAL_KINDS: frozenset[str] = frozenset({
-    "R", "C", "L", "D",
+    "R", "C", "L",
+    "D", "zD", "sD", "tD", "zzD", "leD",
     "V", "I", "vsourcesin", "isourcesin",
     "cV", "cI",
     "open", "short",
@@ -144,9 +146,6 @@ _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
 _NODE_KINDS: frozenset[str] = frozenset({
     "ground", "sground", "cground", "rground", "nground", "pground", "eground",
 })
-
-# Drawing annotations — emitted as standalone commands outside the \draw block.
-_DRAWING_KINDS: frozenset[str] = frozenset({"text_node", "rect"})
 
 
 # ---------------------------------------------------------------------------
@@ -188,13 +187,13 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     # they appear behind circuit elements in the rendered PDF.
     # Sorted ascending: lower z_order is drawn first (further back).
     bg = sorted(
-        (c for c in schematic.components if c.kind in _DRAWING_KINDS and c.z_order < 0),
+        (c for c in schematic.components if isinstance(c, DrawingComponent) and c.z_order < 0),
         key=lambda c: c.z_order,
     )
     for comp in bg:
-        if comp.kind == "text_node":
+        if isinstance(comp, TextNodeComponent):
             lines.append("  " + _text_node_line(comp, _y))
-        elif comp.kind == "rect":
+        elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
 
     lines.append(r"  \draw")
@@ -266,13 +265,13 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     # block so they appear in front of circuit elements.
     # Sorted ascending: lower z_order is drawn first (further back).
     fg = sorted(
-        (c for c in schematic.components if c.kind in _DRAWING_KINDS and c.z_order >= 0),
+        (c for c in schematic.components if isinstance(c, DrawingComponent) and c.z_order >= 0),
         key=lambda c: c.z_order,
     )
     for comp in fg:
-        if comp.kind == "text_node":
+        if isinstance(comp, TextNodeComponent):
             lines.append("  " + _text_node_line(comp, _y))
-        elif comp.kind == "rect":
+        elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
 
     lines.append(r"\end{circuitikz}")
@@ -297,8 +296,8 @@ def _component_lines(
         return [_multi_terminal_line(comp, y_fn, rot_fn)]
     elif kind in _NODE_KINDS:
         return [_node_line(comp, y_fn)]
-    elif kind in _DRAWING_KINDS:
-        # Emitted as standalone commands after the \draw block; nothing here.
+    elif isinstance(comp, DrawingComponent):
+        # Emitted as standalone commands outside the \draw block; nothing here.
         return []
     else:
         raise ValueError(f"Unknown component kind '{kind}'")
@@ -342,9 +341,11 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
-    to_arg = comp.kind
+    from app.components.model import DiodeComponent
+    tikz_kind = comp.kind + ("*" if isinstance(comp, DiodeComponent) and comp.filled else "")
+    to_arg = tikz_kind
     if label_str:
-        to_arg = f"{comp.kind}, {label_str}"
+        to_arg = f"{tikz_kind}, {label_str}"
 
     return f"{coord0} to[{to_arg}] {coord1}"
 
@@ -560,23 +561,23 @@ _FONT_FAMILY_CMD: dict[str, str] = {
 }
 
 
-def _text_node_line(comp: Component, y_fn=lambda y: y) -> str:
+def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
     r"""Render a text annotation as \node[...] at (x,y) {text};
 
-    Font size (``span_override[0]``), bold (``font_bold``), italic
-    (``font_italic``), and family (``font_family``) are all encoded into the
-    ``font=`` node option when any of them is set.
+    Font size (``font_size``), bold (``font_bold``), italic (``font_italic``),
+    and family (``font_family``) are all encoded into the ``font=`` node option
+    when any of them is set.
     """
     x, y = comp.position
     text = comp.options
 
-    has_size   = comp.span_override is not None
+    has_size   = comp.font_size != 12.0
     has_style  = comp.font_bold or comp.font_italic or bool(comp.font_family)
 
     if has_size or has_style:
         parts: list[str] = []
         if has_size:
-            fs = comp.span_override[0]
+            fs = comp.font_size
             leading = round(fs * 1.2, 2)
             leading_str = (
                 str(int(leading)) if leading == int(leading)

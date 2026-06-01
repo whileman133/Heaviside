@@ -124,22 +124,46 @@ class ComponentDef:
     label_slots: list[str]           # valid slot names for this kind, shown as UI hint
     tikz_keyword: str                # CircuiTikZ node/path keyword
     default_span: tuple[float, float]  # (dx, dy) from origin to terminal pin, in GU
+    resizable: bool = False          # True → terminal pin drag handle shown at instance
+    component_class: type = Component  # Component subclass to instantiate for placed instances
 ```
 
-### 4.2 `Component`
+`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`. The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
 
-One instance per placed component.
+### 4.2 `Component` hierarchy
+
+One instance per placed component. `Component` is the base; subclasses add kind-specific fields.
 
 ```python
 @dataclass
-class Component:
-    id: str                                       # UUID, assigned at placement
-    kind: str                                     # Must exist as key in REGISTRY
-    position: tuple[float, float]                 # (x, y) of origin pin in schematic coordinates
-    rotation: int                                 # 0, 90, 180, or 270 degrees
-    options: str                                  # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
-    mirror: bool = False                          # horizontal mirror before rotation
-    label_offset: tuple[float, float] | None = None  # component-local px offset of options label; None = auto
+class Component:                        # circuit components (R, C, L, op amp, …)
+    id: str                             # UUID, assigned at placement
+    kind: str                           # Must exist as key in REGISTRY
+    position: tuple[float, float]       # (x, y) of origin pin in schematic coordinates
+    rotation: int                       # 0, 90, 180, or 270 degrees
+    options: str                        # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
+    mirror: bool = False                # horizontal mirror before rotation
+    label_offset: tuple[float, float] | None = None  # component-local px offset; None = auto
+    span_override: tuple[float, float] | None = None  # custom span for resizable components
+
+@dataclass
+class DiodeComponent(Component):        # all diode types
+    filled: bool = False                # True → emit KIND* and use filled SVG
+
+@dataclass
+class DrawingComponent(Component):      # text_node, rect
+    z_order: int = 0                    # layer order (negative = behind circuit elements)
+
+@dataclass
+class TextNodeComponent(DrawingComponent):
+    font_size: float = 12.0             # points; emitted as \fontsize{N} in LaTeX
+    font_bold: bool = False             # \bfseries
+    font_italic: bool = False           # \itshape
+    font_family: str = ""               # "" = default, "serif"/"sans"/"mono"
+
+@dataclass
+class RectComponent(DrawingComponent):  # options = TikZ draw-options; span_override = (w,h)
+    pass
 ```
 
 `label_offset` is `None` until the user manually drags the options label or the auto-placement algorithm sets it (see §8.3). Once set it is persisted in the file as a two-element JSON array; absent or `null` values load as `None`.
@@ -293,7 +317,23 @@ The component palette renders each component's thumbnail by instantiating its `C
 | `R` | Resistor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
 | `C` | Capacitor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
 | `L` | Inductor | `in` (0,0), `out` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
-| `D` | Diode | `anode` (0,0), `cathode` (2,0) | (2,0) | `l`, `l_`, `v`, `v^`, `i`, `i_` |
+
+#### Diodes
+
+All diode types share pins `anode` (0,0) and `cathode` (2,0), default span (2,0), and label slots `l`, `l_`, `v`, `v^`, `i`, `i_`. They are instantiated as `DiodeComponent`; when `DiodeComponent.filled` is `True` the canvas uses the `*` SVG and the codegen emits `KIND*`.
+
+| Kind | Display Name | Filled variant |
+|------|-------------|----------------|
+| `D` | Diode | `D*` |
+| `zD` | Zener Diode | `zD*` |
+| `sD` | Schottky Diode | `sD*` |
+| `tD` | Tunnel Diode | `tD*` |
+| `zzD` | TVS Diode | `zzD*` |
+| `leD` | LED | `leD*` |
+
+The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emission arrows.
+
+The **Filled** checkbox appears in the Properties panel for any component that is an instance of `DiodeComponent`. It is backed by an undoable `SetFilledCommand`.
 
 #### Amplifiers
 
@@ -365,12 +405,13 @@ Drawing annotations are non-circuit visual elements that appear in the palette u
 | `rect` | Rectangle | none | (2,2) | Yes (corner drag) | Line style combo, Line width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
 
 **Text node (`text_node`):**  
-`Component.position` is the `at` coordinate of the `\node`. `Component.options` is the text content (the `{…}` argument). Font size in points is stored in `Component.span_override[0]`; when `span_override` is `None` the document default font size is used. Three additional fields control text appearance:
+`TextNodeComponent.position` is the `at` coordinate of the `\node`. `TextNodeComponent.options` is the text content (the `{…}` argument). The following fields on `TextNodeComponent` control text appearance:
+- `font_size: float` (default `12.0`) — font size in points; emits `\fontsize{N}` in the `font=` option when it differs from the default.
 - `font_bold: bool` (default `False`) — emits `\bfseries` in the `font=` option.
 - `font_italic: bool` (default `False`) — emits `\itshape`.
 - `font_family: str` (default `""`) — `"serif"` → `\rmfamily`, `"sans"` → `\sffamily`, `"mono"` → `\ttfamily`; empty = document default.
 
-The canvas item draws the text centered at the position using a QFont with matching bold/italic/StyleHint settings so the preview closely matches the LaTeX output. When options is empty a dashed placeholder box with "Text" hint is shown. **Double-clicking** a text node activates inline editing: the drawn text is replaced by a `LabelTextItem` editor centred on the component body, styled with the same font; committing (Enter, Return, or focus-loss) fires the normal `edit_component_options` command; Escape cancels. The properties inspector shows a **Text content** field, **Font size (pt)** spinbox, **Bold** and **Italic** checkboxes, and a **Font family** combo (Default / Serif / Sans-serif / Monospace). Font size changes are undoable via `SetSpanCommand`; bold/italic/family changes are undoable via `SetTextStyleCommand`. Code generation emits:
+The canvas item draws the text centered at the position using a QFont with matching bold/italic/StyleHint settings so the preview closely matches the LaTeX output. When options is empty a dashed placeholder box with "Text" hint is shown. **Double-clicking** a text node activates inline editing: the drawn text is replaced by a `LabelTextItem` editor centred on the component body, styled with the same font; committing (Enter, Return, or focus-loss) fires the normal `edit_component_options` command; Escape cancels. The properties inspector shows a **Text content** field, **Font size (pt)** spinbox, **Bold** and **Italic** checkboxes, and a **Font family** combo (Default / Serif / Sans-serif / Monospace). Font size changes are undoable via `SetFontSizeCommand`; bold/italic/family changes are undoable via `SetTextStyleCommand`. Code generation emits:
 ```latex
 \node[font=\fontsize{SIZE}{LEADING}\selectfont\bfseries\itshape\sffamily] at (x,y) {text};
 % or, when no styling is applied:
@@ -378,7 +419,7 @@ The canvas item draws the text centered at the position using a QFont with match
 ```
 
 **Rectangle (`rect`):**  
-`Component.position` is the first corner (top-left when span is positive). `Component.span_override` (or `default_span` = (2,2) when not set) gives the offset `(dx, dy)` to the opposite corner. `Component.options` is a TikZ draw-options string composed from the individual inspector controls — it may contain any combination of line style (`dashed`, `dotted`, `dash dot`), line width (`line width=Xpt`), and fill (`fill=color`), e.g. `"dashed, line width=1.5pt, fill=yellow!20"`. The string is passed verbatim as the `\draw[…]` argument. The canvas item draws the rectangle with the selected style and shows a square drag handle at the far corner when selected (no circuit pin dots). Resizing via the corner handle is undoable via `ResizeCommand`.
+`RectComponent.position` is the first corner (top-left when span is positive). `RectComponent.span_override` (or `default_span` = (2,2) when not set) gives the offset `(dx, dy)` to the opposite corner. `RectComponent.options` is a TikZ draw-options string composed from the individual inspector controls — it may contain any combination of line style (`dashed`, `dotted`, `dash dot`), line width (`line width=Xpt`), and fill (`fill=color`), e.g. `"dashed, line width=1.5pt, fill=yellow!20"`. The string is passed verbatim as the `\draw[…]` argument. The canvas item draws the rectangle with the selected style and shows a square drag handle at the far corner when selected (no circuit pin dots). Resizing via the corner handle is undoable via `ResizeCommand`.
 
 New rects default to `z_order = -10` (behind circuit elements). TikZ color strings in `fill=` (e.g. `yellow!20`, `gray!15`) are resolved to Qt colors using the `color!percent` mixing formula (percent% of the named color blended with white) before rendering on the Qt canvas. The hit region for selection is the full rectangle interior (not just a band along the diagonal), so clicking anywhere inside the rect selects it.
 
@@ -389,19 +430,19 @@ The inspector shows **Move to front** and **Move to back** buttons: "Move to fro
 \draw (x1,y1) rectangle (x2,y2);
 ```
 
-**Z-order (`Component.z_order`):** An explicit integer field on `Component` (default 0), stored in the JSON file (omitted when 0 for backward compat). Applies to all drawing annotations (`text_node`, `rect`); ignored for circuit components. On the Qt canvas, maps to `QGraphicsItem.setZValue()`. In the LaTeX output, controls emission order:
+**Z-order (`DrawingComponent.z_order`):** An integer field on `DrawingComponent` (default 0), stored in the JSON file (omitted when 0 for backward compat). Applies to `text_node` and `rect`. On the Qt canvas, maps to `QGraphicsItem.setZValue()`. In the LaTeX output, controls emission order:
 - `z_order < 0` → emitted **before** the main `\draw` block (behind circuit elements in the PDF).
 - `z_order ≥ 0` → emitted **after** the `\draw` block and junction/open-endpoint nodes (in front).
 
 Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()`.
 
-**SetSpanCommand:** An undoable command that sets `Component.span_override` without reshaping connected wires. Used for font-size changes on `text_node`.
+**SetFontSizeCommand:** An undoable command that sets `TextNodeComponent.font_size`.
 
-**SetTextStyleCommand:** An undoable command that sets `font_bold`, `font_italic`, and `font_family` together on a `text_node` component. All three values are stored and restored atomically so a single undo reverts the entire style change.
+**SetTextStyleCommand:** An undoable command that sets `font_bold`, `font_italic`, and `font_family` together on a `TextNodeComponent`. All three values are stored and restored atomically so a single undo reverts the entire style change.
 
-**SetZOrderCommand:** An undoable command that sets `Component.z_order` on a drawing annotation.
+**SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
 
-The palette category display order is: **Passives → Amplifiers → Sources → MOSFETs → BJTs → Nodes → Annotations → Drawing**.
+The palette category display order is: **Passives → Diodes → Amplifiers → Sources → MOSFETs → BJTs → Nodes → Annotations → Drawing**.
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
@@ -1304,6 +1345,10 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_capacitor_horizontal` | A capacitor at (2,0), rotation 0 → produces `(2,0) to[C] (4,0)`. |
 | `test_inductor_horizontal` | An inductor at (0,0), rotation 0 → produces `(0,0) to[L] (2,0)`. |
 | `test_diode_horizontal` | A diode at (0,0), rotation 0 → produces `(0,0) to[D] (2,0)`. |
+| `test_diode_filled` | A diode with `filled=True` → produces `(0,0) to[D*] (2,0)`. |
+| `test_zener_diode` | A `zD` component → produces `(0,0) to[zD] (2,0)`. |
+| `test_zener_diode_filled` | A `zD` with `filled=True` → produces `(0,0) to[zD*] (2,0)`. |
+| `test_led` | A `leD` component → produces `(0,0) to[leD] (2,0)`. |
 | `test_voltage_source` | A voltage source at (0,0), rotation 0 → produces `(0,0) to[V] (0,2)`. |
 | `test_opamp_node` | An op-amp produces `node[op amp]` syntax with correct anchor coordinates. |
 | `test_nmos_node` | An NMOS (`nigfete`) produces `node[nigfete, xscale=1.0167, anchor=gate]` syntax (with its §7.2 geometry correction). |

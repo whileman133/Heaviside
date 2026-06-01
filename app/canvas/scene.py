@@ -45,6 +45,8 @@ from app.canvas.commands import (
     MacroCommand,
     MergeWireCommand,
     MirrorCommand,
+    SetFilledCommand,
+    SetFontSizeCommand,
     MoveCommand,
     MoveOptionsLabelCommand,
     MoveWireVertexCommand,
@@ -328,14 +330,19 @@ class SchematicScene(QGraphicsScene):
         options: str = "",
     ) -> Component:
         """Place a component at *position* (GU) via an undoable PlaceCommand."""
-        comp = Component(
+        defn = REGISTRY[kind]
+        cls = defn.component_class
+        extra: dict = {}
+        if kind == "rect":
+            extra["z_order"] = -10
+        comp = cls(
             id=str(uuid.uuid4()),
             kind=kind,
             position=(self.snap_gu(position[0]), self.snap_gu(position[1])),
             rotation=rotation,
             options=options,
             mirror=mirror,
-            z_order=-10 if kind == "rect" else 0,
+            **extra,
         )
         place_cmd = PlaceCommand(comp)
         split_cmds = self._split_commands_for(
@@ -728,6 +735,10 @@ class SchematicScene(QGraphicsScene):
         """Set the mirror state of a component via an undoable MirrorCommand."""
         self._push(MirrorCommand(component_id, new_mirror))
 
+    def set_component_filled(self, component_id: str, new_filled: bool) -> None:
+        """Set the filled state of a component via an undoable SetFilledCommand."""
+        self._push(SetFilledCommand(component_id, new_filled))
+
     def set_component_span(
         self,
         component_id: str,
@@ -746,13 +757,26 @@ class SchematicScene(QGraphicsScene):
 
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
+        from app.components.model import DrawingComponent
+        from app.canvas.commands import SetZOrderCommand
         comp = next(
             (c for c in self._schematic.components if c.id == component_id), None
         )
-        if comp is None or comp.z_order == new_z:
+        if comp is None or not isinstance(comp, DrawingComponent) or comp.z_order == new_z:
             return
-        from app.canvas.commands import SetZOrderCommand
         self._push(SetZOrderCommand(component_id, new_z, comp.z_order))
+
+    def set_text_node_font_size(self, component_id: str, new_size: float) -> None:
+        """Set font_size on a TextNodeComponent via an undoable SetFontSizeCommand."""
+        from app.components.model import TextNodeComponent
+        comp = next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+        if comp is None or not isinstance(comp, TextNodeComponent):
+            return
+        if comp.font_size == new_size:
+            return
+        self._push(SetFontSizeCommand(component_id, new_size, comp.font_size))
 
     def set_text_node_style(
         self,
@@ -761,15 +785,16 @@ class SchematicScene(QGraphicsScene):
         italic: bool,
         family: str,
     ) -> None:
-        """Set font style on a text_node via an undoable SetTextStyleCommand."""
+        """Set font style on a TextNodeComponent via an undoable SetTextStyleCommand."""
+        from app.components.model import TextNodeComponent
+        from app.canvas.commands import SetTextStyleCommand
         comp = next(
             (c for c in self._schematic.components if c.id == component_id), None
         )
-        if comp is None:
+        if comp is None or not isinstance(comp, TextNodeComponent):
             return
         if (comp.font_bold, comp.font_italic, comp.font_family) == (bold, italic, family):
             return
-        from app.canvas.commands import SetTextStyleCommand
         self._push(SetTextStyleCommand(
             component_id,
             bold, italic, family,
@@ -957,7 +982,7 @@ class SchematicScene(QGraphicsScene):
     def _spawn_ghost(self, kind: str) -> None:
         self._cancel_ghost()
         cls = ITEM_CLASSES.get(kind, ComponentItem)
-        ghost_comp = Component(
+        ghost_comp = REGISTRY[kind].component_class(
             id="__ghost__", kind=kind, position=(0.0, 0.0),
             rotation=self._place_rotation, mirror=self._place_mirror, options=""
         )

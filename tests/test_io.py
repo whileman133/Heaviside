@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from app.components.registry import REGISTRY
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Component, Schematic, Wire
 
@@ -36,7 +37,7 @@ def _one_of_each() -> Schematic:
     components = []
     for i, (kind, defn) in enumerate(REGISTRY.items()):
         components.append(
-            Component(
+            defn.component_class(
                 id=_uid(),
                 kind=kind,
                 position=(float(i * 3), 0.0),

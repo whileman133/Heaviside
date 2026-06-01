@@ -36,7 +36,7 @@ def _render_thumbnail(kind: str) -> QPixmap:
     """Render a 32×32 thumbnail for *kind* using its ComponentItem.paint()."""
     defn = REGISTRY[kind]
     # Place at origin so item coords are centred on bounding box.
-    comp = Component(
+    comp = defn.component_class(
         id="__thumb__",
         kind=kind,
         position=(0.0, 0.0),
@@ -180,7 +180,7 @@ class ComponentPalette(QWidget):
     def _build_entries(self) -> None:
         """Populate the palette grouped by category in a fixed display order."""
         # Fixed category order (spec §5.4).
-        category_order = ["Passives", "Amplifiers", "Sources", "MOSFETs", "BJTs", "Nodes", "Annotations", "Drawing"]
+        category_order = ["Passives", "Diodes", "Amplifiers", "Sources", "MOSFETs", "BJTs", "Nodes", "Annotations", "Drawing"]
 
         # Group kinds by category preserving insertion order.
         from collections import defaultdict

@@ -1,12 +1,8 @@
 """
-Schematic data model — per-instance state.
+Schematic data model — wires, schematic root, and geometry helpers.
 
-These dataclasses represent the live document: placed components, wires,
-and top-level metadata. They are mutable (unlike the frozen ComponentDef /
-PinDef in app/components/model.py).
-
-The UI layer holds no schematic state independently; all display is derived
-from these objects.
+The per-instance Component classes live in app.components.model alongside
+ComponentDef; they are re-exported here for backwards-compatible imports.
 """
 
 from __future__ import annotations
@@ -14,67 +10,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.components.model import (  # re-export for backwards compat
+    Component,
+    DiodeComponent,
+    DrawingComponent,
+    RectComponent,
+    TextNodeComponent,
+)
 
-@dataclass
-class Component:
-    """One placed instance of a component type on the canvas."""
-
-    id: str
-    """UUID assigned at placement. Must be unique within a Schematic."""
-
-    kind: str
-    """CircuiTikZ keyword; must exist as a key in REGISTRY."""
-
-    position: tuple[float, float]
-    """(x, y) of the origin pin in schematic grid coordinates."""
-
-    rotation: int
-    """Clockwise rotation in degrees. Must be one of {0, 90, 180, 270}."""
-
-    options: str
-    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$"."""
-
-    mirror: bool = False
-    """Horizontal mirror applied before rotation."""
-
-    label_offset: tuple[float, float] | None = None
-    """Position of the options label in component-local pixel coordinates.
-
-    ``None`` means the label has not been manually positioned; the canvas
-    places it automatically when options are first set (see §8.3).  Once the
-    user drags the label this is set to the chosen (dx, dy) offset and
-    persisted to the file.
-    """
-
-    span_override: tuple[float, float] | None = None
-    """Custom (dx, dy) from origin to terminal pin in component-local GU.
-
-    ``None`` means use ``ComponentDef.default_span``.  Set when the user
-    drags the terminal endpoint handle of a resizable component.  Only
-    meaningful when ``ComponentDef.resizable`` is True.
-    """
-
-    z_order: int = 0
-    """Canvas and code-generation layer for drawing annotations (text_node, rect).
-
-    Ignored for circuit components.  Positive values are drawn/emitted later
-    (in front); negative values are drawn/emitted earlier (behind).  In the
-    LaTeX output, items with z_order < 0 are emitted *before* the main
-    ``\\draw`` block so they appear behind circuit elements in the rendered PDF.
-    On the Qt canvas, maps directly to ``QGraphicsItem.setZValue()``.
-    """
-
-    font_bold: bool = False
-    """Bold weight for text_node annotations.  Ignored for circuit components."""
-
-    font_italic: bool = False
-    """Italic style for text_node annotations.  Ignored for circuit components."""
-
-    font_family: str = ""
-    """Font family for text_node annotations: ``""`` (document default),
-    ``"serif"`` (\\rmfamily), ``"sans"`` (\\sffamily), ``"mono"`` (\\ttfamily).
-    Ignored for circuit components.
-    """
+__all__ = [
+    "Component",
+    "DiodeComponent",
+    "DrawingComponent",
+    "RectComponent",
+    "TextNodeComponent",
+    "Wire",
+    "Schematic",
+]
 
 
 @dataclass

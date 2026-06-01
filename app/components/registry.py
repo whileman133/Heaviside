@@ -14,7 +14,13 @@ To add a new component type:
 
 from __future__ import annotations
 
-from app.components.model import ComponentDef, PinDef
+from app.components.model import (
+    ComponentDef,
+    DiodeComponent,
+    PinDef,
+    RectComponent,
+    TextNodeComponent,
+)
 
 # ---------------------------------------------------------------------------
 # Passives
@@ -62,18 +68,42 @@ _INDUCTOR = ComponentDef(
     default_span=(2.0, 0.0),
 )
 
+_DIODE_PINS = [
+    PinDef(name="anode",   offset=(0.0, 0.0)),
+    PinDef(name="cathode", offset=(2.0, 0.0)),
+]
+_DIODE_LABELS = ["l", "l_", "v", "v^", "i", "i_"]
+_DIODE_BBOX   = (0.0, -0.5, 2.0, 0.5)
+
 _DIODE = ComponentDef(
-    kind="D",
-    display_name="Diode",
-    category="Passives",
-    bbox=(0.0, -0.5, 2.0, 0.5),
-    pins=[
-        PinDef(name="anode",   offset=(0.0, 0.0)),
-        PinDef(name="cathode", offset=(2.0, 0.0)),
-    ],
-    label_slots=["l", "l_", "v", "v^", "i", "i_"],
-    tikz_keyword="D",
-    default_span=(2.0, 0.0),
+    kind="D", display_name="Diode", category="Diodes",
+    bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="D", default_span=(2.0, 0.0), component_class=DiodeComponent,
+)
+_ZENER = ComponentDef(
+    kind="zD", display_name="Zener Diode", category="Diodes",
+    bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="zD", default_span=(2.0, 0.0), component_class=DiodeComponent,
+)
+_SCHOTTKY = ComponentDef(
+    kind="sD", display_name="Schottky Diode", category="Diodes",
+    bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="sD", default_span=(2.0, 0.0), component_class=DiodeComponent,
+)
+_TUNNEL = ComponentDef(
+    kind="tD", display_name="Tunnel Diode", category="Diodes",
+    bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="tD", default_span=(2.0, 0.0), component_class=DiodeComponent,
+)
+_TVS = ComponentDef(
+    kind="zzD", display_name="TVS Diode", category="Diodes",
+    bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="zzD", default_span=(2.0, 0.0), component_class=DiodeComponent,
+)
+_LED = ComponentDef(
+    kind="leD", display_name="LED", category="Diodes",
+    bbox=(0.0, -0.75, 2.0, 0.75), pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
+    tikz_keyword="leD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 
 # ---------------------------------------------------------------------------
@@ -433,6 +463,7 @@ _TEXT_NODE = ComponentDef(
     label_slots=[],
     tikz_keyword="text_node",
     default_span=(0.0, 0.0),
+    component_class=TextNodeComponent,
 )
 
 _RECT = ComponentDef(
@@ -446,6 +477,7 @@ _RECT = ComponentDef(
     tikz_keyword="rectangle",
     default_span=(2.0, 2.0),
     resizable=True,
+    component_class=RectComponent,
 )
 
 # ---------------------------------------------------------------------------
@@ -459,6 +491,11 @@ REGISTRY: dict[str, ComponentDef] = {
         _CAPACITOR,
         _INDUCTOR,
         _DIODE,
+        _ZENER,
+        _SCHOTTKY,
+        _TUNNEL,
+        _TVS,
+        _LED,
         _OPAMP,
         _VSOURCE,
         _ISOURCE,

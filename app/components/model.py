@@ -1,15 +1,113 @@
 """
-Component data model — static definitions only.
+Component data model — static definitions and per-instance component classes.
 
 ComponentDef and PinDef are frozen dataclasses that live in the registry.
-They are never instantiated per placed component; see schematic/model.py for
-the per-instance Component dataclass.
+The Component hierarchy holds per-instance state for placed components;
+ComponentDef.component_class points to the appropriate subclass for each kind.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+
+# ---------------------------------------------------------------------------
+# Per-instance component classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Component:
+    """Base per-instance state for a placed circuit component."""
+
+    id: str
+    """UUID assigned at placement. Must be unique within a Schematic."""
+
+    kind: str
+    """CircuiTikZ keyword; must exist as a key in REGISTRY."""
+
+    position: tuple[float, float]
+    """(x, y) of the origin pin in schematic grid coordinates."""
+
+    rotation: int
+    """Clockwise rotation in degrees. Must be one of {0, 90, 180, 270}."""
+
+    options: str
+    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$"."""
+
+    mirror: bool = False
+    """Horizontal mirror applied before rotation."""
+
+    label_offset: tuple[float, float] | None = None
+    """Position of the options label in component-local pixel coordinates.
+
+    ``None`` means the label has not been manually positioned; the canvas
+    places it automatically when options are first set (see §8.3).  Once the
+    user drags the label this is set to the chosen (dx, dy) offset and
+    persisted to the file.
+    """
+
+    span_override: tuple[float, float] | None = None
+    """Custom (dx, dy) from origin to terminal pin in component-local GU.
+
+    ``None`` means use ``ComponentDef.default_span``.  Set when the user
+    drags the terminal endpoint handle of a resizable component.  Only
+    meaningful when ``ComponentDef.resizable`` is True.
+    """
+
+
+@dataclass
+class DiodeComponent(Component):
+    """A diode — supports the filled (``*``) CircuiTikZ variant."""
+
+    filled: bool = False
+    """Use the filled variant (e.g. ``D*``) when True."""
+
+
+@dataclass
+class DrawingComponent(Component):
+    """Non-circuit visual element (text_node, rect). Carries a z-order for layering."""
+
+    z_order: int = 0
+    """Canvas and code-generation layer.
+
+    Positive values are drawn/emitted later (in front); negative values are
+    drawn/emitted earlier (behind).  In the LaTeX output, items with
+    z_order < 0 are emitted *before* the main ``\\draw`` block.
+    On the Qt canvas, maps directly to ``QGraphicsItem.setZValue()``.
+    """
+
+
+@dataclass
+class TextNodeComponent(DrawingComponent):
+    """Freestanding text annotation."""
+
+    font_size: float = 12.0
+    """Font size in points for the canvas preview and LaTeX output."""
+
+    font_bold: bool = False
+    """Bold weight (\\bfseries in LaTeX)."""
+
+    font_italic: bool = False
+    """Italic style (\\itshape in LaTeX)."""
+
+    font_family: str = ""
+    """Font family: ``""`` (document default), ``"serif"`` (\\rmfamily),
+    ``"sans"`` (\\sffamily), ``"mono"`` (\\ttfamily).
+    """
+
+
+@dataclass
+class RectComponent(DrawingComponent):
+    """Rectangle drawing element.
+
+    ``options`` holds a TikZ draw-options string (line style, fill, etc.);
+    ``span_override`` holds the (width, height) in GU.
+    """
+
+
+# ---------------------------------------------------------------------------
+# Static component definitions
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class PinDef:
@@ -57,3 +155,12 @@ class ComponentDef:
     """If True, the terminal pin can be dragged after placement to resize the
     component.  Only meaningful for two-terminal components.  The actual span
     at a given instance is stored in Component.span_override."""
+
+    component_class: type = Component
+    """The Component subclass to instantiate for placed instances of this kind.
+
+    Defaults to :class:`Component` (plain circuit element).  Overridden for
+    kinds that need extra per-instance state:
+    ``DiodeComponent`` for diodes, ``TextNodeComponent`` for text_node,
+    ``RectComponent`` for rect.
+    """

@@ -12,6 +12,7 @@ import uuid
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
+from app.components.model import DiodeComponent, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -111,6 +112,32 @@ def test_diode_horizontal() -> None:
     """Diode at (0,0), rotation 0 → (0,0) to[D] (2,0)."""
     src = generate(_schematic(_comp("D")))
     assert "(0,0) to[D] (2,0)" in src
+
+
+def test_diode_filled() -> None:
+    """Filled diode → to[D*] in output."""
+    comp = DiodeComponent(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    src = generate(_schematic(comp))
+    assert "(0,0) to[D*] (2,0)" in src
+
+
+def test_zener_diode() -> None:
+    """Zener diode → to[zD] in output."""
+    src = generate(_schematic(_comp("zD")))
+    assert "(0,0) to[zD] (2,0)" in src
+
+
+def test_zener_diode_filled() -> None:
+    """Filled Zener diode → to[zD*] in output."""
+    comp = DiodeComponent(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    src = generate(_schematic(comp))
+    assert "(0,0) to[zD*] (2,0)" in src
+
+
+def test_led() -> None:
+    """LED → to[leD] in output."""
+    src = generate(_schematic(_comp("leD")))
+    assert "(0,0) to[leD] (2,0)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +399,7 @@ def test_no_open_endpoints_no_ocirc() -> None:
 
 def test_text_node_basic() -> None:
     r"""text_node emits \node at (x,y) {text}; outside the \draw block."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(2.0, 3.0),
         rotation=0, options="Hello", mirror=False,
     )
@@ -381,11 +408,11 @@ def test_text_node_basic() -> None:
 
 
 def test_text_node_with_font_size() -> None:
-    r"""text_node with span_override → \node[font=\fontsize{...}...] ..."""
-    comp = Component(
+    r"""text_node with font_size → \node[font=\fontsize{...}...] ..."""
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 1.0),
         rotation=0, options="A", mirror=False,
-        span_override=(14.0, 0.0),
+        font_size=14.0,
     )
     src = generate(_schematic(comp))
     assert r"\node[font=\fontsize{14}" in src
@@ -394,7 +421,7 @@ def test_text_node_with_font_size() -> None:
 
 def test_text_node_bold_italic() -> None:
     r"""text_node with bold+italic → \bfseries\itshape in font= option."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 1.0),
         rotation=0, options="Hi", mirror=False,
         font_bold=True, font_italic=True,
@@ -407,7 +434,7 @@ def test_text_node_bold_italic() -> None:
 
 def test_text_node_font_family_sans() -> None:
     r"""text_node with font_family='sans' → \sffamily in font= option."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 1.0),
         rotation=0, options="T", mirror=False,
         font_family="sans",
@@ -418,7 +445,7 @@ def test_text_node_font_family_sans() -> None:
 
 def test_text_node_font_family_mono() -> None:
     r"""text_node with font_family='mono' → \ttfamily in font= option."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 1.0),
         rotation=0, options="T", mirror=False,
         font_family="mono",
@@ -429,10 +456,10 @@ def test_text_node_font_family_mono() -> None:
 
 def test_text_node_font_all_options() -> None:
     r"""text_node with size+bold+italic+family → all parts present in font=."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(0.0, 0.0),
         rotation=0, options="X", mirror=False,
-        span_override=(10.0, 0.0),
+        font_size=10.0,
         font_bold=True, font_italic=True, font_family="serif",
     )
     src = generate(_schematic(comp))
@@ -444,7 +471,7 @@ def test_text_node_font_all_options() -> None:
 
 def test_text_node_y_flip() -> None:
     r"""text_node with y_flip=True negates the y coordinate."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(2.0, 3.0),
         rotation=0, options="Flip", mirror=False,
     )
@@ -454,7 +481,7 @@ def test_text_node_y_flip() -> None:
 
 def test_text_node_rotation() -> None:
     r"""text_node rotation=90 → rotate=270 (negated so CW-visual on canvas maps to CW in TikZ)."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 2.0),
         rotation=90, options="Hello", mirror=False,
     )
@@ -464,7 +491,7 @@ def test_text_node_rotation() -> None:
 
 def test_text_node_rotation_with_font() -> None:
     r"""text_node rotation=270 + bold → rotate=90 and \bfseries both present."""
-    comp = Component(
+    comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(0.0, 0.0),
         rotation=270, options="Hi", mirror=False,
         font_bold=True,
@@ -476,7 +503,7 @@ def test_text_node_rotation_with_font() -> None:
 
 def test_rect_solid() -> None:
     r"""rect with no style → \draw (x1,y1) rectangle (x2,y2); (no brackets)."""
-    comp = Component(
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(-0.5, -0.5),
         rotation=0, options="", mirror=False,
         span_override=(5.0, 1.0),
@@ -487,7 +514,7 @@ def test_rect_solid() -> None:
 
 def test_rect_dashed() -> None:
     r"""rect with options="dashed" → \draw[dashed] ... rectangle ...;"""
-    comp = Component(
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="dashed", mirror=False,
         span_override=(2.0, 2.0),
@@ -498,7 +525,7 @@ def test_rect_dashed() -> None:
 
 def test_rect_uses_default_span_when_none() -> None:
     """rect with span_override=None falls back to the registry default_span (2,2)."""
-    comp = Component(
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
     )
@@ -508,11 +535,11 @@ def test_rect_uses_default_span_when_none() -> None:
 
 def test_drawing_kinds_not_in_draw_block() -> None:
     """text_node and rect produce nothing inside the main \\draw block."""
-    t = Component(
+    t = TextNodeComponent(
         id=_uid(), kind="text_node", position=(0.0, 0.0),
         rotation=0, options="Hi", mirror=False,
     )
-    r = Component(
+    r = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
         span_override=(1.0, 1.0),
@@ -526,7 +553,7 @@ def test_drawing_kinds_not_in_draw_block() -> None:
 
 def test_rect_with_line_width() -> None:
     r"""rect with line width in options → emitted in the \draw[...] arg."""
-    comp = Component(
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="dashed, line width=1.5pt", mirror=False,
         span_override=(2.0, 2.0),
@@ -537,7 +564,7 @@ def test_rect_with_line_width() -> None:
 
 def test_rect_with_fill() -> None:
     r"""rect with fill → emitted as \draw[fill=...] ... rectangle ...;"""
-    comp = Component(
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="fill=yellow!20", mirror=False,
         span_override=(2.0, 2.0),
@@ -548,7 +575,7 @@ def test_rect_with_fill() -> None:
 
 def test_rect_z_order_background_before_draw_block() -> None:
     """A rect with z_order=-1 is emitted before the \\draw block."""
-    r = Component(
+    r = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="dashed", mirror=False,
         span_override=(2.0, 2.0), z_order=-1,
@@ -565,7 +592,7 @@ def test_rect_z_order_background_before_draw_block() -> None:
 
 def test_rect_z_order_foreground_after_draw_block() -> None:
     """A rect with z_order=0 (default) is emitted after the \\draw block."""
-    r = Component(
+    r = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
         span_override=(2.0, 2.0), z_order=0,
@@ -577,8 +604,8 @@ def test_rect_z_order_foreground_after_draw_block() -> None:
 
 
 def test_z_order_default_is_zero() -> None:
-    """Component.z_order defaults to 0."""
-    comp = Component(
+    """RectComponent.z_order defaults to 0."""
+    comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
     )
@@ -587,12 +614,12 @@ def test_z_order_default_is_zero() -> None:
 
 def test_z_order_sorts_within_background_group() -> None:
     """Two background rects are emitted in z_order ascending order (lower first = further back)."""
-    large = Component(
+    large = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
         span_override=(4.0, 4.0), z_order=-2,
     )
-    small = Component(
+    small = RectComponent(
         id=_uid(), kind="rect", position=(1.0, 1.0),
         rotation=0, options="dashed", mirror=False,
         span_override=(2.0, 2.0), z_order=-1,
@@ -606,12 +633,12 @@ def test_z_order_sorts_within_background_group() -> None:
 
 def test_z_order_sorts_within_foreground_group() -> None:
     """Two foreground rects are emitted in z_order ascending order."""
-    bottom = Component(
+    bottom = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
         span_override=(4.0, 4.0), z_order=1,
     )
-    top = Component(
+    top = RectComponent(
         id=_uid(), kind="rect", position=(1.0, 1.0),
         rotation=0, options="", mirror=False,
         span_override=(2.0, 2.0), z_order=2,
