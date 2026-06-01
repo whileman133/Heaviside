@@ -1733,3 +1733,51 @@ def test_random_mutation_sequences_never_crash_paint():
                 pass
 
             paint()   # <- would segfault on a dangling item pointer
+
+
+# ---------------------------------------------------------------------------
+# Line-style rendering (regression: bipole ignored line_style on canvas)
+# ---------------------------------------------------------------------------
+
+def test_resolve_pen_style_mapping():
+    """The shared line_style → Qt pen-style mapping used by rect and bipole items."""
+    from PySide6.QtCore import Qt
+    from app.canvas.items import _resolve_pen_style
+    assert _resolve_pen_style("") == Qt.SolidLine
+    assert _resolve_pen_style("dashed") == Qt.DashLine
+    assert _resolve_pen_style("DOTTED") == Qt.DotLine        # case-insensitive
+    assert _resolve_pen_style("dash dot") == Qt.DashDotLine
+    assert _resolve_pen_style("bogus") == Qt.SolidLine        # unknown → solid
+
+
+def _render_scene(scene: SchematicScene) -> bytes:
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    img = QImage(400, 240, QImage.Format_ARGB32)
+    img.fill(0)
+    p = QPainter(img)
+    # Map the items' bounding rect to fill the image so a thick dashed border
+    # spans many pixels and resolves distinctly from a solid one.
+    scene.render(p, QRectF(img.rect()), scene.itemsBoundingRect())
+    p.end()
+    return bytes(img.constBits())
+
+
+def test_bipole_line_style_changes_canvas_rendering(scene: SchematicScene):
+    """Changing a bipole's line_style repaints its border with the new style.
+
+    Regression: BipoleItem._draw_body previously built its pen without applying
+    line_style, so dashed/dotted borders looked solid on the canvas.
+    """
+    comp = scene.place_component("bipole", (1.0, 0.0))
+    # Drive edits through the scene (as the inspector does) so the canvas item
+    # is refreshed; thick border makes the dash pattern visible at render scale.
+    scene.set_border_width(comp.id, 3.0)
+
+    scene.set_line_style(comp.id, "")
+    solid = _render_scene(scene)
+
+    scene.set_line_style(comp.id, "dashed")
+    dashed = _render_scene(scene)
+
+    assert solid != dashed, "dashed bipole border should render differently from solid"

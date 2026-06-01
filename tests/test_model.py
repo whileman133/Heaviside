@@ -53,6 +53,45 @@ def _wire(points, **kwargs) -> Wire:
 
 
 # ---------------------------------------------------------------------------
+# Component capability mixins (FontedComponent / StyledComponent)
+# ---------------------------------------------------------------------------
+
+def test_component_mixin_composition() -> None:
+    """Bipole composes both mixins; rect only style; text_node only font.
+
+    Also a regression guard: if the mixins are ever listed *after*
+    DrawingComponent in the bases, dataclass field ordering raises at import,
+    so merely importing/constructing here would fail.
+    """
+    from app.components.model import (
+        BipoleComponent,
+        DrawingComponent,
+        FontedComponent,
+        RectComponent,
+        StyledComponent,
+        TextNodeComponent,
+    )
+
+    bipole = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0), rotation=0, options="",
+        fill_color="red!20", border_width=1.5, line_style="dashed", font_bold=True,
+    )
+    assert isinstance(bipole, FontedComponent)
+    assert isinstance(bipole, StyledComponent)
+    assert isinstance(bipole, DrawingComponent)
+    assert (bipole.fill_color, bipole.line_style, bipole.font_bold) == ("red!20", "dashed", True)
+    assert bipole.font_size == 7.0  # bipole override of FontedComponent's 12.0
+
+    rect = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    assert isinstance(rect, StyledComponent)
+    assert not isinstance(rect, FontedComponent)
+
+    text = TextNodeComponent(id=_uid(), kind="text_node", position=(0.0, 0.0), rotation=0, options="Hi")
+    assert isinstance(text, FontedComponent)
+    assert not isinstance(text, StyledComponent)
+
+
+# ---------------------------------------------------------------------------
 # test_component_valid
 # ---------------------------------------------------------------------------
 

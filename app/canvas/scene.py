@@ -753,23 +753,32 @@ class SchematicScene(QGraphicsScene):
         """Set the body_diode state of a MosfetComponent via an undoable command."""
         self._push(SetBodyDiodeCommand(component_id, new_body_diode))
 
-    def set_bipole_fill_color(self, component_id: str, new_fill: str) -> None:
-        """Set fill_color on a BipoleComponent via an undoable command."""
-        from app.components.model import BipoleComponent
-        from app.canvas.commands import SetBipoleFillCommand
+    def set_fill_color(self, component_id: str, new_fill: str) -> None:
+        """Set fill_color on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetFillColorCommand
         comp = self._component_by_id(component_id)
-        if comp is None or not isinstance(comp, BipoleComponent) or comp.fill_color == new_fill:
+        if comp is None or not isinstance(comp, StyledComponent) or comp.fill_color == new_fill:
             return
-        self._push(SetBipoleFillCommand(component_id, new_fill, comp.fill_color))
+        self._push(SetFillColorCommand(component_id, new_fill, comp.fill_color))
 
-    def set_bipole_border_width(self, component_id: str, new_width: float) -> None:
-        """Set border_width on a BipoleComponent via an undoable command."""
-        from app.components.model import BipoleComponent
-        from app.canvas.commands import SetBipoleBorderWidthCommand
+    def set_border_width(self, component_id: str, new_width: float) -> None:
+        """Set border_width on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetBorderWidthCommand
         comp = self._component_by_id(component_id)
-        if comp is None or not isinstance(comp, BipoleComponent) or abs(comp.border_width - new_width) < 1e-6:
+        if comp is None or not isinstance(comp, StyledComponent) or abs(comp.border_width - new_width) < 1e-6:
             return
-        self._push(SetBipoleBorderWidthCommand(component_id, new_width, comp.border_width))
+        self._push(SetBorderWidthCommand(component_id, new_width, comp.border_width))
+
+    def set_line_style(self, component_id: str, new_style: str) -> None:
+        """Set line_style on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetLineStyleCommand
+        comp = self._component_by_id(component_id)
+        if comp is None or not isinstance(comp, StyledComponent) or comp.line_style == new_style:
+            return
+        self._push(SetLineStyleCommand(component_id, new_style, comp.line_style))
 
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""

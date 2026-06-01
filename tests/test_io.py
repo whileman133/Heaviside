@@ -35,14 +35,18 @@ def _one_of_each() -> Schematic:
     from app.components.registry import REGISTRY
 
     components = []
+    from app.components.model import RectComponent
     for i, (kind, defn) in enumerate(REGISTRY.items()):
+        # Rects carry their style in fields, not the options string, so they
+        # round-trip with empty options; everything else carries a label.
+        opts = "" if issubclass(defn.component_class, RectComponent) else f"l=$X_{{{i}}}$"
         components.append(
             defn.component_class(
                 id=_uid(),
                 kind=kind,
                 position=(float(i * 3), 0.0),
                 rotation=0,
-                options=f"l=$X_{{{i}}}$",
+                options=opts,
                 mirror=False,
             )
         )
@@ -430,6 +434,93 @@ def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
     comp_dict = raw["components"][0]
     assert "fill_color" not in comp_dict
     assert "border_width" not in comp_dict
+
+
+# ---------------------------------------------------------------------------
+# StyledComponent fill / border / line_style round-trip + rect legacy migration
+# ---------------------------------------------------------------------------
+
+def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
+    """RectComponent fill_color/border_width/line_style survive a save/load cycle."""
+    from app.components.model import RectComponent
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="",
+        span_override=(2.0, 2.0),
+        fill_color="yellow!20", border_width=1.5, line_style="dashed",
+    )
+    s = Schematic(version="0.1", name="rect-style", components=[comp])
+    p = tmp_path / "rect_style.ctikz"
+    save(s, p)
+    loaded = load(p).components[0]
+    assert isinstance(loaded, RectComponent)
+    assert loaded.fill_color == "yellow!20"
+    assert abs(loaded.border_width - 1.5) < 1e-6
+    assert loaded.line_style == "dashed"
+    assert loaded.options == ""
+
+
+def test_rect_legacy_options_migrated_to_fields(tmp_path: Path) -> None:
+    """A legacy rect that stored its style in the options string is migrated to fields on load."""
+    legacy = {
+        "version": "0.1",
+        "name": "legacy-rect",
+        "components": [
+            {
+                "id": _uid(),
+                "kind": "rect",
+                "position": [0.0, 0.0],
+                "rotation": 0,
+                "mirror": False,
+                "options": "dashed, line width=1.5pt, fill=yellow!20",
+                "span_override": [2.0, 2.0],
+            }
+        ],
+        "wires": [],
+        "metadata": {},
+    }
+    p = tmp_path / "legacy_rect.ctikz"
+    p.write_text(json.dumps(legacy), encoding="utf-8")
+
+    from app.components.model import RectComponent
+    loaded = load(p).components[0]
+    assert isinstance(loaded, RectComponent)
+    assert loaded.fill_color == "yellow!20"
+    assert abs(loaded.border_width - 1.5) < 1e-6
+    assert loaded.line_style == "dashed"
+    assert loaded.options == ""
+
+
+def test_bipole_line_style_roundtrip(tmp_path: Path) -> None:
+    """BipoleComponent.line_style survives a save/load cycle (dashed border support)."""
+    from app.components.model import BipoleComponent
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="t=Test",
+        span_override=(2.0, 0.0), line_style="dashed",
+    )
+    s = Schematic(version="0.1", name="bipole-ls", components=[comp])
+    p = tmp_path / "bipole_ls.ctikz"
+    save(s, p)
+    loaded = load(p).components[0]
+    assert isinstance(loaded, BipoleComponent)
+    assert loaded.line_style == "dashed"
+
+
+def test_styled_defaults_not_saved(tmp_path: Path) -> None:
+    """Default fill_color/border_width/line_style are omitted from saved JSON."""
+    from app.components.model import RectComponent
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="", span_override=(2.0, 2.0),
+    )
+    s = Schematic(version="0.1", name="rect-defaults", components=[comp])
+    p = tmp_path / "rect_defaults.ctikz"
+    save(s, p)
+    comp_dict = json.loads(p.read_text())["components"][0]
+    assert "fill_color" not in comp_dict
+    assert "border_width" not in comp_dict
+    assert "line_style" not in comp_dict
 
 
 def test_mosfet_body_diode_roundtrip(tmp_path: Path) -> None:

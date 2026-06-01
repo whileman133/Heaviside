@@ -534,11 +534,11 @@ def test_rect_solid() -> None:
 
 
 def test_rect_dashed() -> None:
-    r"""rect with options="dashed" → \draw[dashed] ... rectangle ...;"""
+    r"""rect with line_style="dashed" → \draw[dashed] ... rectangle ...;"""
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="dashed", mirror=False,
-        span_override=(2.0, 2.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 2.0), line_style="dashed",
     )
     src = generate(_schematic(comp))
     assert r"\draw[dashed] (0,0) rectangle (2,2);" in src
@@ -573,22 +573,22 @@ def test_drawing_kinds_not_in_draw_block() -> None:
 
 
 def test_rect_with_line_width() -> None:
-    r"""rect with line width in options → emitted in the \draw[...] arg."""
+    r"""rect with line_style + border_width → emitted in the \draw[...] arg."""
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="dashed, line width=1.5pt", mirror=False,
-        span_override=(2.0, 2.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 2.0), line_style="dashed", border_width=1.5,
     )
     src = generate(_schematic(comp))
     assert r"\draw[dashed, line width=1.5pt] (0,0) rectangle (2,2);" in src
 
 
 def test_rect_with_fill() -> None:
-    r"""rect with fill → emitted as \draw[fill=...] ... rectangle ...;"""
+    r"""rect with fill_color → emitted as \draw[fill=...] ... rectangle ...;"""
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="fill=yellow!20", mirror=False,
-        span_override=(2.0, 2.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 2.0), fill_color="yellow!20",
     )
     src = generate(_schematic(comp))
     assert r"\draw[fill=yellow!20] (0,0) rectangle (2,2);" in src
@@ -598,8 +598,8 @@ def test_rect_z_order_background_before_draw_block() -> None:
     """A rect with z_order=-1 is emitted before the \\draw block."""
     r = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="dashed", mirror=False,
-        span_override=(2.0, 2.0), z_order=-1,
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 2.0), z_order=-1, line_style="dashed",
     )
     resistor = Component(
         id=_uid(), kind="R", position=(3.0, 0.0),
@@ -773,3 +773,25 @@ def test_bipole_default_border_width_omitted() -> None:
     )
     src = generate(_schematic(comp))
     assert "line width" not in src
+
+
+def test_bipole_line_style() -> None:
+    """bipole with line_style emits the style token in the node options."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="t=CPU", mirror=False,
+        span_override=(2.0, 0.0), line_style="dashed",
+    )
+    src = generate(_schematic(comp))
+    assert "dashed" in src
+
+
+def test_rect_line_style_and_fill_combined() -> None:
+    r"""rect with line_style + fill composes both into the \draw[...] arg."""
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 2.0), line_style="dotted", fill_color="cyan!15",
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw[dotted, fill=cyan!15] (0,0) rectangle (2,2);" in src

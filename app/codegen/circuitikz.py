@@ -118,6 +118,7 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.style import compose_style_options
 from app.schematic.model import (
     Component,
     Schematic,
@@ -623,9 +624,9 @@ def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
 def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     r"""Render a rectangle annotation as \draw[style] (x1,y1) rectangle (x2,y2);
 
-    ``comp.options`` is a raw TikZ style string (e.g. "dashed", "dotted", "").
-    The second corner is computed from ``comp.span_override`` (falling back to
-    ``default_span`` from the registry).
+    The draw style (line style, line width, fill) comes from the
+    StyledComponent fields.  The second corner is computed from
+    ``comp.span_override`` (falling back to ``default_span`` from the registry).
     """
     defn = REGISTRY[comp.kind]
     x1, y1 = comp.position
@@ -633,7 +634,11 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     dx, dy = so
     x2, y2 = x1 + dx, y1 + dy
 
-    style = comp.options.strip()
+    style = compose_style_options(
+        fill_color=comp.fill_color,
+        border_width=comp.border_width,
+        line_style=comp.line_style,
+    )
     style_arg = f"[{style}]" if style else ""
 
     return (
@@ -692,13 +697,12 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
         font_cmds += _FONT_FAMILY_CMD[comp.font_family]
     font_opt = rf", font={font_cmds}"
 
-    extra_opts = ""
-    if comp.fill_color:
-        extra_opts += f", fill={comp.fill_color}"
-    if abs(comp.border_width - 0.4) > 1e-6:
-        bw = comp.border_width
-        bw_str = str(int(bw)) if bw == int(bw) else (f"{bw:.1f}" if bw == round(bw, 1) else f"{bw:.2f}")
-        extra_opts += f", line width={bw_str}pt"
+    style = compose_style_options(
+        fill_color=comp.fill_color,
+        border_width=comp.border_width,
+        line_style=comp.line_style,
+    )
+    extra_opts = f", {style}" if style else ""
 
     return (
         rf"\node[draw, minimum width={_fmt(span_len)}cm, "
