@@ -60,6 +60,11 @@ if TYPE_CHECKING:
     from app.canvas.scene import SchematicScene
 
 
+def _round_pt(pt: tuple[float, float]) -> tuple[float, float]:
+    """Round a coordinate to 6 dp for stable dict/set keys (float noise guard)."""
+    return (round(pt[0], 6), round(pt[1], 6))
+
+
 class DragPreviewController:
     """Owns drag state and renders live drag previews for a SchematicScene."""
 
@@ -103,6 +108,41 @@ class DragPreviewController:
         self.previewed_wire_ids = set()
 
     # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _static_pin_positions(self) -> set[tuple[float, float]]:
+        """Rounded pin coordinates of components NOT currently being dragged.
+
+        Dragged components are excluded because their model positions are stale
+        mid-drag; callers supply the live (dragged) pins via ``extra_pin_positions``.
+        """
+        dragged = set(self.drag_start.keys())
+        return {
+            _round_pt(p)
+            for comp in self._scene._schematic.components
+            if comp.id not in dragged
+            for p in component_pin_positions(comp)
+        }
+
+    def _endpoint_local_delta(
+        self, comp_id: str, gu: tuple[float, float]
+    ) -> tuple[_ResizableTwoTerminalItem, object, float, float] | None:
+        """Resolve an endpoint-drag target to ``(item, comp, dx, dy)`` or None.
+
+        ``dx, dy`` is the raw (un-snapped) drag delta mapped into the
+        component's local span axes. Returns None when the component is not a
+        resizable two-terminal item. Shared by the preview and commit paths.
+        """
+        item = self._scene._comp_items.get(comp_id)
+        if not isinstance(item, _ResizableTwoTerminalItem):
+            return None
+        comp = item.component
+        ox, oy = comp.position
+        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
+        return item, comp, dx, dy
+
+    # ------------------------------------------------------------------
     # Endpoint drag helpers (resizable components)
     # ------------------------------------------------------------------
 
@@ -129,16 +169,15 @@ class DragPreviewController:
         if self.endpoint_drag is None:
             return
         comp_id, _handle_idx, old_span = self.endpoint_drag
-        item = self._scene._comp_items.get(comp_id)
-        if not isinstance(item, _ResizableTwoTerminalItem):
+        resolved = self._endpoint_local_delta(comp_id, gu)
+        if resolved is None:
             return
-        comp = item.component
-        ox, oy = comp.position
-        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
+        item, comp, dx, dy = resolved
         if abs(dx) < 0.5 and abs(dy) < 0.5:
             return
 
         # Compute old terminal world position (before preview span is applied).
+        ox, oy = comp.position
         old_rx, old_ry = local_span_to_world(old_span, comp.rotation, comp.mirror)
         old_pin = (ox + old_rx, oy + old_ry)
 
@@ -174,12 +213,10 @@ class DragPreviewController:
         gu: tuple[float, float],
     ) -> None:
         """Commit a ResizeCommand for the dragged terminal endpoint."""
-        item = self._scene._comp_items.get(comp_id)
-        if not isinstance(item, _ResizableTwoTerminalItem):
+        resolved = self._endpoint_local_delta(comp_id, gu)
+        if resolved is None:
             return
-        comp = item.component
-        ox, oy = comp.position
-        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
+        item, _comp, dx, dy = resolved
         dx = round(dx * 2) / 2
         dy = round(dy * 2) / 2
         if abs(dx) < 0.5 and abs(dy) < 0.5:
@@ -262,7 +299,7 @@ class DragPreviewController:
             if comp is not None:
                 at_start = replace(comp, position=start)
                 for p in component_pin_positions(at_start):
-                    start_pins.add((round(p[0], 6), round(p[1], 6)))
+                    start_pins.add(_round_pt(p))
 
         if not deltas:
             return
@@ -285,8 +322,8 @@ class DragPreviewController:
             if all_dragged or wire.id in self.drag_wire_ids:
                 start_hit = end_hit = True
             else:
-                start_hit = (round(pts[0][0], 6), round(pts[0][1], 6)) in start_pins
-                end_hit = (round(pts[-1][0], 6), round(pts[-1][1], 6)) in start_pins
+                start_hit = _round_pt(pts[0]) in start_pins
+                end_hit = _round_pt(pts[-1]) in start_pins
                 if not (start_hit or end_hit):
                     continue
             new_pts = reshape_wire_points(
@@ -324,7 +361,7 @@ class DragPreviewController:
                 ddy = cur[1] - start[1]
                 at_cur = replace(comp, position=(comp.position[0] + ddx, comp.position[1] + ddy))
                 for p in component_pin_positions(at_cur):
-                    dragged_pins.add((round(p[0], 6), round(p[1], 6)))
+                    dragged_pins.add(_round_pt(p))
 
         self.update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)
         self.update_junction_preview(preview_pts, dragged_pins)
@@ -391,15 +428,9 @@ class DragPreviewController:
         otherwise cause connected wire endpoints to falsely appear as open.
         """
         scene = self._scene
-        # Build the set of all pin positions, using dragged positions for
-        # components currently being dragged (their model positions are stale).
-        dragged_comp_ids = set(self.drag_start.keys())
-        pin_positions: set[tuple[float, float]] = set()
-        for comp in scene._schematic.components:
-            if comp.id in dragged_comp_ids:
-                continue  # replaced by extra_pin_positions below
-            for p in component_pin_positions(comp):
-                pin_positions.add((round(p[0], 6), round(p[1], 6)))
+        # All pin positions, using live (dragged) positions via extra_pin_positions
+        # for components currently being dragged (their model positions are stale).
+        pin_positions = self._static_pin_positions()
         if extra_pin_positions:
             pin_positions |= extra_pin_positions
 
@@ -410,7 +441,7 @@ class DragPreviewController:
         for wire in scene._schematic.wires:
             pts = preview_pts_by_wire.get(wire.id, wire.points)
             for pt in pts:
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
+                pt_r = _round_pt(pt)
                 all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
 
         # Compute the desired ocirc positions from model wires, substituting
@@ -421,7 +452,7 @@ class DragPreviewController:
             if len(pts) < 2:
                 continue
             for pt in (pts[0], pts[-1]):
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
+                pt_r = _round_pt(pt)
                 if pt_r in pin_positions:
                     continue
                 if all_wire_points.get(pt_r, 0) > 1:
@@ -455,7 +486,7 @@ class DragPreviewController:
         degree: dict[tuple[float, float], int] = {}
 
         def add(pt: tuple[float, float], d: int) -> None:
-            pt = (round(pt[0], 6), round(pt[1], 6))
+            pt = _round_pt(pt)
             degree[pt] = degree.get(pt, 0) + d
 
         for wire in scene._schematic.wires:
@@ -463,19 +494,15 @@ class DragPreviewController:
             own: dict[tuple[float, float], int] = {}
             n = len(pts)
             for i, pt in enumerate(pts):
-                pt_r = (round(pt[0], 6), round(pt[1], 6))
+                pt_r = _round_pt(pt)
                 own[pt_r] = own.get(pt_r, 0) + (1 if (i == 0 or i == n - 1) else 2)
             for pt, d in own.items():
                 add(pt, d)
 
-        # Add pin positions for all components, but use dragged positions for
-        # components currently being dragged (their model positions are stale).
-        dragged_comp_ids = set(self.drag_start.keys())
-        for comp in scene._schematic.components:
-            if comp.id in dragged_comp_ids:
-                continue  # replaced by extra_pin_positions below
-            for p in component_pin_positions(comp):
-                add(p, 1)
+        # Add pin positions for non-dragged components (live dragged pins arrive
+        # via extra_pin_positions, since model positions are stale mid-drag).
+        for p in self._static_pin_positions():
+            add(p, 1)
         for p in (extra_pin_positions or set()):
             add(p, 1)
 
