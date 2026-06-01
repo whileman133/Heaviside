@@ -325,6 +325,12 @@ class SchematicScene(QGraphicsScene):
     # Commands triggered by UI/keyboard
     # ------------------------------------------------------------------
 
+    def _component_by_id(self, component_id: str) -> Component | None:
+        """Return the live model Component with *component_id*, or None."""
+        return next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+
     def place_component(
         self,
         kind: str,
@@ -574,7 +580,7 @@ class SchematicScene(QGraphicsScene):
         been set yet, auto-placement runs first so the label avoids overlapping
         other component bounding boxes.
         """
-        comp = next((c for c in self._schematic.components if c.id == component_id), None)
+        comp = self._component_by_id(component_id)
         if comp is None:
             return
         was_empty = not comp.options
@@ -607,7 +613,7 @@ class SchematicScene(QGraphicsScene):
         """
         from app.canvas.items import LabelTextItem as _LabelTextItem  # local to avoid circular at module level
 
-        comp = next((c for c in self._schematic.components if c.id == component_id), None)
+        comp = self._component_by_id(component_id)
         if comp is None:
             return None
 
@@ -751,9 +757,7 @@ class SchematicScene(QGraphicsScene):
         """Set fill_color on a BipoleComponent via an undoable command."""
         from app.components.model import BipoleComponent
         from app.canvas.commands import SetBipoleFillCommand
-        comp = next(
-            (c for c in self._schematic.components if c.id == component_id), None
-        )
+        comp = self._component_by_id(component_id)
         if comp is None or not isinstance(comp, BipoleComponent) or comp.fill_color == new_fill:
             return
         self._push(SetBipoleFillCommand(component_id, new_fill, comp.fill_color))
@@ -762,9 +766,7 @@ class SchematicScene(QGraphicsScene):
         """Set border_width on a BipoleComponent via an undoable command."""
         from app.components.model import BipoleComponent
         from app.canvas.commands import SetBipoleBorderWidthCommand
-        comp = next(
-            (c for c in self._schematic.components if c.id == component_id), None
-        )
+        comp = self._component_by_id(component_id)
         if comp is None or not isinstance(comp, BipoleComponent) or abs(comp.border_width - new_width) < 1e-6:
             return
         self._push(SetBipoleBorderWidthCommand(component_id, new_width, comp.border_width))
@@ -773,9 +775,7 @@ class SchematicScene(QGraphicsScene):
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
         from app.components.model import DrawingComponent
         from app.canvas.commands import SetZOrderCommand
-        comp = next(
-            (c for c in self._schematic.components if c.id == component_id), None
-        )
+        comp = self._component_by_id(component_id)
         if comp is None or not isinstance(comp, DrawingComponent) or comp.z_order == new_z:
             return
         self._push(SetZOrderCommand(component_id, new_z, comp.z_order))
@@ -783,9 +783,7 @@ class SchematicScene(QGraphicsScene):
     def set_font_size(self, component_id: str, new_size: float) -> None:
         """Set font_size on any FontedComponent via an undoable SetFontSizeCommand."""
         from app.components.model import FontedComponent
-        comp = next(
-            (c for c in self._schematic.components if c.id == component_id), None
-        )
+        comp = self._component_by_id(component_id)
         if comp is None or not isinstance(comp, FontedComponent):
             return
         if comp.font_size == new_size:
@@ -802,9 +800,7 @@ class SchematicScene(QGraphicsScene):
         """Set font style on any FontedComponent via an undoable SetTextStyleCommand."""
         from app.components.model import FontedComponent
         from app.canvas.commands import SetTextStyleCommand
-        comp = next(
-            (c for c in self._schematic.components if c.id == component_id), None
-        )
+        comp = self._component_by_id(component_id)
         if comp is None or not isinstance(comp, FontedComponent):
             return
         if (comp.font_bold, comp.font_italic, comp.font_family) == (bold, italic, family):
@@ -822,7 +818,7 @@ class SchematicScene(QGraphicsScene):
             self._update_ghost_transform()
             return
         for cid in self.selected_component_ids():
-            comp = next((c for c in self._schematic.components if c.id == cid), None)
+            comp = self._component_by_id(cid)
             if comp is not None:
                 self._push(MirrorCommand(cid, not comp.mirror))
 
@@ -1235,7 +1231,7 @@ class SchematicScene(QGraphicsScene):
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
             comp_id = self._drag.endpoint_handle_at(event.scenePos())
             if comp_id is not None:
-                comp = next((c for c in self._schematic.components if c.id == comp_id), None)
+                comp = self._component_by_id(comp_id)
                 if comp is not None:
                     old_span = comp.span_override if comp.span_override is not None else REGISTRY[comp.kind].default_span
                     self._drag.endpoint_drag = (comp_id, 1, old_span)

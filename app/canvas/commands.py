@@ -35,6 +35,7 @@ from __future__ import annotations
 import copy
 import uuid
 from abc import ABC, abstractmethod
+from typing import TypeVar
 
 from app.components.model import DiodeComponent, DrawingComponent, FontedComponent, MosfetComponent, TextNodeComponent
 from app.schematic.model import (
@@ -83,6 +84,20 @@ def _find_component(schematic: Schematic, comp_id: str) -> Component:
         if comp.id == comp_id:
             return comp
     raise KeyError(f"no component with id {comp_id!r} in schematic")
+
+
+_C = TypeVar("_C", bound=Component)
+
+
+def _typed_component(schematic: Schematic, comp_id: str, cls: type[_C]) -> _C:
+    """Find the component with *comp_id* and assert it is an instance of *cls*.
+
+    Collapses the recurring ``comp = _find_component(...); assert isinstance(...)``
+    pair while preserving the narrowed type for static checkers.
+    """
+    comp = _find_component(schematic, comp_id)
+    assert isinstance(comp, cls)
+    return comp
 
 
 def _wire_touches_position(wire: Wire, pos: tuple[float, float]) -> bool:
@@ -571,13 +586,11 @@ class SetFontSizeCommand(Command):
         self._old_size = old_size
 
     def do(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, FontedComponent)
+        comp = _typed_component(schematic, self._component_id, FontedComponent)
         comp.font_size = self._new_size
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, FontedComponent)
+        comp = _typed_component(schematic, self._component_id, FontedComponent)
         comp.font_size = self._old_size
 
 
@@ -592,13 +605,11 @@ class SetZOrderCommand(Command):
         self._old_z = old_z
 
     def do(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, DrawingComponent)
+        comp = _typed_component(schematic, self._component_id, DrawingComponent)
         comp.z_order = self._new_z
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, DrawingComponent)
+        comp = _typed_component(schematic, self._component_id, DrawingComponent)
         comp.z_order = self._old_z
 
 
@@ -618,8 +629,7 @@ class SetTextStyleCommand(Command):
         self._old = (old_bold, old_italic, old_family)
 
     def _apply(self, schematic: Schematic, vals: tuple) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, FontedComponent)
+        comp = _typed_component(schematic, self._component_id, FontedComponent)
         comp.font_bold, comp.font_italic, comp.font_family = vals
 
     def do(self, schematic: Schematic) -> None:
@@ -1013,15 +1023,13 @@ class SetFilledCommand(Command):
         self._old_filled: bool | None = old_filled
 
     def do(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, DiodeComponent)
+        comp = _typed_component(schematic, self._component_id, DiodeComponent)
         if self._old_filled is None:
             self._old_filled = comp.filled
         comp.filled = self._new_filled
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, DiodeComponent)
+        comp = _typed_component(schematic, self._component_id, DiodeComponent)
         comp.filled = self._old_filled if self._old_filled is not None else False
 
 
@@ -1036,15 +1044,13 @@ class SetBodyDiodeCommand(Command):
         self._old_body_diode: bool | None = old_body_diode
 
     def do(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, MosfetComponent)
+        comp = _typed_component(schematic, self._component_id, MosfetComponent)
         if self._old_body_diode is None:
             self._old_body_diode = comp.body_diode
         comp.body_diode = self._new_body_diode
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, MosfetComponent)
+        comp = _typed_component(schematic, self._component_id, MosfetComponent)
         comp.body_diode = self._old_body_diode if self._old_body_diode is not None else False
 
 
@@ -1060,14 +1066,12 @@ class SetBipoleFillCommand(Command):
 
     def do(self, schematic: Schematic) -> None:
         from app.components.model import BipoleComponent
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, BipoleComponent)
+        comp = _typed_component(schematic, self._component_id, BipoleComponent)
         comp.fill_color = self._new_fill
 
     def undo(self, schematic: Schematic) -> None:
         from app.components.model import BipoleComponent
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, BipoleComponent)
+        comp = _typed_component(schematic, self._component_id, BipoleComponent)
         comp.fill_color = self._old_fill
 
 
@@ -1083,14 +1087,12 @@ class SetBipoleBorderWidthCommand(Command):
 
     def do(self, schematic: Schematic) -> None:
         from app.components.model import BipoleComponent
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, BipoleComponent)
+        comp = _typed_component(schematic, self._component_id, BipoleComponent)
         comp.border_width = self._new_width
 
     def undo(self, schematic: Schematic) -> None:
         from app.components.model import BipoleComponent
-        comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, BipoleComponent)
+        comp = _typed_component(schematic, self._component_id, BipoleComponent)
         comp.border_width = self._old_width
 
 
