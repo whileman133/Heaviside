@@ -172,6 +172,18 @@ class SchematicScene(QGraphicsScene):
         self._clipboard_components: list[Component] = []
         self._clipboard_wires: list[Wire] = []
 
+        # Use a plain (un-indexed) item list rather than the default BSP tree.
+        # _rebuild_items removes coordinate-keyed junction/open-circle dots by
+        # dropping their last Python reference, so PySide frees the C++ item the
+        # instant removeItem() returns. The BSP index only *defers* removal, so a
+        # subsequent paint would walk a dangling pointer and segfault (notably:
+        # group-rotate a circuit with a junction dot, then delete — the rotate
+        # churns the dot and the delete frees it with no paint cycle between to
+        # flush the index). NoIndex updates the item list synchronously on
+        # removeItem, eliminating the dangling pointer; linear hit-testing is a
+        # non-issue for schematic-sized scenes that mutate this frequently.
+        self.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
+
         self.setSceneRect(-20 * GRID_PX, -20 * GRID_PX, 200 * GRID_PX, 200 * GRID_PX)
         self._rebuild_items()
 

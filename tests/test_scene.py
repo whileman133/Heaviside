@@ -1579,3 +1579,59 @@ def test_ghost_hides_options_item(scene: SchematicScene):
     assert not item._options_item.isVisible()
     item.set_ghost(False)
     assert item._options_item.isVisible()
+
+
+# ---------------------------------------------------------------------------
+# Regression: group-rotate + delete with a junction dot must not crash paint
+# ---------------------------------------------------------------------------
+
+def test_no_index_method():
+    """The scene uses NoIndex so removeItem updates the item list synchronously.
+
+    The default BSP tree index only defers item removal; because _rebuild_items
+    drops the last reference to coordinate-keyed junction/open-circle dots
+    immediately, PySide frees the C++ item before the index is purged, and the
+    next paint dereferences freed memory.
+    """
+    from PySide6.QtWidgets import QGraphicsScene
+    s = SchematicScene()
+    assert s.itemIndexMethod() == QGraphicsScene.ItemIndexMethod.NoIndex
+
+
+def test_group_rotate_then_delete_then_paint_does_not_crash(scene: SchematicScene):
+    """Regression: rotating a selected group containing a junction dot and then
+    deleting it, followed by a repaint, previously segfaulted (dangling pointer
+    in the scene's BSP index). It must now complete cleanly.
+    """
+    from PySide6.QtGui import QImage, QPainter
+
+    view = SchematicView(scene)
+    view.resize(800, 600)
+
+    # A 3-way junction: two stubs meeting a through-wire at (80, 79.5).
+    scene.place_component("R", (78.0, 79.0))
+    scene.place_component("C", (78.0, 80.0))
+    scene.place_component("L", (80.5, 79.5))
+    scene.add_wire([(80.0, 79.0), (80.0, 79.5)])
+    scene.add_wire([(80.0, 80.0), (80.0, 79.5)])
+    scene.add_wire([(80.0, 79.5), (80.5, 79.5)])
+    assert len(scene._junction_items) == 1
+
+    for it in list(scene._comp_items.values()) + list(scene._wire_items.values()):
+        it.setSelected(True)
+    scene.rotate_selected_cw()
+
+    for it in list(scene._comp_items.values()) + list(scene._wire_items.values()):
+        it.setSelected(True)
+    scene.delete_selected()
+
+    # Force the paint path that walked the dangling pointer pre-fix.
+    img = QImage(800, 600, QImage.Format_ARGB32)
+    img.fill(0)
+    painter = QPainter(img)
+    scene.render(painter)
+    painter.end()
+
+    assert not scene.schematic.components
+    assert not scene.schematic.wires
+    assert not scene._junction_items

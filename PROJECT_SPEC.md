@@ -638,6 +638,15 @@ non-interactive overlay items, drawn above wires, and correspond exactly to the
 recomputed from wire/pin geometry whenever the schematic changes; they are not
 stored in the model.
 
+Because junction (and open-circle) overlay items are keyed by coordinate, they
+are destroyed and recreated whenever geometry changes (e.g. a group rotate),
+unlike component/wire items which persist across rebuilds. To avoid a
+use-after-free during painting, the scene sets `QGraphicsScene.NoIndex`: the
+default BSP index defers item removal, but `_rebuild_items` drops the last
+reference to a removed overlay item immediately (PySide then frees the C++
+object), so a deferred index would later paint a dangling pointer. `NoIndex`
+keeps the scene's item list consistent synchronously with `removeItem`.
+
 #### Open-Circle Nodes (Unconnected Wire Endpoints)
 
 An open circle (same radius as a junction dot, unfilled) is drawn on the canvas
@@ -1532,6 +1541,7 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_connect_to_wire_corner_splits_l_wire` / `test_connect_to_wire_corner_split_is_one_undo` | Connecting a new wire at an L-wire's corner (intermediate vertex) splits the L-wire into two straight wires, forms a junction, and is one undoable action. Connecting at an existing endpoint leaves the wire unchanged. |
 | `test_click_near_endpoint_selects_short_wire` | After split-on-join the stub is selectable/deletable; deleting it merges the through-wire halves back into one wire (regression + merge-on-delete behavior). |
 | `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
+| `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). |
 
 ### 13.4 Acceptance Criteria
 
