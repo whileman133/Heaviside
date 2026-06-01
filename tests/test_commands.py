@@ -39,6 +39,7 @@ from app.canvas.commands import (
     MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
+    ResizeCommand,
     SplitWireCommand,
     UndoStack,
     WireCommand,
@@ -1037,3 +1038,87 @@ def test_group_rotate_redo():
     assert positions["b"] == (1.0, 1.0)
     for c in stack.schematic.components:
         assert c.rotation == 90
+
+
+# ---------------------------------------------------------------------------
+# ResizeCommand
+# ---------------------------------------------------------------------------
+
+def _open(comp_id: str | None = None, position=(0.0, 0.0)) -> Component:
+    return Component(
+        id=comp_id or _uid(),
+        kind="open",
+        position=position,
+        rotation=0,
+        options="",
+    )
+
+
+def test_resize_sets_span_override():
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    comp = stack.schematic.components[0]
+    assert comp.span_override == (4.0, 0.0)
+
+
+def test_resize_undo_restores_span():
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    stack.undo()
+    comp = stack.schematic.components[0]
+    assert comp.span_override == (2.0, 0.0)
+
+
+def test_resize_redo():
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    stack.undo()
+    stack.redo()
+    comp = stack.schematic.components[0]
+    assert comp.span_override == (4.0, 0.0)
+
+
+def test_resize_reshapes_connected_wire():
+    """A wire connected to the terminal pin follows the resize."""
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    # Wire from terminal pin (2,0) to (2,2).
+    stack.push(WireCommand(Wire(id="w1", points=[(2.0, 0.0), (2.0, 2.0)])))
+    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    wire = stack.schematic.wires[0]
+    assert wire.points[0] == (4.0, 0.0)
+
+
+def test_resize_undo_restores_wire():
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    stack.push(WireCommand(Wire(id="w1", points=[(2.0, 0.0), (2.0, 2.0)])))
+    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    stack.undo()
+    wire = stack.schematic.wires[0]
+    assert wire.points[0] == (2.0, 0.0)
+
+
+def test_codegen_open_uses_span_override():
+    from app.codegen.circuitikz import generate
+    s = Schematic(version="0.1", name="t")
+    comp = _open(comp_id="a", position=(0.0, 0.0))
+    comp.span_override = (3.0, 0.0)
+    s.components.append(comp)
+    src = generate(s)
+    assert "(0,0) to[open]" in src
+    assert "3" in src
+
+
+def test_codegen_ground():
+    from app.codegen.circuitikz import generate
+    s = Schematic(version="0.1", name="t")
+    s.components.append(Component(
+        id="g1", kind="ground", position=(1.0, 0.0),
+        rotation=0, options="",
+    ))
+    src = generate(s)
+    assert "node[ground]" in src

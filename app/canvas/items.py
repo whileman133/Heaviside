@@ -30,6 +30,7 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QFont,
     QPainter,
     QPainterPath,
     QPainterPathStroker,
@@ -257,6 +258,7 @@ class ComponentItem(QGraphicsItem):
     def component(self, comp: "Component") -> None:
         if self._options_item.is_editing:
             self._options_item.end_edit(commit=False)
+        self.prepareGeometryChange()
         self._component = comp
         self._sync_options_item()
 
@@ -497,14 +499,158 @@ class VccsItem(ComponentItem):
 # MOSFET
 # ---------------------------------------------------------------------------
 
-class NigfeteItem(ComponentItem):
-    """N-channel enhancement MOSFET (SVG: nigfete).
+class NpnItem(ComponentItem):
+    """NPN BJT (SVG: npn). Base left, collector top-right, emitter bottom-right."""
 
-    The nigfete SVG is exported with grid-aligned terminal leads (gate, drain,
-    and source each routed to a half-grid point — see
-    ``tools/export_circuitikz_svgs.sh``), so the base ``paint`` renders every
-    terminal directly onto its registry pin.  No bridging required.
+
+class PnpItem(ComponentItem):
+    """PNP BJT (SVG: pnp). Base left, emitter top-right, collector bottom-right."""
+
+
+class NigfeteItem(ComponentItem):
+    """N-channel enhancement MOSFET (SVG: nigfete)."""
+
+
+class NigfetdItem(ComponentItem):
+    """N-channel depletion MOSFET (SVG: nigfetd). Solid channel line."""
+
+
+class PigfeteItem(ComponentItem):
+    """P-channel enhancement MOSFET (SVG: pigfete). Source at top."""
+
+
+class PigfetdItem(ComponentItem):
+    """P-channel depletion MOSFET (SVG: pigfetd). Source at top, solid channel."""
+
+
+# ---------------------------------------------------------------------------
+# Annotations
+# ---------------------------------------------------------------------------
+
+#: Size of the square endpoint drag handle in pixels (half-side).
+_HANDLE_HALF = 5.0
+
+
+class _ResizableTwoTerminalItem(ComponentItem):
+    """Base for resizable two-terminal components (open, short).
+
+    Subclasses inherit span tracking, resize handle rendering, and live-drag
+    preview.  They only need to implement :meth:`_draw_body`.
     """
+
+    def _effective_span(self) -> tuple[float, float]:
+        so = self._component.span_override
+        return so if so is not None else self._defn.default_span
+
+    def _endpoint_px(self) -> QPointF:
+        dx, dy = self._effective_span()
+        return QPointF(dx * GRID_PX, dy * GRID_PX)
+
+    def boundingRect(self) -> QRectF:
+        ep = self._endpoint_px()
+        x0, y0 = min(0.0, ep.x()), min(0.0, ep.y())
+        x1, y1 = max(0.0, ep.x()), max(0.0, ep.y())
+        m = _HANDLE_HALF + LINE_W_THICK
+        return QRectF(x0 - m, y0 - m, (x1 - x0) + 2 * m, (y1 - y0) + 2 * m)
+
+    def shape(self) -> QPainterPath:
+        ep = self._endpoint_px()
+        stroker = QPainterPathStroker()
+        stroker.setWidth(8.0)
+        line = QPainterPath()
+        line.moveTo(QPointF(0.0, 0.0))
+        line.lineTo(ep)
+        path = stroker.createStroke(line)
+        h = QPainterPath()
+        h.addRect(ep.x() - _HANDLE_HALF - 2, ep.y() - _HANDLE_HALF - 2,
+                  (_HANDLE_HALF + 2) * 2, (_HANDLE_HALF + 2) * 2)
+        return path.united(h)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = self._body_color()
+        ep = self._endpoint_px()
+        self._draw_body(painter, color, ep)
+        if not self._ghost:
+            painter.setPen(self._pin_pen())
+            painter.setBrush(self._pin_brush())
+            for pt in (QPointF(0.0, 0.0), ep):
+                painter.drawEllipse(pt, PIN_R, PIN_R)
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.drawRect(
+                ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
+                _HANDLE_HALF * 2, _HANDLE_HALF * 2,
+            )
+
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        raise NotImplementedError
+
+    def set_preview_span(self, span: tuple[float, float]) -> None:
+        import dataclasses
+        self._component = dataclasses.replace(self._component, span_override=span)
+        self.prepareGeometryChange()
+        self.update()
+
+    def terminal_handle_hit(self, local_pt: QPointF) -> bool:
+        ep = self._endpoint_px()
+        return (abs(local_pt.x() - ep.x()) <= _HANDLE_HALF + 2 and
+                abs(local_pt.y() - ep.y()) <= _HANDLE_HALF + 2)
+
+
+class OpenItem(_ResizableTwoTerminalItem):
+    """Voltage annotation — dashed line between two resizable endpoints."""
+
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        painter.setPen(_pen(color, LINE_W, Qt.DashLine))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(0.0, 0.0), ep)
+
+
+class ShortItem(_ResizableTwoTerminalItem):
+    """Current annotation — solid line between two resizable endpoints."""
+
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        painter.setPen(_pen(color, LINE_W))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(0.0, 0.0), ep)
+
+
+# ---------------------------------------------------------------------------
+# Nodes (single-terminal ground symbols)
+# ---------------------------------------------------------------------------
+
+class _GroundBase(ComponentItem):
+    """Base for single-terminal node components drawn from their SVG export."""
+
+    def boundingRect(self) -> QRectF:
+        x0, y0, x1, y1 = self._defn.bbox
+        m = LINE_W_THICK
+        return QRectF(x0 * GRID_PX - m, y0 * GRID_PX - m,
+                      (x1 - x0) * GRID_PX + 2 * m, (y1 - y0) * GRID_PX + 2 * m)
+
+
+class GroundItem(_GroundBase):
+    """Standard ground node (SVG: ground)."""
+
+class RgroundItem(_GroundBase):
+    """Reference ground node (SVG: rground)."""
+
+class SgroundItem(_GroundBase):
+    """Signal ground node (SVG: sground)."""
+
+class NgroundItem(_GroundBase):
+    """Noiseless ground node (SVG: nground)."""
+
+class PgroundItem(_GroundBase):
+    """Protective earth node (SVG: pground)."""
+
+class CgroundItem(_GroundBase):
+    """Chassis/frame ground node (SVG: cground)."""
+
+class EgroundItem(_GroundBase):
+    """Earth ground node (SVG: eground)."""
 
 
 # ---------------------------------------------------------------------------
@@ -803,6 +949,280 @@ class OpenCircleItem(QGraphicsItem):
 
 
 # ---------------------------------------------------------------------------
+# Drawing annotations (non-circuit visual elements)
+# ---------------------------------------------------------------------------
+
+class _DrawingAnnotationBase(ComponentItem):
+    """Base for drawing annotations (text_node, rect).
+
+    Applies ``component.z_order`` to the item's Qt z-value on construction and
+    whenever the component property is updated, so the canvas layer stays in
+    sync with the model without the scene needing to know about drawing kinds
+    specifically.
+    """
+
+    def __init__(self, component: "Component", parent=None) -> None:
+        super().__init__(component, parent)
+        self.setZValue(component.z_order)
+
+    @ComponentItem.component.setter  # type: ignore[misc]
+    def component(self, comp: "Component") -> None:
+        # Call the base setter (prepareGeometryChange + model update + label sync)
+        ComponentItem.component.fset(self, comp)  # type: ignore[attr-defined]
+        self.setZValue(comp.z_order)
+
+
+_RECT_STYLE_MAP: dict[str, Qt.PenStyle] = {
+    "":               Qt.SolidLine,
+    "solid":          Qt.SolidLine,
+    "dashed":         Qt.DashLine,
+    "dotted":         Qt.DotLine,
+    "dash dot":       Qt.DashDotLine,
+}
+
+
+class TextNodeItem(_DrawingAnnotationBase):
+    """Text annotation placed at a point on the canvas.
+
+    ``component.options`` holds the text string; ``component.span_override[0]``
+    (when set) overrides the font size in points (default 12 pt).  No circuit
+    pins — invisible to the connectivity model.
+    """
+
+    _DEFAULT_FONT_SIZE = 12.0
+
+    # Fallback lists passed to QFont.setFamilies() — Qt walks the list and
+    # uses the first installed face, so at least one will match on any platform.
+    _FAMILY_LIST: dict[str, list[str]] = {
+        "serif": ["Georgia", "Times New Roman", "Times", "DejaVu Serif"],
+        "sans":  ["Arial", "Helvetica", "Liberation Sans", "DejaVu Sans"],
+        "mono":  ["Courier New", "Courier", "Liberation Mono", "DejaVu Sans Mono"],
+    }
+
+    def _font_size(self) -> float:
+        so = self._component.span_override
+        return float(so[0]) if so is not None else self._DEFAULT_FONT_SIZE
+
+    def _build_font(self) -> QFont:
+        # Convert LaTeX pt → canvas pixels: 1 grid unit = 1 cm = 28.35 pt,
+        # and 1 grid unit = GRID_PX pixels on the canvas.
+        fs_px = max(1, round(self._font_size() * GRID_PX / 28.35))
+        comp = self._component
+        font = QFont()
+        font.setPixelSize(fs_px)
+        font.setBold(comp.font_bold)
+        font.setItalic(comp.font_italic)
+        # Empty font_family means "LaTeX document default", which is serif
+        # (Computer Modern). Fall back to the serif list so the canvas matches.
+        families = self._FAMILY_LIST.get(comp.font_family or "serif")
+        if families:
+            font.setFamilies(families)
+        return font
+
+    def _sync_options_item(self) -> None:
+        # When not editing: text is drawn inline in paint(); hide the label.
+        if not self._options_item.is_editing:
+            self._options_item.setVisible(False)
+
+    def begin_options_edit(self) -> None:
+        """Activate inline editing of the text content on the canvas body."""
+        if self._options_item.is_editing:
+            return
+        font = self._build_font()
+        self._options_item.setFont(font)
+        self._options_item.setPlainText(self._component.options)
+        # Position at item centre, no counter-rotation (editor rotates with body).
+        rect = self.boundingRect()
+        self._options_item.setTransform(QTransform())
+        # Centre the editor within the bounding rect.
+        er = self._options_item.boundingRect()
+        self._options_item.setPos(
+            rect.center().x() - er.width() / 2,
+            rect.center().y() - er.height() / 2,
+        )
+        self._options_item.setVisible(True)
+        self._options_item.begin_edit()
+
+    def boundingRect(self) -> QRectF:
+        text = self._component.options or "T"
+        fs_px = max(1, round(self._font_size() * GRID_PX / 28.35))
+        bold_factor = 1.08 if self._component.font_bold else 1.0
+        approx_w = max(fs_px * 2.0, len(text) * fs_px * 0.65 * bold_factor)
+        h = fs_px * 1.8
+        return QRectF(-approx_w / 2.0, -h / 2.0, approx_w, h)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = self._body_color()
+
+        painter.setFont(self._build_font())
+
+        text = self._component.options
+        rect = self.boundingRect()
+
+        # Suppress drawn text while the inline editor is active.
+        if self._options_item.is_editing:
+            painter.setPen(_pen(color, LINE_W, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+        elif text:
+            painter.setPen(_pen(color, LINE_W))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawText(rect, Qt.AlignCenter, text)
+        else:
+            # Empty text: draw a dashed placeholder box with "Text" hint.
+            painter.setPen(_pen(color, LINE_W, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+            if not self._ghost:
+                painter.drawText(rect, Qt.AlignCenter, "Text")
+
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(COLOR_SELECTED, 1.0, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRect(rect)
+
+
+def _resolve_tikz_color(tikz: str) -> QColor:
+    """Convert a TikZ color string (e.g. ``"yellow!20"``) to a :class:`QColor`.
+
+    Handles plain named colors and the ``color!percent`` mixing-with-white
+    syntax used by the rect fill palette.  Falls back to Qt's own parser for
+    any string it doesn't recognise.
+    """
+    _NAMED: dict[str, tuple[int, int, int]] = {
+        "white":   (255, 255, 255),
+        "black":   (0,   0,   0),
+        "gray":    (128, 128, 128),
+        "red":     (255, 0,   0),
+        "green":   (0,   255, 0),
+        "blue":    (0,   0,   255),
+        "cyan":    (0,   255, 255),
+        "magenta": (255, 0,   255),
+        "yellow":  (255, 255, 0),
+        "orange":  (255, 165, 0),
+    }
+    tikz = tikz.strip()
+    if "!" in tikz:
+        parts = tikz.split("!", 1)
+        base_name = parts[0].strip().lower()
+        try:
+            pct = float(parts[1].strip()) / 100.0
+        except ValueError:
+            pct = 1.0
+        base = _NAMED.get(base_name, (0, 0, 0))
+        # Mix base color with white: result = white*(1-pct) + base*pct
+        r = int(round(255 * (1 - pct) + base[0] * pct))
+        g = int(round(255 * (1 - pct) + base[1] * pct))
+        b = int(round(255 * (1 - pct) + base[2] * pct))
+        return QColor(r, g, b)
+    lower = tikz.lower()
+    if lower in _NAMED:
+        return QColor(*_NAMED[lower])
+    c = QColor(tikz)
+    return c if c.isValid() else QColor(Qt.white)
+
+
+class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
+    """Rectangle drawing element.
+
+    ``component.position`` is the first corner; ``component.span_override`` (or
+    ``default_span``) gives the offset (dx, dy) to the opposite corner.
+    ``component.options`` is a TikZ draw-options string that may contain any
+    combination of line style, line width, and fill, e.g.
+    ``"dashed, line width=1.5pt, fill=yellow!20"``.  No circuit pins.
+    """
+
+    def _sync_options_item(self) -> None:
+        self._options_item.setVisible(False)
+
+    def _parse_options(self) -> tuple[Qt.PenStyle, float, str]:
+        """Return (pen_style, line_width_px, fill_color_name) from options."""
+        import re as _re
+        opts = self._component.options
+
+        lw_match = _re.search(r"line\s+width\s*=\s*([\d.]+)\s*pt", opts)
+        line_width_pt = float(lw_match.group(1)) if lw_match else 0.4
+        # Convert pt to pixels: 1 pt ≈ 1.333 px at 96 dpi; keep proportional.
+        line_width_px = line_width_pt * 1.333
+
+        fill_match = _re.search(r"fill\s*=\s*([^,]+)", opts)
+        fill = fill_match.group(1).strip() if fill_match else ""
+
+        # Identify line style keyword (strip line width and fill tokens).
+        remainder = _re.sub(r",?\s*line\s+width\s*=\s*[\d.]+\s*pt", "", opts)
+        remainder = _re.sub(r",?\s*fill\s*=\s*[^,]+", "", remainder).strip(", ")
+        pen_style = _RECT_STYLE_MAP.get(remainder.strip().lower(), Qt.SolidLine)
+
+        return pen_style, line_width_px, fill
+
+    def shape(self) -> QPainterPath:
+        """Full rectangle area (interior + border) as the hit region.
+
+        The base class returns a stroked path along the diagonal (treating the
+        rect like a two-terminal wire), which makes only a narrow strip near the
+        centre line selectable.  Override to include the entire rectangle so the
+        user can click anywhere inside or on the border.
+        """
+        ep = self._endpoint_px()
+        x0 = min(0.0, ep.x())
+        y0 = min(0.0, ep.y())
+        x1 = max(0.0, ep.x())
+        y1 = max(0.0, ep.y())
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+
+        # Stroked border band.
+        stroker = QPainterPathStroker()
+        stroker.setWidth(8.0)
+        border = QPainterPath()
+        border.addRect(rect)
+        path = stroker.createStroke(border)
+
+        # Include the interior so clicking anywhere inside selects the rect.
+        interior = QPainterPath()
+        interior.addRect(rect)
+        path = path.united(interior)
+
+        # Include the resize handle at the far corner.
+        handle = QPainterPath()
+        handle.addRect(
+            ep.x() - _HANDLE_HALF - 2, ep.y() - _HANDLE_HALF - 2,
+            (_HANDLE_HALF + 2) * 2, (_HANDLE_HALF + 2) * 2,
+        )
+        return path.united(handle)
+
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        pen_style, line_width_px, fill = self._parse_options()
+        painter.setPen(_pen(color, line_width_px, pen_style))
+
+        x0 = min(0.0, ep.x())
+        y0 = min(0.0, ep.y())
+        x1 = max(0.0, ep.x())
+        y1 = max(0.0, ep.y())
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+
+        if fill and not self._ghost:
+            painter.setBrush(QBrush(_resolve_tikz_color(fill)))
+        else:
+            painter.setBrush(Qt.NoBrush)
+        painter.drawRect(rect)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = self._body_color()
+        ep = self._endpoint_px()
+        self._draw_body(painter, color, ep)
+        # Resize handle at the far corner when selected (no circuit pin dots).
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.drawRect(
+                ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
+                _HANDLE_HALF * 2, _HANDLE_HALF * 2,
+            )
+
+
+# ---------------------------------------------------------------------------
 # ITEM_CLASSES mapping — registered into the component registry
 # ---------------------------------------------------------------------------
 
@@ -812,13 +1232,29 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "L":        InductorItem,
     "D":        DiodeItem,
     "op amp":   OpAmpItem,
+    "npn":      NpnItem,
+    "pnp":      PnpItem,
     "nigfete":  NigfeteItem,
+    "nigfetd":  NigfetdItem,
+    "pigfete":  PigfeteItem,
+    "pigfetd":  PigfetdItem,
     "V":        VoltageSourceItem,
     "I":        CurrentSourceItem,
-    "vsource":  AcVoltageSourceItem,
-    "isource":  AcCurrentSourceItem,
+    "vsourcesin": AcVoltageSourceItem,
+    "isourcesin": AcCurrentSourceItem,
     "cV":       VcvsItem,
     "cI":       VccsItem,
+    "open":       OpenItem,
+    "short":      ShortItem,
+    "text_node":  TextNodeItem,
+    "rect":       RectItem,
+    "ground":     GroundItem,
+    "rground":  RgroundItem,
+    "sground":  SgroundItem,
+    "nground":  NgroundItem,
+    "pground":  PgroundItem,
+    "cground":  CgroundItem,
+    "eground":  EgroundItem,
 }
 
 # Push into the registry so other modules can look up item classes without

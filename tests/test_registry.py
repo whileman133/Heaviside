@@ -21,7 +21,7 @@ from app.components.registry import REGISTRY
 # Helper — two-terminal component kinds
 # ---------------------------------------------------------------------------
 
-_TWO_TERMINAL_KINDS = {"R", "C", "L", "D", "V", "I", "vsource", "isource", "cV", "cI"}
+_TWO_TERMINAL_KINDS = {"R", "C", "L", "D", "V", "I", "vsourcesin", "isourcesin", "cV", "cI"}
 
 
 # ---------------------------------------------------------------------------

@@ -215,7 +215,7 @@ _HORIZONTAL_BIPOLES = {"R", "C", "L", "D"}
 
 # Vertical sources: the SVG draws them horizontally; rotate +90 deg so the
 # SVG +x axis becomes local +y (registry pins at (0,0) and (0,2)).
-_VERTICAL_SOURCES = {"V", "I", "vsource", "isource", "cV", "cI"}
+_VERTICAL_SOURCES = {"V", "I", "vsourcesin", "isourcesin", "cV", "cI"}
 
 # Multi-terminal anchors are taken directly from the SVG terminal points.
 _MULTI_ANCHORS: dict[str, Placement] = {
@@ -227,11 +227,35 @@ _MULTI_ANCHORS: dict[str, Placement] = {
     # op amp: origin = node center.  Terminals (grid units, Qt y-down) are then
     # + (-1.5,+0.5), - (-1.5,-0.5), out (1.5,0).  Power supply pins omitted.
     "op amp": Placement(anchor=(-19.3183, -33.8613)),
-    # nigfete: origin = gate terminal (end of the gate lead).  Terminals are
-    # then drain (1.0,-1), source (1.0,+0.5), gate (0,0).
-    # xscale=1.0167 stretches the symbol to match the codegen output (same
-    # factor used in _MULTI_TERMINAL_EXTRA_OPTS in app/codegen/circuitikz.py).
+    # Ground / reference node symbols: origin = connection pin at the top.
+    # Anchor = SVG coordinate of the first point of the vertical lead (the
+    # connection point at circuit (0,0)).  Symbol extends downward in local space.
+    "ground":  Placement(anchor=(-63.65625, -69.808597)),
+    "rground": Placement(anchor=(-63.65625, -69.808597)),
+    "sground": Placement(anchor=(-63.65625, -69.808597)),
+    "nground": Placement(anchor=(-60.679687, -69.808597)),
+    "pground": Placement(anchor=(-60.679687, -69.609374)),
+    "cground": Placement(anchor=(-59.687499, -69.808597)),
+    "eground": Placement(anchor=(-58.894533, -69.808597)),
+
+    # npn / pnp: origin = base terminal (endpoint of the base lead stub).
+    # SVG base terminal measured from re-exported manifest: (-61.8398, -33.492188).
+    # Collector/emitter sit at (1.013, ±1.0) GU from base; 0.013 GU x-error is
+    # sub-pixel (~0.8 px) so no xscale correction is applied.
+    "npn": Placement(anchor=(-61.8398, -33.492188)),
+    "pnp": Placement(anchor=(-61.8398, -33.492188)),
+
+    # nigfete / nigfetd: origin = gate terminal (end of the gate lead).
+    # Terminals: drain (1.0,-1), source (1.0,+0.5), gate (0,0).
+    # xscale=1.0167 stretches the body so drain/source x aligns with the
+    # 1.0 GU registry pin (CTikZ internal x = 0.9836 GU; 0.9836×1.0167≈1.0).
     "nigfete": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
+    "nigfetd": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
+
+    # pigfete / pigfetd: same x geometry as nigfete but gate is higher (y-mirrored).
+    # Terminals: source (1.0,-0.5), drain (1.0,+1.0), gate (0,0).
+    "pigfete": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
+    "pigfetd": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
 }
 
 
@@ -310,7 +334,7 @@ def is_thick(stroke_width: float) -> bool:
 # component transform used for the manifest paths, and treated as a filled body
 # (glyph outlines are closed regions).
 
-_SVG_DIRS = ("bipoles", "tripoles")
+_SVG_DIRS = ("nodes", "bipoles", "tripoles")
 _MATRIX_RE = re.compile(
     r"matrix\(\s*([-\d.eE]+)\s+([-\d.eE]+)\s+([-\d.eE]+)\s+"
     r"([-\d.eE]+)\s+([-\d.eE]+)\s+([-\d.eE]+)\s*\)"
@@ -413,6 +437,8 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
     intended visual result.
     """
     key = manifest_key(kind)
+    if key not in _manifest():
+        return ()
     entry = _manifest()[key]
     xform = _local_transform(kind)
 

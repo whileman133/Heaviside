@@ -125,17 +125,28 @@ from app.schematic.validate import validate
 # Two-terminal components use to[] path syntax.
 _TWO_TERMINAL_KINDS: frozenset[str] = frozenset({
     "R", "C", "L", "D",
-    "V", "I", "vsource", "isource",
+    "V", "I", "vsourcesin", "isourcesin",
     "cV", "cI",
+    "open", "short",
 })
 
 # Multi-terminal components use node[] syntax.
 _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
+    "npn", "pnp",
     "op amp",
-    "nigfete",
+    "nigfete", "nigfetd",
+    "pigfete", "pigfetd",
     "nmos", "pmos",
     "nmos, bodydiode", "pmos, bodydiode",
 })
+
+# Single-terminal node components: emitted as \node[kind] at (x,y) {};
+_NODE_KINDS: frozenset[str] = frozenset({
+    "ground", "sground", "cground", "rground", "nground", "pground", "eground",
+})
+
+# Drawing annotations — emitted as standalone commands outside the \draw block.
+_DRAWING_KINDS: frozenset[str] = frozenset({"text_node", "rect"})
 
 
 # ---------------------------------------------------------------------------
@@ -162,10 +173,6 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     if errors:
         raise ValueError(f"Invalid schematic: {errors[0]}")
 
-    lines: list[str] = []
-    lines.append(r"\begin{circuitikz}")
-    lines.append(r"  \draw")
-
     # When y_flip=True, negate Y at the point of emission so the output is in
     # CircuiTikZ's Y-up convention.  A simple wrapper handles this uniformly.
     def _y(y: float) -> float:
@@ -173,6 +180,24 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
 
     def _rot(r: int) -> int:
         return -r if y_flip else r
+
+    lines: list[str] = []
+    lines.append(r"\begin{circuitikz}")
+
+    # Background drawing annotations (z_order < 0) — emitted before \draw so
+    # they appear behind circuit elements in the rendered PDF.
+    # Sorted ascending: lower z_order is drawn first (further back).
+    bg = sorted(
+        (c for c in schematic.components if c.kind in _DRAWING_KINDS and c.z_order < 0),
+        key=lambda c: c.z_order,
+    )
+    for comp in bg:
+        if comp.kind == "text_node":
+            lines.append("  " + _text_node_line(comp, _y))
+        elif comp.kind == "rect":
+            lines.append("  " + _rect_line(comp, _y))
+
+    lines.append(r"  \draw")
 
     draw_lines: list[str] = []
 
@@ -237,6 +262,19 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     for x, y in sorted(open_endpoints(schematic)):
         lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
 
+    # Foreground drawing annotations (z_order >= 0) — emitted after the draw
+    # block so they appear in front of circuit elements.
+    # Sorted ascending: lower z_order is drawn first (further back).
+    fg = sorted(
+        (c for c in schematic.components if c.kind in _DRAWING_KINDS and c.z_order >= 0),
+        key=lambda c: c.z_order,
+    )
+    for comp in fg:
+        if comp.kind == "text_node":
+            lines.append("  " + _text_node_line(comp, _y))
+        elif comp.kind == "rect":
+            lines.append("  " + _rect_line(comp, _y))
+
     lines.append(r"\end{circuitikz}")
 
     return "\n".join(lines)
@@ -257,6 +295,11 @@ def _component_lines(
         return [_two_terminal_line(comp, pin_coord_to_ref, y_fn)]
     elif kind in _MULTI_TERMINAL_KINDS:
         return [_multi_terminal_line(comp, y_fn, rot_fn)]
+    elif kind in _NODE_KINDS:
+        return [_node_line(comp, y_fn)]
+    elif kind in _DRAWING_KINDS:
+        # Emitted as standalone commands after the \draw block; nothing here.
+        return []
     else:
         raise ValueError(f"Unknown component kind '{kind}'")
 
@@ -275,12 +318,13 @@ def _two_terminal_line(
     defn = REGISTRY[comp.kind]
     x0, y0 = comp.position
 
-    dx, dy = _rotate(defn.default_span, comp.rotation)
+    base_span = comp.span_override if comp.span_override is not None else defn.default_span
+    dx, dy = _rotate(base_span, comp.rotation)
     x1 = x0 + dx
     y1 = y0 + dy
 
     if comp.mirror:
-        mdx, mdy = defn.default_span
+        mdx, mdy = base_span
         mdx = -mdx
         dx, dy = _rotate((mdx, mdy), comp.rotation)
         x1 = x0 + dx
@@ -387,32 +431,58 @@ def _multi_terminal_line(
 # internal geometry and the canvas grid.
 _MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = {
     "op amp":  [("+", "+"), ("-", "-"), ("out", "out")],
-    # nigfete: placed by anchor=gate (exact gate connection). Drain/source
-    # CTikZ anchors are ~0.5 GU from our grid pins and not rectilinearly
-    # aligned, so leads can't be drawn without diagonal lines. The small gap
-    # in the preview is accepted for this component.
+    # BJTs: xscale/yscale corrections align C/E anchors exactly with the grid,
+    # so no bridge lead wires are needed (same strategy as MOSFETs).
+    "npn": [],
+    "pnp": [],
+    # MOSFETs: placed by anchor=gate (exact gate connection). Drain/source
+    # CTikZ anchors are not rectilinearly aligned with the registry grid pins,
+    # so no lead wires are drawn. xscale=1.0167 corrects the x offset instead.
     "nigfete": [],
+    "nigfetd": [],
+    "pigfete": [],
+    "pigfetd": [],
 }
 
 # Components placed by a specific named anchor rather than by center.
 # Maps kind → (ctikz_anchor_name, registry_pin_name).
 # The node is placed so ctikz_anchor_name coincides with the registry pin coordinate.
 _MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = {
+    "npn": ("B", "base"),
+    "pnp": ("B", "base"),
     "nigfete": ("gate", "gate"),
+    "nigfetd": ("gate", "gate"),
+    "pigfete": ("gate", "gate"),
+    "pigfetd": ("gate", "gate"),
 }
 
 # Extra node options injected into the node[] argument for specific kinds.
 # Used to correct geometry mismatches between CTikZ internal coords and our grid.
-# nigfete: drain/source x is 0.9836 GU from gate; xscale=1.0167 stretches it to 1.0 GU.
+# All IGFET variants: drain/source x is 0.9836 GU from gate; xscale=1.0167 stretches to 1.0 GU.
 _MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = {
+    # BJTs: actual CTikZ C/E offset from base = (0.847, ±0.777) GU (measured from
+    # the bare-node SVG export).  xscale and yscale stretch to the snapped (1.0, ±1.0)
+    # GU grid so C/E anchors land on-grid without needing bridge lead wires.
+    #   xscale = 1.0 / 0.8471 = 1.181
+    #   yscale = 1.0 / 0.7770 = 1.287
+    "npn": "xscale=1.181, yscale=1.287",
+    "pnp": "xscale=1.181, yscale=1.287",
     "nigfete": "xscale=1.0167",
+    "nigfetd": "xscale=1.0167",
+    "pigfete": "xscale=1.0167",
+    "pigfetd": "xscale=1.0167",
 }
 
 # Maps registry pin name → CTikZ anchor name for each multi-terminal kind.
 # Used to substitute wire endpoint coordinates with named node references.
 _PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = {
     "op amp":  {"+": "+", "-": "-", "out": "out"},
+    "npn": {"base": "B", "collector": "C", "emitter": "E"},
+    "pnp": {"base": "B", "collector": "C", "emitter": "E"},
     "nigfete": {"gate": "gate", "drain": "drain", "source": "source"},
+    "nigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
+    "pigfete": {"gate": "gate", "drain": "drain", "source": "source"},
+    "pigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
 }
 
 
@@ -440,6 +510,19 @@ _validate_codegen_tables()
 
 
 # ---------------------------------------------------------------------------
+# Node rendering (single-terminal: ground, sground, etc.)
+# ---------------------------------------------------------------------------
+
+def _node_line(comp: Component, y_fn=lambda y: y) -> str:
+    """Render a single-terminal node as: (x,y) node[kind, rotate=R] {}"""
+    x, y = comp.position
+    rotate_arg = ""
+    if comp.rotation:
+        rotate_arg = f", rotate={comp.rotation}"
+    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{comp.kind}{rotate_arg}] {{}}"
+
+
+# ---------------------------------------------------------------------------
 # Wire rendering
 # ---------------------------------------------------------------------------
 
@@ -464,6 +547,88 @@ def _wire_line(
                 continue
         refs.append(f"({_fmt(x)},{_fmt(y_fn(y))})")
     return " -- ".join(refs)
+
+
+# ---------------------------------------------------------------------------
+# Drawing annotation rendering
+# ---------------------------------------------------------------------------
+
+_FONT_FAMILY_CMD: dict[str, str] = {
+    "serif": r"\rmfamily",
+    "sans":  r"\sffamily",
+    "mono":  r"\ttfamily",
+}
+
+
+def _text_node_line(comp: Component, y_fn=lambda y: y) -> str:
+    r"""Render a text annotation as \node[...] at (x,y) {text};
+
+    Font size (``span_override[0]``), bold (``font_bold``), italic
+    (``font_italic``), and family (``font_family``) are all encoded into the
+    ``font=`` node option when any of them is set.
+    """
+    x, y = comp.position
+    text = comp.options
+
+    has_size   = comp.span_override is not None
+    has_style  = comp.font_bold or comp.font_italic or bool(comp.font_family)
+
+    if has_size or has_style:
+        parts: list[str] = []
+        if has_size:
+            fs = comp.span_override[0]
+            leading = round(fs * 1.2, 2)
+            leading_str = (
+                str(int(leading)) if leading == int(leading)
+                else f"{leading:.1f}" if (leading * 10 == int(leading * 10))
+                else f"{leading:.2f}"
+            )
+            parts.append(rf"\fontsize{{{_fmt(fs)}}}{{{leading_str}}}\selectfont")
+        if comp.font_bold:
+            parts.append(r"\bfseries")
+        if comp.font_italic:
+            parts.append(r"\itshape")
+        family_cmd = _FONT_FAMILY_CMD.get(comp.font_family, "")
+        if family_cmd:
+            parts.append(family_cmd)
+        opts = r"[font=" + "".join(parts) + "]"
+    else:
+        opts = ""
+
+    # Negate rotation: stored rotation follows CW-visually convention (matching
+    # circuit components on canvas), but TikZ rotate= is CCW (standard math).
+    tikz_rotation = (-comp.rotation) % 360
+    rotate_opt = f", rotate={tikz_rotation}" if tikz_rotation else ""
+    if rotate_opt:
+        if opts:
+            opts = opts[:-1] + rotate_opt + "]"
+        else:
+            opts = f"[rotate={tikz_rotation}]"
+
+    return rf"\node{opts} at ({_fmt(x)},{_fmt(y_fn(y))}) {{{text}}};"
+
+
+def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
+    r"""Render a rectangle annotation as \draw[style] (x1,y1) rectangle (x2,y2);
+
+    ``comp.options`` is a raw TikZ style string (e.g. "dashed", "dotted", "").
+    The second corner is computed from ``comp.span_override`` (falling back to
+    ``default_span`` from the registry).
+    """
+    from app.components.registry import REGISTRY
+    defn = REGISTRY[comp.kind]
+    x1, y1 = comp.position
+    so = comp.span_override if comp.span_override is not None else defn.default_span
+    dx, dy = so
+    x2, y2 = x1 + dx, y1 + dy
+
+    style = comp.options.strip()
+    style_arg = f"[{style}]" if style else ""
+
+    return (
+        rf"\draw{style_arg} ({_fmt(x1)},{_fmt(y_fn(y1))}) "
+        rf"rectangle ({_fmt(x2)},{_fmt(y_fn(y2))});"
+    )
 
 
 # ---------------------------------------------------------------------------

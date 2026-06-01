@@ -46,6 +46,36 @@ class Component:
     persisted to the file.
     """
 
+    span_override: tuple[float, float] | None = None
+    """Custom (dx, dy) from origin to terminal pin in component-local GU.
+
+    ``None`` means use ``ComponentDef.default_span``.  Set when the user
+    drags the terminal endpoint handle of a resizable component.  Only
+    meaningful when ``ComponentDef.resizable`` is True.
+    """
+
+    z_order: int = 0
+    """Canvas and code-generation layer for drawing annotations (text_node, rect).
+
+    Ignored for circuit components.  Positive values are drawn/emitted later
+    (in front); negative values are drawn/emitted earlier (behind).  In the
+    LaTeX output, items with z_order < 0 are emitted *before* the main
+    ``\\draw`` block so they appear behind circuit elements in the rendered PDF.
+    On the Qt canvas, maps directly to ``QGraphicsItem.setZValue()``.
+    """
+
+    font_bold: bool = False
+    """Bold weight for text_node annotations.  Ignored for circuit components."""
+
+    font_italic: bool = False
+    """Italic style for text_node annotations.  Ignored for circuit components."""
+
+    font_family: str = ""
+    """Font family for text_node annotations: ``""`` (document default),
+    ``"serif"`` (\\rmfamily), ``"sans"`` (\\sffamily), ``"mono"`` (\\ttfamily).
+    Ignored for circuit components.
+    """
+
 
 @dataclass
 class Wire:
@@ -189,8 +219,16 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
 
     ox, oy = component.position
     out: list[tuple[float, float]] = []
-    for pin in defn.pins:
+    for i, pin in enumerate(defn.pins):
         dx, dy = pin.offset
+        # For resizable two-terminal components, the terminal pin (index 1)
+        # uses span_override when set instead of the registry default offset.
+        if (
+            i == 1
+            and defn.resizable
+            and component.span_override is not None
+        ):
+            dx, dy = component.span_override
         if component.mirror:
             dx = -dx
         r = component.rotation % 360

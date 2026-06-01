@@ -11,13 +11,13 @@ Layout::
     │Tool│ Palette │         Canvas               │  Properties  │
     │Rib-│         │    (QGraphicsView)           │  Panel       │
     │bon │         │                              │              │
-    ├────┴─────────┴──────────────────────────────┴──────────────┤
-    │  Source Panel (read-only CircuiTikZ)                        │
-    ├─────────────────────────────────────────────────────────────┤
+    ├────┴─────────┴──────────────────┬───────────┴──────────────┤
+    │  Source Panel (CircuiTikZ)      │  LaTeX Preview           │
+    ├─────────────────────────────────┴──────────────────────────┤
     │  Status bar: cursor coords | zoom | compile status          │
     └─────────────────────────────────────────────────────────────┘
 
-The preview is a floating overlay anchored to the bottom-right of the canvas.
+The preview occupies the lower-right of the bottom strip, beside the source.
 """
 
 from __future__ import annotations
@@ -26,10 +26,15 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtGui import (
+    QAction, QActionGroup, QColor, QFont, QImage, QKeySequence,
+    QPainter, QPen, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -310,7 +315,7 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Horizontal splitter: palette | canvas+preview | properties.
+        # Horizontal splitter: palette | canvas | properties.
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(4)
 
@@ -319,13 +324,14 @@ class MainWindow(QMainWindow):
         self._palette.set_scene(self._scene)
         splitter.addWidget(self._palette)
 
-        # Centre: canvas + preview overlay.
-        canvas_container = QWidget()
-        canvas_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        canvas_layout = QVBoxLayout(canvas_container)
-        canvas_layout.setContentsMargins(0, 0, 0, 0)
-        canvas_layout.addWidget(self._view)
-        splitter.addWidget(canvas_container)
+        # Centre: stacked widget — welcome screen (page 0) / canvas (page 1).
+        from PySide6.QtWidgets import QStackedWidget
+        self._canvas_stack = QStackedWidget()
+        self._canvas_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._canvas_stack.addWidget(_WelcomeScreen())   # index 0
+        self._canvas_stack.addWidget(self._view)          # index 1
+        self._canvas_stack.setCurrentIndex(0)
+        splitter.addWidget(self._canvas_stack)
 
         # Right: properties.
         self._props = PropertiesPanel()
@@ -338,14 +344,21 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(splitter, 1)
 
-        # Bottom: source panel.
+        # Bottom strip: source panel (left) + preview panel (right).
+        bottom = QWidget()
+        bottom.setFixedHeight(200)
+        bottom_layout = QHBoxLayout(bottom)
+        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setSpacing(0)
+
         self._source_panel = SourcePanel()
         self._source_panel.set_scene(self._scene)
-        outer.addWidget(self._source_panel)
+        bottom_layout.addWidget(self._source_panel, 1)
 
-        # Preview overlay (bottom-right of canvas container, floating).
-        self._preview_overlay = _PreviewOverlay(canvas_container)
-        self._preview_overlay.show()
+        self._preview_panel = _PreviewPanel()
+        bottom_layout.addWidget(self._preview_panel)
+
+        outer.addWidget(bottom)
 
     # ------------------------------------------------------------------
     # Status bar
@@ -375,6 +388,12 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _connect_signals(self) -> None:
+        # Welcome screen → canvas transitions (one-way; never go back to welcome).
+        # Triggered by: File → New, File → Open, or clicking a palette item.
+        self._scene.mode_changed.connect(
+            lambda mode: self._show_canvas() if mode == Mode.PLACE else None
+        )
+
         # Scene → UI.
         self._scene.cursor_moved.connect(self._on_cursor_moved)
         self._scene.schematic_changed.connect(self._on_schematic_changed)
@@ -409,6 +428,10 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom: float) -> None:
         self._status_zoom.setText(f"Zoom: {zoom * 100:.0f}%")
+
+    def _show_canvas(self) -> None:
+        """Switch the centre pane from the welcome screen to the live canvas."""
+        self._canvas_stack.setCurrentIndex(1)
 
     def _on_schematic_changed(self) -> None:
         self._modified = True
@@ -448,11 +471,11 @@ class MainWindow(QMainWindow):
         self._preview_worker.compile_now(source)
 
     def _on_preview_ready(self, image: QImage) -> None:
-        self._preview_overlay.set_image(image)
+        self._preview_panel.set_image(image)
         self._status_compile.setText("Preview ready")
 
     def _on_preview_error(self, error: str) -> None:
-        self._preview_overlay.set_error(error)
+        self._preview_panel.set_error(error)
         first_line = error.split("\n")[0][:80]
         self._status_compile.setText(f"LaTeX error: {first_line}")
 
@@ -463,11 +486,12 @@ class MainWindow(QMainWindow):
     def _on_new(self) -> None:
         if not self._confirm_discard():
             return
+        self._show_canvas()
         self._scene.set_schematic(Schematic(version="0.1", name="untitled"))
         self._current_path = None
         self._modified = False
         self._update_title()
-        self._preview_overlay.clear()
+        self._preview_panel.clear()
         self._status_compile.setText("Ready")
 
     def _on_open(self) -> None:
@@ -483,6 +507,7 @@ class MainWindow(QMainWindow):
         except SchematicLoadError as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
             return
+        self._show_canvas()
         self._scene.set_schematic(schematic)
         self._current_path = Path(path)
         self._modified = False
@@ -539,13 +564,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_about(self) -> None:
-        QMessageBox.about(
-            self,
-            "About Heaviside",
-            "<b>Heaviside</b><br>"
-            "A graphical editor for CircuiTikZ circuit diagrams.<br><br>"
-            "Exports valid CircuiTikZ LaTeX source for use in research papers.",
-        )
+        _AboutDialog(self).exec()
 
     # ------------------------------------------------------------------
     # Dependency check
@@ -575,6 +594,309 @@ class MainWindow(QMainWindow):
 
 
 # ---------------------------------------------------------------------------
+# Welcome overlay
+# ---------------------------------------------------------------------------
+
+_HINTS = [
+    "Click a component in the palette to place it",
+    "W  draw wire   ·   S  select   ·   P  pan",
+]
+
+# Quick-reference table: (code_snippet, plain_description)
+# Left column: two-terminal label/annotation options (complete set).
+# Right column: node / MOSFET options.
+_REF_LEFT = [
+    ("l=$R_1$",   "label"),
+    ("l_=$R_1$",  "label, far side"),
+    ("v=$V$",     "voltage ＋→－"),
+    ("v_=$V$",    "voltage, far side"),
+    ("v^=$V$",    "voltage, reversed"),
+    ("i=$I$",     "current"),
+    ("i_=$I$",    "current, far side"),
+    ("i^=$I$",    "current, reversed"),
+]
+_REF_RIGHT = [
+    ("label=above:$Q_1$", "node label above"),
+    ("label=right:$Q_1$", "node label right"),
+    ("label=below:$Q_1$", "node label below"),
+    ("label=left:$Q_1$",  "node label left"),
+    ("bodydiode",          "add body diode"),
+]
+
+# Colours for the welcome screen
+_C_BG    = QColor(245, 247, 250)        # solid background
+_C_STEP  = QColor( 80, 120, 175, 200)   # step-function line
+_C_AXIS  = QColor(160, 175, 190, 180)   # axis lines
+_C_LABEL = QColor(100, 130, 170, 210)   # H(t) / 1 / t annotations
+_C_TITLE = QColor( 60,  80, 110, 220)   # "Heaviside" heading
+_C_HINT  = QColor(120, 140, 165, 200)   # hint lines
+
+
+class _WelcomeScreen(QWidget):
+    """
+    Solid welcome screen shown in the canvas slot before any document is
+    active.  Draws the Heaviside unit step function H(t) as a centred
+    diagram with quick-start hints below.
+
+    Replaced by the live SchematicView (via QStackedWidget) as soon as the
+    user creates/opens a document or begins component placement.
+    """
+
+    def paintEvent(self, event) -> None:  # noqa: ANN001, N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        w, h = float(self.width()), float(self.height())
+        painter.fillRect(self.rect(), _C_BG)
+
+        # ---- layout constants ------------------------------------------
+        step_w  = min(w * 0.38, 240.0)
+        step_h  = min(h * 0.24, 130.0)
+        row_h   = 18.0
+        n_rows  = max(len(_REF_LEFT), len(_REF_RIGHT))
+        # block_h derived by tracing actual y positions in the paint code:
+        #   title_y  = top + step_h*1.6 + 28
+        #   hint_y   = title_y + 40  (+2 × 20 = +40)
+        #   ref_top  = hint_y_end + 12
+        #   sep_y    = ref_top + 16
+        #   row_y    = sep_y + 10  (+n_rows × row_h)
+        # → block bottom = top + step_h*1.6 + 146 + n_rows*row_h
+        block_h = step_h * 1.6 + 146 + n_rows * row_h
+        top     = max(12.0, (h - block_h) / 2.0)
+        cx   = w / 2.0
+
+        # ---- step function ---------------------------------------------
+        step_cy  = top + step_h * 0.8
+        zero_y   = step_cy + step_h / 2
+        one_y    = step_cy - step_h / 2
+        left_x   = cx - step_w / 2
+        right_x  = cx + step_w / 2
+        origin_x = cx
+
+        ax_pen = QPen(_C_AXIS, 1.2, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(ax_pen)
+        painter.drawLine(QPointF(left_x - 10, zero_y), QPointF(right_x + 20, zero_y))
+        painter.drawLine(QPointF(origin_x, zero_y + 12), QPointF(origin_x, one_y - 20))
+        _arrow_right(painter, _C_AXIS, QPointF(right_x + 20, zero_y), size=7)
+        _arrow_up   (painter, _C_AXIS, QPointF(origin_x, one_y - 20), size=7)
+        painter.drawLine(QPointF(origin_x - 5, one_y), QPointF(origin_x + 5, one_y))
+
+        step_pen = QPen(_C_STEP, 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        painter.setPen(step_pen)
+        painter.drawLine(QPointF(left_x,   zero_y), QPointF(origin_x, zero_y))
+        painter.drawLine(QPointF(origin_x, zero_y), QPointF(origin_x, one_y))
+        painter.drawLine(QPointF(origin_x, one_y),  QPointF(right_x,  one_y))
+        _open_dot  (painter, _C_STEP, QPointF(origin_x, zero_y), r=4.5)
+        _filled_dot(painter, _C_STEP, QPointF(origin_x, one_y),  r=4.5)
+
+        ann_font = QFont()
+        ann_font.setPointSizeF(11.5)
+        ann_font.setItalic(True)
+        painter.setFont(ann_font)
+        painter.setPen(QPen(_C_LABEL))
+        painter.drawText(QPointF(right_x + 8, one_y + 5), "H(t)")
+        ann_font.setItalic(False)
+        ann_font.setPointSizeF(10.5)
+        painter.setFont(ann_font)
+        painter.drawText(QPointF(origin_x - 15, one_y + 5),  "1")
+        painter.drawText(QPointF(right_x + 22,  zero_y + 5), "t")
+
+        # ---- title -----------------------------------------------------
+        title_y = step_cy + step_h * 0.8 + 28
+        title_font = QFont()
+        title_font.setPointSizeF(22)
+        title_font.setWeight(QFont.Light)
+        painter.setFont(title_font)
+        painter.setPen(QPen(_C_TITLE))
+        painter.drawText(QRectF(0, title_y, w, 34),
+                         Qt.AlignHCenter | Qt.AlignTop, "Heaviside")
+
+        # ---- hints -----------------------------------------------------
+        hint_font = QFont()
+        hint_font.setPointSizeF(9.5)
+        painter.setFont(hint_font)
+        painter.setPen(QPen(_C_HINT))
+        hint_y = title_y + 40
+        for line in _HINTS:
+            painter.drawText(QRectF(0, hint_y, w, 20),
+                             Qt.AlignHCenter | Qt.AlignTop, line)
+            hint_y += 20
+
+        # ---- quick-reference table -------------------------------------
+        ref_top  = hint_y + 12
+
+        # section header
+        hdr_font = QFont()
+        hdr_font.setPointSizeF(8.5)
+        hdr_font.setWeight(QFont.DemiBold)
+        hdr_font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+        painter.setFont(hdr_font)
+        painter.setPen(QPen(_C_HINT))
+        painter.drawText(QRectF(0, ref_top, w, 14),
+                         Qt.AlignHCenter | Qt.AlignTop, "OPTIONS QUICK REFERENCE")
+
+        # thin separator
+        sep_y = ref_top + 16
+        painter.setPen(QPen(QColor(180, 195, 210, 140), 0.75))
+        margin = max(20.0, (w - 520) / 2)
+        painter.drawLine(QPointF(margin, sep_y), QPointF(w - margin, sep_y))
+
+        # two-column rows
+        code_font = QFont("Menlo")
+        code_font.setStyleHint(QFont.TypeWriter)
+        code_font.setPointSizeF(8.5)
+        desc_font = QFont()
+        desc_font.setPointSizeF(8.5)
+
+        col_w   = min(260.0, (w - 2 * margin) / 2)
+        lx      = cx - col_w          # left column x start
+        rx      = cx + 4              # right column x start
+        row_y   = sep_y + 10
+
+        for i in range(n_rows):
+            for col_data, x0 in ((_REF_LEFT, lx), (_REF_RIGHT, rx)):
+                if i >= len(col_data):
+                    continue
+                code, desc = col_data[i]
+                painter.setFont(code_font)
+                painter.setPen(QPen(_C_STEP))
+                painter.drawText(QRectF(x0, row_y, col_w * 0.52, row_h),
+                                 Qt.AlignLeft | Qt.AlignVCenter, code)
+                painter.setFont(desc_font)
+                painter.setPen(QPen(_C_HINT))
+                painter.drawText(QRectF(x0 + col_w * 0.54, row_y, col_w * 0.46, row_h),
+                                 Qt.AlignLeft | Qt.AlignVCenter, desc)
+            row_y += row_h
+
+
+# ---------------------------------------------------------------------------
+# Small painter helpers used by _WelcomeScreen
+# ---------------------------------------------------------------------------
+
+def _arrow_right(painter: QPainter, color: QColor, tip: QPointF, size: float) -> None:
+    pen = QPen(color, 1.0)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(tip, QPointF(tip.x() - size, tip.y() - size * 0.5))
+    painter.drawLine(tip, QPointF(tip.x() - size, tip.y() + size * 0.5))
+
+
+def _arrow_up(painter: QPainter, color: QColor, tip: QPointF, size: float) -> None:
+    pen = QPen(color, 1.0)
+    pen.setCapStyle(Qt.RoundCap)
+    painter.setPen(pen)
+    painter.drawLine(tip, QPointF(tip.x() - size * 0.5, tip.y() + size))
+    painter.drawLine(tip, QPointF(tip.x() + size * 0.5, tip.y() + size))
+
+
+def _open_dot(painter: QPainter, color: QColor, centre: QPointF, r: float) -> None:
+    painter.setPen(QPen(color, 1.8))
+    painter.setBrush(Qt.NoBrush)
+    painter.drawEllipse(centre, r, r)
+
+
+def _filled_dot(painter: QPainter, color: QColor, centre: QPointF, r: float) -> None:
+    painter.setPen(Qt.NoPen)
+    painter.setBrush(color)
+    painter.drawEllipse(centre, r, r)
+    painter.setBrush(Qt.NoBrush)
+
+
+# ---------------------------------------------------------------------------
+# About dialog
+# ---------------------------------------------------------------------------
+
+_APP_VERSION = "0.1.0"
+_ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
+
+_HEAVISIDE_QUOTE = (
+    "“The best result of mathematics is to be able to do without it.”"
+    "\n— Oliver Heaviside"
+)
+
+
+class _AboutDialog(QDialog):
+    """Custom About dialog with logo, version, authors, and quote."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("About Heaviside")
+        self.setFixedWidth(400)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 24, 28, 20)
+        layout.setSpacing(0)
+
+        # Logo
+        logo_path = _ASSETS_DIR / "icon.png"
+        if logo_path.exists():
+            pix = QPixmap(str(logo_path))
+            dpr = self.devicePixelRatioF()
+            size = int(96 * dpr)
+            pix = pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pix.setDevicePixelRatio(dpr)
+            logo = QLabel()
+            logo.setPixmap(pix)
+            logo.setAlignment(Qt.AlignCenter)
+            layout.addWidget(logo)
+            layout.addSpacing(12)
+
+        # App name
+        name_label = QLabel("Heaviside")
+        name_label.setAlignment(Qt.AlignCenter)
+        name_label.setStyleSheet("font-size: 22px; font-weight: bold;")
+        layout.addWidget(name_label)
+
+        # Subtitle + version
+        sub_label = QLabel(
+            f"CircuiTikZ Schematic Editor  ·  v{_APP_VERSION}"
+        )
+        sub_label.setAlignment(Qt.AlignCenter)
+        sub_label.setStyleSheet("font-size: 12px; color: #666;")
+        layout.addWidget(sub_label)
+
+        layout.addSpacing(16)
+
+        # Author + affiliation
+        authors_label = QLabel("Wesley Hileman · University of Colorado Colorado Springs")
+        authors_label.setWordWrap(True)
+        authors_label.setAlignment(Qt.AlignCenter)
+        authors_label.setStyleSheet("font-size: 12px;")
+        layout.addWidget(authors_label)
+
+        layout.addSpacing(6)
+
+        claude_label = QLabel("Built with the assistance of Claude")
+        claude_label.setAlignment(Qt.AlignCenter)
+        claude_label.setStyleSheet("font-size: 11px; color: #888;")
+        layout.addWidget(claude_label)
+
+        layout.addSpacing(20)
+
+        # Divider
+        divider = QWidget()
+        divider.setFixedHeight(1)
+        divider.setStyleSheet("background: #ddd;")
+        layout.addWidget(divider)
+
+        layout.addSpacing(16)
+
+        # Quote
+        quote_label = QLabel(_HEAVISIDE_QUOTE)
+        quote_label.setWordWrap(True)
+        quote_label.setAlignment(Qt.AlignCenter)
+        quote_label.setStyleSheet("font-size: 11px; color: #555; font-style: italic;")
+        layout.addWidget(quote_label)
+
+        layout.addSpacing(20)
+
+        # OK button
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(self.accept)
+        layout.addWidget(buttons)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -586,31 +908,37 @@ def _separator() -> QWidget:
     return sep
 
 
-class _PreviewOverlay(QWidget):
+class _PreviewPanel(QWidget):
     """
-    Floating preview image in the bottom-right corner of the canvas.
+    Preview image panel in the lower-right of the bottom strip.
 
-    Shows the compiled PDF page at native sharpness (Retina-aware), capped
-    so it never exceeds half the canvas width/height.
+    Renders the compiled PDF page at native sharpness (Retina-aware), scaled
+    to fill the panel while preserving aspect ratio.
     """
 
-    # Maximum logical-pixel dimensions for the overlay.
-    _MAX_LOGICAL_W = 480
-    _MAX_LOGICAL_H = 360
+    _PANEL_W = 280
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setFixedWidth(self._PANEL_W)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self.setStyleSheet(
-            "background: white; border: 1px solid #bbb; border-radius: 4px;"
+            "background: white; border-left: 1px solid #ddd;"
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setContentsMargins(6, 4, 6, 6)
+        layout.setSpacing(2)
+
+        from PySide6.QtWidgets import QLabel as _QLabel
+        title = _QLabel("LaTeX Preview")
+        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
+        layout.addWidget(title)
 
         self._img_label = QLabel()
         self._img_label.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self._img_label)
+        self._img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self._img_label, 1)
 
         self._error_label = QLabel()
         self._error_label.setWordWrap(True)
@@ -618,43 +946,34 @@ class _PreviewOverlay(QWidget):
         self._error_label.hide()
         layout.addWidget(self._error_label)
 
-        self._reposition()
+        self._raw_image: QImage | None = None
 
     def resizeEvent(self, event) -> None:  # noqa: N802, ANN001
         super().resizeEvent(event)
-        self._reposition()
-
-    def _reposition(self) -> None:
-        if self.parent():
-            p = self.parent()
-            pw, ph = p.width(), p.height()
-            self.move(pw - self.width() - 8, ph - self.height() - 8)
+        if self._raw_image is not None:
+            self._render(self._raw_image)
 
     def set_image(self, image: QImage) -> None:
+        self._raw_image = image
         self._error_label.hide()
-        pix = QPixmap.fromImage(image)
+        self._render(image)
 
-        # The QImage was rendered at `dpi` dots per inch.  On a Retina (HiDPI)
-        # display the device pixel ratio is 2, so we must tell Qt that each
-        # physical pixel in this pixmap corresponds to 0.5 logical pixels —
-        # otherwise Qt will stretch the image to twice its intended size.
+    def _render(self, image: QImage) -> None:
+        pix = QPixmap.fromImage(image)
         dpr = self.devicePixelRatioF()
         pix.setDevicePixelRatio(dpr)
 
-        # Logical size of the image (what the user sees, independent of DPI).
+        available_w = self._img_label.width()
+        available_h = self._img_label.height()
+        if available_w < 1 or available_h < 1:
+            return
+
         logical_w = pix.width() / dpr
         logical_h = pix.height() / dpr
-
-        # Cap to _MAX_LOGICAL_W × _MAX_LOGICAL_H, keeping aspect ratio.
-        scale = min(
-            self._MAX_LOGICAL_W / max(logical_w, 1),
-            self._MAX_LOGICAL_H / max(logical_h, 1),
-            1.0,  # never upscale
-        )
+        scale = min(available_w / max(logical_w, 1), available_h / max(logical_h, 1), 1.0)
         display_w = int(logical_w * scale)
         display_h = int(logical_h * scale)
 
-        # Scale the physical pixmap so it looks right at the capped logical size.
         physical_w = int(display_w * dpr)
         physical_h = int(display_h * dpr)
         scaled_pix = pix.scaled(
@@ -662,21 +981,15 @@ class _PreviewOverlay(QWidget):
             Qt.KeepAspectRatio, Qt.SmoothTransformation,
         )
         scaled_pix.setDevicePixelRatio(dpr)
-
         self._img_label.setPixmap(scaled_pix)
-        self._img_label.setFixedSize(display_w, display_h)
-        self.adjustSize()
-        self._reposition()
-        self.show()
 
     def set_error(self, error: str) -> None:
+        self._raw_image = None
         self._img_label.clear()
         self._error_label.setText(error[:400])
         self._error_label.show()
-        self.adjustSize()
-        self._reposition()
-        self.show()
 
     def clear(self) -> None:
+        self._raw_image = None
         self._img_label.clear()
         self._error_label.hide()

@@ -52,3 +52,8 @@ class ComponentDef:
     """(dx, dy) from the origin pin to the terminal pin, in GU.
     For two-terminal devices this equals the offset of the second pin.
     For multi-terminal devices this is (0, 0)."""
+
+    resizable: bool = False
+    """If True, the terminal pin can be dragged after placement to resize the
+    component.  Only meaningful for two-terminal components.  The actual span
+    at a given instance is stored in Component.span_override."""

@@ -180,7 +180,7 @@ class ComponentPalette(QWidget):
     def _build_entries(self) -> None:
         """Populate the palette grouped by category in a fixed display order."""
         # Fixed category order (spec §5.4).
-        category_order = ["Passives", "Amplifiers", "Sources", "MOSFETs"]
+        category_order = ["Passives", "Amplifiers", "Sources", "MOSFETs", "BJTs", "Nodes", "Annotations", "Drawing"]
 
         # Group kinds by category preserving insertion order.
         from collections import defaultdict

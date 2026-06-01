@@ -107,6 +107,16 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     }
     if c.label_offset is not None:
         d["label_offset"] = list(c.label_offset)
+    if c.span_override is not None:
+        d["span_override"] = list(c.span_override)
+    if c.z_order != 0:
+        d["z_order"] = c.z_order
+    if c.font_bold:
+        d["font_bold"] = True
+    if c.font_italic:
+        d["font_italic"] = True
+    if c.font_family:
+        d["font_family"] = c.font_family
     return d
 
 
@@ -218,6 +228,30 @@ def _dict_to_component(data: Any, index: int) -> Component:
                 f"{ctx}.label_offset values must be numbers"
             ) from exc
 
+    span_override: tuple[float, float] | None = None
+    raw_so = data.get("span_override")
+    if raw_so is not None:
+        if not (isinstance(raw_so, list) and len(raw_so) == 2):
+            raise SchematicLoadError(f"{ctx}.span_override must be a two-element array")
+        try:
+            span_override = (float(raw_so[0]), float(raw_so[1]))
+        except (TypeError, ValueError) as exc:
+            raise SchematicLoadError(
+                f"{ctx}.span_override values must be numbers"
+            ) from exc
+
+    raw_z = data.get("z_order", 0)
+    if not isinstance(raw_z, int):
+        raise SchematicLoadError(f"{ctx}.z_order must be an integer")
+    z_order = raw_z
+
+    font_bold = bool(data.get("font_bold", False))
+    font_italic = bool(data.get("font_italic", False))
+    raw_ff = data.get("font_family", "")
+    if not isinstance(raw_ff, str):
+        raise SchematicLoadError(f"{ctx}.font_family must be a string")
+    font_family = raw_ff
+
     return Component(
         id=comp_id,
         kind=kind,
@@ -226,6 +260,11 @@ def _dict_to_component(data: Any, index: int) -> Component:
         mirror=mirror,
         options=options,
         label_offset=label_offset,
+        span_override=span_override,
+        z_order=z_order,
+        font_bold=font_bold,
+        font_italic=font_italic,
+        font_family=font_family,
     )
 
 

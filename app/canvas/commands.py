@@ -50,6 +50,10 @@ __all__ = [
     "PlaceCommand",
     "DeleteCommand",
     "MoveCommand",
+    "ResizeCommand",
+    "SetSpanCommand",
+    "SetZOrderCommand",
+    "SetTextStyleCommand",
     "MoveWireVertexCommand",
     "SplitWireCommand",
     "MergeWireCommand",
@@ -440,6 +444,179 @@ class MoveCommand(Command):
         # we don't recapture an already-reshaped path.
         self._reshape_wires(schematic)
         self._shift_components(schematic, +1.0)
+
+
+class ResizeCommand(Command):
+    """Drag the terminal endpoint of a resizable two-terminal component.
+
+    Sets ``Component.span_override`` and reshapes any wire whose endpoint
+    coincides with the old terminal-pin position, identical to how
+    :class:`MoveCommand` handles connected wires.
+
+    Inverse: restore the previous ``span_override`` and wire geometry.
+    """
+
+    label = "Resize"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_span: tuple[float, float],
+        old_span: tuple[float, float],
+    ) -> None:
+        self._component_id = component_id
+        self._new_span = new_span
+        self._old_span = old_span
+        # wire id -> original points list, captured on first do().
+        self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
+        self._removed_wire_ids: set[str] = set()
+
+    def _terminal_pin_pos(
+        self, schematic: Schematic, use_old: bool
+    ) -> tuple[float, float]:
+        """World-space position of the terminal (second) pin given the chosen span."""
+        comp = _find_component(schematic, self._component_id)
+        from app.components.registry import REGISTRY
+        from app.schematic.model import component_pin_positions
+        span = self._old_span if use_old else self._new_span
+        # Temporarily override to compute the position.
+        orig = comp.span_override
+        comp.span_override = span
+        pins = component_pin_positions(comp)
+        comp.span_override = orig
+        return pins[1] if len(pins) > 1 else comp.position
+
+    def _reshape_wires(
+        self,
+        schematic: Schematic,
+        old_pin: tuple[float, float],
+        dx: float,
+        dy: float,
+    ) -> None:
+        to_remove: list[str] = []
+        for wire in schematic.wires:
+            pts = wire.points
+            if len(pts) < 2:
+                continue
+            start_hit = pts[0] == old_pin
+            end_hit = pts[-1] == old_pin
+            if not start_hit and not end_hit:
+                continue
+            if wire.id not in self._orig_wire_points:
+                self._orig_wire_points[wire.id] = list(pts)
+            new_pts = reshape_wire_points(
+                pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy
+            )
+            if len(new_pts) < 2:
+                to_remove.append(wire.id)
+            else:
+                wire.points = new_pts
+        if to_remove:
+            self._removed_wire_ids.update(to_remove)
+            schematic.wires[:] = [w for w in schematic.wires if w.id not in to_remove]
+
+    def do(self, schematic: Schematic) -> None:
+        old_pin = self._terminal_pin_pos(schematic, use_old=True)
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._new_span
+        new_pin = self._terminal_pin_pos(schematic, use_old=False)
+        dx = new_pin[0] - old_pin[0]
+        dy = new_pin[1] - old_pin[1]
+        self._reshape_wires(schematic, old_pin, dx, dy)
+
+    def undo(self, schematic: Schematic) -> None:
+        # Find old terminal position under new span so we can compute delta.
+        new_pin = self._terminal_pin_pos(schematic, use_old=False)
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._old_span
+        # Restore wire geometry exactly.
+        for wire in schematic.wires:
+            orig = self._orig_wire_points.get(wire.id)
+            if orig is not None:
+                wire.points = list(orig)
+        existing_ids = {w.id for w in schematic.wires}
+        for wid in self._removed_wire_ids:
+            orig = self._orig_wire_points.get(wid)
+            if orig is not None and wid not in existing_ids:
+                schematic.wires.append(Wire(id=wid, points=list(orig)))
+
+    def redo(self, schematic: Schematic) -> None:
+        old_pin = self._terminal_pin_pos(schematic, use_old=True)
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._new_span
+        new_pin = self._terminal_pin_pos(schematic, use_old=False)
+        dx = new_pin[0] - old_pin[0]
+        dy = new_pin[1] - old_pin[1]
+        self._reshape_wires(schematic, old_pin, dx, dy)
+
+
+class SetSpanCommand(Command):
+    """Set span_override on a component without reshaping connected wires.
+
+    Used for drawing annotations (text_node, rect) where span_override carries
+    non-spatial data (font size) or where wire reshaping is not appropriate.
+    """
+
+    label = "Set Span"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_span: tuple[float, float] | None,
+        old_span: tuple[float, float] | None,
+    ) -> None:
+        self._component_id = component_id
+        self._new_span = new_span
+        self._old_span = old_span
+
+    def do(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).span_override = self._new_span
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).span_override = self._old_span
+
+
+class SetZOrderCommand(Command):
+    """Set z_order on a drawing annotation component (text_node, rect)."""
+
+    label = "Set Z-Order"
+
+    def __init__(self, component_id: str, new_z: int, old_z: int) -> None:
+        self._component_id = component_id
+        self._new_z = new_z
+        self._old_z = old_z
+
+    def do(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).z_order = self._new_z
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).z_order = self._old_z
+
+
+class SetTextStyleCommand(Command):
+    """Set font_bold, font_italic, and font_family on a text_node component."""
+
+    label = "Set Text Style"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_bold: bool, new_italic: bool, new_family: str,
+        old_bold: bool, old_italic: bool, old_family: str,
+    ) -> None:
+        self._component_id = component_id
+        self._new = (new_bold, new_italic, new_family)
+        self._old = (old_bold, old_italic, old_family)
+
+    def _apply(self, schematic: Schematic, vals: tuple) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.font_bold, comp.font_italic, comp.font_family = vals
+
+    def do(self, schematic: Schematic) -> None:
+        self._apply(schematic, self._new)
+
+    def undo(self, schematic: Schematic) -> None:
+        self._apply(schematic, self._old)
 
 
 class WireCommand(Command):

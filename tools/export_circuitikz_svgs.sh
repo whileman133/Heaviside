@@ -58,6 +58,11 @@ BIPOLES=(
   potentiometer generic
 )
 
+NODES=(
+  # Ground / reference symbols (single-terminal, placed as node at (0,0))
+  ground rground sground nground pground cground eground
+)
+
 TRIPOLES=(
   # MOSFETs
   nmos pmos nmosd pmosd
@@ -149,9 +154,59 @@ TRIPOLE_LEADS[nigfete]='\draw (X.drain)  -- (0.0164,0.7295);
   \draw (X.source) -- (0.0164,-0.7705);
   \draw (X.gate)   -| (-0.9836,-0.2705);'
 
+TRIPOLE_LEADS[nigfetd]='\draw (X.drain)  -- (0.0164,0.7295);
+  \draw (X.source) -- (0.0164,-0.7705);
+  \draw (X.gate)   -| (-0.9836,-0.2705);'
+
+TRIPOLE_LEADS[pigfete]='\draw (X.drain)  -- (0.0164,-0.7295);
+  \draw (X.source) -- (0.0164,0.7705);
+  \draw (X.gate)   -| (-0.9836,0.2705);'
+
+TRIPOLE_LEADS[pigfetd]='\draw (X.drain)  -- (0.0164,-0.7295);
+  \draw (X.source) -- (0.0164,0.7705);
+  \draw (X.gate)   -| (-0.9836,0.2705);'
+
 TRIPOLE_LEADS[op_amp]='\draw (X.out)  -- (1.5,0);
   \draw (X.+)    -| (-1.5,-0.5);
   \draw (X.-)    -| (-1.5, 0.5);'
+
+# NPN BJT: base=left(0,0), collector=top-right(1,-1), emitter=bottom-right(1,1).
+# CTikZ anchors sit slightly off-grid; leads extend them to clean 0.5-GU snap.
+TRIPOLE_LEADS[npn]='\draw (X.C) -- (0.0129,1);
+  \draw (X.E) -- (0.0129,-1);
+  \draw (X.B) -- (-1,0);'
+
+# PNP BJT: same geometry but emitter at top, collector at bottom.
+TRIPOLE_LEADS[pnp]='\draw (X.E) -- (0.0129,1);
+  \draw (X.C) -- (0.0129,-1);
+  \draw (X.B) -- (-1,0);'
+
+render_node() {
+  local name="$1"
+  local slug
+  slug=$(slug "$name")
+  local tex="$WORK_DIR/${slug}.tex"
+  local dvi="$WORK_DIR/${slug}.dvi"
+  local svg="$OUT_DIR/nodes/${slug}.svg"
+
+  # Place node at (0,0) with a short vertical lead from the connection point
+  # so the SVG origin aligns with the pin coordinate.
+  cat > "$tex" <<TEX
+\documentclass[border=2pt]{standalone}
+\usepackage[american]{circuitikz}
+\begin{document}
+\begin{circuitikz}
+  \draw (0,0) node[${name}] {};
+\end{circuitikz}
+\end{document}
+TEX
+
+  latex -interaction=nonstopmode -output-directory="$WORK_DIR" "$tex" \
+    > "$WORK_DIR/${slug}.log" 2>&1 || { echo "  [WARN] latex failed for node '$name'"; return 1; }
+  dvisvgm --no-fonts "$dvi" -o "$svg" \
+    > "$WORK_DIR/${slug}.dvisvgm.log" 2>&1 || { echo "  [WARN] dvisvgm failed for node '$name'"; return 1; }
+  echo "$svg"
+}
 
 render_tripole() {
   local name="$1"
@@ -184,6 +239,14 @@ TEX
 # ---------------------------------------------------------------------------
 # Render all components
 # ---------------------------------------------------------------------------
+mkdir -p "$OUT_DIR/nodes"
+
+echo "=== Rendering nodes ==="
+for name in "${NODES[@]}"; do
+  echo -n "  $name ... "
+  render_node "$name" > /dev/null && echo "OK" || true
+done
+
 echo "=== Rendering bipoles ==="
 for name in "${BIPOLES[@]}"; do
   echo -n "  $name ... "
@@ -243,7 +306,7 @@ def parse_svg(svg_path, kind, name):
         "paths":   paths,
     }
 
-for kind in ("bipoles", "tripoles"):
+for kind in ("nodes", "bipoles", "tripoles"):
     for svg_path in sorted(glob.glob(os.path.join(out_dir, kind, "*.svg"))):
         slug = os.path.splitext(os.path.basename(svg_path))[0]
         name = slug.replace("_", " ")

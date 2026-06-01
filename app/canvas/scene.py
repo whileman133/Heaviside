@@ -49,6 +49,7 @@ from app.canvas.commands import (
     MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
+    ResizeCommand,
     RotateCommand,
     SplitWireCommand,
     UndoStack,
@@ -60,6 +61,8 @@ from app.canvas.items import (
     JunctionItem,
     LabelTextItem,
     OpenCircleItem,
+    OpenItem,
+    _ResizableTwoTerminalItem,
     WireItem,
     WirePreviewItem,
 )
@@ -173,6 +176,11 @@ class SchematicScene(QGraphicsScene):
         # (no grid movement → select) from a real drag (→ move the vertex).
         self._vertex_press_gu: tuple[float, float] | None = None
 
+        # Endpoint drag for resizable components: (comp_id, handle_index, old_span) or None.
+        # handle_index: 0 = origin handle (moves component), 1 = terminal handle.
+        self._endpoint_drag: tuple[str, int, tuple[float, float]] | None = None
+        self._endpoint_press_gu: tuple[float, float] | None = None
+
         # Wire ids currently showing a drag-preview (during a component drag),
         # so they can be cleared precisely on release.
         self._previewed_wire_ids: set[str] = set()
@@ -212,9 +220,10 @@ class SchematicScene(QGraphicsScene):
         trigger after each placement.
         """
         return (
-            bool(self._drag_start)          # component drag in progress
-            or self._vertex_drag is not None  # wire vertex drag in progress
-            or bool(self._wire_pts)           # wire being drawn (has anchored points)
+            bool(self._drag_start)             # component drag in progress
+            or self._vertex_drag is not None   # wire vertex drag in progress
+            or self._endpoint_drag is not None # endpoint resize in progress
+            or bool(self._wire_pts)            # wire being drawn (has anchored points)
         )
 
 
@@ -326,6 +335,7 @@ class SchematicScene(QGraphicsScene):
             rotation=rotation,
             options=options,
             mirror=mirror,
+            z_order=-10 if kind == "rect" else 0,
         )
         place_cmd = PlaceCommand(comp)
         split_cmds = self._split_commands_for(
@@ -717,6 +727,54 @@ class SchematicScene(QGraphicsScene):
     def mirror_component(self, component_id: str, new_mirror: bool) -> None:
         """Set the mirror state of a component via an undoable MirrorCommand."""
         self._push(MirrorCommand(component_id, new_mirror))
+
+    def set_component_span(
+        self,
+        component_id: str,
+        new_span: tuple[float, float] | None,
+    ) -> None:
+        """Set span_override without wire reshaping (for drawing annotations)."""
+        comp = next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+        if comp is None:
+            return
+        if comp.span_override == new_span:
+            return
+        from app.canvas.commands import SetSpanCommand
+        self._push(SetSpanCommand(component_id, new_span, comp.span_override))
+
+    def set_component_z_order(self, component_id: str, new_z: int) -> None:
+        """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
+        comp = next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+        if comp is None or comp.z_order == new_z:
+            return
+        from app.canvas.commands import SetZOrderCommand
+        self._push(SetZOrderCommand(component_id, new_z, comp.z_order))
+
+    def set_text_node_style(
+        self,
+        component_id: str,
+        bold: bool,
+        italic: bool,
+        family: str,
+    ) -> None:
+        """Set font style on a text_node via an undoable SetTextStyleCommand."""
+        comp = next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+        if comp is None:
+            return
+        if (comp.font_bold, comp.font_italic, comp.font_family) == (bold, italic, family):
+            return
+        from app.canvas.commands import SetTextStyleCommand
+        self._push(SetTextStyleCommand(
+            component_id,
+            bold, italic, family,
+            comp.font_bold, comp.font_italic, comp.font_family,
+        ))
 
     def mirror_selected(self) -> None:
         """Toggle mirror on selected components, or mirror the placement ghost."""
@@ -1297,6 +1355,11 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
+        if self._endpoint_drag is not None:
+            self._preview_endpoint_drag(gu)
+            event.accept()
+            return
+
         # Let Qt move any dragged component items, then snap them to the grid
         # and ghost their connected wires.
         super().mouseMoveEvent(event)
@@ -1307,6 +1370,88 @@ class SchematicScene(QGraphicsScene):
                     snapped = self.snap_point_gu(item.pos())
                     item.setPos(self.gu_to_scene(*snapped))
             self._preview_component_drag()
+
+    # ------------------------------------------------------------------
+    # Endpoint drag helpers (resizable components)
+    # ------------------------------------------------------------------
+
+    def _endpoint_handle_at(
+        self, scene_pos: "QPointF"
+    ) -> str | None:
+        """Return comp_id if *scene_pos* is over the terminal resize handle of any
+        OpenItem, regardless of selection state.  Checks selected items first."""
+        candidates = list(self.selectedItems()) + [
+            item for item in self._comp_items.values()
+            if isinstance(item, _ResizableTwoTerminalItem) and item not in self.selectedItems()
+        ]
+        for item in candidates:
+            if not isinstance(item, _ResizableTwoTerminalItem):
+                continue
+            local = item.mapFromScene(scene_pos)
+            if item.terminal_handle_hit(local):
+                return item.component.id
+        return None
+
+    def _preview_endpoint_drag(self, gu: tuple[float, float]) -> None:
+        """Live visual update while dragging the terminal endpoint (model untouched)."""
+        if self._endpoint_drag is None:
+            return
+        comp_id, _handle_idx, _old_span = self._endpoint_drag
+        item = self._comp_items.get(comp_id)
+        if not isinstance(item, _ResizableTwoTerminalItem):
+            return
+        comp = item.component
+        ox, oy = comp.position
+        dx_w = gu[0] - ox
+        dy_w = gu[1] - oy
+        r = comp.rotation % 360
+        if r == 90:
+            dx, dy = dy_w, -dx_w
+        elif r == 180:
+            dx, dy = -dx_w, -dy_w
+        elif r == 270:
+            dx, dy = -dy_w, dx_w
+        else:
+            dx, dy = dx_w, dy_w
+        if abs(dx) < 0.5 and abs(dy) < 0.5:
+            return
+        item.set_preview_span((dx, dy))
+
+    def _commit_endpoint_drag(
+        self,
+        comp_id: str,
+        old_span: tuple[float, float],
+        gu: tuple[float, float],
+    ) -> None:
+        """Commit a ResizeCommand for the dragged terminal endpoint."""
+        item = self._comp_items.get(comp_id)
+        if not isinstance(item, _ResizableTwoTerminalItem):
+            return
+        comp = item.component
+        ox, oy = comp.position
+        dx_w = gu[0] - ox
+        dy_w = gu[1] - oy
+        r = comp.rotation % 360
+        if r == 90:
+            dx, dy = dy_w, -dx_w
+        elif r == 180:
+            dx, dy = -dx_w, -dy_w
+        elif r == 270:
+            dx, dy = -dy_w, dx_w
+        else:
+            dx, dy = dx_w, dy_w
+        dx = round(dx * 2) / 2
+        dy = round(dy * 2) / 2
+        if abs(dx) < 0.5 and abs(dy) < 0.5:
+            item.set_preview_span(old_span)
+            return
+        new_span = (dx, dy)
+        if new_span == old_span:
+            return
+        cmd = ResizeCommand(comp_id, new_span, old_span)
+        self._stack.push(cmd)
+        self._rebuild_items()
+        self.schematic_changed.emit()
 
     def _preview_vertex_drag(self, gu: tuple[float, float]) -> None:
         """Live visual feedback while dragging a wire vertex (model untouched).
@@ -1613,6 +1758,25 @@ class SchematicScene(QGraphicsScene):
                 event.accept()
                 return
 
+        # SELECT mode: a press on a resizable component's terminal handle starts
+        # an endpoint drag (takes priority over wire-auto-enter and vertex drag).
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            comp_id = self._endpoint_handle_at(event.scenePos())
+            if comp_id is not None:
+                comp = next((c for c in self._schematic.components if c.id == comp_id), None)
+                if comp is not None:
+                    from app.components.registry import REGISTRY as _REG
+                    old_span = comp.span_override if comp.span_override is not None else _REG[comp.kind].default_span
+                    self._endpoint_drag = (comp_id, 1, old_span)
+                    self._endpoint_press_gu = self.snap_point_gu(event.scenePos())
+                    # Select the item so resize handles become visible.
+                    item = self._comp_items.get(comp_id)
+                    if item is not None:
+                        self.clearSelection()
+                        item.setSelected(True)
+                    event.accept()
+                    return
+
         # SELECT mode: a press on a draggable wire vertex starts a vertex drag
         # (takes priority over component drag / rubber-band select).
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
@@ -1663,6 +1827,19 @@ class SchematicScene(QGraphicsScene):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        # Commit an endpoint drag if one is active.
+        if self._endpoint_drag is not None and event.button() == Qt.LeftButton:
+            comp_id, _handle_idx, old_span = self._endpoint_drag
+            press_gu = self._endpoint_press_gu
+            self._endpoint_drag = None
+            self._endpoint_press_gu = None
+            gu = self.snap_point_gu(event.scenePos())
+            if gu != press_gu:
+                self._commit_endpoint_drag(comp_id, old_span, gu)
+            # On plain click (no movement) the item is already selected from press.
+            event.accept()
+            return
+
         # Commit a wire-vertex drag if one is active.
         if self._vertex_drag is not None and event.button() == Qt.LeftButton:
             wire_id, idx, _orig = self._vertex_drag

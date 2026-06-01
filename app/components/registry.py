@@ -131,7 +131,7 @@ _ISOURCE = ComponentDef(
 )
 
 _AC_VSOURCE = ComponentDef(
-    kind="vsource",
+    kind="vsourcesin",
     display_name="AC Voltage Source",
     category="Sources",
     bbox=(-0.5, 0.0, 0.5, 2.0),
@@ -140,12 +140,12 @@ _AC_VSOURCE = ComponentDef(
         PinDef(name="-", offset=(0.0, 2.0)),
     ],
     label_slots=["l", "l_", "v", "v^"],
-    tikz_keyword="vsource",
+    tikz_keyword="vsourcesin",
     default_span=(0.0, 2.0),
 )
 
 _AC_ISOURCE = ComponentDef(
-    kind="isource",
+    kind="isourcesin",
     display_name="AC Current Source",
     category="Sources",
     bbox=(-0.5, 0.0, 0.5, 2.0),
@@ -154,7 +154,7 @@ _AC_ISOURCE = ComponentDef(
         PinDef(name="-", offset=(0.0, 2.0)),
     ],
     label_slots=["l", "l_", "i", "i_"],
-    tikz_keyword="isource",
+    tikz_keyword="isourcesin",
     default_span=(0.0, 2.0),
 )
 
@@ -213,6 +213,241 @@ _NIGFETE = ComponentDef(
     default_span=(0.0, 0.0),
 )
 
+_NIGFETD = ComponentDef(
+    kind="nigfetd",
+    display_name="NMOS (depletion)",
+    category="MOSFETs",
+    # Identical pin geometry to nigfete; only the channel drawing differs
+    # (solid line instead of three dashes = depletion mode).
+    bbox=(-0.05, -1.1, 1.05, 0.55),
+    pins=[
+        PinDef(name="gate",   offset=(0.0,  0.0)),
+        PinDef(name="drain",  offset=(1.0, -1.0)),
+        PinDef(name="source", offset=(1.0,  0.5)),
+    ],
+    label_slots=["l"],
+    tikz_keyword="nigfetd",
+    default_span=(0.0, 0.0),
+)
+
+_PIGFETE = ComponentDef(
+    kind="pigfete",
+    display_name="PMOS",
+    category="MOSFETs",
+    # PMOS enhancement: gate on left, source at top, drain at bottom.
+    # Measured CTikZ anchor positions (pt/28.34765, anchor=gate):
+    #   gate (0,0), source (0.984,-0.500)→(1.0,-0.5), drain (0.984,1.043)→(1.0,1.0)
+    bbox=(-0.05, -0.55, 1.05, 1.1),
+    pins=[
+        PinDef(name="gate",   offset=(0.0,  0.0)),
+        PinDef(name="source", offset=(1.0, -0.5)),   # Qt y-down: -0.5 = visual top
+        PinDef(name="drain",  offset=(1.0,  1.0)),   # Qt y-down: +1.0 = visual bottom
+    ],
+    label_slots=["l"],
+    tikz_keyword="pigfete",
+    default_span=(0.0, 0.0),
+)
+
+_PIGFETD = ComponentDef(
+    kind="pigfetd",
+    display_name="PMOS (depletion)",
+    category="MOSFETs",
+    # PMOS depletion: same pin geometry as pigfete, solid channel line.
+    bbox=(-0.05, -0.55, 1.05, 1.1),
+    pins=[
+        PinDef(name="gate",   offset=(0.0,  0.0)),
+        PinDef(name="source", offset=(1.0, -0.5)),
+        PinDef(name="drain",  offset=(1.0,  1.0)),
+    ],
+    label_slots=["l"],
+    tikz_keyword="pigfetd",
+    default_span=(0.0, 0.0),
+)
+
+# ---------------------------------------------------------------------------
+# BJTs
+# ---------------------------------------------------------------------------
+
+_NPN = ComponentDef(
+    kind="npn",
+    display_name="NPN BJT",
+    category="BJTs",
+    # Anchor = base pin.  Measured from re-exported SVG with grid-aligned leads
+    # (tools/export_circuitikz_svgs.sh TRIPOLE_LEADS[npn]):
+    #   base (0,0), collector (1.013,-1.0)→(1.0,-1.0), emitter (1.013,1.0)→(1.0,1.0)
+    # x-error 0.013 GU ≈ 0.8 px — sub-pixel, no scale correction applied.
+    bbox=(0.0, -1.1, 1.1, 1.1),
+    pins=[
+        PinDef(name="base",      offset=(0.0,  0.0)),
+        PinDef(name="collector", offset=(1.0, -1.0)),   # Qt y-down: -1 = visual top
+        PinDef(name="emitter",   offset=(1.0,  1.0)),   # Qt y-down: +1 = visual bottom
+    ],
+    label_slots=["l"],
+    tikz_keyword="npn",
+    default_span=(0.0, 0.0),
+)
+
+_PNP = ComponentDef(
+    kind="pnp",
+    display_name="PNP BJT",
+    category="BJTs",
+    # Same SVG geometry as NPN; emitter is at top (visual top = Qt y -1),
+    # collector at bottom (Qt y +1).
+    bbox=(0.0, -1.1, 1.1, 1.1),
+    pins=[
+        PinDef(name="base",      offset=(0.0,  0.0)),
+        PinDef(name="emitter",   offset=(1.0, -1.0)),   # Qt y-down: -1 = visual top
+        PinDef(name="collector", offset=(1.0,  1.0)),   # Qt y-down: +1 = visual bottom
+    ],
+    label_slots=["l"],
+    tikz_keyword="pnp",
+    default_span=(0.0, 0.0),
+)
+
+# ---------------------------------------------------------------------------
+# Annotations
+# ---------------------------------------------------------------------------
+
+_OPEN = ComponentDef(
+    kind="open",
+    display_name="Voltage Annotation",
+    category="Annotations",
+    bbox=(0.0, -0.4, 2.0, 0.4),
+    pins=[
+        PinDef(name="in",  offset=(0.0, 0.0)),
+        PinDef(name="out", offset=(2.0, 0.0)),
+    ],
+    label_slots=["v", "v^", "v_", "i", "i_"],
+    tikz_keyword="open",
+    default_span=(2.0, 0.0),
+    resizable=True,
+)
+
+_SHORT = ComponentDef(
+    kind="short",
+    display_name="Current Annotation",
+    category="Annotations",
+    bbox=(0.0, -0.4, 2.0, 0.4),
+    pins=[
+        PinDef(name="in",  offset=(0.0, 0.0)),
+        PinDef(name="out", offset=(2.0, 0.0)),
+    ],
+    label_slots=["i", "i_", "i^", "v", "v^", "v_"],
+    tikz_keyword="short",
+    default_span=(2.0, 0.0),
+    resizable=True,
+)
+
+# ---------------------------------------------------------------------------
+# Nodes (single-terminal)
+# ---------------------------------------------------------------------------
+
+_GROUND = ComponentDef(
+    kind="ground",
+    display_name="Ground",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="ground",
+    default_span=(0.0, 0.0),
+)
+
+_RGROUND = ComponentDef(
+    kind="rground",
+    display_name="Reference Ground",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.5),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="rground",
+    default_span=(0.0, 0.0),
+)
+
+_SGROUND = ComponentDef(
+    kind="sground",
+    display_name="Signal Ground",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="sground",
+    default_span=(0.0, 0.0),
+)
+
+_NGROUND = ComponentDef(
+    kind="nground",
+    display_name="Noiseless Ground",
+    category="Nodes",
+    bbox=(-0.75, 0.0, 0.75, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="nground",
+    default_span=(0.0, 0.0),
+)
+
+_PGROUND = ComponentDef(
+    kind="pground",
+    display_name="Protective Earth",
+    category="Nodes",
+    bbox=(-0.75, 0.0, 0.75, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="pground",
+    default_span=(0.0, 0.0),
+)
+
+_CGROUND = ComponentDef(
+    kind="cground",
+    display_name="Chassis Ground",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="cground",
+    default_span=(0.0, 0.0),
+)
+
+_EGROUND = ComponentDef(
+    kind="eground",
+    display_name="Earth Ground",
+    category="Nodes",
+    bbox=(-0.75, 0.0, 0.75, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=[],
+    tikz_keyword="eground",
+    default_span=(0.0, 0.0),
+)
+
+# ---------------------------------------------------------------------------
+# Drawing annotations (non-circuit visual elements)
+# ---------------------------------------------------------------------------
+
+_TEXT_NODE = ComponentDef(
+    kind="text_node",
+    display_name="Text",
+    category="Drawing",
+    # Placeholder bbox; TextNodeItem overrides boundingRect() dynamically.
+    bbox=(-1.5, -0.4, 1.5, 0.4),
+    pins=[],
+    label_slots=[],
+    tikz_keyword="text_node",
+    default_span=(0.0, 0.0),
+)
+
+_RECT = ComponentDef(
+    kind="rect",
+    display_name="Rectangle",
+    category="Drawing",
+    # Placeholder bbox matching default span; RectItem overrides boundingRect().
+    bbox=(0.0, 0.0, 2.0, 2.0),
+    pins=[],
+    label_slots=[],
+    tikz_keyword="rectangle",
+    default_span=(2.0, 2.0),
+    resizable=True,
+)
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -232,6 +467,22 @@ REGISTRY: dict[str, ComponentDef] = {
         _VCVS,
         _VCCS,
         _NIGFETE,
+        _NIGFETD,
+        _PIGFETE,
+        _PIGFETD,
+        _NPN,
+        _PNP,
+        _OPEN,
+        _SHORT,
+        _GROUND,
+        _RGROUND,
+        _SGROUND,
+        _NGROUND,
+        _PGROUND,
+        _CGROUND,
+        _EGROUND,
+        _TEXT_NODE,
+        _RECT,
     ]
 }
 
