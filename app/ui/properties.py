@@ -251,6 +251,66 @@ def _make_section_label(text: str) -> QLabel:
     return lbl
 
 
+_ROT_BTN_WIDTH = 52
+_Z_ORDER_TOOLTIP = (
+    "Negative = behind circuit elements; 0 = default; positive = in front"
+)
+
+
+def _make_separator() -> QFrame:
+    """A sunken horizontal rule used between panel sections."""
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setFrameShadow(QFrame.Sunken)
+    return sep
+
+
+def _make_rotation_row(
+    owner: QWidget, on_rotate: "Callable[[int], None]"
+) -> "tuple[QHBoxLayout, dict[int, QPushButton]]":
+    """Build the exclusive 0/90/180/270° rotation button row.
+
+    Returns the row layout and the ``{angle: button}`` map (the caller stores the
+    map for selection/enable updates). *on_rotate* is invoked with the angle when
+    a button is clicked. The owning widget parents the QButtonGroup so it stays
+    alive.
+    """
+    row = QHBoxLayout()
+    row.setSpacing(4)
+    buttons: dict[int, QPushButton] = {}
+    group = QButtonGroup(owner)
+    group.setExclusive(True)
+    for angle in (0, 90, 180, 270):
+        btn = QPushButton(f"{angle}°")
+        btn.setCheckable(True)
+        btn.setFixedWidth(_ROT_BTN_WIDTH)
+        group.addButton(btn)
+        buttons[angle] = btn
+        btn.clicked.connect(lambda checked, a=angle: on_rotate(a))
+        row.addWidget(btn)
+    return row, buttons
+
+
+def _make_z_order_row(
+    on_changed: "Callable[[int], None]"
+) -> "tuple[QHBoxLayout, QSpinBox]":
+    """Build the "Z-order" label + spin-box row (range -99..99).
+
+    Returns the row layout and the spin box (the caller stores it for value
+    updates). *on_changed* is connected to ``valueChanged``.
+    """
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel("Z-order"))
+    spin = QSpinBox()
+    spin.setRange(-99, 99)
+    spin.setToolTip(_Z_ORDER_TOOLTIP)
+    spin.valueChanged.connect(on_changed)
+    row.addWidget(spin)
+    row.addStretch(1)
+    return row, spin
+
+
 class _CircuitPanel(_BasePanel):
     """
     Panel for plain circuit components.
@@ -278,26 +338,11 @@ class _CircuitPanel(_BasePanel):
         self._hint_label.setWordWrap(True)
         layout.addWidget(self._hint_label)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Rotation"))
 
-        rot_row = QHBoxLayout()
-        rot_row.setSpacing(4)
-        self._rot_buttons: dict[int, QPushButton] = {}
-        rot_group = QButtonGroup(self)
-        rot_group.setExclusive(True)
-        for angle in (0, 90, 180, 270):
-            btn = QPushButton(f"{angle}°")
-            btn.setCheckable(True)
-            btn.setFixedWidth(52)
-            rot_group.addButton(btn)
-            self._rot_buttons[angle] = btn
-            btn.clicked.connect(lambda checked, a=angle: self._on_rotate(a))
-            rot_row.addWidget(btn)
+        rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
         layout.addLayout(rot_row)
 
         self._mirror_cb = QCheckBox("Mirror (horizontal)")
@@ -440,10 +485,7 @@ class _TextNodePanel(_BasePanel):
         self._text_field.textChanged.connect(self._on_text_changed)
         layout.addWidget(self._text_field)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Font"))
         self._font_ctrl = _FontControls()
@@ -451,44 +493,16 @@ class _TextNodePanel(_BasePanel):
         self._font_ctrl.style_committed.connect(self._on_font_style)
         layout.addWidget(self._font_ctrl)
 
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep2)
+        layout.addWidget(_make_separator())
 
-        z_row = QHBoxLayout()
-        z_row.setSpacing(6)
-        z_row.addWidget(QLabel("Z-order"))
-        self._z_order_spin = QSpinBox()
-        self._z_order_spin.setRange(-99, 99)
-        self._z_order_spin.setToolTip(
-            "Negative = behind circuit elements; 0 = default; positive = in front"
-        )
-        self._z_order_spin.valueChanged.connect(self._on_z_order_changed)
-        z_row.addWidget(self._z_order_spin)
-        z_row.addStretch(1)
+        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
         layout.addLayout(z_row)
 
-        sep3 = QFrame()
-        sep3.setFrameShape(QFrame.HLine)
-        sep3.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep3)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Rotation"))
 
-        rot_row = QHBoxLayout()
-        rot_row.setSpacing(4)
-        self._rot_buttons: dict[int, QPushButton] = {}
-        rot_group = QButtonGroup(self)
-        rot_group.setExclusive(True)
-        for angle in (0, 90, 180, 270):
-            btn = QPushButton(f"{angle}°")
-            btn.setCheckable(True)
-            btn.setFixedWidth(52)
-            rot_group.addButton(btn)
-            self._rot_buttons[angle] = btn
-            btn.clicked.connect(lambda checked, a=angle: self._on_rotate(a))
-            rot_row.addWidget(btn)
+        rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
         layout.addLayout(rot_row)
 
         layout.addStretch(1)
@@ -617,22 +631,9 @@ class _RectPanel(_BasePanel):
         layer_row.addWidget(self._move_back_btn)
         layout.addLayout(layer_row)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep)
+        layout.addWidget(_make_separator())
 
-        z_row = QHBoxLayout()
-        z_row.setSpacing(6)
-        z_row.addWidget(QLabel("Z-order"))
-        self._z_order_spin = QSpinBox()
-        self._z_order_spin.setRange(-99, 99)
-        self._z_order_spin.setToolTip(
-            "Negative = behind circuit elements; 0 = default; positive = in front"
-        )
-        self._z_order_spin.valueChanged.connect(self._on_z_order_changed)
-        z_row.addWidget(self._z_order_spin)
-        z_row.addStretch(1)
+        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
         layout.addLayout(z_row)
 
         layout.addStretch(1)
@@ -759,10 +760,7 @@ class _BipolePanel(_BasePanel):
         self._label_field.textChanged.connect(self._on_label_changed)
         layout.addWidget(self._label_field)
 
-        sep0 = QFrame()
-        sep0.setFrameShape(QFrame.HLine)
-        sep0.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep0)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Other CircuiTikZ options"))
 
@@ -775,10 +773,7 @@ class _BipolePanel(_BasePanel):
         hint.setStyleSheet("color: #888; font-size: 10px;")
         layout.addWidget(hint)
 
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.HLine)
-        sep1.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep1)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Font"))
         self._font_ctrl = _FontControls()
@@ -786,10 +781,7 @@ class _BipolePanel(_BasePanel):
         self._font_ctrl.style_committed.connect(self._on_font_style)
         layout.addWidget(self._font_ctrl)
 
-        sep1b = QFrame()
-        sep1b.setFrameShape(QFrame.HLine)
-        sep1b.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep1b)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Appearance"))
 
@@ -815,48 +807,20 @@ class _BipolePanel(_BasePanel):
         bw_row.addWidget(self._border_width_spin, 1)
         layout.addLayout(bw_row)
 
-        sep1c = QFrame()
-        sep1c.setFrameShape(QFrame.HLine)
-        sep1c.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep1c)
+        layout.addWidget(_make_separator())
 
         layout.addWidget(_make_section_label("Rotation"))
 
-        rot_row = QHBoxLayout()
-        rot_row.setSpacing(4)
-        self._rot_buttons: dict[int, QPushButton] = {}
-        rot_group = QButtonGroup(self)
-        rot_group.setExclusive(True)
-        for angle in (0, 90, 180, 270):
-            btn = QPushButton(f"{angle}°")
-            btn.setCheckable(True)
-            btn.setFixedWidth(52)
-            rot_group.addButton(btn)
-            self._rot_buttons[angle] = btn
-            btn.clicked.connect(lambda checked, a=angle: self._on_rotate(a))
-            rot_row.addWidget(btn)
+        rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
         layout.addLayout(rot_row)
 
         self._mirror_cb = QCheckBox("Mirror (horizontal)")
         self._mirror_cb.stateChanged.connect(self._on_mirror)
         layout.addWidget(self._mirror_cb)
 
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.HLine)
-        sep2.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(sep2)
+        layout.addWidget(_make_separator())
 
-        z_row = QHBoxLayout()
-        z_row.setSpacing(6)
-        z_row.addWidget(QLabel("Z-order"))
-        self._z_order_spin = QSpinBox()
-        self._z_order_spin.setRange(-99, 99)
-        self._z_order_spin.setToolTip(
-            "Negative = behind circuit elements; 0 = default; positive = in front"
-        )
-        self._z_order_spin.valueChanged.connect(self._on_z_order_changed)
-        z_row.addWidget(self._z_order_spin)
-        z_row.addStretch(1)
+        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
         layout.addLayout(z_row)
 
         layout.addStretch(1)
@@ -1003,10 +967,7 @@ class PropertiesPanel(QWidget):
         self._header.setWordWrap(True)
         outer.addWidget(self._header)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        outer.addWidget(sep)
+        outer.addWidget(_make_separator())
 
         self._stack = QStackedWidget()
         outer.addWidget(self._stack)
