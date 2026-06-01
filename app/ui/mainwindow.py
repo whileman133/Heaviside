@@ -26,13 +26,12 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QFont, QImage, QKeySequence,
     QPainter, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -390,9 +389,7 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         # Welcome screen → canvas transitions (one-way; never go back to welcome).
         # Triggered by: File → New, File → Open, or clicking a palette item.
-        self._scene.mode_changed.connect(
-            lambda mode: self._show_canvas() if mode == Mode.PLACE else None
-        )
+        self._scene.mode_changed.connect(self._on_mode_changed)
 
         # Scene → UI.
         self._scene.cursor_moved.connect(self._on_cursor_moved)
@@ -428,6 +425,13 @@ class MainWindow(QMainWindow):
 
     def _on_zoom_changed(self, zoom: float) -> None:
         self._status_zoom.setText(f"Zoom: {zoom * 100:.0f}%")
+
+    def _on_mode_changed(self, mode: Mode) -> None:
+        if mode == Mode.PLACE:
+            self._show_canvas()
+            # Clicking a palette entry moves keyboard focus to the palette widget;
+            # restore it to the view so R, X, Escape, etc. work immediately.
+            self._view.setFocus()
 
     def _show_canvas(self) -> None:
         """Switch the centre pane from the welcome screen to the live canvas."""
@@ -589,7 +593,6 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self._preview_worker.shutdown()
-        self._props.shutdown()
         super().closeEvent(event)
 
 

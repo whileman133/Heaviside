@@ -211,7 +211,7 @@ class Placement:
 
 # Horizontal two-terminal devices: lead axis y read from the manifest at load
 # time (it differs per component).  ``in`` pin = SVG (_BIPOLE_IN_X, lead_y).
-_HORIZONTAL_BIPOLES = {"R", "C", "L", "D"}
+_HORIZONTAL_BIPOLES = {"R", "C", "L", "D", "zD", "sD", "tD", "zzD", "leD"}
 
 # Vertical sources: the SVG draws them horizontally; rotate +90 deg so the
 # SVG +x axis becomes local +y (registry pins at (0,0) and (0,2)).
@@ -251,11 +251,16 @@ _MULTI_ANCHORS: dict[str, Placement] = {
     # 1.0 GU registry pin (CTikZ internal x = 0.9836 GU; 0.9836×1.0167≈1.0).
     "nigfete": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
     "nigfetd": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
+    # bodydiode variants share the same gate anchor; body diode extends rightward.
+    "nigfete_bodydiode": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
+    "nigfetd_bodydiode": Placement(anchor=(-61.7422, -32.14453), xscale=1.0167),
 
     # pigfete / pigfetd: same x geometry as nigfete but gate is higher (y-mirrored).
     # Terminals: source (1.0,-0.5), drain (1.0,+1.0), gate (0,0).
     "pigfete": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
     "pigfetd": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
+    "pigfete_bodydiode": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
+    "pigfetd_bodydiode": Placement(anchor=(-61.7422, -47.48047), xscale=1.0167),
 }
 
 
@@ -270,14 +275,15 @@ def _lead_y(key: str) -> float:
 
 
 def _placement(kind: str) -> Placement:
+    # Filled variants (e.g. "zD*") share geometry with their base kind ("zD").
+    base = kind[:-1] if kind.endswith("*") else kind
     key = manifest_key(kind)
-    if kind in _HORIZONTAL_BIPOLES:
+    if base in _HORIZONTAL_BIPOLES:
         return Placement(anchor=(_BIPOLE_IN_X, _lead_y(key)))
-    if kind in _VERTICAL_SOURCES:
-        # ``in`` pin is the left terminal; rotate so it points downward (+y).
+    if base in _VERTICAL_SOURCES:
         return Placement(anchor=(_BIPOLE_IN_X, _lead_y(key)), rotate_deg=90.0)
-    if kind in _MULTI_ANCHORS:
-        return _MULTI_ANCHORS[kind]
+    if base in _MULTI_ANCHORS:
+        return _MULTI_ANCHORS[base]
     raise KeyError(f"no placement defined for kind {kind!r}")
 
 
@@ -449,9 +455,14 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
             continue
         raw = parse_path(d)
         local = xform.map(raw)
-        fill_attr = (p.get("fill") or "").lower()
-        explicit_fill = fill_attr in ("", "#000", "#000000", "black")
-        filled = explicit_fill and ("z" in d.lower())
+        fill_attr = p.get("fill", "none").lower()
+        if fill_attr == "":
+            # Absent fill attribute in original SVG = SVG default black fill.
+            filled = True
+        elif fill_attr in ("#000", "#000000", "black"):
+            filled = "z" in d.lower()
+        else:
+            filled = False
         out.append(
             SymbolPath(
                 path=local,
@@ -463,9 +474,3 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
     # Append resolved glyph marks (+/- etc.) from the source SVG, if any.
     out.extend(_glyph_paths(kind))
     return tuple(out)
-
-
-def terminal_local(kind: str, svg_point: tuple[float, float]) -> QPointF:
-    """Map an arbitrary SVG point into local pixel space (helper for stubs)."""
-    p = _local_transform(kind).map(QPointF(*svg_point))
-    return p

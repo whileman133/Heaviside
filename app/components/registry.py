@@ -15,21 +15,23 @@ To add a new component type:
 from __future__ import annotations
 
 from app.components.model import (
+    BipoleComponent,
     ComponentDef,
     DiodeComponent,
+    MosfetComponent,
     PinDef,
     RectComponent,
     TextNodeComponent,
 )
 
 # ---------------------------------------------------------------------------
-# Passives
+# Bipoles (passives, diodes, general block)
 # ---------------------------------------------------------------------------
 
 _RESISTOR = ComponentDef(
     kind="R",
     display_name="Resistor",
-    category="Passives",
+    category="Bipoles",
     bbox=(0.0, -0.5, 2.0, 0.5),
     pins=[
         PinDef(name="in",  offset=(0.0, 0.0)),
@@ -43,7 +45,7 @@ _RESISTOR = ComponentDef(
 _CAPACITOR = ComponentDef(
     kind="C",
     display_name="Capacitor",
-    category="Passives",
+    category="Bipoles",
     bbox=(0.0, -0.5, 2.0, 0.5),
     pins=[
         PinDef(name="in",  offset=(0.0, 0.0)),
@@ -57,7 +59,7 @@ _CAPACITOR = ComponentDef(
 _INDUCTOR = ComponentDef(
     kind="L",
     display_name="Inductor",
-    category="Passives",
+    category="Bipoles",
     bbox=(0.0, -0.5, 2.0, 0.5),
     pins=[
         PinDef(name="in",  offset=(0.0, 0.0)),
@@ -76,32 +78,32 @@ _DIODE_LABELS = ["l", "l_", "v", "v^", "i", "i_"]
 _DIODE_BBOX   = (0.0, -0.5, 2.0, 0.5)
 
 _DIODE = ComponentDef(
-    kind="D", display_name="Diode", category="Diodes",
+    kind="D", display_name="Diode", category="Bipoles",
     bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="D", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 _ZENER = ComponentDef(
-    kind="zD", display_name="Zener Diode", category="Diodes",
+    kind="zD", display_name="Zener Diode", category="Bipoles",
     bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="zD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 _SCHOTTKY = ComponentDef(
-    kind="sD", display_name="Schottky Diode", category="Diodes",
+    kind="sD", display_name="Schottky Diode", category="Bipoles",
     bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="sD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 _TUNNEL = ComponentDef(
-    kind="tD", display_name="Tunnel Diode", category="Diodes",
+    kind="tD", display_name="Tunnel Diode", category="Bipoles",
     bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="tD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 _TVS = ComponentDef(
-    kind="zzD", display_name="TVS Diode", category="Diodes",
+    kind="zzD", display_name="TVS Diode", category="Bipoles",
     bbox=_DIODE_BBOX, pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="zzD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
 _LED = ComponentDef(
-    kind="leD", display_name="LED", category="Diodes",
+    kind="leD", display_name="LED", category="Bipoles",
     bbox=(0.0, -0.75, 2.0, 0.75), pins=_DIODE_PINS, label_slots=_DIODE_LABELS,
     tikz_keyword="leD", default_span=(2.0, 0.0), component_class=DiodeComponent,
 )
@@ -113,7 +115,7 @@ _LED = ComponentDef(
 _OPAMP = ComponentDef(
     kind="op amp",
     display_name="Op-Amp",
-    category="Amplifiers",
+    category="Tripoles",
     # Pin offsets match CircuiTikZ's actual anchor geometry (measured from the
     # compiled output): ±1.1944 GU horizontally, ±0.4918 GU vertically.
     # Power supply pins are omitted — they are conventionally not shown.
@@ -135,7 +137,7 @@ _OPAMP = ComponentDef(
 _VSOURCE = ComponentDef(
     kind="V",
     display_name="Voltage Source",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -149,7 +151,7 @@ _VSOURCE = ComponentDef(
 _ISOURCE = ComponentDef(
     kind="I",
     display_name="Current Source",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -163,7 +165,7 @@ _ISOURCE = ComponentDef(
 _AC_VSOURCE = ComponentDef(
     kind="vsourcesin",
     display_name="AC Voltage Source",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -177,7 +179,7 @@ _AC_VSOURCE = ComponentDef(
 _AC_ISOURCE = ComponentDef(
     kind="isourcesin",
     display_name="AC Current Source",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -195,7 +197,7 @@ _AC_ISOURCE = ComponentDef(
 _VCVS = ComponentDef(
     kind="cV",
     display_name="VCVS",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -209,7 +211,7 @@ _VCVS = ComponentDef(
 _VCCS = ComponentDef(
     kind="cI",
     display_name="VCCS",
-    category="Sources",
+    category="Bipoles",
     bbox=(-0.5, 0.0, 0.5, 2.0),
     pins=[
         PinDef(name="+", offset=(0.0, 0.0)),
@@ -227,7 +229,7 @@ _VCCS = ComponentDef(
 _NIGFETE = ComponentDef(
     kind="nigfete",
     display_name="NMOS",
-    category="MOSFETs",
+    category="Tripoles",
     # Pin offsets match CircuiTikZ's actual anchor geometry when placed with
     # anchor=gate, snapped to the nearest 0.5 GU boundary.
     # Measured from compiled output (pt/28.348):
@@ -241,12 +243,13 @@ _NIGFETE = ComponentDef(
     label_slots=["l"],
     tikz_keyword="nigfete",
     default_span=(0.0, 0.0),
+    component_class=MosfetComponent,
 )
 
 _NIGFETD = ComponentDef(
     kind="nigfetd",
     display_name="NMOS (depletion)",
-    category="MOSFETs",
+    category="Tripoles",
     # Identical pin geometry to nigfete; only the channel drawing differs
     # (solid line instead of three dashes = depletion mode).
     bbox=(-0.05, -1.1, 1.05, 0.55),
@@ -258,12 +261,13 @@ _NIGFETD = ComponentDef(
     label_slots=["l"],
     tikz_keyword="nigfetd",
     default_span=(0.0, 0.0),
+    component_class=MosfetComponent,
 )
 
 _PIGFETE = ComponentDef(
     kind="pigfete",
     display_name="PMOS",
-    category="MOSFETs",
+    category="Tripoles",
     # PMOS enhancement: gate on left, source at top, drain at bottom.
     # Measured CTikZ anchor positions (pt/28.34765, anchor=gate):
     #   gate (0,0), source (0.984,-0.500)→(1.0,-0.5), drain (0.984,1.043)→(1.0,1.0)
@@ -276,12 +280,13 @@ _PIGFETE = ComponentDef(
     label_slots=["l"],
     tikz_keyword="pigfete",
     default_span=(0.0, 0.0),
+    component_class=MosfetComponent,
 )
 
 _PIGFETD = ComponentDef(
     kind="pigfetd",
     display_name="PMOS (depletion)",
-    category="MOSFETs",
+    category="Tripoles",
     # PMOS depletion: same pin geometry as pigfete, solid channel line.
     bbox=(-0.05, -0.55, 1.05, 1.1),
     pins=[
@@ -292,6 +297,7 @@ _PIGFETD = ComponentDef(
     label_slots=["l"],
     tikz_keyword="pigfetd",
     default_span=(0.0, 0.0),
+    component_class=MosfetComponent,
 )
 
 # ---------------------------------------------------------------------------
@@ -301,7 +307,7 @@ _PIGFETD = ComponentDef(
 _NPN = ComponentDef(
     kind="npn",
     display_name="NPN BJT",
-    category="BJTs",
+    category="Tripoles",
     # Anchor = base pin.  Measured from re-exported SVG with grid-aligned leads
     # (tools/export_circuitikz_svgs.sh TRIPOLE_LEADS[npn]):
     #   base (0,0), collector (1.013,-1.0)→(1.0,-1.0), emitter (1.013,1.0)→(1.0,1.0)
@@ -320,7 +326,7 @@ _NPN = ComponentDef(
 _PNP = ComponentDef(
     kind="pnp",
     display_name="PNP BJT",
-    category="BJTs",
+    category="Tripoles",
     # Same SVG geometry as NPN; emitter is at top (visual top = Qt y -1),
     # collector at bottom (Qt y +1).
     bbox=(0.0, -1.1, 1.1, 1.1),
@@ -480,6 +486,24 @@ _RECT = ComponentDef(
     component_class=RectComponent,
 )
 
+_BIPOLE = ComponentDef(
+    kind="bipole",
+    display_name="Bipole",
+    category="Bipoles",
+    # bbox matches standard bipole half-height (±0.25 GU).
+    # BipoleItem overrides boundingRect() dynamically from span_override.
+    bbox=(0.0, -0.25, 1.0, 0.25),
+    pins=[
+        PinDef(name="in",  offset=(0.0, 0.0)),
+        PinDef(name="out", offset=(1.0, 0.0)),
+    ],
+    label_slots=["t", "l", "l_", "v", "v^", "i", "i_"],
+    tikz_keyword="twoport",
+    default_span=(1.0, 0.0),
+    resizable=True,
+    component_class=BipoleComponent,
+)
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -496,13 +520,14 @@ REGISTRY: dict[str, ComponentDef] = {
         _TUNNEL,
         _TVS,
         _LED,
-        _OPAMP,
         _VSOURCE,
         _ISOURCE,
         _AC_VSOURCE,
         _AC_ISOURCE,
         _VCVS,
         _VCCS,
+        _BIPOLE,
+        _OPAMP,
         _NIGFETE,
         _NIGFETD,
         _PIGFETE,

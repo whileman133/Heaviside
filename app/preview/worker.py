@@ -19,20 +19,16 @@ Typical usage::
 
 Debouncing
 ----------
-``request_compile()`` is debounced: repeated calls within 1.5 seconds collapse
-into a single compile run (spec §8.1).  A ``QTimer`` fires after the debounce
-window and marshals the compile onto the worker thread via a queued signal.
+``request_compile()`` is debounced: repeated calls within the debounce window
+collapse into a single compile run (spec §8.1).  A ``QTimer`` fires after the
+debounce window and marshals the compile onto the worker thread via a queued
+signal.
 
 Thread safety
 -------------
 ``_source`` is written on the calling (main) thread and read on the worker
 thread.  The ordering is safe: the write precedes the timer expiry, which in
 turn precedes the queued signal dispatch to the worker thread.
-
-EquationPreviewWorker
----------------------
-A lightweight variant for per-slot equation previews in the Properties Panel
-(spec §8.2) with a 500 ms debounce.
 """
 
 from __future__ import annotations
@@ -40,7 +36,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QImage
 
-from app.preview.latex import CompileError, build_equation_tex, build_tex, compile_tex, pdf_to_qimage
+from app.preview.latex import CompileError, build_tex, compile_tex, pdf_to_qimage
 
 # ---------------------------------------------------------------------------
 # Schematic preview worker (spec §8.1)
@@ -121,7 +117,7 @@ class PreviewWorker(QObject):
 
     def request_compile(self, circuitikz_source: str) -> None:
         """
-        Schedule a compile with 1.5 s debounce.
+        Schedule a compile, debounced by ``_SCHEMATIC_DEBOUNCE_MS``.
 
         Repeated calls within the debounce window discard earlier sources and
         only compile the most recent one.
@@ -156,93 +152,4 @@ class PreviewWorker(QObject):
         is the canonical way to call a slot on a different thread's object.
         """
         from PySide6.QtCore import QMetaObject, Qt  # local import avoids top-level Qt dep
-        QMetaObject.invokeMethod(self._worker, "do_compile", Qt.ConnectionType.QueuedConnection)
-
-
-# ---------------------------------------------------------------------------
-# Equation preview worker (spec §8.2)
-# ---------------------------------------------------------------------------
-
-_EQUATION_DEBOUNCE_MS = 500  # 500 ms
-
-
-class _EquationCompileWorker(QObject):
-    """Internal object that lives on the equation-preview worker thread."""
-
-    preview_ready = Signal(QImage)
-    preview_error = Signal()
-
-    def __init__(self, dpi: int) -> None:
-        super().__init__()
-        self._dpi = dpi
-        self.label: str = ""
-
-    @Slot()
-    def do_compile(self) -> None:
-        if not self.label.strip():
-            return
-        try:
-            tex = build_equation_tex(self.label)
-            pdf_bytes = compile_tex(tex)
-            image = pdf_to_qimage(pdf_bytes, dpi=self._dpi)
-            self.preview_ready.emit(image)
-        except CompileError:
-            self.preview_error.emit()
-        except Exception:
-            import sys
-            print(f"EquationPreviewWorker: unexpected error for label {self.label!r}",
-                  file=sys.stderr)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            self.preview_error.emit()
-
-
-class EquationPreviewWorker(QObject):
-    """
-    Compile a label string to a ``QImage`` on a background thread.
-
-    Used by the Properties Panel for per-slot equation previews (spec §8.2).
-
-    Signals
-    -------
-    preview_ready(QImage)
-        Emitted on successful render.
-    preview_error()
-        Emitted when the LaTeX is invalid.  The UI should show a red border
-        on the input field and no image.
-    """
-
-    preview_ready = Signal(QImage)
-    preview_error = Signal()
-
-    def __init__(self, parent: QObject | None = None, dpi: int = 120) -> None:
-        super().__init__(parent)
-
-        self._thread = QThread()
-        self._worker = _EquationCompileWorker(dpi=dpi)
-        self._worker.moveToThread(self._thread)
-
-        self._worker.preview_ready.connect(self.preview_ready)
-        self._worker.preview_error.connect(self.preview_error)
-
-        self._debounce_timer = QTimer(self)
-        self._debounce_timer.setSingleShot(True)
-        self._debounce_timer.setInterval(_EQUATION_DEBOUNCE_MS)
-        self._debounce_timer.timeout.connect(self._dispatch_compile)
-
-        self._thread.start()
-
-    def request_compile(self, label: str) -> None:
-        """Schedule compilation of *label* with 500 ms debounce."""
-        self._worker.label = label
-        self._debounce_timer.start()
-
-    def shutdown(self) -> None:
-        """Stop the background thread."""
-        self._debounce_timer.stop()
-        self._thread.quit()
-        self._thread.wait()
-
-    def _dispatch_compile(self) -> None:
-        from PySide6.QtCore import QMetaObject, Qt
         QMetaObject.invokeMethod(self._worker, "do_compile", Qt.ConnectionType.QueuedConnection)

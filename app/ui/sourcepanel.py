@@ -1,9 +1,9 @@
 """
 Source Panel (spec §10.4).
 
-A collapsible bottom panel showing the current CircuiTikZ source in a
-read-only ``QPlainTextEdit``.  Updates live (300 ms debounce) after any
-schematic change.
+A bottom panel showing the current CircuiTikZ source in a read-only
+``QPlainTextEdit``.  Updates live (300 ms debounce) after any schematic
+change.
 """
 
 from __future__ import annotations

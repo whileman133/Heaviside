@@ -36,7 +36,7 @@ import copy
 import uuid
 from abc import ABC, abstractmethod
 
-from app.components.model import DiodeComponent, DrawingComponent, TextNodeComponent
+from app.components.model import DiodeComponent, DrawingComponent, FontedComponent, MosfetComponent, TextNodeComponent
 from app.schematic.model import (
     Component,
     Schematic,
@@ -53,9 +53,12 @@ __all__ = [
     "MoveCommand",
     "ResizeCommand",
     "SetFontSizeCommand",
-    "SetSpanCommand",
     "SetZOrderCommand",
     "SetTextStyleCommand",
+    "SetFilledCommand",
+    "SetBodyDiodeCommand",
+    "SetBipoleFillCommand",
+    "SetBipoleBorderWidthCommand",
     "MoveWireVertexCommand",
     "SplitWireCommand",
     "MergeWireCommand",
@@ -552,34 +555,8 @@ class ResizeCommand(Command):
         self._reshape_wires(schematic, old_pin, dx, dy)
 
 
-class SetSpanCommand(Command):
-    """Set span_override on a component without reshaping connected wires.
-
-    Used for drawing annotations (text_node, rect) where span_override carries
-    non-spatial data (font size) or where wire reshaping is not appropriate.
-    """
-
-    label = "Set Span"
-
-    def __init__(
-        self,
-        component_id: str,
-        new_span: tuple[float, float] | None,
-        old_span: tuple[float, float] | None,
-    ) -> None:
-        self._component_id = component_id
-        self._new_span = new_span
-        self._old_span = old_span
-
-    def do(self, schematic: Schematic) -> None:
-        _find_component(schematic, self._component_id).span_override = self._new_span
-
-    def undo(self, schematic: Schematic) -> None:
-        _find_component(schematic, self._component_id).span_override = self._old_span
-
-
 class SetFontSizeCommand(Command):
-    """Set font_size on a TextNodeComponent."""
+    """Set font_size on any FontedComponent (text_node, bipole)."""
 
     label = "Set Font Size"
 
@@ -595,12 +572,12 @@ class SetFontSizeCommand(Command):
 
     def do(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, TextNodeComponent)
+        assert isinstance(comp, FontedComponent)
         comp.font_size = self._new_size
 
     def undo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, TextNodeComponent)
+        assert isinstance(comp, FontedComponent)
         comp.font_size = self._old_size
 
 
@@ -626,7 +603,7 @@ class SetZOrderCommand(Command):
 
 
 class SetTextStyleCommand(Command):
-    """Set font_bold, font_italic, and font_family on a text_node component."""
+    """Set font_bold, font_italic, and font_family on any FontedComponent (text_node, bipole)."""
 
     label = "Set Text Style"
 
@@ -642,7 +619,7 @@ class SetTextStyleCommand(Command):
 
     def _apply(self, schematic: Schematic, vals: tuple) -> None:
         comp = _find_component(schematic, self._component_id)
-        assert isinstance(comp, TextNodeComponent)
+        assert isinstance(comp, FontedComponent)
         comp.font_bold, comp.font_italic, comp.font_family = vals
 
     def do(self, schematic: Schematic) -> None:
@@ -1046,6 +1023,75 @@ class SetFilledCommand(Command):
         comp = _find_component(schematic, self._component_id)
         assert isinstance(comp, DiodeComponent)
         comp.filled = self._old_filled if self._old_filled is not None else False
+
+
+class SetBodyDiodeCommand(Command):
+    """Set the bodydiode state of a MosfetComponent."""
+
+    label = "Set Body Diode"
+
+    def __init__(self, component_id: str, new_body_diode: bool, old_body_diode: bool | None = None) -> None:
+        self._component_id = component_id
+        self._new_body_diode = new_body_diode
+        self._old_body_diode: bool | None = old_body_diode
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, MosfetComponent)
+        if self._old_body_diode is None:
+            self._old_body_diode = comp.body_diode
+        comp.body_diode = self._new_body_diode
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, MosfetComponent)
+        comp.body_diode = self._old_body_diode if self._old_body_diode is not None else False
+
+
+class SetBipoleFillCommand(Command):
+    """Set fill_color on a BipoleComponent."""
+
+    label = "Set Fill"
+
+    def __init__(self, component_id: str, new_fill: str, old_fill: str) -> None:
+        self._component_id = component_id
+        self._new_fill = new_fill
+        self._old_fill = old_fill
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.model import BipoleComponent
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, BipoleComponent)
+        comp.fill_color = self._new_fill
+
+    def undo(self, schematic: Schematic) -> None:
+        from app.components.model import BipoleComponent
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, BipoleComponent)
+        comp.fill_color = self._old_fill
+
+
+class SetBipoleBorderWidthCommand(Command):
+    """Set border_width on a BipoleComponent."""
+
+    label = "Set Border Width"
+
+    def __init__(self, component_id: str, new_width: float, old_width: float) -> None:
+        self._component_id = component_id
+        self._new_width = new_width
+        self._old_width = old_width
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.model import BipoleComponent
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, BipoleComponent)
+        comp.border_width = self._new_width
+
+    def undo(self, schematic: Schematic) -> None:
+        from app.components.model import BipoleComponent
+        comp = _find_component(schematic, self._component_id)
+        assert isinstance(comp, BipoleComponent)
+        comp.border_width = self._old_width
 
 
 class GroupRotateCommand(Command):

@@ -45,6 +45,7 @@ from app.canvas.commands import (
     MacroCommand,
     MergeWireCommand,
     MirrorCommand,
+    SetBodyDiodeCommand,
     SetFilledCommand,
     SetFontSizeCommand,
     MoveCommand,
@@ -63,7 +64,6 @@ from app.canvas.items import (
     JunctionItem,
     LabelTextItem,
     OpenCircleItem,
-    OpenItem,
     _ResizableTwoTerminalItem,
     WireItem,
     WirePreviewItem,
@@ -739,21 +739,31 @@ class SchematicScene(QGraphicsScene):
         """Set the filled state of a component via an undoable SetFilledCommand."""
         self._push(SetFilledCommand(component_id, new_filled))
 
-    def set_component_span(
-        self,
-        component_id: str,
-        new_span: tuple[float, float] | None,
-    ) -> None:
-        """Set span_override without wire reshaping (for drawing annotations)."""
+    def set_component_body_diode(self, component_id: str, new_body_diode: bool) -> None:
+        """Set the body_diode state of a MosfetComponent via an undoable command."""
+        self._push(SetBodyDiodeCommand(component_id, new_body_diode))
+
+    def set_bipole_fill_color(self, component_id: str, new_fill: str) -> None:
+        """Set fill_color on a BipoleComponent via an undoable command."""
+        from app.components.model import BipoleComponent
+        from app.canvas.commands import SetBipoleFillCommand
         comp = next(
             (c for c in self._schematic.components if c.id == component_id), None
         )
-        if comp is None:
+        if comp is None or not isinstance(comp, BipoleComponent) or comp.fill_color == new_fill:
             return
-        if comp.span_override == new_span:
+        self._push(SetBipoleFillCommand(component_id, new_fill, comp.fill_color))
+
+    def set_bipole_border_width(self, component_id: str, new_width: float) -> None:
+        """Set border_width on a BipoleComponent via an undoable command."""
+        from app.components.model import BipoleComponent
+        from app.canvas.commands import SetBipoleBorderWidthCommand
+        comp = next(
+            (c for c in self._schematic.components if c.id == component_id), None
+        )
+        if comp is None or not isinstance(comp, BipoleComponent) or abs(comp.border_width - new_width) < 1e-6:
             return
-        from app.canvas.commands import SetSpanCommand
-        self._push(SetSpanCommand(component_id, new_span, comp.span_override))
+        self._push(SetBipoleBorderWidthCommand(component_id, new_width, comp.border_width))
 
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
@@ -766,32 +776,32 @@ class SchematicScene(QGraphicsScene):
             return
         self._push(SetZOrderCommand(component_id, new_z, comp.z_order))
 
-    def set_text_node_font_size(self, component_id: str, new_size: float) -> None:
-        """Set font_size on a TextNodeComponent via an undoable SetFontSizeCommand."""
-        from app.components.model import TextNodeComponent
+    def set_font_size(self, component_id: str, new_size: float) -> None:
+        """Set font_size on any FontedComponent via an undoable SetFontSizeCommand."""
+        from app.components.model import FontedComponent
         comp = next(
             (c for c in self._schematic.components if c.id == component_id), None
         )
-        if comp is None or not isinstance(comp, TextNodeComponent):
+        if comp is None or not isinstance(comp, FontedComponent):
             return
         if comp.font_size == new_size:
             return
         self._push(SetFontSizeCommand(component_id, new_size, comp.font_size))
 
-    def set_text_node_style(
+    def set_font_style(
         self,
         component_id: str,
         bold: bool,
         italic: bool,
         family: str,
     ) -> None:
-        """Set font style on a TextNodeComponent via an undoable SetTextStyleCommand."""
-        from app.components.model import TextNodeComponent
+        """Set font style on any FontedComponent via an undoable SetTextStyleCommand."""
+        from app.components.model import FontedComponent
         from app.canvas.commands import SetTextStyleCommand
         comp = next(
             (c for c in self._schematic.components if c.id == component_id), None
         )
-        if comp is None or not isinstance(comp, TextNodeComponent):
+        if comp is None or not isinstance(comp, FontedComponent):
             return
         if (comp.font_bold, comp.font_italic, comp.font_family) == (bold, italic, family):
             return
@@ -1421,7 +1431,7 @@ class SchematicScene(QGraphicsScene):
         """Live visual update while dragging the terminal endpoint (model untouched)."""
         if self._endpoint_drag is None:
             return
-        comp_id, _handle_idx, _old_span = self._endpoint_drag
+        comp_id, _handle_idx, old_span = self._endpoint_drag
         item = self._comp_items.get(comp_id)
         if not isinstance(item, _ResizableTwoTerminalItem):
             return
@@ -1440,7 +1450,46 @@ class SchematicScene(QGraphicsScene):
             dx, dy = dx_w, dy_w
         if abs(dx) < 0.5 and abs(dy) < 0.5:
             return
+
+        # Compute old terminal world position (before preview span is applied).
+        old_sdx, old_sdy = old_span
+        if comp.mirror:
+            old_sdx = -old_sdx
+        r = comp.rotation % 360
+        if r == 90:
+            old_rx, old_ry = -old_sdy, old_sdx
+        elif r == 180:
+            old_rx, old_ry = -old_sdx, -old_sdy
+        elif r == 270:
+            old_rx, old_ry = old_sdy, -old_sdx
+        else:
+            old_rx, old_ry = old_sdx, old_sdy
+        old_pin = (ox + old_rx, oy + old_ry)
+
         item.set_preview_span((dx, dy))
+
+        # Compute new terminal world position from the snapped drag target.
+        new_pin = gu
+
+        pin_dx = new_pin[0] - old_pin[0]
+        pin_dy = new_pin[1] - old_pin[1]
+        if pin_dx == 0.0 and pin_dy == 0.0:
+            return
+        for wire in self._schematic.wires:
+            pts = wire.points
+            if len(pts) < 2:
+                continue
+            start_hit = pts[0] == old_pin
+            end_hit = pts[-1] == old_pin
+            if not start_hit and not end_hit:
+                continue
+            new_pts = reshape_wire_points(
+                pts, start_hit=start_hit, end_hit=end_hit,
+                dx=pin_dx, dy=pin_dy,
+            )
+            wire_item = self._wire_items.get(wire.id)
+            if wire_item is not None and len(new_pts) >= 2:
+                wire_item.set_preview_points(new_pts)
 
     def _commit_endpoint_drag(
         self,
@@ -1790,8 +1839,7 @@ class SchematicScene(QGraphicsScene):
             if comp_id is not None:
                 comp = next((c for c in self._schematic.components if c.id == comp_id), None)
                 if comp is not None:
-                    from app.components.registry import REGISTRY as _REG
-                    old_span = comp.span_override if comp.span_override is not None else _REG[comp.kind].default_span
+                    old_span = comp.span_override if comp.span_override is not None else REGISTRY[comp.kind].default_span
                     self._endpoint_drag = (comp_id, 1, old_span)
                     self._endpoint_press_gu = self.snap_point_gu(event.scenePos())
                     # Select the item so resize handles become visible.
@@ -1861,6 +1909,10 @@ class SchematicScene(QGraphicsScene):
             gu = self.snap_point_gu(event.scenePos())
             if gu != press_gu:
                 self._commit_endpoint_drag(comp_id, old_span, gu)
+            else:
+                # No movement: clear any wire preview points set during the drag.
+                for wire_item in self._wire_items.values():
+                    wire_item.clear_preview_points()
             # On plain click (no movement) the item is already selected from press.
             event.accept()
             return

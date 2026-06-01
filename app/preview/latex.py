@@ -6,10 +6,6 @@ Public API
 build_tex(circuitikz_source: str) -> str
     Wrap a CircuiTikZ environment in the minimal standalone template (§8.3).
 
-build_equation_tex(label: str) -> str
-    Wrap a label string in a minimal math-mode document for per-slot equation
-    previews (§8.2).
-
 compile_tex(tex_source: str, *, timeout: int = 30) -> bytes
     Write *tex_source* to a temp directory, run pdflatex, and return the PDF
     bytes on success.  Raises CompileError on pdflatex failure or timeout.
@@ -54,13 +50,6 @@ _SCHEMATIC_TEMPLATE = r"""\documentclass[border=4pt]{standalone}
 \end{document}
 """
 
-_EQUATION_TEMPLATE = r"""\documentclass[12pt]{standalone}
-\usepackage{amsmath}
-\begin{document}
-% EQUATION_SOURCE
-\end{document}
-"""
-
 
 def build_tex(circuitikz_source: str) -> str:
     """
@@ -72,22 +61,6 @@ def build_tex(circuitikz_source: str) -> str:
     codegen layer, not here.
     """
     return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
-
-
-def build_equation_tex(label: str) -> str:
-    """
-    Return a complete standalone .tex document that renders *label* as an
-    equation preview (spec §8.2).
-
-    If *label* is already wrapped in ``$...$`` or ``\\(...\\)`` it is used
-    verbatim; otherwise it is wrapped in ``$...$``.
-    """
-    stripped = label.strip()
-    if stripped.startswith("$") or stripped.startswith(r"\("):
-        math_source = stripped
-    else:
-        math_source = f"${stripped}$"
-    return _EQUATION_TEMPLATE.replace("% EQUATION_SOURCE", math_source)
 
 
 # ---------------------------------------------------------------------------

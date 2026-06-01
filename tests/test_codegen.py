@@ -12,7 +12,7 @@ import uuid
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
-from app.components.model import DiodeComponent, RectComponent, TextNodeComponent
+from app.components.model import DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -246,6 +246,27 @@ def test_pmos_depletion_node() -> None:
     comp = _comp("pigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
     assert "node[pigfetd, xscale=1.0167, anchor=gate]" in src
+
+
+def test_nmos_bodydiode() -> None:
+    """nigfete with body_diode=True emits the bodydiode option."""
+    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    src = generate(_schematic(comp))
+    assert "node[nigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
+
+
+def test_nmos_no_bodydiode() -> None:
+    """nigfete with body_diode=False omits the bodydiode option."""
+    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=False)
+    src = generate(_schematic(comp))
+    assert "bodydiode" not in src
+
+
+def test_pmos_bodydiode() -> None:
+    """pigfete with body_diode=True emits the bodydiode option."""
+    comp = MosfetComponent(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    src = generate(_schematic(comp))
+    assert "node[pigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
 
 
 def test_pmos_pin_offsets() -> None:
@@ -647,3 +668,108 @@ def test_z_order_sorts_within_foreground_group() -> None:
     bottom_pos = src.index("rectangle (4,4)")
     top_pos = src.index("rectangle (3,3)")
     assert bottom_pos < top_pos, "Lower z_order rect must be emitted first (further back)"
+
+
+# ---------------------------------------------------------------------------
+# Block component tests
+# ---------------------------------------------------------------------------
+
+from app.components.model import BipoleComponent
+
+
+def test_block_basic() -> None:
+    r"""bipole emits \node[draw, minimum width=W, minimum height=0.5cm, font=\fontsize{7}{8.4}\selectfont] at (...) {};"""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False,
+        span_override=(3.0, 0.0),
+    )
+    src = generate(_schematic(comp))
+    assert "minimum width=3cm" in src
+    assert "minimum height=0.5cm" in src
+    assert r"\fontsize{7}{8.4}\selectfont" in src
+    assert "at (1.5,0) {};" in src
+
+
+def test_block_with_label() -> None:
+    r"""bipole with t=Processor → \node[...] at (...) {Processor};"""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="t=Processor", mirror=False,
+        span_override=(3.0, 0.0),
+    )
+    src = generate(_schematic(comp))
+    assert "minimum width=3cm" in src
+    assert "{Processor};" in src
+
+
+def test_block_default_span() -> None:
+    """bipole with span_override=None falls back to registry default_span (1,0)."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(1.0, 2.0),
+        rotation=0, options="", mirror=False,
+    )
+    src = generate(_schematic(comp))
+    # default span=1: center = (1+2)/2=1.5, y=2; width=1cm
+    assert "minimum width=1cm" in src
+    assert "at (1.5,2)" in src
+
+
+def test_block_resizable_span() -> None:
+    """block with custom span_override uses the overridden width as minimum width."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="t=ADC", mirror=False,
+        span_override=(4.0, 0.0),
+    )
+    src = generate(_schematic(comp))
+    assert "minimum width=4cm" in src
+    assert "{ADC}" in src
+
+
+def test_block_outside_draw_block() -> None:
+    """block is emitted as a standalone \\node, not inside the \\draw block."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="t=DSP", mirror=False,
+        span_override=(2.0, 0.0),
+    )
+    src = generate(_schematic(comp))
+    draw_block = src.split(r"\draw")[1].split(";")[0]
+    assert r"\node" not in draw_block
+    assert r"\node[draw" in src
+
+
+def test_block_fill_color() -> None:
+    """bipole with fill_color emits fill=... in the node options."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="t=CPU", mirror=False,
+        span_override=(2.0, 0.0),
+        fill_color="yellow!20",
+    )
+    src = generate(_schematic(comp))
+    assert "fill=yellow!20" in src
+
+
+def test_block_border_width() -> None:
+    """bipole with non-default border_width emits line width=... in the node options."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 0.0),
+        border_width=1.5,
+    )
+    src = generate(_schematic(comp))
+    assert "line width=1.5pt" in src
+
+
+def test_block_default_border_width_omitted() -> None:
+    """bipole at default border_width (0.4pt) does not emit line width."""
+    comp = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False,
+        span_override=(2.0, 0.0),
+    )
+    src = generate(_schematic(comp))
+    assert "line width" not in src

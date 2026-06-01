@@ -24,9 +24,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.scene import SchematicScene
 from app.canvas.items import ITEM_CLASSES, ComponentItem
-from app.canvas.style import GRID_PX
 from app.components.registry import REGISTRY
-from app.schematic.model import Component
 
 _THUMB_SIZE = 32
 _PALETTE_WIDTH = 190
@@ -180,7 +178,7 @@ class ComponentPalette(QWidget):
     def _build_entries(self) -> None:
         """Populate the palette grouped by category in a fixed display order."""
         # Fixed category order (spec §5.4).
-        category_order = ["Passives", "Diodes", "Amplifiers", "Sources", "MOSFETs", "BJTs", "Nodes", "Annotations", "Drawing"]
+        category_order = ["Bipoles", "Tripoles", "Nodes", "Annotations", "Drawing"]
 
         # Group kinds by category preserving insertion order.
         from collections import defaultdict

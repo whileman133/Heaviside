@@ -106,7 +106,17 @@ _two_terminal_line.
 
 from __future__ import annotations
 
-from app.components.model import DrawingComponent, RectComponent, TextNodeComponent
+import math
+import re
+
+from app.components.model import (
+    BipoleComponent,
+    DiodeComponent,
+    DrawingComponent,
+    MosfetComponent,
+    RectComponent,
+    TextNodeComponent,
+)
 from app.components.registry import REGISTRY
 from app.schematic.model import (
     Component,
@@ -138,8 +148,6 @@ _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
     "op amp",
     "nigfete", "nigfetd",
     "pigfete", "pigfetd",
-    "nmos", "pmos",
-    "nmos, bodydiode", "pmos, bodydiode",
 })
 
 # Single-terminal node components: emitted as \node[kind] at (x,y) {};
@@ -195,6 +203,8 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
             lines.append("  " + _text_node_line(comp, _y))
         elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
+        elif isinstance(comp, BipoleComponent):
+            lines.append("  " + _block_node_line(comp, _y))
 
     lines.append(r"  \draw")
 
@@ -273,6 +283,8 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
             lines.append("  " + _text_node_line(comp, _y))
         elif isinstance(comp, RectComponent):
             lines.append("  " + _rect_line(comp, _y))
+        elif isinstance(comp, BipoleComponent):
+            lines.append("  " + _block_node_line(comp, _y))
 
     lines.append(r"\end{circuitikz}")
 
@@ -341,8 +353,7 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
-    from app.components.model import DiodeComponent
-    tikz_kind = comp.kind + ("*" if isinstance(comp, DiodeComponent) and comp.filled else "")
+    tikz_kind = defn.tikz_keyword + ("*" if isinstance(comp, DiodeComponent) and comp.filled else "")
     to_arg = tikz_kind
     if label_str:
         to_arg = f"{tikz_kind}, {label_str}"
@@ -365,16 +376,17 @@ def _multi_terminal_line(
     pin_positions = component_pin_positions(comp)
 
     kind_arg = comp.kind
+    if isinstance(comp, MosfetComponent) and comp.body_diode:
+        kind_arg = f"{kind_arg}, bodydiode"
     extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
     if extra_opts:
-        kind_arg = f"{comp.kind}, {extra_opts}"
+        kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)
     if rotation != 0:
         kind_arg = f"{kind_arg}, rotate={rotation}"
     if comp.mirror:
         if extra_opts and "xscale=" in extra_opts:
-            import re as _re
-            kind_arg = _re.sub(
+            kind_arg = re.sub(
                 r"xscale=([\d.]+)",
                 lambda m: f"xscale=-{m.group(1)}",
                 kind_arg,
@@ -496,7 +508,6 @@ def _validate_codegen_tables() -> None:
     _PIN_TO_CTIKZ_ANCHOR entry.  Kinds in _MULTI_TERMINAL_KINDS that are not
     yet in the registry are skipped — they may be planned for future use.
     """
-    from app.components.registry import REGISTRY
     for kind in _MULTI_TERMINAL_KINDS:
         if kind not in REGISTRY:
             continue  # not yet registered; skip
@@ -616,7 +627,6 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     The second corner is computed from ``comp.span_override`` (falling back to
     ``default_span`` from the registry).
     """
-    from app.components.registry import REGISTRY
     defn = REGISTRY[comp.kind]
     x1, y1 = comp.position
     so = comp.span_override if comp.span_override is not None else defn.default_span
@@ -629,6 +639,71 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     return (
         rf"\draw{style_arg} ({_fmt(x1)},{_fmt(y_fn(y1))}) "
         rf"rectangle ({_fmt(x2)},{_fmt(y_fn(y2))});"
+    )
+
+
+_BIPOLE_HALF_H_GU = 0.25  # must match canvas/items.py _BIPOLE_HALF_H
+
+
+def _block_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
+    r"""Render a block element as \node[draw, minimum width=W, minimum height=H] at (cx,cy) {label};
+
+    The node dimensions are derived from ``span_override`` so the box exactly
+    fills the space between the two pin coordinates — resizing the component on
+    the canvas directly controls the box size in the output.
+
+    Label text is taken from the ``t=`` slot in ``comp.options``; other slots
+    are stored in options but are not rendered on the standalone node.
+    """
+    defn = REGISTRY[comp.kind]
+    x0, y0 = comp.position
+    so = comp.span_override if comp.span_override is not None else defn.default_span
+
+    # Span length is invariant under rotation and mirror.
+    span_len = math.hypot(so[0], so[1])
+
+    # Compute actual terminal offset (mirror then rotate, same as _two_terminal_line).
+    dx, dy = so
+    if comp.mirror:
+        dx = -dx
+    rdx, rdy = _rotate((dx, dy), comp.rotation)
+    x1, y1 = x0 + rdx, y0 + rdy
+
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    height_gu = _BIPOLE_HALF_H_GU * 2  # 0.5 GU = 0.5 cm
+
+    # TikZ rotation is CCW; canvas rotation is CW.
+    tikz_rot = (-comp.rotation) % 360
+    rotate_opt = f", rotate={tikz_rot}" if tikz_rot else ""
+
+    m = re.search(r'\bt\s*=\s*([^,]+)', comp.options)
+    label = m.group(1).strip() if m else ""
+
+    fs = comp.font_size
+    leading = round(fs * 1.2, 1)
+    leading_str = str(int(leading)) if leading == int(leading) else f"{leading:.1f}"
+    fs_str = str(int(fs)) if fs == int(fs) else f"{fs:.1f}"
+    font_cmds = rf"\fontsize{{{fs_str}}}{{{leading_str}}}\selectfont"
+    if comp.font_bold:
+        font_cmds += r"\bfseries"
+    if comp.font_italic:
+        font_cmds += r"\itshape"
+    if comp.font_family in _FONT_FAMILY_CMD:
+        font_cmds += _FONT_FAMILY_CMD[comp.font_family]
+    font_opt = rf", font={font_cmds}"
+
+    extra_opts = ""
+    if comp.fill_color:
+        extra_opts += f", fill={comp.fill_color}"
+    if abs(comp.border_width - 0.4) > 1e-6:
+        bw = comp.border_width
+        bw_str = str(int(bw)) if bw == int(bw) else (f"{bw:.1f}" if bw == round(bw, 1) else f"{bw:.2f}")
+        extra_opts += f", line width={bw_str}pt"
+
+    return (
+        rf"\node[draw, minimum width={_fmt(span_len)}cm, "
+        rf"minimum height={_fmt(height_gu)}cm{rotate_opt}{font_opt}{extra_opts}] "
+        rf"at ({_fmt(cx)},{_fmt(y_fn(cy))}) {{{label}}};"
     )
 
 

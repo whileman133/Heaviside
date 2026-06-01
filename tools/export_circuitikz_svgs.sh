@@ -40,8 +40,8 @@ mkdir -p "$OUT_DIR/bipoles" "$OUT_DIR/tripoles"
 BIPOLES=(
   # Passives
   R C L
-  # Diodes / semiconductors
-  D D* Do Dz Dtz Dtv Dav Dv Dsch
+  # Diodes / semiconductors (use current CircuiTikZ names; old aliases Dz/Dsch/etc. are unsupported)
+  D D* Do zD "zD*" sD "sD*" tD "tD*" zzD "zzD*" leD "leD*"
   # Sources
   V I vsource isource vsourcesin isourcesin vsourceam isourceam
   vsourcesquare vsourcetri dcvsource dcisource
@@ -68,6 +68,7 @@ TRIPOLES=(
   nmos pmos nmosd pmosd
   nfet pfet nfetd pfetd
   nigfete pigfete nigfetd pigfetd nigfetebulk pigfetebulk
+  "nigfete, bodydiode" "pigfete, bodydiode" "nigfetd, bodydiode" "pigfetd, bodydiode"
   # BJTs
   npn pnp
   # JFETs
@@ -163,6 +164,22 @@ TRIPOLE_LEADS[pigfete]='\draw (X.drain)  -- (0.0164,-0.7295);
   \draw (X.gate)   -| (-0.9836,0.2705);'
 
 TRIPOLE_LEADS[pigfetd]='\draw (X.drain)  -- (0.0164,-0.7295);
+  \draw (X.source) -- (0.0164,0.7705);
+  \draw (X.gate)   -| (-0.9836,0.2705);'
+
+TRIPOLE_LEADS[nigfete_bodydiode]='\draw (X.drain)  -- (0.0164,0.7295);
+  \draw (X.source) -- (0.0164,-0.7705);
+  \draw (X.gate)   -| (-0.9836,-0.2705);'
+
+TRIPOLE_LEADS[nigfetd_bodydiode]='\draw (X.drain)  -- (0.0164,0.7295);
+  \draw (X.source) -- (0.0164,-0.7705);
+  \draw (X.gate)   -| (-0.9836,-0.2705);'
+
+TRIPOLE_LEADS[pigfete_bodydiode]='\draw (X.drain)  -- (0.0164,-0.7295);
+  \draw (X.source) -- (0.0164,0.7705);
+  \draw (X.gate)   -| (-0.9836,0.2705);'
+
+TRIPOLE_LEADS[pigfetd_bodydiode]='\draw (X.drain)  -- (0.0164,-0.7295);
   \draw (X.source) -- (0.0164,0.7705);
   \draw (X.gate)   -| (-0.9836,0.2705);'
 
