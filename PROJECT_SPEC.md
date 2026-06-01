@@ -1217,6 +1217,10 @@ heaviside/
 ├── app/
 │   ├── canvas/
 │   │   ├── scene.py               # SchematicScene(QGraphicsScene) + interaction state machine
+│   │   ├── geometry.py            # Pure geometry helpers (snap/coord conversion, span
+│   │   │                          #   rotation mapping, segment proximity) — no Qt scene state
+│   │   ├── wiregeometry.py        # WireGeometry: wire snapping / hit-testing queries over
+│   │   │                          #   the schematic (stateless; used by the scene)
 │   │   ├── view.py                # SchematicView(QGraphicsView)
 │   │   ├── items.py               # ComponentItem subclasses, WireItem, WirePreviewItem,
 │   │   │                          #   JunctionItem, ITEM_CLASSES map
@@ -1249,6 +1253,8 @@ heaviside/
     ├── test_io.py
     ├── test_registry.py
     ├── test_commands.py           # undo/redo for all command classes
+    ├── test_geometry.py           # pure canvas geometry helpers (no Qt scene)
+    ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     └── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
 ```
 
@@ -1474,6 +1480,14 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
+
+#### Canvas Geometry (`test_geometry.py`)
+
+The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested directly: `snap_gu` rounding; `scene_to_gu`/`gu_to_scene` round-trip; `snap_point_gu`; the `local_span_to_world` / `world_delta_to_local` rotation mapping (round-trip across all four rotations and both mirror states, plus known clockwise/mirror values); `dist2_to_segment` interior-vs-endpoint and degenerate cases; and `wire_proximity_key` (empty polyline → None, interior hit outranks endpoint touch, intermediate-vertex hit promoted to rank 0).
+
+#### Wire Geometry (`test_wiregeometry.py`)
+
+`WireGeometry` (wire snapping / hit-testing over a `Schematic`, no Qt scene) is unit-tested directly: `nearest_pin` radius behavior; `all_pin_positions`; `wire_snap_target` priority (pin over wire), grid fallback, snap-onto-segment, and own-wire exclusion; `vertex_is_draggable` (endpoint-on-pin locked, intermediate always draggable); `wire_vertex_at`; `unconnected_pin_at` (free pin detected, connected pin skipped); and `click_select_wire_id` preferring a pass-through wire over the grabbed stub.
 
 #### Commands (`test_commands.py`)
 

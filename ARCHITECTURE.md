@@ -17,6 +17,7 @@ graph TB
 
     subgraph Canvas["Canvas Layer  (app/canvas/)"]
         SCENE["SchematicScene\n─────────────\nmode FSM, undo stack\nmouse events → commands"]
+        GEOM["geometry + WireGeometry\n─────────────\nsnap / coord / rotation\nwire snapping & hit-testing\n(stateless, no Qt scene)"]
         VIEW["SchematicView\n─────────────\nzoom / pan\nkeyboard dispatch"]
         ITEMS["Graphics Items\n─────────────\nComponentItem subtypes\nWireItem, JunctionItem\nOpenCircleItem, PreviewItem"]
         CMDS["UndoStack + Commands\n─────────────\nPlace/Delete/Move/Wire\nEdit/Rotate/Mirror\nSplit/Merge/MoveVertex\nMacro  (12 total)"]
@@ -35,7 +36,7 @@ graph TB
     end
 
     subgraph Preview["Preview Pipeline  (app/preview/)"]
-        WORKER["PreviewWorker\n─────────────\nQThread + debounce\n5 s schematic / 0.5 s eq"]
+        WORKER["PreviewWorker\n─────────────\nQThread + debounce\n5 s schematic"]
         LATEX["latex.py\n─────────────\nbuild_tex()\ncompile_tex()  ← pdflatex\npdf_to_qimage() ← pdf2image"]
     end
 
@@ -54,6 +55,8 @@ graph TB
 
     SCENE --> CMDS
     SCENE --> ITEMS
+    SCENE --> GEOM
+    GEOM --> SCH
     CMDS --> SCH
     ITEMS --> REG
 

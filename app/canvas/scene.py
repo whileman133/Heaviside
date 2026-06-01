@@ -68,7 +68,17 @@ from app.canvas.items import (
     WireItem,
     WirePreviewItem,
 )
+from app.canvas.geometry import (
+    SNAP_GU,
+    gu_to_scene as _gu_to_scene,
+    local_span_to_world,
+    scene_to_gu as _scene_to_gu,
+    snap_gu as _snap_gu,
+    snap_point_gu as _snap_point_gu,
+    world_delta_to_local,
+)
 from app.canvas.style import GRID_PX
+from app.canvas.wiregeometry import WireGeometry
 from app.components.registry import ITEM_CLASSES, REGISTRY
 from app.schematic.model import (
     Component,
@@ -87,21 +97,8 @@ from app.schematic.model import (
 # Constants
 # ---------------------------------------------------------------------------
 
-SNAP_GU: float = 0.5
-"""Half-grid snap granularity (spec §3.1)."""
-
-PIN_SNAP_GU: float = 0.25
-"""Wire endpoints snap to a pin within this radius (spec §6.4)."""
-
-VERTEX_HIT_GU: float = 0.3
-"""A wire vertex is grabbable for dragging within this radius of the cursor."""
-
-PIN_GRAB_GU: float = 0.3
-"""Auto-start a wire only when the click is within this radius of a free pin.
-
-Tighter than a component's body half-extent, so a press near a component's
-centre falls through to selection/drag while a press right on a pin wires.
-"""
+# Snap / proximity constants live in app.canvas.geometry. SNAP_GU is imported
+# above for drawBackground; the wire-snap radii are used by WireGeometry.
 
 _GRID_NORMAL = QColor("#FFD0D0D0")   # integer grid lines
 _GRID_SUB = QColor("#22808080")      # 0.5 GU sub-grid lines (reduced opacity)
@@ -145,6 +142,10 @@ class SchematicScene(QGraphicsScene):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
         self._stack = UndoStack(self._schematic)
+
+        # Stateless query helper for wire snapping / hit-testing. Reads the live
+        # schematic through a getter so it stays valid across set_schematic().
+        self._wire_geom = WireGeometry(lambda: self._schematic)
 
         self._mode = Mode.SELECT
         self._panning = False
@@ -241,22 +242,23 @@ class SchematicScene(QGraphicsScene):
     # Coordinate helpers
     # ------------------------------------------------------------------
 
+    # These delegate to the pure helpers in app.canvas.geometry; kept as methods
+    # so existing callers (event handlers, tests) use the same names.
     @staticmethod
     def snap_gu(value: float) -> float:
         """Round a GU value to the nearest 0.5 GU."""
-        return round(value / SNAP_GU) * SNAP_GU
+        return _snap_gu(value)
 
     @staticmethod
     def scene_to_gu(pt: QPointF) -> tuple[float, float]:
-        return (pt.x() / GRID_PX, pt.y() / GRID_PX)
+        return _scene_to_gu(pt)
 
     @staticmethod
     def gu_to_scene(x: float, y: float) -> QPointF:
-        return QPointF(x * GRID_PX, y * GRID_PX)
+        return _gu_to_scene(x, y)
 
     def snap_point_gu(self, pt: QPointF) -> tuple[float, float]:
-        x, y = self.scene_to_gu(pt)
-        return (self.snap_gu(x), self.snap_gu(y))
+        return _snap_point_gu(pt)
 
     # ------------------------------------------------------------------
     # Mode management
@@ -1023,281 +1025,38 @@ class SchematicScene(QGraphicsScene):
     # Wire routing
     # ------------------------------------------------------------------
 
+    # Wire snapping / hit-testing delegate to the stateless WireGeometry helper;
+    # kept as scene methods so event handlers and tests use the same names.
+
     def _nearest_pin_gu(self, gu: tuple[float, float]) -> tuple[float, float] | None:
-        """Return the nearest pin within PIN_SNAP_GU of *gu*, else None."""
-        gx, gy = gu
-        best: tuple[float, float] | None = None
-        best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
-        for comp in self._schematic.components:
-            for px, py in _component_pin_positions(comp):
-                d2 = (px - gx) ** 2 + (py - gy) ** 2
-                if d2 <= best_d2:
-                    best_d2 = d2
-                    best = (px, py)
-        return best
+        return self._wire_geom.nearest_pin(gu)
+
+    def _all_pin_positions(self) -> set[tuple[float, float]]:
+        return self._wire_geom.all_pin_positions()
 
     def wire_snap_target(
         self,
         gu: tuple[float, float],
         exclude_wire_id: str | None = None,
     ) -> tuple[tuple[float, float], bool]:
-        """Resolve a wire endpoint for cursor position *gu* (already snapped).
+        return self._wire_geom.wire_snap_target(gu, exclude_wire_id)
 
-        Snap priority: component pin → existing wire vertex → nearest point on
-        an existing wire segment → bare 0.5 GU grid node. Snapping to a pin or
-        to existing wire geometry forms a junction (and is treated as a
-        "connectable" target). Returns ``(point, is_connectable)`` where the
-        flag drives the preview marker (ring vs. plain dot) and termination.
+    def _wire_snap_point(self, scene_pt: QPointF) -> tuple[float, float] | None:
+        return self._wire_geom.wire_snap_point(scene_pt)
 
-        *exclude_wire_id* omits one wire from the wire-vertex / wire-segment
-        snap — used while dragging a vertex so it does not snap to its own wire.
-        """
-        pin = self._nearest_pin_gu(gu)
-        if pin is not None:
-            return pin, True
-        vtx = self._nearest_wire_vertex_gu(gu, exclude_wire_id)
-        if vtx is not None:
-            return vtx, True
-        seg = self._nearest_wire_segment_point_gu(gu, exclude_wire_id)
-        if seg is not None:
-            return seg, True
-        return gu, False
-
-    def _wire_snap_point(
-        self, scene_pt: QPointF
-    ) -> tuple[float, float] | None:
-        """Return the nearest wire vertex or segment point if within snap range.
-
-        Like :meth:`wire_snap_target` but ignores component pins and the bare
-        grid fallback — returns non-None only when the cursor is genuinely on
-        or very close to an existing wire.  Used by the double-click-on-wire
-        gesture to locate the start point for a new wire.
-        """
-        gu = self.snap_point_gu(scene_pt)
-        vtx = self._nearest_wire_vertex_gu(gu)
-        if vtx is not None:
-            return vtx
-        return self._nearest_wire_segment_point_gu(gu)
-
-    def _nearest_wire_vertex_gu(
-        self, gu: tuple[float, float], exclude_wire_id: str | None = None
-    ) -> tuple[float, float] | None:
-        """Nearest existing wire vertex within PIN_SNAP_GU of *gu*, else None."""
-        gx, gy = gu
-        best: tuple[float, float] | None = None
-        best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
-        for wire in self._schematic.wires:
-            if wire.id == exclude_wire_id:
-                continue
-            for px, py in wire.points:
-                d2 = (px - gx) ** 2 + (py - gy) ** 2
-                if d2 <= best_d2:
-                    best_d2 = d2
-                    best = (px, py)
-        return best
-
-    def _nearest_wire_segment_point_gu(
-        self, gu: tuple[float, float], exclude_wire_id: str | None = None
-    ) -> tuple[float, float] | None:
-        """Nearest point on an existing wire segment, snapped to 0.5 GU.
-
-        Returns the snapped foot of the perpendicular from *gu* onto the closest
-        Manhattan segment, but only if it is within PIN_SNAP_GU and lands on the
-        segment interior. Lets a wire T into the middle of another wire.
-        """
-        gx, gy = gu
-        best: tuple[float, float] | None = None
-        best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
-        for wire in self._schematic.wires:
-            if wire.id == exclude_wire_id:
-                continue
-            pts = wire.points
-            for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-                # Project onto the (axis-aligned) segment, then snap.
-                if x0 == x1:                       # vertical segment
-                    fx = x0
-                    fy = min(max(gy, min(y0, y1)), max(y0, y1))
-                elif y0 == y1:                     # horizontal segment
-                    fy = y0
-                    fx = min(max(gx, min(x0, x1)), max(x0, x1))
-                else:                              # (shouldn't happen: Manhattan)
-                    continue
-                sx, sy = self.snap_gu(fx), self.snap_gu(fy)
-                d2 = (sx - gx) ** 2 + (sy - gy) ** 2
-                if d2 <= best_d2:
-                    best_d2 = d2
-                    best = (sx, sy)
-        return best
-
-    def _wire_endpoint_positions(self) -> set[tuple[float, float]]:
-        """All wire endpoint coordinates currently in the schematic."""
-        out: set[tuple[float, float]] = set()
-        for wire in self._schematic.wires:
-            if wire.points:
-                out.add(wire.points[0])
-                out.add(wire.points[-1])
-        return out
-
-    def unconnected_pin_at(
-        self, scene_pt: QPointF
-    ) -> tuple[float, float] | None:
-        """Return the pin under *scene_pt* only if a wire may be auto-started.
-
-        Used to auto-start a wire when the user clicks a free pin in SELECT
-        mode. Returns None (so the click falls through to normal selection /
-        component drag) when:
-
-        * the cursor is not tightly on a pin (within ``PIN_GRAB_GU``);
-        * the nearest pin already has a wire endpoint on it.
-
-        The tight grab radius (smaller than the body half-extent) is what keeps
-        component dragging intact: a press near the *centre* of a component is
-        not on a pin and falls through to selection/drag, while a press right at
-        a free pin/lead end starts a wire.
-        """
-        gu = self.snap_point_gu(scene_pt)
-        # Use the raw (unsnapped) distance to the pin so the grab is tight.
-        rx, ry = self.scene_to_gu(scene_pt)
-        pin = self._nearest_pin_gu(gu)
-        if pin is None:
-            return None
-        if (pin[0] - rx) ** 2 + (pin[1] - ry) ** 2 > PIN_GRAB_GU * PIN_GRAB_GU:
-            return None
-        if pin in self._wire_endpoint_positions():
-            return None
-        return pin
-
-    # -- wire vertex hit-testing -----------------------------------------
-
-    def _all_pin_positions(self) -> set[tuple[float, float]]:
-        pins: set[tuple[float, float]] = set()
-        for comp in self._schematic.components:
-            for p in _component_pin_positions(comp):
-                pins.add(p)
-        return pins
+    def unconnected_pin_at(self, scene_pt: QPointF) -> tuple[float, float] | None:
+        return self._wire_geom.unconnected_pin_at(scene_pt)
 
     def vertex_is_draggable(
         self, wire: Wire, index: int, pins: set[tuple[float, float]] | None = None
     ) -> bool:
-        """A vertex is draggable unless it is an endpoint sitting on a pin.
+        return self._wire_geom.vertex_is_draggable(wire, index, pins)
 
-        Endpoints that coincide with a component pin are owned by wire-following
-        (they move with the component), so they are locked here. Intermediate
-        vertices and free (non-pin) endpoints are draggable.
-        """
-        pts = wire.points
-        if not (0 <= index < len(pts)):
-            return False
-        is_endpoint = index == 0 or index == len(pts) - 1
-        if not is_endpoint:
-            return True
-        if pins is None:
-            pins = self._all_pin_positions()
-        return pts[index] not in pins
+    def wire_vertex_at(self, scene_pt: QPointF) -> tuple[str, int] | None:
+        return self._wire_geom.wire_vertex_at(scene_pt)
 
-    def wire_vertex_at(
-        self, scene_pt: QPointF
-    ) -> tuple[str, int] | None:
-        """Return the (wire_id, index) of a draggable vertex under *scene_pt*.
-
-        Picks the nearest draggable vertex within VERTEX_HIT_GU; returns None if
-        none qualifies. Endpoints on pins are skipped (not draggable).
-        """
-        gx, gy = self.scene_to_gu(scene_pt)
-        pins = self._all_pin_positions()
-        best: tuple[str, int] | None = None
-        best_d2 = VERTEX_HIT_GU * VERTEX_HIT_GU
-        for wire in self._schematic.wires:
-            for i, (px, py) in enumerate(wire.points):
-                d2 = (px - gx) ** 2 + (py - gy) ** 2
-                if d2 <= best_d2 and self.vertex_is_draggable(wire, i, pins):
-                    best_d2 = d2
-                    best = (wire.id, i)
-        return best
-
-    @staticmethod
-    def _dist2_to_segment(
-        px: float, py: float,
-        x0: float, y0: float, x1: float, y1: float,
-    ) -> tuple[float, bool]:
-        """Squared distance from (px,py) to segment (x0,y0)-(x1,y1).
-
-        Returns ``(dist2, at_endpoint)`` where *at_endpoint* is True when the
-        closest point is one of the segment's ends (the cursor only touches the
-        tip) rather than its interior (the cursor passes through it).
-        """
-        dx, dy = x1 - x0, y1 - y0
-        seg2 = dx * dx + dy * dy
-        if seg2 == 0.0:
-            return ((px - x0) ** 2 + (py - y0) ** 2, True)
-        t = ((px - x0) * dx + (py - y0) * dy) / seg2
-        at_end = t <= 0.0 or t >= 1.0
-        t = max(0.0, min(1.0, t))
-        cx, cy = x0 + t * dx, y0 + t * dy
-        return ((px - cx) ** 2 + (py - cy) ** 2, at_end)
-
-    def _wire_proximity_key(
-        self, gx: float, gy: float, wire: Wire
-    ) -> tuple[float, int] | None:
-        """Sort key for how close (gx,gy) is to *wire*, or None if empty.
-
-        Key is ``(rounded_dist2, endpoint_rank)`` where endpoint_rank is 0 when
-        the closest point is in a segment interior (cursor passes through) and 1
-        when it is only an endpoint touch. Smaller sorts as "more on the wire".
-
-        A click that lands exactly on an intermediate vertex gets rank 0: the
-        wire passes through that point (the vertex is shared by two adjacent
-        segments), so it is a full interior hit even though both adjacent
-        segments individually report ``at_end=True``.
-        """
-        best: tuple[float, int] | None = None
-        pts = wire.points
-        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
-            d2, at_end = self._dist2_to_segment(gx, gy, x0, y0, x1, y1)
-            key = (round(d2, 9), 1 if at_end else 0)
-            if best is None or key < best:
-                best = key
-        # Promote rank to 0 if the best distance matches an intermediate vertex.
-        # Each segment reports at_end=True for its shared endpoint, so without
-        # this correction a click at an intermediate vertex is ranked 1 instead
-        # of 0, losing unfairly to an adjacent wire stub.
-        if best is not None and best[1] == 1:
-            for vx, vy in pts[1:-1]:
-                if round((gx - vx) ** 2 + (gy - vy) ** 2, 9) == best[0]:
-                    best = (best[0], 0)
-                    break
-        return best
-
-    def _click_select_wire_id(
-        self, scene_pt: QPointF, grabbed_id: str
-    ) -> str:
-        """Wire to select for a click that grabbed a vertex of *grabbed_id*.
-
-        Returns the wire the cursor is actually on — the closest segment within
-        VERTEX_HIT_GU, preferring a pass-through over an endpoint-touch. On a
-        true tie the grabbed wire wins, so a click where two wires overlap stays
-        on the grabbed one. Falls back to *grabbed_id* if nothing is in range.
-        """
-        gx, gy = self.scene_to_gu(scene_pt)
-        bound2 = VERTEX_HIT_GU * VERTEX_HIT_GU
-        best_id: str | None = None
-        best_key: tuple[float, int] | None = None
-        for wire in self._schematic.wires:
-            key = self._wire_proximity_key(gx, gy, wire)
-            if key is None or key[0] > bound2:
-                continue
-            if best_key is None or key < best_key:
-                best_key, best_id = key, wire.id
-        if best_id is None:
-            return grabbed_id
-        grabbed = next(
-            (w for w in self._schematic.wires if w.id == grabbed_id), None
-        )
-        if grabbed is not None:
-            gk = self._wire_proximity_key(gx, gy, grabbed)
-            if gk is not None and gk == best_key:
-                return grabbed_id
-        return best_id
+    def _click_select_wire_id(self, scene_pt: QPointF, grabbed_id: str) -> str:
+        return self._wire_geom.click_select_wire_id(scene_pt, grabbed_id)
 
     def move_wire_vertex(
         self, wire_id: str, index: int, new_point: tuple[float, float]
@@ -1437,33 +1196,12 @@ class SchematicScene(QGraphicsScene):
             return
         comp = item.component
         ox, oy = comp.position
-        dx_w = gu[0] - ox
-        dy_w = gu[1] - oy
-        r = comp.rotation % 360
-        if r == 90:
-            dx, dy = dy_w, -dx_w
-        elif r == 180:
-            dx, dy = -dx_w, -dy_w
-        elif r == 270:
-            dx, dy = -dy_w, dx_w
-        else:
-            dx, dy = dx_w, dy_w
+        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
         if abs(dx) < 0.5 and abs(dy) < 0.5:
             return
 
         # Compute old terminal world position (before preview span is applied).
-        old_sdx, old_sdy = old_span
-        if comp.mirror:
-            old_sdx = -old_sdx
-        r = comp.rotation % 360
-        if r == 90:
-            old_rx, old_ry = -old_sdy, old_sdx
-        elif r == 180:
-            old_rx, old_ry = -old_sdx, -old_sdy
-        elif r == 270:
-            old_rx, old_ry = old_sdy, -old_sdx
-        else:
-            old_rx, old_ry = old_sdx, old_sdy
+        old_rx, old_ry = local_span_to_world(old_span, comp.rotation, comp.mirror)
         old_pin = (ox + old_rx, oy + old_ry)
 
         item.set_preview_span((dx, dy))
@@ -1503,17 +1241,7 @@ class SchematicScene(QGraphicsScene):
             return
         comp = item.component
         ox, oy = comp.position
-        dx_w = gu[0] - ox
-        dy_w = gu[1] - oy
-        r = comp.rotation % 360
-        if r == 90:
-            dx, dy = dy_w, -dx_w
-        elif r == 180:
-            dx, dy = -dx_w, -dy_w
-        elif r == 270:
-            dx, dy = -dy_w, dx_w
-        else:
-            dx, dy = dx_w, dy_w
+        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
         dx = round(dx * 2) / 2
         dy = round(dy * 2) / 2
         if abs(dx) < 0.5 and abs(dy) < 0.5:
