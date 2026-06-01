@@ -1018,6 +1018,8 @@ The preview is triggered by:
 
 Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never blocked. While compiling, a spinner is shown in the preview panel. If `pdflatex` returns a non-zero exit code, the error log is shown in the preview panel in place of the image.
 
+The worker thread is always stopped before the application exits: `PreviewWorker` connects its (idempotent) `shutdown()` to `QApplication.aboutToQuit`, and the main window's `closeEvent` also calls it. This covers every exit path (window close, `app.quit()`, or a teardown that bypasses the window) and prevents Qt's "QThread destroyed while still running" abort.
+
 ### 8.2 Equation Preview
 
 The Properties Panel does not provide per-field equation previews. The full schematic preview (§8.1) serves as the authoritative rendered view of all component annotations.
@@ -1503,6 +1505,10 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 #### Commands (`test_commands.py`)
 
 In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo).
+
+#### Preview Worker (`test_worker.py`)
+
+`PreviewWorker` thread lifecycle: `shutdown()` stops the background `QThread`; it is idempotent (safe to call from both `closeEvent` and `aboutToQuit`); and emitting `QApplication.aboutToQuit` stops the thread even when the window's `closeEvent` never fired.
 
 ### 13.3 Integration Tests
 

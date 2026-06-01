@@ -93,9 +93,19 @@ class PreviewWorker(QObject):
     def __init__(self, parent: QObject | None = None, dpi: int = 150) -> None:
         super().__init__(parent)
 
+        self._stopped = False
         self._thread = QThread()
         self._worker = _SchematicCompileWorker(dpi=dpi)
         self._worker.moveToThread(self._thread)
+
+        # Always stop the worker thread before the application exits, even if the
+        # window's closeEvent never fires (e.g. app.quit(), or a teardown path
+        # that bypasses the main window). Otherwise Qt warns/aborts with
+        # "QThread: Destroyed while thread is still running".
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self.shutdown)
 
         # Forward signals from the internal worker to this object.
         self._worker.preview_ready.connect(self.preview_ready)
@@ -136,7 +146,11 @@ class PreviewWorker(QObject):
         self._dispatch_compile()
 
     def shutdown(self) -> None:
-        """Stop the background thread.  Call before the application exits."""
+        """Stop the background thread.  Idempotent; runs on app quit and on
+        the main window's closeEvent, whichever happens first."""
+        if self._stopped:
+            return
+        self._stopped = True
         self._debounce_timer.stop()
         self._thread.quit()
         self._thread.wait()
