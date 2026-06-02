@@ -15,7 +15,8 @@ Every ComponentItem:
   • Implements paint() by stroking/filling the SVG-derived QPainterPaths.
   • Draws pin indicator dots at every PinDef offset.
   • Adjusts pen/brush color for normal / selected / hover / ghost states.
-  • Renders component labels as plain text (LaTeX verbatim on canvas).
+  • Renders component labels as typeset math (vector, via app.preview.mathrender),
+    placed per-slot on conventional sides; raw text is the fallback (see §5.8).
 
 ITEM_CLASSES at the bottom of this module is registered into
 app.components.registry.ITEM_CLASSES so the rest of the application can map a
@@ -40,6 +41,7 @@ from PySide6.QtGui import (
     QTransform,
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
+from shiboken6 import isValid
 
 from app.canvas.style import (
     COLOR_GHOST,
@@ -79,6 +81,16 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
 # LaTeX points per grid unit (1 GU = 1 cm). Canvas pixels = pt * GRID_PX / this.
 _PT_PER_GU = 28.35
 
+# Vector-math rendering: mathrender returns paths in LaTeX pt at TEMPLATE_PT
+# (10 pt).  Multiply by _VEC_SCALE to convert pt -> canvas px (same factor that
+# sizes label QFonts), then by font_size/_VEC_TEMPLATE_PT for the actual size.
+_VEC_SCALE = GRID_PX / _PT_PER_GU
+_VEC_TEMPLATE_PT = 10.0
+
+# Z-value applied to the edited item's parent while in-place LaTeX editing is
+# active, so the editor (and its solid backdrop) floats above all other items.
+_EDIT_Z = 10_000.0
+
 # Options-label sizing. The label is sized in canvas *pixels* derived from a
 # LaTeX point size the same way text-node fonts are (see _fonted_qfont), so the
 # on-canvas label matches the proportions of the compiled output rather than
@@ -87,6 +99,9 @@ _LABEL_FONT_PT = 10.0
 _LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
 _LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
 _LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
+# Current annotations (`i=`) hug the wire (lead axis) instead of clearing the
+# whole body, matching where CircuiTikZ draws the current label.
+_CURRENT_GAP = 3.0
 
 # Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
 # uses the first installed face, so at least one matches on any platform.
@@ -115,15 +130,16 @@ def _fonted_qfont(comp) -> "QFont":  # noqa: ANN001
 
 
 class LabelTextItem(QGraphicsTextItem):
-    """Editable, draggable options label child of a ComponentItem.
+    """In-place editor for a component's raw options string (e.g. ``l=$R_1$``).
 
-    Displays ``comp.options`` verbatim (e.g. ``l=$R_1$, v=$V_s$``).
-    Call :meth:`begin_edit` to activate in-place editing.  Commits via its
-    callback on focus-loss, Enter, or Return; Escape cancels without changes.
+    Display of labels is handled by :class:`_SlotLabel` (typeset math, §5.8);
+    this item is shown only while editing.  Call :meth:`begin_edit` to activate
+    editing; it commits via its callback on focus-loss, Enter, or Return, and
+    Escape cancels.  While editing it paints a solid backdrop (see :meth:`paint`)
+    and is not draggable.
 
-    The label can be dragged freely within the parent's coordinate system.
-    After a drag completes the move callback is fired with the new QPointF
-    position so the scene can persist the offset via an undoable command.
+    (The drag-move and vector-display code below is retained but dormant: the
+    item is no longer movable, and slot display lives in :class:`_SlotLabel`.)
     """
 
     def __init__(self, parent: "ComponentItem") -> None:
@@ -134,6 +150,11 @@ class LabelTextItem(QGraphicsTextItem):
         self._commit_cb = None  # callable(text: str) -> None
         self._move_cb = None    # callable(QPointF) -> None
         self._drag_origin: QPointF | None = None  # pos at mouse-press
+        self._saved_parent_z: float | None = None  # parent z restored after edit
+        # Vector-math preview: rendered QPainterPath (pt units) for the current
+        # displayable fragment, painted instead of raw text when not editing.
+        self._vec_path: QPainterPath | None = None
+        self._vec_fragment: str | None = None
 
         self.setTextInteractionFlags(Qt.NoTextInteraction)
         self.setFlag(QGraphicsItem.ItemIsSelectable, False)
@@ -160,6 +181,12 @@ class LabelTextItem(QGraphicsTextItem):
         """Activate the text editor, selecting all existing text."""
         self._saved_text = self.toPlainText()
         self._editing = True
+        # Float the whole component (and this editor) above other items so the
+        # editor's solid backdrop isn't painted over by overlapping elements.
+        parent = self.parentItem()
+        if parent is not None:
+            self._saved_parent_z = parent.zValue()
+            parent.setZValue(_EDIT_Z)
         self._apply_text_color()
         self.setTextInteractionFlags(Qt.TextEditorInteraction)
         self.setFocus(Qt.MouseFocusReason)
@@ -175,6 +202,10 @@ class LabelTextItem(QGraphicsTextItem):
         new_text = self.toPlainText().strip()
         self.setTextInteractionFlags(Qt.NoTextInteraction)
         self.clearFocus()
+        parent = self.parentItem()
+        if parent is not None and self._saved_parent_z is not None:
+            parent.setZValue(self._saved_parent_z)
+        self._saved_parent_z = None
         self._apply_text_color()
         if commit:
             if self._commit_cb is not None:
@@ -188,6 +219,13 @@ class LabelTextItem(QGraphicsTextItem):
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            # Shift+Return inserts a newline (one option per line); plain Return
+            # commits.
+            if event.modifiers() & Qt.ShiftModifier:
+                cursor = self.textCursor()
+                cursor.insertText("\n")
+                self.setTextCursor(cursor)
+                return
             self.end_edit(commit=True)
             return
         if event.key() == Qt.Key_Escape:
@@ -195,8 +233,8 @@ class LabelTextItem(QGraphicsTextItem):
             return
         super().keyPressEvent(event)
 
-    def _apply_text_color(self) -> None:
-        """Set text colour based on current interactive/hover/edit state."""
+    def _text_qcolor(self) -> QColor:
+        """The colour for the label given current hover/edit/selection state."""
         parent = self.parentItem()
         draggable = bool(self.flags() & QGraphicsItem.ItemIsMovable)
         parent_selected = parent is not None and parent.isSelected()
@@ -206,7 +244,75 @@ class LabelTextItem(QGraphicsTextItem):
             and not parent_selected
             and not self._editing
         )
-        self.setDefaultTextColor(QColor(COLOR_HOVER if show_hover else COLOR_NORMAL))
+        return QColor(COLOR_HOVER if show_hover else COLOR_NORMAL)
+
+    def _apply_text_color(self) -> None:
+        """Set text colour based on current interactive/hover/edit state."""
+        self.setDefaultTextColor(self._text_qcolor())
+        self.update()  # repaint the vector preview if one is shown
+
+    # ------------------------------------------------------------------
+    # Vector-math preview
+    # ------------------------------------------------------------------
+
+    def request_vector(self, fragment: str) -> None:
+        """Request (async) a vector render of *fragment* to show instead of raw
+        text.  No-op if the same fragment is already requested or rendered."""
+        fragment = (fragment or "").strip()
+        if fragment == (self._vec_fragment or ""):
+            return
+        self._vec_fragment = fragment or None
+        if not fragment:
+            self.prepareGeometryChange()
+            self._vec_path = None
+            self.update()
+            return
+
+        from app.preview.mathrender import render_async
+
+        def _on_done(path, frag=fragment):  # noqa: ANN001
+            # The delivery is queued: this item's C++ object may have been
+            # deleted (scene torn down) by the time it fires.
+            if not isValid(self) or frag != (self._vec_fragment or ""):
+                return  # deleted, or a newer request superseded this one
+            self.prepareGeometryChange()
+            self._vec_path = path
+            self.update()
+
+        render_async(fragment, _on_done)
+
+    def _vec_rect(self) -> QRectF:
+        """Scaled bounding rect of the vector path in item coordinates."""
+        r = self._vec_path.boundingRect()
+        return QRectF(0.0, 0.0, r.width() * _VEC_SCALE, r.height() * _VEC_SCALE)
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        if self._vec_path is not None and not self._editing:
+            return self._vec_rect().adjusted(-2.0, -2.0, 2.0, 2.0)
+        return super().boundingRect()
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
+        if self._editing:
+            # Solid backdrop + border so the raw LaTeX stays readable over any
+            # underlying wires, symbols, or other labels.
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(_pen(COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor("#FFFFFFFF")))
+            painter.drawRoundedRect(
+                self.boundingRect().adjusted(0.5, 0.5, -0.5, -0.5), 3.0, 3.0
+            )
+            painter.restore()
+            super().paint(painter, option, widget)
+            return
+        if self._vec_path is not None:
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.save()
+            painter.scale(_VEC_SCALE, _VEC_SCALE)
+            painter.fillPath(self._vec_path, QBrush(self._text_qcolor()))
+            painter.restore()
+            return
+        super().paint(painter, option, widget)
 
     def hoverEnterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
@@ -231,6 +337,119 @@ class LabelTextItem(QGraphicsTextItem):
                 if self._move_cb is not None:
                     self._move_cb(new_pos)
             self._drag_origin = None
+
+
+# ---------------------------------------------------------------------------
+# Per-side annotation label (display only)
+# ---------------------------------------------------------------------------
+
+class _SlotLabel(QGraphicsItem):
+    """Non-interactive, baseline-anchored vector render of one annotation slot.
+
+    The parent :class:`ComponentItem` positions it on a side of the component
+    body (via :meth:`configure`) and applies a counter-rotation so the text
+    stays upright.  It shows nothing until its async render lands; the path is
+    baseline-normalised (baseline at y=0), so siblings on the same side share a
+    baseline.
+    """
+
+    def __init__(self, parent: "ComponentItem") -> None:
+        super().__init__(parent)
+        self.setAcceptedMouseButtons(Qt.NoButton)
+        self.setAcceptHoverEvents(True)
+        self._path: QPainterPath | None = None
+        self._fragment: str | None = None
+        # Placement geometry (screen-relative to the item origin), set by the
+        # parent in _layout_slots and applied once the path is known.
+        self._dir = QPointF(0.0, -1.0)        # unit offset direction (screen)
+        self._center_rel = QPointF(0.0, 0.0)  # comp centre, screen-rel to origin
+        self._base_dist = 0.0                 # clearance from centre along _dir
+        self._step = 0.0                      # stacking offset along _dir
+        self._inv = QTransform()              # screen-rel -> parent-local
+
+    def configure(
+        self,
+        fragment: str,
+        direction: QPointF,
+        center_rel: QPointF,
+        base_dist: float,
+        step: float,
+        inv: QTransform,
+    ) -> None:
+        """Set this slot's text and screen-space offset direction/placement."""
+        self._dir = direction
+        self._center_rel = center_rel
+        self._base_dist = base_dist
+        self._step = step
+        self._inv = inv
+        if fragment != (self._fragment or ""):
+            self._fragment = fragment or None
+            if not fragment:
+                self.prepareGeometryChange()
+                self._path = None
+            else:
+                from app.preview.mathrender import render_async
+
+                def _done(path, frag=fragment):  # noqa: ANN001
+                    if not isValid(self) or frag != (self._fragment or ""):
+                        return
+                    self.prepareGeometryChange()
+                    self._path = path
+                    self._reposition()
+                    self.update()
+
+                render_async(fragment, _done)
+        self._reposition()
+        self.update()
+
+    def _reposition(self) -> None:
+        if self._path is None:
+            return
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        w, h = r.width() * s, r.height() * s
+        u = self._dir
+        # The upright label's half-extent along the offset direction.
+        label_half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
+        dist = self._base_dist + label_half + self._step
+        # Label centre, screen-relative to the item origin.
+        cx = self._center_rel.x() + u.x() * dist
+        cy = self._center_rel.y() + u.y() * dist
+        # Anchor (baseline-left of the upright text) = centre - (w/2, midY).
+        anchor = QPointF(cx - w / 2.0, cy - r.center().y() * s)
+        self.setPos(self._inv.map(anchor))
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        if self._path is None:
+            return QRectF()
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        return QRectF(
+            r.left() * s, r.top() * s, r.width() * s, r.height() * s
+        ).adjusted(-1.0, -1.0, 1.0, 1.0)
+
+    def hoverEnterEvent(self, event) -> None:  # noqa: N802
+        parent = self.parentItem()
+        if hasattr(parent, "_set_hovered"):
+            parent._set_hovered(True)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event) -> None:  # noqa: N802
+        parent = self.parentItem()
+        if hasattr(parent, "_set_hovered"):
+            parent._set_hovered(False)
+        super().hoverLeaveEvent(event)
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
+        if self._path is None:
+            return
+        parent = self.parentItem()
+        color = parent._label_color() if hasattr(parent, "_label_color") else QColor(COLOR_NORMAL)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.save()
+        painter.scale(_VEC_SCALE, _VEC_SCALE)
+        painter.fillPath(self._path, QBrush(color))
+        painter.restore()
 
 
 # ---------------------------------------------------------------------------
@@ -274,10 +493,13 @@ class ComponentItem(QGraphicsItem):
         t.rotate(component.rotation)
         self.setTransform(t)
 
-        # Single child item for the whole options string.
+        # The LabelTextItem is now the in-place *editor* only (double-click);
+        # display is handled by per-side _SlotLabel children.  It is hidden when
+        # not editing and is not draggable (labels auto-place on their sides).
         self._options_item = LabelTextItem(self)
+        self._options_item.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._options_item.set_commit_callback(self._on_options_commit)
-        self._options_item.set_move_callback(self._on_options_label_moved)
+        self._slot_items: list[_SlotLabel] = []
         self._sync_options_item()
 
     # ------------------------------------------------------------------
@@ -300,58 +522,186 @@ class ComponentItem(QGraphicsItem):
         """Called by the LabelTextItem when the user commits an in-place edit."""
         scene = self.scene()
         if scene is not None and hasattr(scene, "edit_component_options"):
-            scene.edit_component_options(self._component.id, text)
+            scene.edit_component_options(
+                self._component.id, self._options_from_editable(text)
+            )
 
-    def _on_options_label_moved(self, new_pos: QPointF) -> None:
-        """Called by the LabelTextItem after the user drags it to a new position."""
-        scene = self.scene()
-        if scene is not None and hasattr(scene, "move_options_label"):
-            scene.move_options_label(self._component.id, (new_pos.x(), new_pos.y()))
+    # Options are edited one slot per line for readability; converted to/from the
+    # stored comma-separated form. TextNodeItem overrides these to identity.
+    def _options_to_editable(self, options: str) -> str:
+        from app.preview.mathrender import options_to_editable
+        return options_to_editable(options)
 
-    def _default_label_pos(self) -> QPointF:
-        """Default above-centre position for the options label (component-local px)."""
-        x0, y0, x1, y1 = self._defn.bbox
-        cx = (x0 + x1) / 2 * GRID_PX
-        bbox_top = y0 * GRID_PX
-        w = self._options_item.boundingRect().width()
-        return QPointF(cx - w / 2, bbox_top - _LABEL_GAP - _LABEL_LINE_H)
+    def _options_from_editable(self, text: str) -> str:
+        from app.preview.mathrender import editable_to_options
+        return editable_to_options(text)
+
+    def _editor_center_pos(self) -> QPointF:
+        """Local pos that centres the in-place editor over the component body."""
+        p0, p1 = self._lead_terminals_local()
+        center_local = QPointF((p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0)
+        t = self.transform()
+        inv, _ = t.inverted()
+        er = self._options_item.boundingRect()
+        target = t.map(center_local)
+        anchor = QPointF(target.x() - er.width() / 2.0, target.y() - er.height() / 2.0)
+        return inv.map(anchor)
 
     def _label_counter_transform(self) -> QTransform:
-        """Inverse of this item's own transform, so the label stays horizontal."""
+        """Inverse of this item's own transform, so labels stay horizontal."""
         inv, _ = self.transform().inverted()
         return inv
 
     def apply_transform(self, t: QTransform) -> None:
-        """Set this item's transform and re-sync the label counter-transform."""
+        """Set this item's transform and re-lay out the labels."""
         self.setTransform(t)
         self._sync_options_item()
 
     def _sync_options_item(self) -> None:
-        """Update position, transform, and visibility of the child options LabelTextItem."""
+        """Hide the editor (unless active) and lay out the per-side slot labels."""
         if self._options_item.is_editing:
             return
-        options = self._component.options
-        if options and not self._ghost:
-            self._options_item.setPlainText(options)
-            if self._component.label_offset is not None:
-                dx, dy = self._component.label_offset
-                self._options_item.setPos(dx, dy)
+        self._options_item.setVisible(False)
+        self._layout_slots()
+
+    def _layout_slots(self) -> None:
+        """Render each annotation slot on its conventional side of the body.
+
+        Placement is perpendicular to the component's *on-screen* lead axis, so
+        labels land on the correct side regardless of rotation/mirror.
+        """
+        from app.preview.mathrender import slot_fragments
+
+        slots = [] if self._ghost else slot_fragments(self._component.options)
+        while len(self._slot_items) < len(slots):
+            self._slot_items.append(_SlotLabel(self))
+
+        geom = self._slot_geometry()
+        counter = self._label_counter_transform()
+        counts: dict[tuple[float, float], int] = {}
+        for idx, item in enumerate(self._slot_items):
+            if idx < len(slots):
+                key, latex = slots[idx]
+                direction = self._slot_direction(key, geom)
+                # Stack labels that share a direction outward.
+                dk = (round(direction.x(), 3), round(direction.y(), 3))
+                i = counts.get(dk, 0)
+                counts[dk] = i + 1
+                # Currents hug the wire (lead axis through the centre); other
+                # slots clear the body's perpendicular thickness.
+                base = (
+                    _CURRENT_GAP if key.startswith("i")
+                    else geom["perp_thickness"] + _LABEL_GAP
+                )
+                item.setTransform(counter)
+                item.configure(
+                    latex, direction, geom["center_rel"],
+                    base, _LABEL_LINE_H * i, geom["inv"],
+                )
+                item.setVisible(True)
             else:
-                self._options_item.setPos(self._default_label_pos())
-            self._options_item.setTransform(self._label_counter_transform())
-            self._options_item.setVisible(True)
-        else:
-            self._options_item.setVisible(False)
+                item.configure(
+                    "", geom["left"], geom["center_rel"], 0.0, 0.0, geom["inv"],
+                )
+                item.setVisible(False)
+
+    def _slot_direction(self, key: str, geom: dict) -> QPointF:
+        """Screen-space offset direction for a slot, relative to the lead axis.
+
+        Labels/currents (`l`/`i`/`a`) are placed on the *traversal-relative* side
+        — left of the lead direction for the plain/`^` form, right for the `_`
+        form — matching CircuiTikZ under any rotation. Voltage (`v`) uses the
+        screen-positive perpendicular (down, else right), which reproduces
+        CircuiTikZ's default voltage-label side for both horizontal and vertical
+        elements; `v^` flips it.
+        """
+        from app.preview.mathrender import slot_side
+
+        left, right = geom["left"], geom["right"]
+        fam = key[0] if key else "l"
+        suffix = key[-1] if key and key[-1] in "^_" else ""
+        if fam == "v":
+            pos = left if (left.y(), left.x()) >= (right.y(), right.x()) else right
+            return QPointF(-pos.x(), -pos.y()) if suffix == "^" else pos
+        return left if slot_side(key) == "above" else right
+
+    def _lead_terminals_local(self) -> tuple[QPointF, QPointF]:
+        """The component's two lead terminals in local px (origin + endpoint).
+
+        Used to centre slot labels and derive the lead axis.  Resizable
+        components (open/short/bipole) override this so the centre tracks the
+        *actual* span, not the default registry bbox.
+        """
+        pins = self._defn.pins
+        if len(pins) >= 2:
+            (x0, y0), (x1, y1) = pins[0].offset, pins[1].offset
+            return (
+                QPointF(x0 * GRID_PX, y0 * GRID_PX),
+                QPointF(x1 * GRID_PX, y1 * GRID_PX),
+            )
+        bx0, by0, bx1, by1 = self._defn.bbox
+        c = QPointF((bx0 + bx1) / 2 * GRID_PX, (by0 + by1) / 2 * GRID_PX)
+        return c, QPointF(c.x() + GRID_PX, c.y())
+
+    def _slot_geometry(self) -> dict:
+        """Screen-space placement basis for the slot labels.
+
+        Returns the component centre (screen-relative to the item origin), unit
+        vectors for the left/right sides of the on-screen lead axis, the body's
+        half-thickness perpendicular to the leads, and the inverse transform
+        mapping screen-relative points back to parent-local.
+        """
+        t = self.transform()  # rotation + mirror (no translation)
+        inv, _ = t.inverted()
+        x0, y0, x1, y1 = self._defn.bbox
+
+        # Centre and lead axis from the *actual* terminals (tracks resize).
+        p0, p1 = self._lead_terminals_local()
+        center_local = QPointF((p0.x() + p1.x()) / 2.0, (p0.y() + p1.y()) / 2.0)
+        center_rel = t.map(center_local)
+        axis = t.map(QPointF(p1.x() - p0.x(), p1.y() - p0.y()))
+        if axis.x() == 0.0 and axis.y() == 0.0:
+            axis = QPointF(1.0, 0.0)
+        alen = (axis.x() ** 2 + axis.y() ** 2) ** 0.5 or 1.0
+        ax, ay = axis.x() / alen, axis.y() / alen
+        # Left/right of the traversal direction (screen, y-down).
+        left = QPointF(ay, -ax)
+        right = QPointF(-ay, ax)
+
+        # Half-thickness perpendicular to the *registry* lead direction — the
+        # bbox half-height for horizontal leads, half-width for vertical ones —
+        # so resizable/rotated bodies stay tight (the default bbox width is not
+        # projected onto the perpendicular).
+        hw, hh = (x1 - x0) / 2 * GRID_PX, (y1 - y0) / 2 * GRID_PX
+        pins = self._defn.pins
+        vertical_leads = (
+            len(pins) >= 2
+            and abs(pins[1].offset[1] - pins[0].offset[1])
+            > abs(pins[1].offset[0] - pins[0].offset[0])
+        )
+        perp_thickness = hw if vertical_leads else hh
+        return {
+            "center_rel": center_rel,
+            "left": left,
+            "right": right,
+            "perp_thickness": perp_thickness,
+            "inv": inv,
+        }
 
     def begin_options_edit(self) -> None:
-        """Show and activate in-place editing for the options string."""
+        """Show and activate in-place editing of the full options string.
+
+        The editor shows one option per line and is centred over the component
+        body, regardless of where the slot labels sit.
+        """
         if self._options_item.is_editing:
             return
-        if not self._options_item.isVisible():
-            self._options_item.setPlainText("")
-            self._options_item.setPos(self._default_label_pos())
-            self._options_item.setTransform(self._label_counter_transform())
-            self._options_item.setVisible(True)
+        for it in self._slot_items:
+            it.setVisible(False)
+        self._options_item.setPlainText(self._options_to_editable(self._component.options))
+        self._options_item.setTransform(self._label_counter_transform())
+        self._options_item.setPos(self._editor_center_pos())
+        self._options_item.setVisible(True)
         self._options_item.begin_edit()
 
     # ------------------------------------------------------------------
@@ -359,31 +709,44 @@ class ComponentItem(QGraphicsItem):
     # ------------------------------------------------------------------
 
     def set_label_interactive(self, interactive: bool) -> None:
-        """Allow or block label dragging (mirrors parent's SELECT-mode flag)."""
-        self._options_item.setFlag(QGraphicsItem.ItemIsMovable, interactive)
-        self._options_item._apply_text_color()
+        """No-op: labels auto-place on their sides and are not draggable."""
+        return
 
     def set_ghost(self, ghost: bool) -> None:
         self._ghost = ghost
-        if ghost:
-            self._options_item.setVisible(False)
-        elif self._component.options:
-            self._options_item.setVisible(True)
+        self._options_item.setVisible(False)
+        self._sync_options_item()  # re-lay out (slots hidden while ghost)
         self.update()
 
     def hoverEnterEvent(self, event):  # noqa: N802
-        self._hovered = True
-        self.update()
+        self._set_hovered(True)
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):  # noqa: N802
-        self._hovered = False
-        self.update()
+        self._set_hovered(False)
         super().hoverLeaveEvent(event)
+
+    def _set_hovered(self, hovered: bool) -> None:
+        """Set hover state and repaint the body and all slot labels together,
+        so hovering the component or any of its labels highlights the group."""
+        if self._hovered == hovered:
+            return
+        self._hovered = hovered
+        self.update()
+        for it in self._slot_items:
+            it.update()
 
     # ------------------------------------------------------------------
     # Color selection
     # ------------------------------------------------------------------
+
+    def _label_color(self) -> QColor:
+        """Colour for the per-side slot labels: hover-highlight with the body."""
+        if self._ghost:
+            return QColor(COLOR_GHOST)
+        if self._hovered:
+            return QColor(COLOR_HOVER)
+        return QColor(COLOR_NORMAL)
 
     def _body_color(self) -> str:
         if self._ghost:
@@ -403,6 +766,46 @@ class ComponentItem(QGraphicsItem):
         if self._ghost:
             return QBrush(QColor(COLOR_GHOST))
         return QBrush(QColor(COLOR_PIN))
+
+    # ------------------------------------------------------------------
+    # Vector-math label preview (shared by inline-label items)
+    # ------------------------------------------------------------------
+    #
+    # Items that draw their label *inline* (TextNodeItem, BipoleItem) render the
+    # label's LaTeX to a QPainterPath and paint it instead of raw text once it is
+    # ready.  Defaults live on the class so they exist during __init__, which
+    # calls _sync_options_item before any subclass body runs.
+
+    _vec_path: QPainterPath | None = None
+    _vec_fragment: str | None = None
+
+    def _vec_scale(self) -> float:
+        """pt -> px factor for this item's font size against the template size."""
+        return self._component.font_size * _VEC_SCALE / _VEC_TEMPLATE_PT
+
+    def _request_vector(self, fragment: str) -> None:
+        """Request (async) a vector render of *fragment* for inline painting."""
+        fragment = (fragment or "").strip()
+        if fragment == (self._vec_fragment or ""):
+            return
+        self._vec_fragment = fragment or None
+        if not fragment:
+            self.prepareGeometryChange()
+            self._vec_path = None
+            self.update()
+            return
+
+        from app.preview.mathrender import render_async
+
+        def _on_done(path, frag=fragment):  # noqa: ANN001
+            # Queued delivery: guard against the item being deleted meanwhile.
+            if not isValid(self) or frag != (self._vec_fragment or ""):
+                return
+            self.prepareGeometryChange()
+            self._vec_path = path
+            self.update()
+
+        render_async(fragment, _on_done)
 
     # ------------------------------------------------------------------
     # QGraphicsItem interface
@@ -609,6 +1012,10 @@ class _ResizableTwoTerminalItem(ComponentItem):
     def _endpoint_px(self) -> QPointF:
         dx, dy = self._effective_span()
         return QPointF(dx * GRID_PX, dy * GRID_PX)
+
+    def _lead_terminals_local(self) -> tuple[QPointF, QPointF]:
+        # Centre slot labels on the *actual* span, not the default registry bbox.
+        return QPointF(0.0, 0.0), self._endpoint_px()
 
     def boundingRect(self) -> QRectF:
         ep = self._endpoint_px()
@@ -1085,10 +1492,20 @@ class TextNodeItem(_DrawingAnnotationBase):
         assert isinstance(comp, TextNodeComponent)
         return _fonted_qfont(comp)
 
+    # Text-node content is free text, not key=value options — edit it verbatim
+    # (no comma<->newline conversion).
+    def _options_to_editable(self, options: str) -> str:
+        return options
+
+    def _options_from_editable(self, text: str) -> str:
+        return text
+
     def _sync_options_item(self) -> None:
         # When not editing: text is drawn inline in paint(); hide the label.
         if not self._options_item.is_editing:
             self._options_item.setVisible(False)
+        if not self._ghost:
+            self._request_vector(self._component.options)
 
     def begin_options_edit(self) -> None:
         """Activate inline editing of the text content on the canvas body."""
@@ -1113,6 +1530,12 @@ class TextNodeItem(_DrawingAnnotationBase):
         from app.components.model import TextNodeComponent
         comp = self._component
         assert isinstance(comp, TextNodeComponent)
+        if self._vec_path is not None and not self._options_item.is_editing:
+            scale = self._vec_scale()
+            r = self._vec_path.boundingRect()
+            w, h = r.width() * scale, r.height() * scale
+            m = 2.0
+            return QRectF(-w / 2.0 - m, -h / 2.0 - m, w + 2 * m, h + 2 * m)
         text = comp.options or "T"
         fs_px = max(1, round(comp.font_size * GRID_PX / _PT_PER_GU))
         bold_factor = 1.08 if comp.font_bold else 1.0
@@ -1134,6 +1557,16 @@ class TextNodeItem(_DrawingAnnotationBase):
             painter.setPen(_pen(color, LINE_W, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
+        elif text and self._vec_path is not None:
+            # Vector math preview, centred on the item origin.  The path is
+            # baseline-normalised, so centre its ink bbox (offset by r.center()).
+            scale = self._vec_scale()
+            r = self._vec_path.boundingRect()
+            painter.save()
+            painter.scale(scale, scale)
+            painter.translate(-r.center().x(), -r.center().y())
+            painter.fillPath(self._vec_path, QBrush(QColor(color)))
+            painter.restore()
         elif text:
             painter.setPen(_pen(color, LINE_W))
             painter.setBrush(Qt.NoBrush)
@@ -1304,6 +1737,8 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         # Label text is drawn inline; hide the floating options child unless editing.
         if not self._options_item.is_editing:
             self._options_item.setVisible(False)
+        if not self._ghost:
+            self._request_vector(_extract_bipole_label(self._component.options))
 
     def begin_options_edit(self) -> None:
         """Activate inline editing of the t= label text centred inside the box."""
@@ -1378,11 +1813,21 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         painter.drawRect(rect)
         label = _extract_bipole_label(self._component.options)
         if label and not self._ghost and not self._options_item.is_editing:
-            from app.components.model import BipoleComponent as _BipoleComponent
-            comp = self._component
-            assert isinstance(comp, _BipoleComponent)
-            painter.setFont(_fonted_qfont(comp))
-            painter.drawText(rect, Qt.AlignCenter, label)
+            if self._vec_path is not None:
+                scale = self._vec_scale()
+                pr = self._vec_path.boundingRect()
+                painter.save()
+                painter.translate(rect.center().x(), rect.center().y())
+                painter.scale(scale, scale)
+                painter.translate(-pr.center().x(), -pr.center().y())
+                painter.fillPath(self._vec_path, QBrush(QColor(color)))
+                painter.restore()
+            else:
+                from app.components.model import BipoleComponent as _BipoleComponent
+                comp = self._component
+                assert isinstance(comp, _BipoleComponent)
+                painter.setFont(_fonted_qfont(comp))
+                painter.drawText(rect, Qt.AlignCenter, label)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)

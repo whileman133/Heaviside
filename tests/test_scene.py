@@ -1529,42 +1529,47 @@ def test_empty_options_item_hidden(scene: SchematicScene):
     assert not item._options_item.isVisible()
 
 
-def test_non_empty_options_item_visible(scene: SchematicScene):
-    """Setting options makes the child visible with the raw string as text."""
+def test_non_empty_options_shows_slot_labels(scene: SchematicScene):
+    """Setting options shows one per-side slot label per annotation; the in-place
+    editor item stays hidden (it activates only on double-click)."""
     comp = scene.place_component("R", (0.0, 0.0))
     scene.edit_component_options(comp.id, "l=$R_1$, v=$5V$")
     item = scene._comp_items[comp.id]
-    assert item._options_item.isVisible()
-    assert item._options_item.toPlainText() == "l=$R_1$, v=$5V$"
+    assert not item._options_item.isVisible()  # editor hidden until edit
+    visible = [s for s in item._slot_items if s.isVisible()]
+    assert len(visible) == 2  # l (above) + v (below)
 
 
-def test_cleared_options_hides_child(scene: SchematicScene):
-    """Setting options to empty hides the child item."""
+def test_cleared_options_hides_slots(scene: SchematicScene):
+    """Setting options to empty hides all slot labels (and the editor)."""
     comp = scene.place_component("R", (0.0, 0.0))
     scene.edit_component_options(comp.id, "l=$R_1$")
     scene.edit_component_options(comp.id, "")
     item = scene._comp_items[comp.id]
     assert not item._options_item.isVisible()
+    assert not any(s.isVisible() for s in item._slot_items)
 
 
-def test_options_item_above_bbox(scene: SchematicScene):
-    """The options child is positioned above the component bbox."""
-    from app.canvas.style import GRID_PX
-
+def test_label_slot_side(scene: SchematicScene):
+    """A plain `l=` label on a horizontal component is placed above (offset up)."""
     comp = scene.place_component("R", (0.0, 0.0))
     scene.edit_component_options(comp.id, "l=$R_1$")
     item = scene._comp_items[comp.id]
-    bbox_top_px = -0.5 * GRID_PX  # resistor bbox y0 = -0.5 GU
-    assert item._options_item.pos().y() < bbox_top_px
+    visible = [s for s in item._slot_items if s.isVisible()]
+    assert len(visible) == 1
+    # Horizontal lead axis -> left-of-traversal is screen-up (negative y).
+    assert visible[0]._dir.y() < 0
 
 
-def test_options_undo_hides_child(scene: SchematicScene):
-    """Undoing an options edit hides the child item again."""
+def test_options_undo_hides_slots(scene: SchematicScene):
+    """Undoing an options edit hides the slot labels again."""
     comp = scene.place_component("R", (0.0, 0.0))
     scene.edit_component_options(comp.id, "l=$R_1$")
-    assert scene._comp_items[comp.id]._options_item.isVisible()
+    item = scene._comp_items[comp.id]
+    assert any(s.isVisible() for s in item._slot_items)
     scene.undo()
-    assert not scene._comp_items[comp.id]._options_item.isVisible()
+    item = scene._comp_items[comp.id]  # may be rebuilt by the undo
+    assert not any(s.isVisible() for s in item._slot_items)
 
 
 def test_options_item_begin_edit(scene: SchematicScene):
@@ -1574,6 +1579,128 @@ def test_options_item_begin_edit(scene: SchematicScene):
     item = scene._comp_items[comp.id]
     item.begin_options_edit()
     assert item._options_item.is_editing
+
+
+def test_double_click_slot_label_opens_editor(scene: SchematicScene):
+    """Double-clicking a rendered per-side slot label opens the in-place editor.
+
+    Regression: slot labels are display-only `_SlotLabel`s, not `LabelTextItem`s,
+    so the double-click handler must map them back to their parent component
+    instead of falling through to wire-drawing.
+    """
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QPainterPath
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    comp = scene.place_component("R", (3.0, 3.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+
+    # Give the slot a path + position directly (the async render won't run in a
+    # headless unit test) so it has a non-empty, hit-testable bounding rect.
+    slot = item._slot_items[0]
+    p = QPainterPath()
+    p.addRect(0.0, -8.0, 14.0, 10.0)
+    slot._path = p
+    slot.setVisible(True)
+    slot.setPos(0.0, -40.0)  # above the body, clear of the wire
+
+    ev = QGraphicsSceneMouseEvent(QEvent.GraphicsSceneMouseDoubleClick)
+    ev.setScenePos(slot.mapToScene(slot.boundingRect().center()))
+    ev.setButton(Qt.LeftButton)
+    scene.mouseDoubleClickEvent(ev)
+
+    assert item._options_item.is_editing
+
+
+def test_hover_highlights_label_group(scene: SchematicScene):
+    """Hovering the component highlights its slot labels (same hover colour)."""
+    from PySide6.QtGui import QColor
+
+    from app.canvas.style import COLOR_HOVER, COLOR_NORMAL
+
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    assert item._label_color() == QColor(COLOR_NORMAL)
+    item._set_hovered(True)
+    assert item._label_color() == QColor(COLOR_HOVER)
+    item._set_hovered(False)
+    assert item._label_color() == QColor(COLOR_NORMAL)
+
+
+def test_label_side_is_traversal_relative(scene: SchematicScene):
+    """`l`/`l_` sides follow the lead-axis traversal direction, not screen up/down.
+
+    Regression: a controlled source whose lead axis points down had `l_` placed
+    on the wrong (right) side; it must go left (right-of-traversal).
+    """
+    comp = scene.place_component("cV", (3.0, 3.0))  # pins (0,0)->(0,2): axis down
+    scene.edit_component_options(comp.id, "l_=$O$")
+    item = scene._comp_items[comp.id]
+    geom = item._slot_geometry()
+    # Down axis: left-of-traversal is screen-right, right-of-traversal is left.
+    assert item._slot_direction("l_", geom).x() < 0   # l_ -> left
+    assert item._slot_direction("l", geom).x() > 0     # l  -> right (opposite)
+
+
+def test_resizable_slot_centres_on_actual_span(scene: SchematicScene):
+    """A resizable component's slot label centres on its actual span, not the
+    default registry bbox.
+
+    Regression: `I_f+dl` sat right-of-centre because a 1-GU `short` used the
+    2-GU default bbox centre.
+    """
+    from app.canvas.items import ITEM_CLASSES
+    from app.canvas.style import GRID_PX
+    from app.components.model import Component
+
+    comp = Component(
+        id="s1", kind="short", position=(0.0, 0.0), rotation=0,
+        options="i=$I$", mirror=False, span_override=(1.0, 0.0),
+    )
+    item = ITEM_CLASSES["short"](comp)
+    geom = item._slot_geometry()
+    # 1-GU span -> centre at 0.5 GU, not the 2-GU default's 1.0 GU.
+    assert geom["center_rel"].x() == 0.5 * GRID_PX
+
+
+def test_slot_label_hover_highlights_component(scene: SchematicScene):
+    """Hovering a slot label sets the parent component's hover state, so the
+    body and all sibling labels highlight together."""
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QGraphicsSceneHoverEvent
+
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    slot = item._slot_items[0]
+
+    slot.hoverEnterEvent(QGraphicsSceneHoverEvent(QEvent.GraphicsSceneHoverEnter))
+    assert item._hovered
+    slot.hoverLeaveEvent(QGraphicsSceneHoverEvent(QEvent.GraphicsSceneHoverLeave))
+    assert not item._hovered
+
+
+def test_editor_shows_options_one_per_line(scene: SchematicScene):
+    """begin_options_edit displays each option slot on its own line."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$, v=$V_s$")
+    item = scene._comp_items[comp.id]
+    item.begin_options_edit()
+    assert item._options_item.toPlainText() == "l=$R_1$\nv=$V_s$"
+
+
+def test_editor_commit_joins_lines_with_commas(scene: SchematicScene):
+    """Newline-separated edits are stored back as a comma-separated string."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    item.begin_options_edit()
+    item._options_item.setPlainText("l=$R_2$\nv=$10V$")
+    item._options_item.end_edit(commit=True)
+    updated = next(c for c in scene.schematic.components if c.id == comp.id)
+    assert updated.options == "l=$R_2$, v=$10V$"
 
 
 def test_options_commit_updates_model(scene: SchematicScene):
@@ -1604,15 +1731,15 @@ def test_options_cancel_does_not_update_model(scene: SchematicScene):
     assert unchanged.options == "l=$R_1$"
 
 
-def test_ghost_hides_options_item(scene: SchematicScene):
-    """The options child is hidden in ghost (placement preview) state."""
+def test_ghost_hides_slot_labels(scene: SchematicScene):
+    """Slot labels are hidden in ghost (placement preview) state, shown after."""
     comp = scene.place_component("R", (0.0, 0.0))
     scene.edit_component_options(comp.id, "l=$R_1$")
     item = scene._comp_items[comp.id]
     item.set_ghost(True)
-    assert not item._options_item.isVisible()
+    assert not any(s.isVisible() for s in item._slot_items)
     item.set_ghost(False)
-    assert item._options_item.isVisible()
+    assert any(s.isVisible() for s in item._slot_items)
 
 
 # ---------------------------------------------------------------------------

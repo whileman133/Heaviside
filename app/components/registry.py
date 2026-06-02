@@ -32,7 +32,9 @@ _RESISTOR = ComponentDef(
     kind="R",
     display_name="Resistor",
     category="Bipoles",
-    bbox=(0.0, -0.5, 2.0, 0.5),
+    # ±0.25 GU perpendicular to the leads — snug around the zigzag (which reaches
+    # ±0.21 GU) so side labels sit close to the body.
+    bbox=(0.0, -0.25, 2.0, 0.25),
     pins=[
         PinDef(name="in",  offset=(0.0, 0.0)),
         PinDef(name="out", offset=(2.0, 0.0)),
@@ -60,7 +62,9 @@ _INDUCTOR = ComponentDef(
     kind="L",
     display_name="Inductor",
     category="Bipoles",
-    bbox=(0.0, -0.5, 2.0, 0.5),
+    # ±0.25 GU perpendicular to the leads — snug around the humps (which reach
+    # ≈0.20 GU above the lead) so side labels sit close to the body.
+    bbox=(0.0, -0.25, 2.0, 0.25),
     pins=[
         PinDef(name="in",  offset=(0.0, 0.0)),
         PinDef(name="out", offset=(2.0, 0.0)),

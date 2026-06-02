@@ -143,7 +143,7 @@ class Component:                        # circuit components (R, C, L, op amp, �
     rotation: int                       # 0, 90, 180, or 270 degrees
     options: str                        # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
     mirror: bool = False                # horizontal mirror before rotation
-    label_offset: tuple[float, float] | None = None  # component-local px offset; None = auto
+    label_offset: tuple[float, float] | None = None  # legacy; persisted but no longer affects display (§5.8)
     span_override: tuple[float, float] | None = None  # custom span for resizable components
 
 @dataclass
@@ -188,7 +188,7 @@ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
     font_size: float = 7.0              # override: smaller box default
 ```
 
-`label_offset` is `None` until the user manually drags the options label or the auto-placement algorithm sets it (see §8.3). Once set it is persisted in the file as a two-element JSON array; absent or `null` values load as `None`.
+`label_offset` is a **legacy** field. Labels now auto-place on their conventional sides and are not draggable (§5.8), so `label_offset` no longer affects display. It is still round-tripped in the file format (a two-element JSON array; absent or `null` loads as `None`) and set by `MoveOptionsLabelCommand` for back-compat, but the canvas ignores it.
 
 ### 4.3 `Wire`
 
@@ -321,10 +321,14 @@ Each `ComponentItem` subclass:
 - Implements `paint()` drawing the component symbol as `QPainterPath` geometry translated from the SVG reference.
 - Renders pin indicator dots at all `PinDef` offsets.
 - Adjusts pen color and style based on item state: normal, selected (highlight color), hover, and ghost (semi-transparent, used during placement).
-- Renders `Component.options` via a single child `LabelTextItem` (`QGraphicsTextItem`). The item is hidden when options is empty and visible otherwise. The options string is shown verbatim (e.g. `l=$R_1$, v=$V_s$`). Child items are never clipped by the parent's bounding rect.
-- **Label position**: if `Component.label_offset` is set, the label is placed at that `(dx, dy)` offset in component-local pixel coordinates; otherwise it falls back to the default above-centre position (`cx − w/2`, `bbox_top − gap − line_height`). See §8.3 for auto-placement.
-- **Label hover**: hovering over the label text turns it the hover colour (`COLOR_HOVER`) to signal that it is editable and draggable. The colour resets to normal on leave or when editing begins.
-- **Label drag**: `LabelTextItem` has `ItemIsMovable=True`. After a drag completes, a `MoveOptionsLabelCommand` is pushed so the new position is undoable. The label is only draggable in **Select** mode; `_apply_item_flags` sets `ItemIsMovable` to match the parent component's interactive state.
+- Renders `Component.options` as **typeset math**, not raw LaTeX. The options string is parsed into annotation slots (`l`/`v`/`i`/`a` families) and each slot's value is rendered to a vector `QPainterPath` and drawn on its conventional side of the body (see §5.8). Child items are never clipped by the parent's bounding rect.
+
+The on-canvas label system (§5.8) is:
+
+- **Display** — one `_SlotLabel` child per non-empty annotation slot, placed above/below the body and counter-rotated to stay upright. Slot labels are non-interactive (display only).
+- **Editing** — double-clicking a component (or any of its slot labels) activates a single child `LabelTextItem` (`QGraphicsTextItem`) that edits the options string. The editor is **centred over the component body** (regardless of where the slot labels sit) and shows the options **one slot per line** (`options_to_editable()` splits top-level commas to newlines; `editable_to_options()` joins them back with `, ` on commit). Commas inside `$...$`/`{...}` or escaped as a LaTeX control sequence (e.g. `\,`) are *not* split. **Enter** commits, **Shift+Enter** inserts a newline, **Escape** cancels. While editing, the slot labels are hidden and the editor shows a solid white rounded backdrop with a blue border; the whole component is raised to `_EDIT_Z` so nothing overlaps the editor. `TextNodeItem` edits its free text verbatim (no comma/newline conversion).
+- **No dragging** — labels auto-place on their sides and are not draggable. `set_label_interactive()` is a no-op. (`Component.label_offset` and `MoveOptionsLabelCommand` remain in the model/command layer for file back-compat but no longer affect display.)
+- **`text_node` and `bipole`** label text is rendered inline (centred) by the item's own `paint()` using the same vector renderer, with raw-text fallback.
 
 ### 5.3 Palette Thumbnails
 
@@ -371,7 +375,7 @@ The component palette renders each component's thumbnail by instantiating its `C
 
 The **Bipole** (`bipole`) component appears last in the Bipoles group — see §7.7.
 
-The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emission arrows.
+The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emission arrows. The resistor and inductor bboxes are tighter perpendicular to the leads (y0=−0.25, y1=0.25) — snug around the zigzag (±0.21 GU) / humps (≈0.20 GU) so their side labels sit close to the body (§5.8). The capacitor keeps ±0.5 (its plates reach ±0.42 GU).
 
 The **Filled** checkbox appears in the Properties panel for any component that is an instance of `DiodeComponent`. It is backed by an undoable `SetFilledCommand`.
 
@@ -699,6 +703,64 @@ toggles the preference and rebuilds immediately. During a **live drag preview**,
 dragged components' live positions and previewed wire points so the markers
 follow the gesture (e.g. a pin that picks up or loses a wire mid-drag) rather
 than waiting for commit. When the preference is off, no such items exist.
+
+### 5.8 On-Canvas Math Rendering (WYSIWYG labels)
+
+Component labels, `text_node` content, and `bipole` box text are shown as
+**typeset math**, rendered to vector by `app/preview/mathrender.py`. This reuses
+the exact toolchain that produces the component symbols (§5.2): a LaTeX fragment
+is wrapped in a `standalone` document and run through `latex → dvisvgm
+--no-fonts → SVG`, and the SVG paths are parsed by the same
+`svgsym.parse_path()` into a `QPainterPath`. No raster step is involved, so
+labels stay crisp at every zoom.
+
+- **Baseline normalisation.** Every fragment is typeset behind a leading
+  `\strut`, which pins the baseline to a constant device-y across all fragments.
+  `render_latex()` returns the path normalised so the **baseline is at y=0** and
+  the **left ink edge at x=0** (ascenders negative, descenders positive). This
+  lets sibling labels on the same side share a baseline. `_baseline_y()`
+  calibrates the constant once from a render of `x` (a zero-depth glyph).
+- **Sizing.** Paths are in LaTeX pt at the template's 10 pt body size; callers
+  scale by `GRID_PX / _PT_PER_GU` (× `font_size / 10` where a per-component font
+  size applies), matching the QFont sizing used for text fallback.
+- **Per-side placement (orientation-aware).** `slot_fragments(options)` parses
+  the options string into `(slot_key, latex)` pairs for the side-placed families
+  (`l`/`v`/`i`/`a`); the in-body `t=` slot and styling flags are excluded.
+  `ComponentItem._slot_geometry()` derives the on-screen lead axis from the
+  *actual* lead terminals (`_lead_terminals_local()`, through the item
+  transform); resizable components (open/short/bipole) override it so the axis
+  and centre track the actual span, not the default registry bbox.
+  `_slot_direction(key, geom)` then chooses the offset direction:
+    - **Labels/currents** (`l`/`i`/`a`) are **traversal-relative** — left of the
+      lead direction for the plain/`^` form, right for the `_` form — so they
+      land on the correct side under any rotation/mirror (e.g. `l_` on a
+      down-pointing source goes left, matching CircuiTikZ).
+    - **Voltage** (`v`) uses the screen-positive perpendicular (down, else
+      right), which reproduces CircuiTikZ's default voltage-label side for both
+      horizontal and vertical elements; `v^` flips it.
+  Labels are **centred on the component** and offset by the body's
+  perpendicular half-thickness (bbox half-height for horizontal leads,
+  half-width for vertical) plus a gap; **current** (`i=`) labels instead hug the
+  wire (a small `_CURRENT_GAP` off the lead axis), matching where CircuiTikZ
+  draws them. Each `_SlotLabel` is counter-rotated to stay upright and stacks
+  outward when several share a direction. This is a readable convention,
+  **not** a pixel-exact reproduction of CircuiTikZ's voltage/current arrow
+  rendering (no ± signs or direction arrows are drawn on the canvas).
+- **Hover association.** Hovering the component body *or* any of its slot labels
+  highlights the whole group (body + all slot labels) in `COLOR_HOVER`, so it is
+  clear the labels belong to that component. `_SlotLabel` forwards hover events
+  to `ComponentItem._set_hovered()`, which repaints the body and every slot.
+- **Caching.** Two tiers: an in-process `lru_cache` of parsed paths, and an
+  on-disk cache of compiled SVG text keyed by a content hash (with a
+  `_RENDER_VERSION` prefix so template changes invalidate it). A failed compile
+  writes an empty sentinel so it is not retried. Reopening a file re-parses
+  cached SVGs without invoking `latex`.
+- **Async, non-blocking.** `render_async(fragment, on_done)` runs the compile on
+  a bounded `QThreadPool` (2 workers) and delivers the result back on the UI
+  thread via a queued signal. Until the path arrives — or if `latex`/`dvisvgm`
+  are missing — items fall back to raw-text rendering, so the canvas never
+  blocks and degrades gracefully. Queued callbacks guard with
+  `shiboken6.isValid` so a render landing after its item was deleted is dropped.
 
 ---
 
@@ -1122,19 +1184,19 @@ The worker thread is always stopped before the application exits: `PreviewWorker
 
 ### 8.2 Equation Preview
 
-The Properties Panel does not provide per-field equation previews. The full schematic preview (§8.1) serves as the authoritative rendered view of all component annotations.
+The Properties Panel does not provide per-field equation previews. Component annotations are rendered as typeset math directly on the canvas (§5.8); the full schematic preview (§8.1) remains the authoritative rendered view of the complete diagram.
 
-### 8.3 Options Label Auto-Placement
+### 8.3 Options Label Auto-Placement (legacy)
+
+> **Superseded by §5.8.** Labels now render as per-slot vector math auto-placed on conventional sides of the body; they are not draggable and do not use `label_offset`. The legacy single-label auto-placement below still runs in the scene (it sets `label_offset` via a bundled `MoveOptionsLabelCommand`) for file/undo back-compat, but the canvas ignores the result.
 
 When a component's options string transitions from empty to non-empty for the first time (i.e. `Component.label_offset` is still `None`), the scene runs an auto-placement pass before committing the `EditCommand`. The algorithm:
 
 1. Builds eight candidate positions (above-centre, right-middle, below-centre, left-middle, and the four diagonal corners) at a fixed clearance distance from the component bbox in component-local pixel coordinates.
 2. Maps each candidate label rect to scene coordinates and scores it by total overlap area with every other component's bounding box.
 3. Selects the lowest-overlap candidate, preferring above-centre when there is a tie.
-4. If the default above-centre position has zero overlap, no `label_offset` is set (the default fallback continues to apply).
+4. If the default above-centre position has zero overlap, no `label_offset` is set.
 5. Otherwise the chosen offset is recorded via a `MoveOptionsLabelCommand` bundled with the `EditCommand` inside a `MacroCommand` so both are undone together.
-
-The auto-placement fires only once per options string lifetime. Subsequent edits to the options text leave `label_offset` unchanged. The user can always drag the label to a preferred position afterward.
 
 ### 8.4 LaTeX Template
 
@@ -1495,6 +1557,7 @@ heaviside/
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
+    ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; render gated on latex/dvisvgm)
     └── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
 ```
 
@@ -1809,6 +1872,10 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 #### Preview Render (`test_preview_render.py`)
 
 `pdf_to_qimage` (QtPdf): a compiled schematic PDF renders to a non-null `QImage`; a higher DPI yields a proportionally larger raster (same source page); garbage input raises cleanly (`CompileError`/`RuntimeError`) rather than crashing. Requires `pdflatex`; no Poppler involved.
+
+#### Math Render (`test_mathrender.py`)
+
+On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. Render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop.
 
 #### Symbol Geometry (`test_svgsym.py`)
 

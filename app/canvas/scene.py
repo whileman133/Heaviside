@@ -64,6 +64,7 @@ from app.canvas.items import (
     OpenCircleItem,
     WireItem,
     WirePreviewItem,
+    _SlotLabel,
 )
 from app.canvas.geometry import (
     SNAP_GU,
@@ -1444,6 +1445,15 @@ class SchematicScene(QGraphicsScene):
                     it.begin_edit()
                     event.accept()
                     return
+                # A per-side slot label (display only) maps to its component's
+                # in-place editor — double-clicking a rendered label edits it.
+                if isinstance(it, _SlotLabel):
+                    parent = it.parentItem()
+                    if isinstance(parent, ComponentItem):
+                        parent.begin_options_edit()
+                        self.component_double_clicked.emit(parent.component.id)
+                        event.accept()
+                        return
                 if isinstance(it, ComponentItem):
                     # Start in-place options editing and open the Properties Panel.
                     it.begin_options_edit()
