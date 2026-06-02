@@ -1169,6 +1169,9 @@ class GroupRotateCommand(Command):
         # Captured at first do() — never overwritten on redo.
         self._orig_comp: dict[str, tuple] = {}
         self._orig_wire: dict[str, list] = {}
+        # Boundary wires that collapsed to a point under the rotation and were
+        # removed (recomputed each do(); restored on undo).
+        self._removed_wire_ids: set[str] = set()
 
     @staticmethod
     def _rot90cw(
@@ -1256,6 +1259,7 @@ class GroupRotateCommand(Command):
             ]
 
         # Reshape boundary wires.
+        collapsed: list[str] = []
         for wire in schematic.wires:
             if wire.id not in boundary:
                 continue
@@ -1267,9 +1271,22 @@ class GroupRotateCommand(Command):
                 continue
             dx = new_pt[0] - moving_pt[0]
             dy = new_pt[1] - moving_pt[1]
-            wire.points = reshape_wire_points(
+            new_pts = reshape_wire_points(
                 orig, start_hit=sh, end_hit=eh, dx=dx, dy=dy
             )
+            if len(new_pts) < 2:
+                # The rotation folded the wire's moving end onto its fixed end —
+                # it collapsed to a point. Remove it rather than leave a stray
+                # degenerate wire (mirrors MoveCommand). Restored on undo.
+                collapsed.append(wire.id)
+            else:
+                wire.points = new_pts
+
+        self._removed_wire_ids = set(collapsed)
+        if collapsed:
+            schematic.wires[:] = [
+                w for w in schematic.wires if w.id not in self._removed_wire_ids
+            ]
 
     def undo(self, schematic: Schematic) -> None:
         for comp in schematic.components:
@@ -1282,6 +1299,13 @@ class GroupRotateCommand(Command):
         for wire in schematic.wires:
             if wire.id in self._orig_wire:
                 wire.points = list(self._orig_wire[wire.id])
+        # Re-add any boundary wires that collapsed (and were removed) under do().
+        existing = {w.id for w in schematic.wires}
+        for wid in self._removed_wire_ids:
+            orig = self._orig_wire.get(wid)
+            if orig is not None and wid not in existing:
+                schematic.wires.append(Wire(id=wid, points=list(orig)))
+        self._removed_wire_ids = set()
 
 
 class MacroCommand(Command):

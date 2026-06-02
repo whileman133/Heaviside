@@ -1034,6 +1034,37 @@ def test_group_rotate_boundary_wire():
     assert wire.points[-1] == (4.0, 0.0)
 
 
+def test_group_rotate_boundary_wire_collapse_removes_it():
+    """A boundary wire that folds onto itself under rotation is removed.
+
+    Regression: GroupRotateCommand reshaped boundary wires with the same
+    reshape_wire_points() that can collapse to a single point, but (unlike
+    MoveCommand) didn't guard the result — leaving a stray degenerate wire.
+    Here r1's out pin (2,0) rotates around (0,0) onto (0,2), which is the wire's
+    free end, so the wire collapses.
+    """
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="r1", position=(0.0, 0.0))))
+    stack.push(WireCommand(Wire(id="wb", points=[(2.0, 0.0), (0.0, 2.0)])))
+    stack.push(GroupRotateCommand(["r1"], [], centroid=(0.0, 0.0)))
+    assert stack.schematic.wires == []   # collapsed wire removed, not degenerate
+
+
+def test_group_rotate_boundary_wire_collapse_undo_restores():
+    """Undo re-adds a boundary wire that a rotation collapsed; redo removes it."""
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="r1", position=(0.0, 0.0))))
+    stack.push(WireCommand(Wire(id="wb", points=[(2.0, 0.0), (0.0, 2.0)])))
+    stack.push(GroupRotateCommand(["r1"], [], centroid=(0.0, 0.0)))
+    assert stack.schematic.wires == []
+    stack.undo()
+    assert len(stack.schematic.wires) == 1
+    assert stack.schematic.wires[0].id == "wb"
+    assert stack.schematic.wires[0].points == [(2.0, 0.0), (0.0, 2.0)]
+    stack.redo()
+    assert stack.schematic.wires == []
+
+
 def test_group_rotate_undo():
     """Undo restores all component positions, rotations, and wire points."""
     stack = _stack()

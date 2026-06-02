@@ -868,7 +868,7 @@ Wires do not auto-route around components in v1 — the user routes manually.
 | `MoveOptionsLabelCommand` | Restore previous `label_offset` value |
 | `RotateCommand` | Restore previous rotation value |
 | `MirrorCommand` | Restore previous mirror state |
-| `GroupRotateCommand` | Restore component positions, rotations, label offsets, and all affected wire points |
+| `GroupRotateCommand` | Restore component positions, rotations, label offsets, and all affected wire points (re-adding any boundary wire that collapsed and was removed) |
 | `MacroCommand` | Composite of the above (e.g. a split + add, or a multi-component move) |
 
 Notes:
@@ -877,7 +877,7 @@ Notes:
 - `SplitWireCommand` replaces a wire with two independent halves when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
 - `MergeWireCommand` merges two wire stubs that share a free endpoint into one wire; it is bundled after a `DeleteCommand` inside a `MacroCommand` when the deletion dissolves a T-junction (see §6.4).
 - `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
-- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.5 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`.
+- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.5 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`. If a boundary wire's reshape collapses it to a single point (its moving end folds onto its fixed end), the wire is **removed** rather than left as a degenerate single-point wire — and `undo` re-adds it (same guard `MoveCommand` applies to wire-following).
 
 ### 6.7 Copy / Paste
 
@@ -1798,7 +1798,7 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo).
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it).
 
 #### Preview Worker (`test_worker.py`)
 
