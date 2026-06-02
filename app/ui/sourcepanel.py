@@ -61,7 +61,7 @@ class SourcePanel(QWidget):
         mono.setStyleHint(QFont.TypeWriter)
         mono.setPointSize(10)
         self._text.setFont(mono)
-        self._text.setStyleSheet("background: #f8f8f8; border: 1px solid #ddd;")
+        self._text.setStyleSheet("background: #ffffff; border: 1px solid #ddd;")
         layout.addWidget(self._text, 1)
 
     def set_scene(self, scene: SchematicScene) -> None:

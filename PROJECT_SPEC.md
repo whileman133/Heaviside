@@ -1269,6 +1269,17 @@ On file load, the application:
 
 The `version` field in the JSON corresponds to the spec version. Future spec versions must document migration rules for loading files from older versions.
 
+### 9.5 Bundled Examples
+
+Example schematics live under `examples/` as `.hv` files and are bundled into
+the app (the PyInstaller spec adds `examples/*.hv`; the co-located `.pdf`/`.eps`
+exports are regenerable and not bundled or tracked). **File → Open Example ▸**
+lists each one (resolved via `resource_path("examples")`, so it works from a
+source checkout and when frozen). Selecting an example loads it as a *template*:
+it is opened and the view is fit to it (§5), but `_current_path` is left unset so
+**Save** prompts for a new location rather than overwriting the read-only bundled
+file. If no examples are present the submenu shows a disabled placeholder.
+
 ---
 
 ## 10. UI Layout
@@ -1294,6 +1305,12 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 │  Status bar: cursor coords | zoom level | compile status    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+**Window background.** The window background is white: `MainWindow` sets its
+palette `Window` color to `#ffffff`, which child widgets inherit (central area,
+panels, splitter gaps, status bar). The two **toolbars keep their gray** (`#ebebeb`,
+set via their own stylesheets) and input controls are unaffected (they paint
+with the `Base`/`Button` palette roles, not `Window`).
 
 ### 10.2 Component Palette
 
@@ -1429,6 +1446,7 @@ heaviside/
 ├── scripts/
 │   ├── build_app.sh               # Clean PyInstaller build helper
 │   └── make_icns.sh               # Regenerate assets/icon.icns from icon.png
+├── examples/                      # Bundled example .hv schematics (File → Open Example, §9.5)
 ├── app/
 │   ├── resources.py               # resource_path(): frozen-safe bundled-file resolution
 │   ├── canvas/

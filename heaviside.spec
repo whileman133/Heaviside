@@ -19,12 +19,12 @@ editing, source generation, and .tex export work without them.
 """
 
 import sys
+from glob import glob
 
 from PyInstaller.utils.hooks import collect_data_files
 
-# Only two files are read at runtime; the SVG sources are not (the manifest is
-# the baked-in geometry). Paths are relative to the project root and mirror the
-# layout app/resources.py expects.
+# Runtime resources, paths relative to the project root, mirroring the layout
+# app/resources.py expects.
 datas = [
     ("assets/icon.png", "assets"),
     # The whole SVG export tree, not just the manifest: svgsym.py reads the
@@ -34,6 +34,9 @@ datas = [
     # marks in the frozen app. The tree is small (~0.5 MB).
     ("tools/circuitikz_svgs", "tools/circuitikz_svgs"),
 ]
+# Example schematics for the File → Open Example menu. Only the .hv sources are
+# bundled — the co-located .pdf/.eps are regenerable and intentionally skipped.
+datas += [(f, "examples") for f in glob("examples/*.hv")]
 # qtawesome ships its icon fonts as package data (toolbar/ribbon glyphs).
 datas += collect_data_files("qtawesome")
 

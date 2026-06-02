@@ -29,7 +29,7 @@ import qtawesome as qta
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QFont, QImage, QKeySequence,
-    QPainter, QPen, QPixmap, QShortcut,
+    QPainter, QPalette, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
     QDialog,
@@ -77,6 +77,14 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle(_WINDOW_TITLE)
         self.resize(1280, 800)
+
+        # White window background. Children inherit the Window role, so the
+        # central area, panels, splitter gaps, and status bar render white. The
+        # two toolbars keep their explicit gray (they set their own stylesheet),
+        # and input controls are unaffected (they use the Base/Button roles).
+        pal = self.palette()
+        pal.setColor(QPalette.Window, QColor("#ffffff"))
+        self.setPalette(pal)
 
         # -- Core objects --------------------------------------------------
         self._scene = SchematicScene()
@@ -127,6 +135,8 @@ class MainWindow(QMainWindow):
         self._act_open.setShortcut(QKeySequence.Open)
         self._act_open.triggered.connect(self._on_open)
         file_menu.addAction(self._act_open)
+
+        self._build_examples_menu(file_menu)
 
         file_menu.addSeparator()
 
@@ -571,6 +581,53 @@ class MainWindow(QMainWindow):
         # Fit the view to the loaded circuit. Deferred so it runs after the
         # welcome→canvas switch and layout pass, when the viewport has its final
         # size (fitInView needs a valid viewport size to compute the zoom).
+        QTimer.singleShot(0, self._view.fit_to_schematic)
+
+    def _build_examples_menu(self, file_menu) -> None:
+        """Add an **Open Example ▸** submenu listing the bundled example files.
+
+        Examples ship under ``examples/`` (bundled into the .app via
+        heaviside.spec) and are resolved through ``resource_path`` so the same
+        code works from a source checkout and when frozen. Each ``*.hv`` becomes
+        a menu item that loads it as a starting point (see ``_open_example``).
+        """
+        examples_dir = resource_path("examples")
+        try:
+            files = sorted(examples_dir.glob("*.hv")) if examples_dir.is_dir() else []
+        except OSError:
+            files = []
+
+        submenu = file_menu.addMenu("Open &Example")
+        if not files:
+            placeholder = submenu.addAction("(no examples available)")
+            placeholder.setEnabled(False)
+            return
+        for path in files:
+            act = submenu.addAction(path.stem)
+            # Bind the path per-iteration (default-arg avoids the late-binding trap).
+            act.triggered.connect(lambda _checked=False, p=path: self._open_example(p))
+
+    def _open_example(self, path: Path) -> None:
+        """Load a bundled example as a fresh, unsaved document.
+
+        Unlike **Open**, the current path is left unset: the example file lives
+        inside the (read-only) app bundle, so **Save** should prompt for a new
+        location rather than overwrite it — the example acts as a template.
+        """
+        if not self._confirm_discard():
+            return
+        try:
+            schematic = load(str(path))
+        except SchematicLoadError as exc:
+            QMessageBox.critical(self, "Load Error", str(exc))
+            return
+        self._show_canvas()
+        self._scene.set_schematic(schematic)
+        self._current_path = None        # template: Save → Save As (don't touch the bundle)
+        self._modified = False
+        self._update_title()
+        self._props.clear()
+        self._status_compile.setText(f"Loaded example: {path.stem}")
         QTimer.singleShot(0, self._view.fit_to_schematic)
 
     def _on_save(self) -> None:
