@@ -1511,11 +1511,13 @@ a `.hv` document-type association) and `dist/Heaviside/` elsewhere. `build/` and
 `dist/` are git-ignored.
 
 **App icon.** The bundle icon is `assets/icon.icns`, regenerated from
-`assets/icon.png` by `./scripts/make_icns.sh` (run after the PNG changes). The
-source PNG need not be square — the script pads it onto a transparent square
-canvas before rendering the iconset, so the icon is never distorted. (After
-replacing the icon you may need to clear the macOS icon cache — e.g. relaunch
-the Dock — to see the change on an already-seen bundle.)
+`assets/icon.png` by `./scripts/make_icns.sh`. On macOS `build_app.sh` runs this
+automatically when the `.icns` is missing or older than the PNG, so updating the
+icon is just: replace `icon.png`, rebuild. The source PNG need not be square —
+the script pads it onto a transparent square canvas before rendering the
+iconset, so the icon is never distorted. (After replacing the icon you may need
+to clear the macOS icon cache — e.g. relaunch the Dock — to see the change on an
+already-seen bundle.)
 
 **Runtime resources.** Two resource sets are read at runtime and must be
 bundled: `assets/icon.png`, and the whole `tools/circuitikz_svgs/` tree. The
