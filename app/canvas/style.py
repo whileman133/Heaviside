@@ -7,7 +7,7 @@ current zoom transform automatically, so these constants stay fixed at all zoom
 levels — they define the *schematic-space* geometry of each symbol.
 """
 
-from pathlib import Path
+from app.resources import resource_path
 
 # ---------------------------------------------------------------------------
 # Core spatial constants
@@ -49,12 +49,7 @@ COLOR_PIN       = "#FFCC0000"   # dark red  (pin indicator dots)
 # SVG symbol reference (see app/canvas/svgsym.py)
 # ---------------------------------------------------------------------------
 
-MANIFEST_PATH: str = str(
-    Path(__file__).resolve().parents[2]
-    / "tools"
-    / "circuitikz_svgs"
-    / "manifest.json"
-)
+MANIFEST_PATH: str = str(resource_path("tools", "circuitikz_svgs", "manifest.json"))
 """Absolute path to the CircuiTikZ SVG export manifest."""
 
 SVG_PT_PER_GU: float = 28.34765

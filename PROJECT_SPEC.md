@@ -1045,6 +1045,12 @@ connect a wire end, so a wire that only touches one stays open:
 \node[ocirc] at (x, y) {};
 ```
 
+**Degenerate wires** (fewer than two points) have no segment and connect
+nothing: connectivity helpers (`open_endpoints`, `unconnected_pins`,
+`junction_points`) ignore them, and `generate()` skips them so they emit no stray
+lone coordinate in the `\draw` path. (Such a single-point wire previously made a
+real endpoint at the same coordinate look connected, hiding its circle.)
+
 Both sets of nodes are placed after the path's terminating `;`. Coordinates use
 the same formatting rules as §7.3. Both sets are **derived** from the schematic
 geometry at generation time — they are not stored in the model.
@@ -1098,12 +1104,17 @@ A rendered PDF preview of the complete schematic is produced by:
 
 1. Wrapping the generated CircuiTikZ in a minimal `.tex` document.
 2. Running `pdflatex` in a temporary directory via `subprocess`.
-3. Converting the output PDF page to a `QImage` using `pdf2image`.
+3. Rendering the output PDF page to a `QImage` with Qt's own PDF engine
+   (`PySide6.QtPdf.QPdfDocument`) — `pdf_to_qimage()` loads the PDF bytes from an
+   in-memory `QBuffer` and renders page 0 at the worker's DPI. No external
+   process and no Poppler dependency. (The `QByteArray` backing the buffer is
+   held in a local for the buffer's lifetime — `QBuffer` references it without
+   copying.)
 4. Displaying the image in the preview panel.
 
 The preview is triggered by:
 - A **Compile** button (toolbar)
-- Automatically, with a 5-second debounce (`_SCHEMATIC_DEBOUNCE_MS`), after any schematic edit
+- Automatically, with a 500 ms debounce (`_SCHEMATIC_DEBOUNCE_MS`), after any schematic edit. The short delay is practical because the render step is now Qt-native (QtPdf, §8.4) and turns around quickly; the debounce only needs to coalesce a burst of rapid edits.
 
 Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never blocked. While compiling, a spinner is shown in the preview panel. If `pdflatex` returns a non-zero exit code, the error log is shown in the preview panel in place of the image.
 
@@ -1204,9 +1215,9 @@ PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
 
 ### 8.4 Dependencies
 
-- `pdflatex` must be on the system `PATH`. Checked at startup; a warning dialog is shown if not found.
-- `pdf2image` Python package (wraps `pdftoppm` from Poppler).
-- `pdftocairo` (also from Poppler) is required for EPS export (§8.6); other features do not need it.
+- `pdflatex` must be on the system `PATH`. Checked at startup (`check_dependencies`); a warning dialog is shown if not found. It is the only tool required for normal use.
+- The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
+- `pdftocairo` (Poppler) is required **only** for EPS export (§8.6). It is checked on demand in `pdf_to_eps` (not at startup), so users who never export EPS are not warned about a missing Poppler.
 - The `circuitikz` LaTeX package must be installed in the TeX distribution.
 
 ---
@@ -1278,7 +1289,7 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 │    │Tripoles │                           │                  │
 │    │         │                           │                  │
 ├────┴─────────┴──────────────┬────────────┴──────────────────┤
-│  Source Panel (CircuiTikZ)  │  LaTeX Preview (~280px wide)  │
+│  Source Panel (CircuiTikZ)  │  LaTeX Preview (draggable)    │
 ├─────────────────────────────┴───────────────────────────────┤
 │  Status bar: cursor coords | zoom level | compile status    │
 └─────────────────────────────────────────────────────────────┘
@@ -1313,16 +1324,23 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 
 All section edits funnel through `SchematicScene` methods that push undoable commands. Text/options fields and the fill/border controls debounce commits 300 ms; checkboxes, rotation, mirror, and z-order commit immediately.
 
+The bottom strip (height 260px) holds the source panel and preview panel side by
+side in a horizontal `QSplitter`. Because the generated CircuiTikZ lines are
+short, the preview gets the larger initial share of the width (initial sizes
+≈ 440 / 840); the user can drag the handle to rebalance, and neither pane is
+collapsible.
+
 ### 10.4 Source Panel
 
-- Left portion of the bottom strip (height 200px), stretches horizontally.
+- Left pane of the bottom strip.
 - Read-only `QPlainTextEdit` showing the current generated CircuiTikZ source.
 - Updates live (debounced 300ms) as the schematic changes.
 - Syntax is not highlighted in v1.
 
 ### 10.5 Preview Panel
 
-- Right portion of the bottom strip, fixed width ~280px, separated by a 1px border.
+- Right pane of the bottom strip, separated by a 1px border; resizable via the
+  splitter (minimum width ~240px), and re-renders to fit on resize.
 - Shows the rendered PDF preview image, scaled to fill the available area.
 - Shows error text on compilation failure.
 - The panel is always visible; content appears after first compile.
@@ -1407,7 +1425,12 @@ saving adds the compile latency when auto-export is enabled.
 ```
 heaviside/
 ├── main.py                        # Entry point; constructs QApplication and MainWindow
+├── heaviside.spec                 # PyInstaller build spec (see §11.1)
+├── scripts/
+│   ├── build_app.sh               # Clean PyInstaller build helper
+│   └── make_icns.sh               # Regenerate assets/icon.icns from icon.png
 ├── app/
+│   ├── resources.py               # resource_path(): frozen-safe bundled-file resolution
 │   ├── canvas/
 │   │   ├── scene.py               # SchematicScene(QGraphicsScene) + interaction state machine
 │   │   ├── geometry.py            # Pure geometry helpers (snap/coord conversion, span
@@ -1451,12 +1474,55 @@ heaviside/
     ├── test_commands.py           # undo/redo for all command classes
     ├── test_geometry.py           # pure canvas geometry helpers (no Qt scene)
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
-    └── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
+    ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
+    ├── test_preferences.py        # Preferences (QSettings) + dialog
+    └── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
 ```
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
 
-`scratch_canvas.py` was a temporary development harness used during Phases 5–8 and has been removed now that the full UI shell (Phase 9) is in place. The SVG manifest under `tools/` is excluded from version control of the shipped app via `.gitignore`.
+`scratch_canvas.py` was a temporary development harness used during Phases 5–8 and has been removed now that the full UI shell (Phase 9) is in place.
+
+### 11.1 Packaging (PyInstaller)
+
+The app ships as a self-contained bundle built with PyInstaller from
+[`heaviside.spec`](heaviside.spec) (`./scripts/build_app.sh`). Output is
+`dist/Heaviside.app` on macOS (a proper `.app` bundle with the `.icns` icon and
+a `.hv` document-type association) and `dist/Heaviside/` elsewhere. `build/` and
+`dist/` are git-ignored.
+
+**App icon.** The bundle icon is `assets/icon.icns`, regenerated from
+`assets/icon.png` by `./scripts/make_icns.sh` (run after the PNG changes). The
+source PNG need not be square — the script pads it onto a transparent square
+canvas before rendering the iconset, so the icon is never distorted. (After
+replacing the icon you may need to clear the macOS icon cache — e.g. relaunch
+the Dock — to see the change on an already-seen bundle.)
+
+**Runtime resources.** Only two files are read at runtime and must be bundled:
+`assets/icon.png` and `tools/circuitikz_svgs/manifest.json` (the SVG *sources*
+are not loaded — the manifest holds the baked-in geometry). Because a frozen app
+cannot resolve `__file__`-relative paths the way a source checkout does, all
+three call sites (`main.py`, `app/ui/mainwindow.py`, `app/canvas/style.py`) go
+through `resource_path()` in `app/resources.py`, which roots paths at
+`sys._MEIPASS` when frozen and at the project root otherwise. The `datas` list
+in the spec mirrors these relative paths exactly.
+
+**Not bundled.** `pdflatex` (with `circuitikz`) remains an external
+user-installed dependency (§8.4) — bundling a TeX distribution is impractical.
+The PDF preview is rendered by the bundled `QtPdf` module (PySide6), so the
+bundle needs no Poppler for normal use; `pdftocairo` (Poppler) is only needed if
+you export EPS. Editing, source generation, preview, and `.tex`/PDF export work
+with just `pdflatex`; the startup dependency check (§8.4) warns when it is
+absent.
+
+**macOS PATH augmentation.** A GUI app launched from Finder/Dock inherits only a
+minimal `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`), so TeX/Poppler tools installed
+under `/Library/TeX/texbin` or `/opt/homebrew/bin` appear "missing" even when
+present. `app/preview/latex.py` therefore calls `_ensure_tool_dirs_on_path()`
+(idempotent; macOS-only; appends the standard tool directories that exist)
+before every `pdflatex`/`pdftocairo` lookup in `check_dependencies`,
+`compile_tex`, and `pdf_to_eps`. This makes a Finder-launched bundle behave the
+same as a terminal launch. The list of directories is `_MAC_TOOL_DIRS`.
 
 ---
 
@@ -1493,7 +1559,7 @@ requires-python = ">=3.11"
 dependencies = [
     "PySide6>=6.5",
     "pydantic>=2.0",
-    "pdf2image>=1.16",
+    "qtawesome>=1.4.2",
 ]
 
 [project.scripts]
@@ -1504,6 +1570,8 @@ dev = [
     "pytest>=7.0",
     "pytest-qt>=4.2",
     "pytest-cov>=4.0",
+    "pyinstaller>=6.20.0",
+    "pillow>=12.2.0",
 ]
 
 [tool.pytest.ini_options]
@@ -1554,9 +1622,9 @@ The following must be installed separately from uv — they are not Python packa
 |------------|---------|---------|
 | `pdflatex` | Compiling LaTeX previews | TeX Live (`texlive-full`) or MiKTeX |
 | `circuitikz` | LaTeX package for circuit diagrams | Included in `texlive-science` or MiKTeX package manager |
-| `pdftoppm` | PDF-to-image conversion (used by `pdf2image`) | Poppler (`poppler-utils` on Debian/Ubuntu) |
+| `pdftocairo` *(optional)* | PDF→EPS conversion for **EPS export only** | Poppler (`poppler-utils` on Debian/Ubuntu) |
 
-The application checks for `pdflatex` and `pdftoppm` on the system `PATH` at startup and shows a warning dialog for any that are missing.
+The PDF preview is rendered by the `QtPdf` module bundled with PySide6, so no Poppler is needed for normal use. The application checks for `pdflatex` on the system `PATH` at startup and shows a warning dialog if it is missing; `pdftocairo` is checked only when EPS export is invoked.
 
 ---
 
@@ -1618,6 +1686,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
 | `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
 | `test_voltage_annotation_endpoint_emits_ocirc` | A wire ending on a voltage annotation (`open`) pin still emits `\node[ocirc]` — the annotation is an open circuit, not a connection. |
+| `test_degenerate_wire_skipped_but_endpoint_open` | A degenerate single-point wire emits no `\draw` coordinate and does not suppress the `\node[ocirc]` at a real wire endpoint sharing its coordinate. |
 | `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
 | `test_mark_unconnected_pins_off_by_default` / `test_mark_unconnected_pins_marks_dangling_pins` | With `mark_unconnected_pins=False` (default) a lone resistor emits no `ocirc`; with it `True`, both free pins get a `\node[ocirc]` (§7.6). |
 | `test_mark_unconnected_pins_skips_wired_pin` / `test_mark_unconnected_pins_respects_y_flip` | A pin with a wire on it is never marked even when the option is on; marked pins honor the `y_flip` convention. |
@@ -1688,8 +1757,8 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `simplify_points` / `test_simplify_u_turn_collapses_to_straight` | Collapses consecutive duplicates and redundant collinear interior vertices; preserves endpoints and genuine elbows; does not mutate its input. A second dedup pass after collinear collapse handles the A–B–A → A case where collapsing B (same-y) would otherwise leave a consecutive duplicate at A. |
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
-| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect). |
-| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect. |
+| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect); a degenerate single-point wire connects nothing, so it does not suppress a real endpoint at the same coordinate. |
+| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect; a degenerate single-point wire on a pin does not mark it connected. |
 | `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
@@ -1709,6 +1778,10 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 #### Preview Worker (`test_worker.py`)
 
 `PreviewWorker` thread lifecycle: `shutdown()` stops the background `QThread`; it is idempotent (safe to call from both `closeEvent` and `aboutToQuit`); and emitting `QApplication.aboutToQuit` stops the thread even when the window's `closeEvent` never fired.
+
+#### Preview Render (`test_preview_render.py`)
+
+`pdf_to_qimage` (QtPdf): a compiled schematic PDF renders to a non-null `QImage`; a higher DPI yields a proportionally larger raster (same source page); garbage input raises cleanly (`CompileError`/`RuntimeError`) rather than crashing. Requires `pdflatex`; no Poppler involved.
 
 #### Preferences (`test_preferences.py`)
 
@@ -1805,7 +1878,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] Double-clicking a component opens the Properties Panel.
 - [ ] The options string field is shown, pre-populated with the component's current options.
 - [ ] Typing a LaTeX string (e.g., `$R_1$`) into a label field updates the canvas label display.
-- [ ] The full schematic preview updates within 5 seconds of any change (debounced).
+- [ ] The full schematic preview updates shortly after any change (500 ms debounce).
 - [ ] Rotation and mirror controls change the component orientation on the canvas immediately.
 
 #### AC-5: Undo / Redo
@@ -1821,7 +1894,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 
 #### AC-7: Preview
 - [ ] Pressing `Ctrl+Return` or the Compile button triggers a preview render.
-- [ ] The rendered PDF preview appears in the preview panel within 5 seconds on a standard machine.
+- [ ] The rendered PDF preview appears in the preview panel within ~1 second of a change on a standard machine (500 ms debounce + a fast pdflatex/QtPdf turnaround).
 - [ ] The preview matches the source panel output visually.
 - [ ] A LaTeX compilation error is reported in the preview panel with the relevant error text visible.
 - [ ] The main UI remains responsive during compilation (main thread not blocked).

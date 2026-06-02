@@ -7,6 +7,7 @@ All tests are pure: no Qt, no filesystem, no LaTeX.
 from __future__ import annotations
 
 import copy
+import os
 import uuid
 
 import pytest
@@ -415,6 +416,18 @@ def test_voltage_annotation_endpoint_emits_ocirc() -> None:
     s = _schematic(va, wires=[_wire([(0.0, 0.0), (2.0, 0.0)])])
     src = generate(s)
     assert r"\node[ocirc] at (2,0) {};" in src   # wire end on annotation → open
+    assert r"\node[ocirc] at (0,0) {};" in src
+
+
+def test_degenerate_wire_skipped_but_endpoint_open() -> None:
+    """A single-point wire emits no draw line and does not suppress an ocirc."""
+    s = _schematic(wires=[
+        _wire([(0.0, 0.0), (4.0, 0.0)]),
+        _wire([(4.0, 0.0)]),   # degenerate
+    ])
+    src = generate(s)
+    assert "\n    (4,0)\n" not in src                  # no stray lone coordinate
+    assert r"\node[ocirc] at (4,0) {};" in src         # endpoint still open
     assert r"\node[ocirc] at (0,0) {};" in src
 
 
@@ -911,3 +924,52 @@ def test_pdf_to_eps_roundtrip() -> None:
     assert eps_bytes.startswith(b"%!PS-Adobe")
     assert b"EPSF" in eps_bytes[:64]
     assert b"%%BoundingBox" in eps_bytes
+
+
+# ---------------------------------------------------------------------------
+# _ensure_tool_dirs_on_path — macOS GUI PATH augmentation (packaging)
+# ---------------------------------------------------------------------------
+
+def test_ensure_tool_dirs_adds_existing_dir(monkeypatch, tmp_path) -> None:
+    """An existing tool dir missing from PATH is appended (macOS)."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    latex._ensure_tool_dirs_on_path()
+    assert str(tmp_path) in os.environ["PATH"].split(os.pathsep)
+
+
+def test_ensure_tool_dirs_idempotent(monkeypatch, tmp_path) -> None:
+    """Calling twice does not duplicate the appended dir."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    latex._ensure_tool_dirs_on_path()
+    latex._ensure_tool_dirs_on_path()
+    assert os.environ["PATH"].split(os.pathsep).count(str(tmp_path)) == 1
+
+
+def test_ensure_tool_dirs_skips_missing_dir(monkeypatch) -> None:
+    """A non-existent tool dir is never added."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", ("/no/such/dir/xyz",))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    latex._ensure_tool_dirs_on_path()
+    assert "/no/such/dir/xyz" not in os.environ["PATH"].split(os.pathsep)
+
+
+def test_ensure_tool_dirs_noop_off_darwin(monkeypatch, tmp_path) -> None:
+    """Off macOS the function makes no change to PATH."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    latex._ensure_tool_dirs_on_path()
+    assert os.environ["PATH"] == "/usr/bin"

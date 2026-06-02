@@ -278,9 +278,14 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
 
     # Collect all wire vertex positions (every point on every wire).
     # A wire endpoint that coincides with ANY vertex of ANY other wire is
-    # connected — it should not be shown as an open endpoint.
+    # connected — it should not be shown as an open endpoint.  Degenerate wires
+    # (fewer than two points) have no segments and connect nothing, so they are
+    # skipped — otherwise a stray single-point wire would make a real endpoint
+    # at the same coordinate look connected.
     all_wire_points: dict[tuple[float, float], int] = {}
     for wire in schematic.wires:
+        if len(wire.points) < 2:
+            continue
         for pt in wire.points:
             pt_r = (round(pt[0], 6), round(pt[1], 6))
             all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
@@ -320,8 +325,12 @@ def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
     Pure function; returns a set of (x, y) tuples in grid units.
     """
     # Every wire vertex coordinate (endpoints and interior points alike).
+    # Degenerate wires (fewer than two points) connect nothing and are skipped,
+    # so a stray single-point wire on a pin does not mark it as connected.
     wire_points: set[tuple[float, float]] = set()
     for wire in schematic.wires:
+        if len(wire.points) < 2:
+            continue
         for pt in wire.points:
             wire_points.add((round(pt[0], 6), round(pt[1], 6)))
 

@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.resources import resource_path
 from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
 from app.canvas.view import SchematicView
 from app.codegen.circuitikz import generate
@@ -377,20 +378,33 @@ class MainWindow(QMainWindow):
 
         outer.addWidget(splitter, 1)
 
-        # Bottom strip: source panel (left) + preview panel (right).
+        # Bottom strip: source panel (left) + preview panel (right), in a
+        # draggable splitter. The CircuiTikZ source lines are short, so the
+        # preview gets the larger initial share of the width; the user can drag
+        # the handle to rebalance.
         bottom = QWidget()
-        bottom.setFixedHeight(200)
+        bottom.setFixedHeight(260)
         bottom_layout = QHBoxLayout(bottom)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(0)
 
+        bottom_split = QSplitter(Qt.Horizontal)
+        bottom_split.setHandleWidth(4)
+        bottom_split.setChildrenCollapsible(False)
+
         self._source_panel = SourcePanel(preferences=self._prefs)
         self._source_panel.set_scene(self._scene)
-        bottom_layout.addWidget(self._source_panel, 1)
+        bottom_split.addWidget(self._source_panel)
 
         self._preview_panel = _PreviewPanel()
-        bottom_layout.addWidget(self._preview_panel)
+        bottom_split.addWidget(self._preview_panel)
 
+        # Source stays only as wide as it needs; preview takes the extra room.
+        bottom_split.setStretchFactor(0, 0)
+        bottom_split.setStretchFactor(1, 1)
+        bottom_split.setSizes([440, 840])
+
+        bottom_layout.addWidget(bottom_split)
         outer.addWidget(bottom)
 
     # ------------------------------------------------------------------
@@ -992,7 +1006,7 @@ def _filled_dot(painter: QPainter, color: QColor, centre: QPointF, r: float) -> 
 # ---------------------------------------------------------------------------
 
 _APP_VERSION = "0.1.0"
-_ASSETS_DIR = Path(__file__).parent.parent.parent / "assets"
+_ASSETS_DIR = resource_path("assets")
 
 _HEAVISIDE_QUOTE = (
     "“The best result of mathematics is to be able to do without it.”"
@@ -1101,12 +1115,14 @@ class _PreviewPanel(QWidget):
     to fill the panel while preserving aspect ratio.
     """
 
-    _PANEL_W = 280
+    _MIN_W = 240
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedWidth(self._PANEL_W)
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # Resizable: the panel lives in a splitter and re-renders to fit (see
+        # resizeEvent). A minimum width keeps it from collapsing to nothing.
+        self.setMinimumWidth(self._MIN_W)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setStyleSheet(
             "background: white; border-left: 1px solid #ddd;"
         )

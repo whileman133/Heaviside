@@ -544,6 +544,21 @@ def test_open_endpoints_real_pin_still_connects_wire() -> None:
     assert (2.0, 0.0) not in open_endpoints(s)
 
 
+def test_open_endpoints_degenerate_wire_does_not_connect() -> None:
+    """A stray single-point wire must not suppress a real open endpoint.
+
+    Regression: a degenerate one-point wire at the same coordinate made the
+    real wire's endpoint look connected, hiding its ocirc.
+    """
+    s = _make_schematic(wires=(
+        _W("a", [(0.0, 0.0), (4.0, 0.0)]),
+        _W("b", [(4.0, 0.0)]),   # degenerate: no segments, connects nothing
+    ))
+    result = open_endpoints(s)
+    assert (4.0, 0.0) in result   # still open despite the degenerate wire
+    assert (0.0, 0.0) in result
+
+
 # ---------------------------------------------------------------------------
 # unconnected_pins
 # ---------------------------------------------------------------------------
@@ -608,6 +623,13 @@ def test_unconnected_pins_voltage_annotation_pins_not_flagged() -> None:
     """The voltage annotation's own pins are never flagged (not a terminal)."""
     va = _open("va", (5.0, 5.0))  # free-floating annotation, pins (5,5),(7,5)
     assert unconnected_pins(_make_schematic(va)) == set()
+
+
+def test_unconnected_pins_degenerate_wire_does_not_connect() -> None:
+    """A single-point wire on a pin must not mark it as connected."""
+    r = _R("r1", (0.0, 0.0))   # pins (0,0),(2,0)
+    s = _make_schematic(r, wires=(_W("b", [(2.0, 0.0)]),))  # degenerate on (2,0)
+    assert (2.0, 0.0) in unconnected_pins(s)
 
 
 def test_unconnected_pins_current_annotation_still_connects() -> None:

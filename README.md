@@ -17,11 +17,13 @@ need schematics with typeset mathematical annotations.
 - [`uv`](https://docs.astral.sh/uv/) for environment and dependency management
 - `pdflatex` on your `PATH`, with the `circuitikz` package installed (TeX Live or
   MiKTeX) — used for the rendered preview
-- [Poppler](https://poppler.freedesktop.org/) (`pdftoppm`) — used by `pdf2image`
-  to rasterize the preview PDF
+- *(optional)* [Poppler](https://poppler.freedesktop.org/) (`pdftocairo`) — only
+  needed for **EPS export**. The preview is rendered by Qt's own PDF engine, so
+  Poppler is not required for normal use.
 
-Python dependencies (PySide6, pydantic, pdf2image, qtawesome) are declared in
-[`pyproject.toml`](pyproject.toml) and installed by `uv`.
+Python dependencies (PySide6, pydantic, qtawesome) are declared in
+[`pyproject.toml`](pyproject.toml) and installed by `uv`. The PDF preview uses
+the `QtPdf` module that ships with PySide6 — no extra Python packages.
 
 ## Running
 
@@ -36,6 +38,28 @@ uv run pytest                 # full suite with coverage
 uv run pytest --no-cov        # faster, no coverage
 QT_QPA_PLATFORM=offscreen uv run pytest   # headless (CI / no display)
 ```
+
+## Packaging a standalone app
+
+Build a self-contained app with [PyInstaller](https://pyinstaller.org) (no
+Python install required to run the result):
+
+```sh
+./scripts/build_app.sh        # or: uv run pyinstaller --noconfirm --clean heaviside.spec
+```
+
+Output:
+
+- **macOS** → `dist/Heaviside.app` (drag to `/Applications`)
+- **Windows / Linux** → `dist/Heaviside/` (run the `Heaviside` executable inside)
+
+The bundle includes everything the app needs **except** `pdflatex` (TeX Live /
+MiKTeX, with `circuitikz`), which the preview and exports compile with — bundling
+a full TeX distribution is impractical, so it stays a user-installed dependency
+and the app warns at startup if it is missing. (EPS export additionally needs
+Poppler's `pdftocairo`, checked only when you actually export EPS.) Editing,
+source generation, preview, and PDF/`.tex` export need only `pdflatex`. Build
+configuration lives in [`heaviside.spec`](heaviside.spec).
 
 ## Documentation
 

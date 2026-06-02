@@ -254,6 +254,10 @@ def generate(
         draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
 
     for wire in schematic.wires:
+        # Skip degenerate wires (fewer than two points): they have no segment to
+        # draw and would emit a stray lone coordinate in the \draw path.
+        if len(wire.points) < 2:
+            continue
         draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
 
     wired_coords: set[tuple[float, float]] = set()

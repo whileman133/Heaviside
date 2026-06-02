@@ -1,4 +1,4 @@
-"""
+r"""
 Preview pipeline helpers (spec §8).
 
 Public API
@@ -15,24 +15,60 @@ compile_tex(tex_source: str, *, timeout: int = 30) -> bytes
     bytes on success.  Raises CompileError on pdflatex failure or timeout.
 
 pdf_to_qimage(pdf_bytes: bytes, dpi: int = 150) -> QImage
-    Convert the first page of a PDF (given as bytes) to a QImage using
-    pdf2image / pdftoppm.
+    Render the first page of a PDF (given as bytes) to a QImage using Qt's own
+    PDF engine (QtPdf) — no external process, no Poppler.
 
 pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes
     Convert a PDF (given as bytes) to an EPS with a tight bounding box using
     pdftocairo.  Raises CompileError if pdftocairo is missing or fails (§8.6).
 
 check_dependencies() -> list[str]
-    Return a list of human-readable warning strings for each missing system
-    dependency (pdflatex, pdftoppm).  Empty list means all present.
+    Return human-readable warnings for missing *required* tools (just pdflatex;
+    the preview no longer needs Poppler).  Empty list means all present.
 """
 
 from __future__ import annotations
 
+import os
+import platform
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Tool discovery (PATH augmentation)
+# ---------------------------------------------------------------------------
+
+# Directories where TeX and Poppler binaries commonly live on macOS but which a
+# GUI app launched from Finder/Dock does NOT inherit: such an app gets only a
+# minimal PATH (``/usr/bin:/bin:/usr/sbin:/sbin``), so pdflatex (and pdftocairo
+# for EPS export) appear "missing" even when installed. We append these to PATH so
+# the tools are found regardless of how the app was launched. Appending (not
+# prepending) preserves any working PATH from a terminal launch.
+_MAC_TOOL_DIRS = (
+    "/Library/TeX/texbin",   # MacTeX / BasicTeX
+    "/usr/local/bin",        # Intel Homebrew, MacPorts symlinks
+    "/opt/homebrew/bin",     # Apple Silicon Homebrew
+    "/opt/local/bin",        # MacPorts
+)
+
+
+def _ensure_tool_dirs_on_path() -> None:
+    """Append common macOS TeX/Poppler bin dirs to PATH if absent.
+
+    Idempotent; only adds directories that exist and are not already on PATH.
+    No-op off macOS. Called before any ``shutil.which`` / ``subprocess`` use so
+    the dependency check and compilation behave the same whether the app was
+    launched from a terminal or from Finder/Dock.
+    """
+    if platform.system() != "Darwin":
+        return
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    extra = [d for d in _MAC_TOOL_DIRS if os.path.isdir(d) and d not in parts]
+    if extra:
+        os.environ["PATH"] = os.pathsep.join([p for p in parts if p] + extra)
+
 
 # ---------------------------------------------------------------------------
 # Custom exception
@@ -119,6 +155,7 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
         If pdflatex is not found on PATH, exits with a non-zero status, or
         exceeds *timeout*.
     """
+    _ensure_tool_dirs_on_path()
     if shutil.which("pdflatex") is None:
         raise CompileError(
             "pdflatex not found on PATH. "
@@ -170,10 +207,12 @@ def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
     """
     Convert *pdf_bytes* to an EPS document and return the EPS as bytes.
 
-    Uses ``pdftocairo -eps`` (from Poppler, the same package that provides the
-    ``pdftoppm`` used for preview).  ``-eps`` emits Encapsulated PostScript with
-    a tight bounding box derived from the PDF's crop box, which is exactly what
-    ``\\includegraphics`` expects.
+    Uses ``pdftocairo -eps`` (from Poppler).  ``-eps`` emits Encapsulated
+    PostScript with a tight bounding box derived from the PDF's crop box, which
+    is exactly what ``\\includegraphics`` expects.  This is the *only* feature
+    that still needs Poppler — the preview is rendered by Qt (see
+    :func:`pdf_to_qimage`).  A clear error is raised on demand if ``pdftocairo``
+    is missing, so users who never export EPS are unaffected.
 
     The conversion happens in a fresh temporary directory that is removed
     afterward regardless of outcome.
@@ -184,6 +223,7 @@ def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
         If ``pdftocairo`` is not found on PATH, exits non-zero, times out, or
         produces no EPS output.
     """
+    _ensure_tool_dirs_on_path()
     if shutil.which("pdftocairo") is None:
         raise CompileError(
             "pdftocairo not found on PATH. "
@@ -224,12 +264,11 @@ def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
 
 def pdf_to_qimage(pdf_bytes: bytes, dpi: int = 150):  # -> QImage
     """
-    Convert the first page of *pdf_bytes* to a ``QImage``.
+    Render the first page of *pdf_bytes* to a ``QImage``.
 
-    Uses ``pdf2image`` (which wraps ``pdftoppm`` from Poppler).  Import of
-    ``pdf2image`` is deferred so that the module is importable in test
-    environments where pdf2image is not installed (the function itself would
-    fail, but module-level imports do not).
+    Uses Qt's own PDF engine (``PySide6.QtPdf.QPdfDocument``) — no external
+    process and no Poppler dependency.  The PDF is loaded from an in-memory
+    buffer and the page is rendered at *dpi* (page point-size × dpi ÷ 72).
 
     Parameters
     ----------
@@ -246,45 +285,43 @@ def pdf_to_qimage(pdf_bytes: bytes, dpi: int = 150):  # -> QImage
     Raises
     ------
     CompileError
-        If pdf2image / pdftoppm is unavailable or conversion fails.
+        If Qt cannot load or render the PDF.
     RuntimeError
         If the PDF has no pages.
     """
     try:
-        from pdf2image import convert_from_bytes  # type: ignore[import]
-    except ImportError as exc:
+        from PySide6.QtCore import QBuffer, QByteArray, QSize
+        from PySide6.QtPdf import QPdfDocument
+    except ImportError as exc:  # pragma: no cover - PySide6/QtPdf always present in app
         raise CompileError(
-            "pdf2image is not installed. Run: uv add pdf2image"
+            "PySide6 QtPdf is required to render the preview."
         ) from exc
 
+    # Load from an in-memory buffer. QBuffer references its QByteArray without
+    # copying, so the QByteArray must stay alive for the buffer's lifetime —
+    # hold it in a named local, not a temporary. The buffer must also stay open
+    # for the duration of the render() call (the document reads from it lazily).
+    data = QByteArray(pdf_bytes)
+    buffer = QBuffer(data)
+    buffer.open(QBuffer.OpenModeFlag.ReadOnly)
     try:
-        images = convert_from_bytes(pdf_bytes, dpi=dpi, first_page=1, last_page=1)
-    except Exception as exc:
-        raise CompileError(f"pdf2image conversion failed: {exc}") from exc
+        doc = QPdfDocument()
+        status = doc.load(buffer)
+        if doc.pageCount() < 1:
+            raise RuntimeError("PDF has no pages.")
 
-    if not images:
-        raise RuntimeError("PDF has no pages.")
+        point_size = doc.pagePointSize(0)   # 1 pt = 1/72 inch
+        width = max(1, round(point_size.width() * dpi / 72.0))
+        height = max(1, round(point_size.height() * dpi / 72.0))
 
-    pil_image = images[0]
-
-    # Convert PIL Image → QImage.
-    try:
-        from PySide6.QtGui import QImage  # type: ignore[import]
-    except ImportError as exc:
-        raise ImportError("PySide6 is required for pdf_to_qimage.") from exc
-
-    pil_image = pil_image.convert("RGBA")
-    data = pil_image.tobytes("raw", "RGBA")
-    qimage = QImage(
-        data,
-        pil_image.width,
-        pil_image.height,
-        pil_image.width * 4,
-        QImage.Format.Format_RGBA8888,
-    )
-    # Keep a reference to `data` alive for the duration of `qimage`'s life.
-    qimage._pil_data = data  # type: ignore[attr-defined]
-    return qimage
+        image = doc.render(0, QSize(width, height))
+        if image.isNull():
+            raise CompileError(f"QtPdf failed to render the PDF page (status: {status}).")
+        # render() returns a self-contained QImage (owns its pixels), so it
+        # remains valid after the document and buffer are released.
+        return image
+    finally:
+        buffer.close()
 
 
 # ---------------------------------------------------------------------------
@@ -297,19 +334,16 @@ def check_dependencies() -> list[str]:
 
     An empty list means all required tools are present on PATH.
 
-    Checked tools:
-    - ``pdflatex`` — LaTeX compiler (spec §8.4)
-    - ``pdftoppm``  — PDF-to-image converter used by pdf2image (spec §8.4)
+    Only ``pdflatex`` is required for normal use: the preview is rendered by
+    Qt's own PDF engine (no Poppler).  ``pdftocairo`` (Poppler) is needed *only*
+    for EPS export and is checked on demand in :func:`pdf_to_eps`, so it is not
+    reported here — a missing Poppler should not warn users who never export EPS.
     """
+    _ensure_tool_dirs_on_path()
     missing: list[str] = []
     if shutil.which("pdflatex") is None:
         missing.append(
             "pdflatex not found on PATH. "
             "Install TeX Live (texlive-full) or MiKTeX to enable preview."
-        )
-    if shutil.which("pdftoppm") is None:
-        missing.append(
-            "pdftoppm not found on PATH. "
-            "Install Poppler (poppler-utils) to enable preview."
         )
     return missing

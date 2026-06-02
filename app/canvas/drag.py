@@ -451,6 +451,8 @@ class DragPreviewController:
         all_wire_points: dict[tuple[float, float], int] = {}
         for wire in scene._schematic.wires:
             pts = preview_pts_by_wire.get(wire.id, wire.points)
+            if len(pts) < 2:
+                continue  # degenerate wire connects nothing (mirrors open_endpoints)
             for pt in pts:
                 pt_r = _round_pt(pt)
                 all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
@@ -523,6 +525,8 @@ class DragPreviewController:
         wire_points: set[tuple[float, float]] = set()
         for wire in scene._schematic.wires:
             pts = preview_pts_by_wire.get(wire.id, wire.points)
+            if len(pts) < 2:
+                continue  # degenerate wire connects nothing (mirrors unconnected_pins)
             for pt in pts:
                 wire_points.add(_round_pt(pt))
 

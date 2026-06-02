@@ -42,7 +42,10 @@ from app.preview.latex import CompileError, build_tex, compile_tex, pdf_to_qimag
 # Schematic preview worker (spec §8.1)
 # ---------------------------------------------------------------------------
 
-_SCHEMATIC_DEBOUNCE_MS = 5000
+# Auto-compile debounce. Kept short because the render step is now Qt-native
+# (QtPdf, no external rasterizer), so a compile turns around quickly; the delay
+# only needs to coalesce a burst of rapid edits, not hide a slow pipeline.
+_SCHEMATIC_DEBOUNCE_MS = 500
 
 
 class _SchematicCompileWorker(QObject):
