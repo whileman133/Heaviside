@@ -841,6 +841,7 @@ class MoveWireVertexCommand(Command):
         self._index = index
         self._new_point = new_point
         self._orig_points: list[tuple[float, float]] | None = None
+        self._removed = False   # set when the drag collapses the wire to a point
 
     def _find_wire(self, schematic: Schematic) -> Wire | None:
         for w in schematic.wires:
@@ -891,11 +892,30 @@ class MoveWireVertexCommand(Command):
                     rebuilt.append(elbow)
             rebuilt.append(p)
 
-        wire.points = simplify_points(rebuilt)
+        new_pts = simplify_points(rebuilt)
+        if len(new_pts) < 2:
+            # The drag collapsed the wire to a single point — it has no segment
+            # and would be a stray degenerate wire. Remove it (restored on undo),
+            # mirroring MoveCommand's handling of collapsed wire-following.
+            self._removed = True
+            schematic.wires[:] = [w for w in schematic.wires if w.id != self._wire_id]
+        else:
+            self._removed = False
+            wire.points = new_pts
 
     def undo(self, schematic: Schematic) -> None:
+        if self._orig_points is None:
+            return
+        if self._removed:
+            # Re-add the collapsed wire with its original geometry.
+            if not any(w.id == self._wire_id for w in schematic.wires):
+                schematic.wires.append(
+                    Wire(id=self._wire_id, points=list(self._orig_points))
+                )
+            self._removed = False
+            return
         wire = self._find_wire(schematic)
-        if wire is not None and self._orig_points is not None:
+        if wire is not None:
             wire.points = list(self._orig_points)
 
     def redo(self, schematic: Schematic) -> None:

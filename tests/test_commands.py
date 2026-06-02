@@ -793,6 +793,31 @@ def test_vertex_move_unknown_wire_is_noop():
     assert s.wires[0].points == [(0.0, 0.0), (2.0, 0.0)]
 
 
+def test_vertex_move_collapse_removes_wire():
+    """Dragging a vertex onto the wire's only other point removes the wire.
+
+    Regression: this used to leave a degenerate single-point wire (which then
+    suppressed nearby ocirc markers and emitted a stray draw coordinate).
+    """
+    s = _wire_only([(0.0, 0.0), (2.0, 0.0)])
+    MoveWireVertexCommand("w", 1, (0.0, 0.0)).do(s)   # drag end onto start
+    assert s.wires == []   # collapsed wire is removed, not left degenerate
+
+
+def test_vertex_move_collapse_undo_restores_wire():
+    """Undo re-adds a wire that a collapse removed, with its original points."""
+    s = _wire_only([(0.0, 0.0), (2.0, 0.0)])
+    cmd = MoveWireVertexCommand("w", 1, (0.0, 0.0))
+    cmd.do(s)
+    assert s.wires == []
+    cmd.undo(s)
+    assert len(s.wires) == 1
+    assert s.wires[0].id == "w"
+    assert s.wires[0].points == [(0.0, 0.0), (2.0, 0.0)]
+    cmd.redo(s)
+    assert s.wires == []
+
+
 def test_vertex_move_via_stack():
     stack = UndoStack(_wire_only([(0.0, 0.0), (2.0, 0.0), (2.0, 3.0)]))
     stack.push(MoveWireVertexCommand("w", 1, (4.0, 1.0)))
