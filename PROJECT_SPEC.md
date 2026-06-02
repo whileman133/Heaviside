@@ -95,7 +95,7 @@ This document specifies a graphical editor for creating publication-quality circ
 
 - The canvas supports continuous zoom via scroll wheel and pinch gesture.
 - Pan via middle-mouse drag or spacebar + left-mouse drag.
-- A "fit to schematic" action zooms to show all placed components with a fixed margin.
+- A "fit to schematic" action (`Ctrl+0`) zooms to show all placed components with a fixed margin. Opening a schematic from disk (**File → Open**) runs the same fit automatically so the loaded circuit is framed in the view (deferred one event-loop tick so the viewport has its final size before `fitInView` runs).
 - Zoom does not affect grid unit size or snap behavior — those remain in schematic coordinates.
 
 ---
@@ -1856,6 +1856,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] Delete key removes selected components and their connected wires.
 - [ ] Canvas pan and zoom work via scroll wheel and middle-mouse drag.
 - [ ] "Fit to schematic" correctly frames all placed components.
+- [ ] Opening a schematic from disk fits the view to the loaded circuit.
 
 #### AC-3: Wiring
 - [ ] Pressing `W` enters wire mode.

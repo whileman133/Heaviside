@@ -26,7 +26,7 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QFont, QImage, QKeySequence,
     QPainter, QPen, QPixmap, QShortcut,
@@ -568,6 +568,10 @@ class MainWindow(QMainWindow):
         self._update_title()
         self._props.clear()
         self._status_compile.setText("Ready")
+        # Fit the view to the loaded circuit. Deferred so it runs after the
+        # welcome→canvas switch and layout pass, when the viewport has its final
+        # size (fitInView needs a valid viewport size to compute the zoom).
+        QTimer.singleShot(0, self._view.fit_to_schematic)
 
     def _on_save(self) -> None:
         if self._current_path is None:
