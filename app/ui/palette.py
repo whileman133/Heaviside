@@ -140,6 +140,8 @@ class ComponentPalette(QWidget):
         super().__init__(parent)
         self.setFixedWidth(_PALETTE_WIDTH)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        # White panel background (overrides the platform window-gray).
+        self.setStyleSheet("ComponentPalette { background-color: #ffffff; }")
 
         self._scene: SchematicScene | None = None
         self._entries: list[_PaletteEntry] = []
@@ -160,9 +162,12 @@ class ComponentPalette(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.viewport().setStyleSheet("background-color: #ffffff;")
         outer.addWidget(scroll, 1)
 
         content = QWidget()
+        content.setObjectName("palette_content")
+        content.setStyleSheet("QWidget#palette_content { background-color: #ffffff; }")
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(2)

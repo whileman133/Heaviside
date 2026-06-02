@@ -1297,7 +1297,7 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 
 ### 10.2 Component Palette
 
-- Left panel, fixed width ~180px.
+- Left panel, fixed width ~180px, white background.
 - Components grouped by `category` in collapsible sections.
 - Each entry shows a thumbnail rendered from the component's `ComponentItem` at 32×32px, alongside the `display_name`.
 - Clicking an entry enters **Place** mode.
@@ -1476,7 +1476,8 @@ heaviside/
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
-    └── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
+    ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
+    └── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
 ```
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
@@ -1498,14 +1499,20 @@ canvas before rendering the iconset, so the icon is never distorted. (After
 replacing the icon you may need to clear the macOS icon cache — e.g. relaunch
 the Dock — to see the change on an already-seen bundle.)
 
-**Runtime resources.** Only two files are read at runtime and must be bundled:
-`assets/icon.png` and `tools/circuitikz_svgs/manifest.json` (the SVG *sources*
-are not loaded — the manifest holds the baked-in geometry). Because a frozen app
-cannot resolve `__file__`-relative paths the way a source checkout does, all
-three call sites (`main.py`, `app/ui/mainwindow.py`, `app/canvas/style.py`) go
-through `resource_path()` in `app/resources.py`, which roots paths at
-`sys._MEIPASS` when frozen and at the project root otherwise. The `datas` list
-in the spec mirrors these relative paths exactly.
+**Runtime resources.** Two resource sets are read at runtime and must be
+bundled: `assets/icon.png`, and the whole `tools/circuitikz_svgs/` tree. The
+tree's `manifest.json` holds the baked-in stroke geometry, **and** `svgsym.py`
+reads the original per-symbol `.svg` files to reconstruct glyph marks — the
+`+`/`−` of a voltage/controlled source, op-amp labels, etc. — that the manifest
+records only as opaque `<use>` references. Bundling just `manifest.json` drops
+those marks in the frozen app (they render fine from a source checkout because
+the `.svg` files are on disk), so the spec bundles the entire directory. Because
+a frozen app cannot resolve `__file__`-relative paths the way a source checkout
+does, all three call sites (`main.py`, `app/ui/mainwindow.py`,
+`app/canvas/style.py`) go through `resource_path()` in `app/resources.py`, which
+roots paths at `sys._MEIPASS` when frozen and at the project root otherwise.
+`svgsym.py` finds the `.svg` files relative to `MANIFEST_PATH`, so they must be
+co-located with `manifest.json` (the `datas` entry preserves that layout).
 
 **Not bundled.** `pdflatex` (with `circuitikz`) remains an external
 user-installed dependency (§8.4) — bundling a TeX distribution is impractical.
@@ -1782,6 +1789,10 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 #### Preview Render (`test_preview_render.py`)
 
 `pdf_to_qimage` (QtPdf): a compiled schematic PDF renders to a non-null `QImage`; a higher DPI yields a proportionally larger raster (same source page); garbage input raises cleanly (`CompileError`/`RuntimeError`) rather than crashing. Requires `pdflatex`; no Poppler involved.
+
+#### Symbol Geometry (`test_svgsym.py`)
+
+`symbol_paths` glyph reconstruction: the controlled-source `.svg` (carrying its `+`/`−` glyphs) is findable; every path returned for `cV` has real geometry (no unresolved `<use>` glyph-ref leaks through as an empty path); a glyph-bearing kind (`cV`) returns strictly more paths than a glyph-free one (`R`); and a plain symbol still renders its strokes. Guards against the `+`/`−` marks silently disappearing (which also manifested as a packaging bug when the `.svg` files were not bundled — see §11.1).
 
 #### Preferences (`test_preferences.py`)
 
