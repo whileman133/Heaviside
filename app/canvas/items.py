@@ -713,6 +713,23 @@ class EgroundItem(_GroundBase):
 
 
 # ---------------------------------------------------------------------------
+# Power rails (single-terminal, positive supplies point up, negative down)
+# ---------------------------------------------------------------------------
+
+class VccItem(_GroundBase):
+    """VCC power rail node (SVG: vcc)."""
+
+class VddItem(_GroundBase):
+    """VDD power rail node (SVG: vdd)."""
+
+class VeeItem(_GroundBase):
+    """VEE power rail node (SVG: vee)."""
+
+class VssItem(_GroundBase):
+    """VSS power rail node (SVG: vss)."""
+
+
+# ---------------------------------------------------------------------------
 # Wire item
 # ---------------------------------------------------------------------------
 
@@ -1420,6 +1437,10 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "pground":  PgroundItem,
     "cground":  CgroundItem,
     "eground":  EgroundItem,
+    "vcc":      VccItem,
+    "vdd":      VddItem,
+    "vee":      VeeItem,
+    "vss":      VssItem,
 }
 
 # Push into the registry so other modules can look up item classes without

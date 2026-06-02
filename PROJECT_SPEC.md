@@ -277,7 +277,7 @@ The script supports three component categories, each with a corresponding output
 |----------|-------------|----------------|---------|
 | `bipoles` | `bipoles/` | `\draw (0,0) to[kind] (2,0);` | R, C, L, open |
 | `tripoles` | `tripoles/` | `\node[kind] (X) at (0,0) {};` | op amp, nigfete |
-| `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground |
+| `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
 
 To add a new component: add it to the appropriate list in the script, re-run it, then add the `Placement` anchor in `svgsym.py` (see §5.5 for the measurement procedure) and an `ITEM_CLASSES` entry in `items.py`.
 
@@ -409,11 +409,21 @@ Both BJTs are placed with `anchor=B` (base pin) at `Component.position`. SVG sym
 
 Single-terminal components are placed as `\node[kind] at (x,y) {};` in the generated LaTeX. They have one pin (`in` at (0,0)) and `default_span=(0,0)`.
 
-| Kind | Display Name | Canvas Symbol |
-|------|-------------|--------------|
-| `ground` | Ground | Three horizontal bars of decreasing width |
-| `sground` | Signal Ground | Downward-pointing triangle |
-| `cground` | Chassis Ground | Horizontal bar with three diagonal ticks |
+| Kind | Display Name | Canvas Symbol | Label Slots |
+|------|-------------|--------------|-------------|
+| `ground` | Ground | Three horizontal bars of decreasing width | — |
+| `sground` | Signal Ground | Downward-pointing triangle | — |
+| `cground` | Chassis Ground | Horizontal bar with three diagonal ticks | — |
+| `rground` | Reference Ground | Single horizontal bar | — |
+| `nground` | Noiseless Ground | Wider horizontal bars | — |
+| `pground` | Protective Earth | Bar with diagonal ticks | — |
+| `eground` | Earth Ground | Protective earth variant | — |
+| `vcc` | VCC | Upward-pointing triangle with bar | `l` |
+| `vdd` | VDD | Upward-pointing triangle | `l` |
+| `vee` | VEE | Downward-pointing triangle with bar | `l` |
+| `vss` | VSS | Downward-pointing triangle | `l` |
+
+**Power rails** (`vcc`, `vdd`, `vee`, `vss`) support an optional `l=` label slot. The label is emitted as `label=right:{value}`, placing the voltage name to the right of the symbol bar — the conventional schematic position for power-rail net names.
 
 #### Annotations
 
@@ -674,6 +684,21 @@ endpoints. Like junction dots, they are recomputed whenever the schematic change
 and are not stored in the model. During a **live drag preview** (vertex drag or
 component drag), open-circle items track the previewed endpoint positions in
 real time — they do not wait for the drag to be committed.
+
+#### Open-Circle Nodes (Unconnected Component Pins)
+
+When the **Mark unconnected component pins** display preference (§10.8) is on,
+the canvas also draws an open circle (the same `OpenCircleItem`) at every
+component pin that nothing connects to — the canvas counterpart of
+`generate(..., mark_unconnected_pins=True)` (§7.6), derived from
+`unconnected_pins()`. These are kept in a separate `_pin_circle_items` map so
+they never collide with the wire-endpoint circles, and are reconciled in
+`_rebuild_items` on every schematic change. `SchematicScene.set_mark_unconnected_pins()`
+toggles the preference and rebuilds immediately. During a **live drag preview**,
+`DragPreviewController.update_pin_circle_preview()` recomputes them from the
+dragged components' live positions and previewed wire points so the markers
+follow the gesture (e.g. a pin that picks up or loses a wire mid-drag) rather
+than waiting for commit. When the preference is off, no such items exist.
 
 ---
 
@@ -1022,6 +1047,18 @@ Both sets of nodes are placed after the path's terminating `;`. Coordinates use
 the same formatting rules as §7.3. Both sets are **derived** from the schematic
 geometry at generation time — they are not stored in the model.
 
+**Unconnected-pin circles** (optional) — when `generate()` is called with
+`mark_unconnected_pins=True`, an additional `\node[ocirc]` is emitted at every
+*component pin* that nothing connects to (`unconnected_pins()` in
+`app/schematic/model.py`: a pin with no wire vertex on its coordinate and no
+second component pin sharing it). This is the pin-side counterpart of the
+open-endpoint circles above, and the two sets are disjoint by construction. The
+flag is driven by the **Mark unconnected component pins** display preference
+(§10.8) and defaults to `False`, so output is unchanged unless requested. All
+call sites that should honor the preference (source panel, preview compilation,
+and the PDF/EPS/TeX exports) pass the current preference value through. The Qt
+canvas mirrors the same markers — see §10.5.
+
 ### 7.7 Drawing Annotation Commands
 
 After junction and open-endpoint nodes, the generator emits standalone commands for drawing annotations (`text_node`, `rect`). These produce nothing inside the `\draw` path block — `_component_lines()` returns `[]` for drawing kinds.
@@ -1112,10 +1149,57 @@ The string `% CIRCUITIKZ_SOURCE` is replaced verbatim by the output of
 
 The `border=4pt` option on `standalone` provides a small uniform margin.
 
+### 8.5 Export to TeX
+
+**File → Export to TeX…** (`Ctrl+E`) writes the schematic as an includable
+CircuiTikZ `.tex` snippet, chosen via a save dialog (default filename derived
+from the current document, defaulting to `untitled.tex`). The output is produced
+by `build_snippet()` in `app/preview/latex.py`:
+
+```latex
+% CircuiTikZ schematic exported from Heaviside.
+% Include in your document with \input{<this file>}.
+% Your document preamble must contain:
+%   \usepackage[american]{circuitikz}
+%   \ctikzset{voltage=american, current=american, resistor=american}
+\begin{circuitikz}
+  ...
+\end{circuitikz}
+```
+
+The snippet is a bare `circuitikz` environment preceded by a comment listing the
+preamble packages the host document must load — it deliberately omits
+`\documentclass` and `\begin{document}` so it can be `\input` into an existing
+document rather than compiled on its own. The source is generated with
+`generate(schematic, y_flip=True)` (Y-up convention, like preview compilation in
+§8.4) so the included figure renders in the same orientation as the canvas.
+
+### 8.6 Export to PDF / EPS
+
+**File → Export to PDF…** and **File → Export to EPS…** write a compiled image
+of the schematic, suitable for `\includegraphics` in a LaTeX document (or any
+other consumer). Both reuse the §8.1 compile pipeline:
+
+1. `generate(schematic, y_flip=True)` → `build_tex()` → `compile_tex()` yields
+   PDF bytes (run synchronously on the UI thread; the status bar shows
+   "Compiling…").
+2. **PDF export** writes those bytes directly.
+3. **EPS export** converts them with `pdf_to_eps()`, which runs
+   `pdftocairo -eps`. The `-eps` flag emits Encapsulated PostScript with a tight
+   bounding box derived from the PDF crop box.
+
+Unlike the §8.5 `.tex` snippet, these formats require `pdflatex` to be available
+at export time (and `pdftocairo` for EPS), but the result is a self-contained
+image that does not need the host document to load `circuitikz`. Compile or
+conversion failures are reported in a dialog (the `pdflatex` log is included for
+compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
+PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
+
 ### 8.4 Dependencies
 
 - `pdflatex` must be on the system `PATH`. Checked at startup; a warning dialog is shown if not found.
 - `pdf2image` Python package (wraps `pdftoppm` from Poppler).
+- `pdftocairo` (also from Poppler) is required for EPS export (§8.6); other features do not need it.
 - The `circuitikz` LaTeX package must be installed in the TeX distribution.
 
 ---
@@ -1244,6 +1328,7 @@ All section edits funnel through `SchematicScene` methods that push undoable com
 | Open | `Ctrl+O` |
 | Save | `Ctrl+S` |
 | Save As | `Ctrl+Shift+S` |
+| Export to TeX | `Ctrl+E` |
 | Undo | `Ctrl+Z` |
 | Redo | `Ctrl+Shift+Z` |
 | Copy | `Ctrl+C` |
@@ -1251,6 +1336,7 @@ All section edits funnel through `SchematicScene` methods that push undoable com
 | Duplicate | `Ctrl+D` |
 | Delete | `Delete` / `Backspace` |
 | Select All | `Ctrl+A` |
+| Preferences | `Ctrl+,` |
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
@@ -1274,6 +1360,38 @@ A narrow vertical ribbon toolbar is docked on the **left edge** of the window (Q
 - Clicking a button invokes the corresponding `enter_*_mode()` on the scene.
 - The scene's `mode_changed` signal keeps the buttons in sync when mode changes originate from the keyboard.
 - The ribbon is non-movable (cannot be dragged to another dock area).
+
+### 10.8 Preferences
+
+**Edit → Preferences…** (`Ctrl+,`) opens a modal `PreferencesDialog`
+(`app/ui/preferences.py`). On macOS the action carries `QAction.PreferencesRole`
+so Qt relocates it to the standard application menu. Settings are persisted via
+`QSettings` (keyed by the organization/application names set in `main.py`) and
+accessed through the typed `Preferences` wrapper rather than raw string keys.
+The dialog reads current values on open and writes them back only on **OK**;
+**Cancel** discards changes. Accepting the dialog refreshes the source panel and
+recompiles the preview so a display change (e.g. marking unconnected pins) is
+reflected immediately.
+
+Current settings:
+
+| Setting | Key | Default | Effect |
+|---------|-----|---------|--------|
+| Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.ctikz`, also write `<name>.pdf` to the same directory. |
+| Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
+| Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
+
+When either is enabled, `_do_save()` calls `_auto_export()`, which compiles the
+schematic **once** (reusing the §8.6 pipeline) and writes the requested sibling
+file(s) — the single PDF is converted to EPS via `pdf_to_eps()` when both are
+requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`) in a LaTeX
+document in sync with the schematic without a manual export step.
+
+Auto-export never blocks or aborts the save: it runs only *after* the `.ctikz`
+is written, and any failure (invalid schematic, missing `pdflatex`/`pdftocairo`,
+or a `pdflatex` error) is reported in the status bar only — not as a modal
+dialog, which would be intrusive on every save. The compile is synchronous, so
+saving adds the compile latency when auto-export is enabled.
 
 ---
 
@@ -1310,11 +1428,12 @@ heaviside/
 │   │   └── circuitikz.py          # generate(schematic) → str
 │   ├── preview/
 │   │   ├── worker.py              # PreviewWorker(QThread)
-│   │   └── latex.py               # build_tex(source) → str, helpers
+│   │   └── latex.py               # build_tex / build_snippet / pdf_to_eps, helpers
 │   └── ui/
 │       ├── mainwindow.py          # MainWindow(QMainWindow)
 │       ├── palette.py             # ComponentPalette(QWidget)
 │       ├── properties.py          # PropertiesPanel(QWidget)
+│       ├── preferences.py         # Preferences (QSettings), PreferencesDialog
 │       └── sourcepanel.py         # SourcePanel(QWidget)
 └── tests/
     ├── test_model.py              # model + validation + geometry helpers (simplify,
@@ -1492,6 +1611,8 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
 | `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
 | `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
+| `test_mark_unconnected_pins_off_by_default` / `test_mark_unconnected_pins_marks_dangling_pins` | With `mark_unconnected_pins=False` (default) a lone resistor emits no `ocirc`; with it `True`, both free pins get a `\node[ocirc]` (§7.6). |
+| `test_mark_unconnected_pins_skips_wired_pin` / `test_mark_unconnected_pins_respects_y_flip` | A pin with a wire on it is never marked even when the option is on; marked pins honor the `y_flip` convention. |
 | `test_text_node_basic` | A `text_node` at (2,3) with options "Hello" emits `\node at (2,3) {Hello};` outside the `\draw` block. |
 | `test_text_node_with_font_size` | A `text_node` with `span_override=(14,0)` emits `\node[font=\fontsize{14}…\selectfont] at (…) {…};`. |
 | `test_text_node_y_flip` | A `text_node` at (2,3) with `y_flip=True` emits `\node at (2,-3) {…};`. |
@@ -1506,6 +1627,11 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
 | `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
 | `test_bipole_line_style` | A `bipole` with `line_style="dashed"` → emits `dashed` in the `\node[…]` options. |
+| `test_build_snippet_wraps_environment` | `build_snippet()` keeps the `circuitikz` environment intact and includes the generated source verbatim (§8.5). |
+| `test_build_snippet_lists_required_preamble` | The snippet documents the required `\usepackage[american]{circuitikz}` preamble and the `\input` usage. |
+| `test_build_snippet_has_no_document_wrapper` | The snippet is includable, not standalone: it emits no `\documentclass` or `\begin{document}`. |
+| `test_pdf_to_eps_missing_tool` | `pdf_to_eps()` raises `CompileError` mentioning `pdftocairo` when the tool is absent (§8.6). |
+| `test_pdf_to_eps_roundtrip` | A compiled schematic PDF converts to a valid EPS (`%!PS-Adobe`, `EPSF`, `%%BoundingBox`). Skipped without `pdflatex`+`pdftocairo`. |
 
 #### File I/O (`test_io.py`)
 
@@ -1554,6 +1680,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
 | `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a pin-connected end is excluded. |
+| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. |
 | `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
@@ -1573,6 +1700,16 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 #### Preview Worker (`test_worker.py`)
 
 `PreviewWorker` thread lifecycle: `shutdown()` stops the background `QThread`; it is idempotent (safe to call from both `closeEvent` and `aboutToQuit`); and emitting `QApplication.aboutToQuit` stops the thread even when the window's `closeEvent` never fired.
+
+#### Preferences (`test_preferences.py`)
+
+The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
+isolated `QSettings` backed by a temp INI file (never touching the real user
+store): auto-export and mark-unconnected-pins defaults are off; PDF/EPS and the
+display flag round-trip and persist across new `Preferences` instances over the
+same backing file; `_to_bool` normalizes the string booleans `QSettings` may
+return; the dialog persists all checkbox state on accept and discards it on
+cancel.
 
 ### 13.3 Integration Tests
 
@@ -1602,6 +1739,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_double_click_wire_near_component_enters_wire_mode` | Wire double-click is detected even when the wire is inside a component's bounding box — the wire check runs before the component check (regression: component bbox previously swallowed the event). |
 | `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
 | `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
+| `test_pin_circles_absent_by_default` / `test_pin_circles_appear_when_enabled` / `test_pin_circles_toggle_off_removes_items` | Unconnected-pin circles (§10.5) are absent until `set_mark_unconnected_pins(True)`, then drawn at each free pin, and removed again when toggled off. |
+| `test_pin_circle_removed_when_pin_gets_wired` | With the preference on, attaching a wire to a previously-free pin removes that pin's circle on the next rebuild while the still-free pin keeps its own. |
 | `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
 | `test_drag_release_at_same_spot_is_noop` / `test_click_near_endpoint_selects_short_wire` / `test_click_on_segment_near_vertex_does_not_move_it` | A vertex grab is a drag only if the snapped cursor moves between press and release; a stationary click selects the wire (no command, no geometry change), so a short wire with an open-circle end is selectable/deletable near its ends and clicking a segment near a vertex never relocates the vertex or inserts a spurious junction (regression). |
 | `test_click_at_t_junction_selects_through_wire_half` | With split-on-join, each half of a split through wire is a separate wire object; clicking on the body of each half selects that half (not the stub). |

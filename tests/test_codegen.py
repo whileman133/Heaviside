@@ -414,6 +414,37 @@ def test_no_open_endpoints_no_ocirc() -> None:
     assert r"\node[ocirc]" not in generate(s)
 
 
+def test_mark_unconnected_pins_off_by_default() -> None:
+    """A lone resistor emits no ocirc unless the option is set."""
+    s = _schematic(_comp("R", position=(0.0, 0.0)))
+    assert r"\node[ocirc]" not in generate(s)
+
+
+def test_mark_unconnected_pins_marks_dangling_pins() -> None:
+    """With the option on, both free pins of a lone resistor get an ocirc."""
+    s = _schematic(_comp("R", position=(0.0, 0.0)))   # pins at (0,0) and (2,0)
+    src = generate(s, mark_unconnected_pins=True)
+    assert r"\node[ocirc] at (0,0) {};" in src
+    assert r"\node[ocirc] at (2,0) {};" in src
+
+
+def test_mark_unconnected_pins_skips_wired_pin() -> None:
+    """A pin with a wire on it gets no ocirc even when the option is on."""
+    r = _comp("R", position=(0.0, 0.0))   # pins at (0,0) and (2,0)
+    s = _schematic(r, wires=[_wire([(2.0, 0.0), (5.0, 0.0)])])
+    src = generate(s, mark_unconnected_pins=True)
+    assert r"\node[ocirc] at (2,0) {};" not in src   # wired
+    assert r"\node[ocirc] at (0,0) {};" in src       # dangling
+
+
+def test_mark_unconnected_pins_respects_y_flip() -> None:
+    """Marked pins honor the y_flip convention like every other coordinate."""
+    s = _schematic(_comp("V", position=(0.0, 0.0)))   # vertical: pins (0,0),(0,2)
+    src = generate(s, y_flip=True, mark_unconnected_pins=True)
+    assert r"\node[ocirc] at (0,0) {};" in src
+    assert r"\node[ocirc] at (0,-2) {};" in src
+
+
 # ---------------------------------------------------------------------------
 # Drawing annotations
 # ---------------------------------------------------------------------------
@@ -795,3 +826,67 @@ def test_rect_line_style_and_fill_combined() -> None:
     )
     src = generate(_schematic(comp))
     assert r"\draw[dotted, fill=cyan!15] (0,0) rectangle (2,2);" in src
+
+
+# ---------------------------------------------------------------------------
+# build_snippet — includable .tex export (§8.5)
+# ---------------------------------------------------------------------------
+
+def test_build_snippet_wraps_environment() -> None:
+    """build_snippet prepends a preamble comment and keeps the environment."""
+    from app.preview.latex import build_snippet
+
+    src = generate(_schematic(_comp("R")), y_flip=True)
+    snippet = build_snippet(src)
+    assert r"\begin{circuitikz}" in snippet
+    assert r"\end{circuitikz}" in snippet
+    # The original source is included verbatim.
+    assert src in snippet
+
+
+def test_build_snippet_lists_required_preamble() -> None:
+    """The snippet documents the packages the host document must load."""
+    from app.preview.latex import build_snippet
+
+    snippet = build_snippet(generate(_schematic(_comp("R")), y_flip=True))
+    assert r"\usepackage[american]{circuitikz}" in snippet
+    assert r"\input" in snippet
+
+
+def test_build_snippet_has_no_document_wrapper() -> None:
+    r"""A snippet is includable, not standalone: no \documentclass/\begin{document}."""
+    from app.preview.latex import build_snippet
+
+    snippet = build_snippet(generate(_schematic(_comp("R")), y_flip=True))
+    assert r"\documentclass" not in snippet
+    assert r"\begin{document}" not in snippet
+
+
+# ---------------------------------------------------------------------------
+# pdf_to_eps — EPS image export (§8.6)
+# ---------------------------------------------------------------------------
+
+def test_pdf_to_eps_missing_tool(monkeypatch) -> None:
+    """pdf_to_eps raises CompileError when pdftocairo is absent."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.shutil, "which", lambda name: None)
+    with pytest.raises(latex.CompileError, match="pdftocairo"):
+        latex.pdf_to_eps(b"%PDF-1.4")
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("pdflatex") is None
+    or __import__("shutil").which("pdftocairo") is None,
+    reason="requires pdflatex and pdftocairo",
+)
+def test_pdf_to_eps_roundtrip() -> None:
+    """A compiled schematic PDF converts to a valid EPS document."""
+    from app.preview.latex import build_tex, compile_tex, pdf_to_eps
+
+    src = generate(_schematic(_comp("R")), y_flip=True)
+    pdf_bytes = compile_tex(build_tex(src))
+    eps_bytes = pdf_to_eps(pdf_bytes)
+    assert eps_bytes.startswith(b"%!PS-Adobe")
+    assert b"EPSF" in eps_bytes[:64]
+    assert b"%%BoundingBox" in eps_bytes

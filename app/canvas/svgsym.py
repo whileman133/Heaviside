@@ -237,6 +237,12 @@ _MULTI_ANCHORS: dict[str, Placement] = {
     "pground": Placement(anchor=(-60.679687, -69.609374)),
     "cground": Placement(anchor=(-59.687499, -69.808597)),
     "eground": Placement(anchor=(-58.894533, -69.808597)),
+    # Power rails: vcc/vdd point up (pin at bottom of stem), vee/vss point down (pin at top).
+    # Anchor = SVG coordinate of the stem endpoint that is the connection pin.
+    "vcc": Placement(anchor=(-65.640623, -54.132812)),
+    "vdd": Placement(anchor=(-65.640623, -54.132812)),
+    "vee": Placement(anchor=(-65.640623, -69.808597)),
+    "vss": Placement(anchor=(-65.640623, -69.808597)),
 
     # npn / pnp: origin = base terminal (endpoint of the base lead stub).
     # SVG base terminal measured from re-exported manifest: (-61.8398, -33.492188).

@@ -61,6 +61,8 @@ BIPOLES=(
 NODES=(
   # Ground / reference symbols (single-terminal, placed as node at (0,0))
   ground rground sground nground pground cground eground
+  # Power rail symbols (single-terminal, placed as node at (0,0))
+  vcc vdd vee vss
 )
 
 TRIPOLES=(

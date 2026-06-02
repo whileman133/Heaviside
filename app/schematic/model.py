@@ -289,6 +289,38 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
     return candidates
 
 
+def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
+    """Component pin positions that nothing connects to.
+
+    A pin is *unconnected* when no wire vertex (endpoint or interior) lies at
+    its coordinate and no other component pin shares that exact coordinate.
+    These can be marked with open circles (``\\node[ocirc]``) to flag dangling
+    terminals — the counterpart of :func:`open_endpoints`, which flags dangling
+    *wire* ends. The two sets are disjoint by construction: open endpoints are
+    wire ends *not* at a pin, while these are pins with *no* wire.
+
+    Pure function; returns a set of (x, y) tuples in grid units.
+    """
+    # Every wire vertex coordinate (endpoints and interior points alike).
+    wire_points: set[tuple[float, float]] = set()
+    for wire in schematic.wires:
+        for pt in wire.points:
+            wire_points.add((round(pt[0], 6), round(pt[1], 6)))
+
+    # Count component pins per coordinate so two abutting pins are not flagged.
+    pin_count: dict[tuple[float, float], int] = {}
+    for comp in schematic.components:
+        for p in component_pin_positions(comp):
+            key = (round(p[0], 6), round(p[1], 6))
+            pin_count[key] = pin_count.get(key, 0) + 1
+
+    return {
+        coord
+        for coord, count in pin_count.items()
+        if count == 1 and coord not in wire_points
+    }
+
+
 def _point_strictly_on_segment(
     pt: tuple[float, float],
     a: tuple[float, float],

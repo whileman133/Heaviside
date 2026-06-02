@@ -83,6 +83,7 @@ from app.schematic.model import (
     component_pin_positions as _component_pin_positions,
     junction_points,
     open_endpoints,
+    unconnected_pins,
     route,
     simplify_points,
     wire_corner_splits_at,
@@ -157,6 +158,10 @@ class SchematicScene(QGraphicsScene):
         self._junction_items: dict[tuple[float, float], JunctionItem] = {}
         # open-endpoint coordinate (gu) -> open-circle item
         self._open_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
+        # unconnected-pin coordinate (gu) -> open-circle item (display preference)
+        self._pin_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
+        # Whether to draw open circles at unconnected component pins (§10.8).
+        self._mark_unconnected_pins: bool = False
 
         # Placement state
         self._place_kind: str | None = None
@@ -980,6 +985,20 @@ class SchematicScene(QGraphicsScene):
                 self.addItem(oc)
                 self._open_circle_items[coord] = oc
 
+        # --- unconnected-pin circles (display preference, §10.8) -----------
+        # Open circles at component pins nothing connects to.  Mirrors the
+        # generator's mark_unconnected_pins option; same OpenCircleItem visual.
+        wanted_pc = unconnected_pins(self._schematic) if self._mark_unconnected_pins else set()
+        for coord in list(self._pin_circle_items):
+            if coord not in wanted_pc:
+                self._remove_item(self._pin_circle_items.pop(coord))
+        for coord in wanted_pc:
+            if coord not in self._pin_circle_items:
+                pc = OpenCircleItem()
+                pc.setPos(self.gu_to_scene(*coord))
+                self.addItem(pc)
+                self._pin_circle_items[coord] = pc
+
         # Gate interactivity on the current mode (newly created items are
         # movable/selectable by default).
         self._apply_item_flags()
@@ -1068,6 +1087,18 @@ class SchematicScene(QGraphicsScene):
 
     def unconnected_pin_at(self, scene_pt: QPointF) -> tuple[float, float] | None:
         return self._wire_geom.unconnected_pin_at(scene_pt)
+
+    def set_mark_unconnected_pins(self, enabled: bool) -> None:
+        """Toggle open-circle markers at unconnected component pins (§10.8).
+
+        No-op if unchanged; otherwise rebuilds canvas items so the markers
+        appear or disappear immediately.
+        """
+        enabled = bool(enabled)
+        if enabled == self._mark_unconnected_pins:
+            return
+        self._mark_unconnected_pins = enabled
+        self._rebuild_items()
 
     def vertex_is_draggable(
         self, wire: Wire, index: int, pins: set[tuple[float, float]] | None = None

@@ -50,11 +50,19 @@ from PySide6.QtWidgets import (
 from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
 from app.canvas.view import SchematicView
 from app.codegen.circuitikz import generate
-from app.preview.latex import check_dependencies
+from app.preview.latex import (
+    CompileError,
+    build_snippet,
+    build_tex,
+    check_dependencies,
+    compile_tex,
+    pdf_to_eps,
+)
 from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
 from app.ui.palette import ComponentPalette
+from app.ui.preferences import Preferences, PreferencesDialog
 from app.ui.properties import PropertiesPanel
 from app.ui.sourcepanel import SourcePanel
 
@@ -75,6 +83,8 @@ class MainWindow(QMainWindow):
         self._preview_worker = PreviewWorker(self, dpi=300)
         self._current_path: Path | None = None
         self._modified = False
+        self._prefs = Preferences()
+        self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
 
         # -- Build UI -------------------------------------------------------
         self._build_menu()
@@ -131,6 +141,21 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._act_export_tex = QAction("&Export to TeX…", self)
+        self._act_export_tex.setShortcut(QKeySequence("Ctrl+E"))
+        self._act_export_tex.triggered.connect(self._on_export_tex)
+        file_menu.addAction(self._act_export_tex)
+
+        self._act_export_pdf = QAction("Export to &PDF…", self)
+        self._act_export_pdf.triggered.connect(self._on_export_pdf)
+        file_menu.addAction(self._act_export_pdf)
+
+        self._act_export_eps = QAction("Export to E&PS…", self)
+        self._act_export_eps.triggered.connect(self._on_export_eps)
+        file_menu.addAction(self._act_export_eps)
+
+        file_menu.addSeparator()
+
         act_quit = QAction("&Quit", self)
         act_quit.setShortcut(QKeySequence.Quit)
         act_quit.triggered.connect(self.close)
@@ -172,6 +197,15 @@ class MainWindow(QMainWindow):
         act_delete.setShortcut(QKeySequence.Delete)
         act_delete.triggered.connect(self._scene.delete_selected)
         edit_menu.addAction(act_delete)
+
+        edit_menu.addSeparator()
+
+        self._act_preferences = QAction("&Preferences…", self)
+        self._act_preferences.setShortcut(QKeySequence("Ctrl+,"))
+        # On macOS this role relocates the item to the application menu.
+        self._act_preferences.setMenuRole(QAction.PreferencesRole)
+        self._act_preferences.triggered.connect(self._on_preferences)
+        edit_menu.addAction(self._act_preferences)
 
         # View menu.
         view_menu = mb.addMenu("&View")
@@ -350,7 +384,7 @@ class MainWindow(QMainWindow):
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         bottom_layout.setSpacing(0)
 
-        self._source_panel = SourcePanel()
+        self._source_panel = SourcePanel(preferences=self._prefs)
         self._source_panel.set_scene(self._scene)
         bottom_layout.addWidget(self._source_panel, 1)
 
@@ -461,14 +495,16 @@ class MainWindow(QMainWindow):
         if self._scene.is_gesture_in_progress:
             return
         try:
-            source = generate(self._scene.schematic, y_flip=True)
+            source = generate(self._scene.schematic, y_flip=True,
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
         except Exception:
             return
         self._preview_worker.request_compile(source)
 
     def _on_compile_now(self) -> None:
         try:
-            source = generate(self._scene.schematic, y_flip=True)
+            source = generate(self._scene.schematic, y_flip=True,
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
         except Exception as exc:
             self._status_compile.setText(f"Error: {exc}")
             return
@@ -544,6 +580,154 @@ class MainWindow(QMainWindow):
         self._current_path = path
         self._modified = False
         self._update_title()
+        self._auto_export(path)
+
+    def _auto_export(self, path: Path) -> None:
+        """Write sibling PDF/EPS images next to *path* if enabled in Preferences.
+
+        Runs after a successful save so an ``\\includegraphics`` of the sibling
+        file stays in sync with the schematic (§10.8).  Compilation failures are
+        reported in the status bar only — a modal dialog on every save would be
+        intrusive — and never block the save itself.
+        """
+        want_pdf = self._prefs.auto_export_pdf
+        want_eps = self._prefs.auto_export_eps
+        if not (want_pdf or want_eps):
+            return
+
+        self._status_compile.setText("Auto-exporting…")
+        pdf_bytes = self._compile_to_pdf(quiet=True)
+        if pdf_bytes is None:
+            self._status_compile.setText("Auto-export failed (see Compile)")
+            return
+
+        written: list[str] = []
+        try:
+            if want_pdf:
+                pdf_path = path.with_suffix(".pdf")
+                pdf_path.write_bytes(pdf_bytes)
+                written.append(pdf_path.name)
+            if want_eps:
+                eps_path = path.with_suffix(".eps")
+                eps_path.write_bytes(pdf_to_eps(pdf_bytes))
+                written.append(eps_path.name)
+        except (OSError, CompileError) as exc:
+            self._status_compile.setText(f"Auto-export failed: {exc}")
+            return
+
+        self._status_compile.setText("Auto-exported " + ", ".join(written))
+
+    def _on_preferences(self) -> None:
+        """Open the modal Preferences dialog (§10.8).
+
+        On accept, refresh the source panel and recompile the preview so a
+        display change (e.g. marking unconnected pins) is reflected immediately.
+        """
+        if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
+            self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
+            self._source_panel.refresh()
+            self._on_auto_compile()
+
+    def _on_export_tex(self) -> None:
+        """Export the schematic as an includable CircuiTikZ ``.tex`` snippet.
+
+        The snippet uses ``y_flip=True`` so the included figure renders in the
+        same orientation as the canvas (see §8.5).
+        """
+        try:
+            source = generate(self._scene.schematic, y_flip=True,
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
+            return
+
+        default_name = (self._current_path.stem if self._current_path else "untitled") + ".tex"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to TeX", default_name, "LaTeX Source (*.tex);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".tex"):
+            path += ".tex"
+        try:
+            Path(path).write_text(build_snippet(source), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            return
+        self._status_compile.setText(f"Exported to {Path(path).name}")
+
+    def _compile_to_pdf(self, *, quiet: bool = False) -> bytes | None:
+        """Generate source and compile it to PDF bytes for image export.
+
+        Returns the PDF bytes, or None on failure (invalid schematic or
+        ``pdflatex`` error).  When *quiet* is False, failures raise a modal
+        error dialog; when True (auto-export on save), they are silent so the
+        caller can report via the status bar instead.
+        """
+        try:
+            source = generate(self._scene.schematic, y_flip=True,
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+        except Exception as exc:
+            if not quiet:
+                QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
+            return None
+        try:
+            return compile_tex(build_tex(source))
+        except CompileError as exc:
+            if not quiet:
+                detail = f"{exc}\n\n{exc.log}".strip() if exc.log else str(exc)
+                QMessageBox.critical(self, "Export Error", detail[:1000])
+            return None
+
+    def _on_export_pdf(self) -> None:
+        """Export the schematic as a compiled PDF image (§8.6)."""
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Export failed")
+            return
+        default_name = (self._current_path.stem if self._current_path else "untitled") + ".pdf"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to PDF", default_name, "PDF Document (*.pdf);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".pdf"):
+            path += ".pdf"
+        try:
+            Path(path).write_bytes(pdf_bytes)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            return
+        self._status_compile.setText(f"Exported to {Path(path).name}")
+
+    def _on_export_eps(self) -> None:
+        """Export the schematic as an EPS image (compile then convert, §8.6)."""
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Export failed")
+            return
+        try:
+            eps_bytes = pdf_to_eps(pdf_bytes)
+        except CompileError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            self._status_compile.setText("Export failed")
+            return
+        default_name = (self._current_path.stem if self._current_path else "untitled") + ".eps"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to EPS", default_name, "EPS Image (*.eps);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".eps"):
+            path += ".eps"
+        try:
+            Path(path).write_bytes(eps_bytes)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            return
+        self._status_compile.setText(f"Exported to {Path(path).name}")
 
     def _confirm_discard(self) -> bool:
         """Return True if it is safe to discard the current document."""

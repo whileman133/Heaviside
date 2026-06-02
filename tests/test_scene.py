@@ -1070,6 +1070,40 @@ def test_unconnected_pin_at_skips_connected_pin(scene: SchematicScene):
     assert scene.unconnected_pin_at(scene.gu_to_scene(2.0, 0.0)) is None
 
 
+# ---------------------------------------------------------------------------
+# Unconnected-pin open circles on the canvas (display preference, §10.8)
+# ---------------------------------------------------------------------------
+
+def test_pin_circles_absent_by_default(scene: SchematicScene):
+    """No pin circles are drawn unless the preference is enabled."""
+    scene.place_component("R", (0.0, 0.0))
+    assert scene._pin_circle_items == {}
+
+
+def test_pin_circles_appear_when_enabled(scene: SchematicScene):
+    """Enabling the preference draws a circle at each unconnected pin."""
+    scene.place_component("R", (0.0, 0.0))   # free pins (0,0),(2,0)
+    scene.set_mark_unconnected_pins(True)
+    assert set(scene._pin_circle_items) == {(0.0, 0.0), (2.0, 0.0)}
+
+
+def test_pin_circles_toggle_off_removes_items(scene: SchematicScene):
+    """Disabling the preference removes the markers again."""
+    scene.place_component("R", (0.0, 0.0))
+    scene.set_mark_unconnected_pins(True)
+    scene.set_mark_unconnected_pins(False)
+    assert scene._pin_circle_items == {}
+
+
+def test_pin_circle_removed_when_pin_gets_wired(scene: SchematicScene):
+    """A pin that becomes wired loses its circle on the next rebuild."""
+    scene.place_component("R", (0.0, 0.0))   # free pins (0,0),(2,0)
+    scene.set_mark_unconnected_pins(True)
+    scene.add_wire([(2.0, 0.0), (4.0, 0.0)])  # wire now attaches (2,0)
+    assert (2.0, 0.0) not in scene._pin_circle_items
+    assert (0.0, 0.0) in scene._pin_circle_items
+
+
 def test_click_free_pin_enters_wire_mode(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))   # free pin (2,0)
     assert scene.mode == Mode.SELECT
