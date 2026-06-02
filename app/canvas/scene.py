@@ -786,6 +786,41 @@ class SchematicScene(QGraphicsScene):
             return
         self._push(SetLineStyleCommand(component_id, new_style, comp.line_style))
 
+    def _wire_by_id(self, wire_id: str):  # noqa: ANN201
+        return next((w for w in self._schematic.wires if w.id == wire_id), None)
+
+    def set_wire_line_style(self, wire_id: str, new_style: str) -> None:
+        """Set line_style on a wire via an undoable command (no-op if unchanged)."""
+        from app.canvas.commands import SetWireLineStyleCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.line_style == new_style:
+            return
+        self._push(SetWireLineStyleCommand(wire_id, new_style, wire.line_style))
+
+    def set_wire_line_width(self, wire_id: str, new_width: float) -> None:
+        """Set line_width (pt) on a wire via an undoable command (no-op if unchanged)."""
+        from app.canvas.commands import SetWireLineWidthCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or abs(wire.line_width - new_width) < 1e-6:
+            return
+        self._push(SetWireLineWidthCommand(wire_id, new_width, wire.line_width))
+
+    def set_wire_no_junction_dots(self, wire_id: str, value: bool) -> None:
+        """Toggle no_junction_dots on a wire via an undoable command (no-op if unchanged)."""
+        from app.canvas.commands import SetWireNoJunctionDotsCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.no_junction_dots == value:
+            return
+        self._push(SetWireNoJunctionDotsCommand(wire_id, value, wire.no_junction_dots))
+
+    def set_wire_no_termination_dots(self, wire_id: str, value: bool) -> None:
+        """Toggle no_termination_dots on a wire via an undoable command (no-op if unchanged)."""
+        from app.canvas.commands import SetWireNoTerminationDotsCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.no_termination_dots == value:
+            return
+        self._push(SetWireNoTerminationDotsCommand(wire_id, value, wire.no_termination_dots))
+
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
         from app.components.model import DrawingComponent

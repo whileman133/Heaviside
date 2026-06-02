@@ -154,10 +154,21 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
 
 
 def _wire_to_dict(w: Wire) -> dict[str, Any]:
-    return {
+    d: dict[str, Any] = {
         "id": w.id,
         "points": [list(pt) for pt in w.points],
     }
+    # Only persist style fields when they differ from the defaults, keeping
+    # plain wires' JSON unchanged and backward-compatible.
+    if w.line_style:
+        d["line_style"] = w.line_style
+    if w.line_width != 0.4:
+        d["line_width"] = w.line_width
+    if w.no_junction_dots:
+        d["no_junction_dots"] = True
+    if w.no_termination_dots:
+        d["no_termination_dots"] = True
+    return d
 
 
 # ---------------------------------------------------------------------------
@@ -362,4 +373,25 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
                 f"{ctx}.points[{j}] values must be numbers"
             ) from exc
 
-    return Wire(id=wire_id, points=points)
+    line_style = data.get("line_style", "")
+    if not isinstance(line_style, str):
+        raise SchematicLoadError(f"{ctx}.line_style must be a string")
+
+    raw_lw = data.get("line_width", 0.4)
+    try:
+        line_width = float(raw_lw)
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.line_width must be a number") from exc
+
+    no_junction_dots = data.get("no_junction_dots", False)
+    if not isinstance(no_junction_dots, bool):
+        raise SchematicLoadError(f"{ctx}.no_junction_dots must be a boolean")
+
+    no_termination_dots = data.get("no_termination_dots", False)
+    if not isinstance(no_termination_dots, bool):
+        raise SchematicLoadError(f"{ctx}.no_termination_dots must be a boolean")
+
+    return Wire(
+        id=wire_id, points=points, line_style=line_style, line_width=line_width,
+        no_junction_dots=no_junction_dots, no_termination_dots=no_termination_dots,
+    )

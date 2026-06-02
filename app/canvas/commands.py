@@ -61,6 +61,10 @@ __all__ = [
     "SetFillColorCommand",
     "SetBorderWidthCommand",
     "SetLineStyleCommand",
+    "SetWireLineStyleCommand",
+    "SetWireLineWidthCommand",
+    "SetWireNoJunctionDotsCommand",
+    "SetWireNoTerminationDotsCommand",
     "MoveWireVertexCommand",
     "SplitWireCommand",
     "MergeWireCommand",
@@ -85,6 +89,14 @@ def _find_component(schematic: Schematic, comp_id: str) -> Component:
         if comp.id == comp_id:
             return comp
     raise KeyError(f"no component with id {comp_id!r} in schematic")
+
+
+def _find_wire(schematic: Schematic, wire_id: str) -> Wire:
+    """Return the live wire with *wire_id* or raise KeyError."""
+    for wire in schematic.wires:
+        if wire.id == wire_id:
+            return wire
+    raise KeyError(f"no wire with id {wire_id!r} in schematic")
 
 
 _C = TypeVar("_C", bound=Component)
@@ -1136,6 +1148,74 @@ class SetLineStyleCommand(Command):
         from app.components.model import StyledComponent
         comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.line_style = self._old_style
+
+
+class SetWireLineStyleCommand(Command):
+    """Set line_style on a Wire."""
+
+    label = "Set Wire Line Style"
+
+    def __init__(self, wire_id: str, new_style: str, old_style: str) -> None:
+        self._wire_id = wire_id
+        self._new_style = new_style
+        self._old_style = old_style
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).line_style = self._new_style
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).line_style = self._old_style
+
+
+class SetWireLineWidthCommand(Command):
+    """Set line_width (pt) on a Wire."""
+
+    label = "Set Wire Line Width"
+
+    def __init__(self, wire_id: str, new_width: float, old_width: float) -> None:
+        self._wire_id = wire_id
+        self._new_width = new_width
+        self._old_width = old_width
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).line_width = self._new_width
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).line_width = self._old_width
+
+
+class SetWireNoJunctionDotsCommand(Command):
+    """Toggle no_junction_dots on a Wire."""
+
+    label = "Set Wire Junction Dots"
+
+    def __init__(self, wire_id: str, new_value: bool, old_value: bool) -> None:
+        self._wire_id = wire_id
+        self._new_value = new_value
+        self._old_value = old_value
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).no_junction_dots = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).no_junction_dots = self._old_value
+
+
+class SetWireNoTerminationDotsCommand(Command):
+    """Toggle no_termination_dots on a Wire."""
+
+    label = "Set Wire Termination Dots"
+
+    def __init__(self, wire_id: str, new_value: bool, old_value: bool) -> None:
+        self._wire_id = wire_id
+        self._new_value = new_value
+        self._old_value = old_value
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).no_termination_dots = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).no_termination_dots = self._old_value
 
 
 class GroupRotateCommand(Command):

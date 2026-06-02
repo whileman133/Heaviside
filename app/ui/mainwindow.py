@@ -501,16 +501,25 @@ class MainWindow(QMainWindow):
         # Keep the properties panel in sync when a single component is selected
         # (e.g. after an in-place options edit that doesn't change the selection).
         comp_ids = self._scene.selected_component_ids()
-        if len(comp_ids) == 1:
+        wire_ids = self._scene.selected_wire_ids()
+        if len(comp_ids) == 1 and not wire_ids:
             self._props.show_component(comp_ids[0])
+        elif len(wire_ids) == 1 and not comp_ids:
+            self._props.show_wire(wire_ids[0])
 
     def _on_selection_changed(self, comp_ids: list[str]) -> None:
-        if len(comp_ids) == 0:
+        # comp_ids comes from the signal; query wires directly (the signal only
+        # carries component ids).
+        wire_ids = self._scene.selected_wire_ids()
+        total = len(comp_ids) + len(wire_ids)
+        if total == 0:
             self._props.clear()
-        elif len(comp_ids) == 1:
+        elif total == 1 and len(comp_ids) == 1:
             self._props.show_component(comp_ids[0])
+        elif total == 1 and len(wire_ids) == 1:
+            self._props.show_wire(wire_ids[0])
         else:
-            self._props.show_multi_select(len(comp_ids))
+            self._props.show_multi_select(total)
 
     def _on_component_double_clicked(self, comp_id: str) -> None:
         self._props.show_component(comp_id)

@@ -197,11 +197,21 @@ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
 class Wire:
     id: str                          # UUID
     points: list[tuple[float, float]]  # Ordered Manhattan path vertices, in schematic coords
+    line_style: str = ""             # raw TikZ line-style tokens (e.g. "dashed"); "" = solid
+    line_width: float = 0.4          # pt (TikZ default 0.4); drawn proportionally on canvas
+    no_junction_dots: bool = False   # exclude this wire from junction-dot placement (§6.4)
+    no_termination_dots: bool = False  # suppress open-circle terminals at this wire's free ends (§6.4)
     # All vertices lie on 0.5 GU boundaries
     # All consecutive segment pairs are strictly horizontal or vertical
     # The point list is kept minimal: no consecutive duplicates and no
     # redundant collinear interior vertices (see §6.4 "Wire Simplification")
 ```
+
+`no_junction_dots` flags a wire as an *annotation* rather than a real electrical connection: when set, the wire is skipped entirely by `junction_points()` (§6.4), so the solid `circ` dots it would otherwise create (where it meets other wires/pins) are suppressed — other wires/pins at the same coordinate still count, so a dot they independently justify is unaffected. Useful e.g. for leads into a voltage annotation. It does not change connectivity for code generation otherwise.
+
+`no_termination_dots` likewise excludes the wire from `open_endpoints()` (§6.4), suppressing the `ocirc` open-circle markers at the wire's own dangling ends. It still counts toward *other* wires' connection detection (an endpoint of another wire landing on it stays connected), so only this wire's free ends lose their terminals.
+
+`line_style` / `line_width` / `no_junction_dots` / `no_termination_dots` are edited via the wire property inspector (§10.3) and are undoable (`SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand`). Both are persisted only when non-default, so plain wires' JSON is unchanged; old files without them load as solid / 0.4 pt. On the canvas the pen width is proportional (`LINE_W × line_width/0.4`, so the 0.4 pt default keeps the existing 2 px appearance). In the LaTeX output a styled wire is emitted as its own `\draw[<style>] (…) -- (…);` statement (default wires stay in the shared `\draw` path); see §8.
 
 **Connectivity.** Wires connect to component pins, to other wires, and to bare
 grid points purely by **coincident coordinates** — there is no explicit
@@ -862,8 +872,8 @@ targets are what finalize the wire.
 
 #### Junctions and segment splitting
 
-- Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.)
-- Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints.
+- Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.) A wire with `no_junction_dots=True` (§4.3) is **excluded from the degree count entirely**, so annotation leads do not create dots; other wires/pins at the coordinate are still counted normally.
+- Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints. A wire with `no_termination_dots=True` (§4.3) is **excluded from `open_endpoints()`**, so its free ends get no terminal — while it still counts as a connection for other wires ending on it.
 - When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it, by dragging an existing wire vertex onto it, or by **placing or moving a component** such that one of its pins lands mid-segment — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable, and a junction dot is drawn. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand`, `MoveWireVertexCommand`, `PlaceCommand`, or `MoveCommand`) inside a `MacroCommand` so it is one undoable action. Component operations that trigger splits: initial placement, drag-drop, arrow-key nudge, and paste.
 - When a wire is **deleted** and the deletion dissolves a T-junction (a free endpoint now has exactly two remaining wire neighbors and is not a component pin), those two stubs are automatically **merged** into a single wire. The merge is bundled with the `DeleteCommand` inside a `MacroCommand` so delete + merge is one undoable action. Undoing restores the deleted wire and re-splits the merged wire back into its two halves.
 
@@ -1385,7 +1395,8 @@ with the `Base`/`Button` palette roles, not `Window`).
 ### 10.3 Properties Panel
 
 - Right panel, fixed width ~250px, header showing the `ComponentDef.display_name` and `kind`, followed by a vertical scroll area of **capability sections**.
-- Empty when no component is selected; shows multi-select count when multiple are selected.
+- Empty when nothing is selected; shows a multi-select count (components + wires) when more than one item is selected.
+- Selecting a single **wire** shows the wire inspector instead of the component sections (header "Wire").
 
 **Architecture — capability sections.** The panel is composed of `InspectorSection` widgets rather than one monolithic panel per component type. Each section edits one capability and declares which components it `applies_to` (by `isinstance` against the model hierarchy and the `FontedComponent` / `StyledComponent` mixins). On selection the panel walks an ordered section list, `bind`-ing (showing) the sections that apply and `unbind`-ing (hiding) the rest; the first visible section's leading separator is suppressed. Adding a component type that combines existing capabilities needs no new panel — the sections compose. Section → applicability:
 
@@ -1400,6 +1411,8 @@ with the `Base`/`Button` palette roles, not `Window`).
 | `FillBorderSection` | `StyledComponent` (rect, bipole) | line style, border width, fill |
 | `TransformSection` | all but `rect` (rect rotation is a codegen no-op) | rotation buttons; mirror checkbox (circuit + bipole only) |
 | `LayerSection` | `DrawingComponent` (text_node, rect, bipole) | move front/back buttons + z-order spinbox |
+
+`WireStyleSection` is a section for **wires** (not Components, so it is outside the component `applies_to` loop). When a single wire is selected, `PropertiesPanel.show_wire(wire_id)` unbinds the component sections and binds it via `bind_wire`; it offers **Line style** (solid/dashed/dotted/dash-dot), **Line width (pt)**, a **No junction dots** checkbox, and a **No termination dots** checkbox, writing through `set_wire_line_style` / `set_wire_line_width` / `set_wire_no_junction_dots` / `set_wire_no_termination_dots` (the combo/spinbox debounce 300 ms; the checkboxes commit immediately). Selection routing (`MainWindow`) queries both `selected_component_ids()` and `selected_wire_ids()` to choose component / wire / multi-select / empty.
 
 All section edits funnel through `SchematicScene` methods that push undoable commands. Text/options fields and the fill/border controls debounce commits 300 ms; checkboxes, rotation, mirror, and z-order commit immediately.
 
@@ -1791,6 +1804,11 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_rect_uses_default_span_when_none` | A `rect` with `span_override=None` falls back to `default_span=(2,2)`. |
 | `test_rect_line_style_and_fill_combined` | A `rect` with `line_style="dotted"` + `fill_color="cyan!15"` emits `\draw[dotted, fill=cyan!15] … rectangle …;`. |
 | `test_drawing_kinds_not_in_draw_block` | `text_node` and `rect` produce nothing inside the main `\draw … ;` block. |
+| `test_plain_wire_in_shared_draw` | A default-styled wire is emitted inside the shared `\draw` path (no per-wire `\draw[…]`). |
+| `test_styled_wire_separate_draw` | A wire with `line_style="dashed"`, `line_width=0.8` emits its own `\draw[dashed, line width=0.8pt] (…) -- (…);`. |
+| `test_styled_wire_line_width_only` | A non-default `line_width` alone triggers a styled `\draw[line width=…pt]` statement. |
+| `test_no_junction_dots_wire_suppresses_circ` | A wire flagged `no_junction_dots` emits no `\node[circ]` at its T-junction (and the same topology unflagged does). |
+| `test_no_termination_dots_wire_suppresses_ocirc` | A wire flagged `no_termination_dots` emits no `\node[ocirc]` at its free ends (and the same wire unflagged does). |
 | `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
 | `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
 | `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
@@ -1813,6 +1831,16 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_label_offset_none_not_serialised` | When `label_offset` is `None` the `label_offset` key is absent from the JSON. |
 | `test_label_offset_missing_loads_as_none` | Old files without `label_offset` field deserialise with `label_offset=None`. |
 | `test_label_offset_bad_type_raises` | `label_offset` with wrong type (string instead of two-element array) raises `SchematicLoadError`. |
+| `test_roundtrip_wire_style` | A wire's `line_style`/`line_width` round-trip through save+load. |
+| `test_wire_default_style_not_serialised` | Default wire style fields are omitted from the JSON (back-compat). |
+| `test_wire_missing_style_loads_defaults` | Old files without wire style fields load as solid / 0.4 pt. |
+| `test_wire_bad_style_type_raises` | A non-numeric `line_width` raises `SchematicLoadError`. |
+| `test_roundtrip_wire_no_junction_dots` | A wire's `no_junction_dots` flag round-trips through save+load. |
+| `test_wire_no_junction_dots_default_omitted` | The default (`False`) is omitted from the JSON. |
+| `test_wire_no_junction_dots_bad_type_raises` | A non-boolean `no_junction_dots` raises `SchematicLoadError`. |
+| `test_roundtrip_wire_no_termination_dots` | A wire's `no_termination_dots` flag round-trips through save+load. |
+| `test_wire_no_termination_dots_default_omitted` | The default (`False`) is omitted from the JSON. |
+| `test_wire_no_termination_dots_bad_type_raises` | A non-boolean `no_termination_dots` raises `SchematicLoadError`. |
 | `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
 | `test_load_unknown_version` | Loading a `.hv` file with an unrecognized `version` string raises a descriptive error. |
 | `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
@@ -1846,6 +1874,10 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 |------|-------------|
 | `simplify_points` / `test_simplify_u_turn_collapses_to_straight` | Collapses consecutive duplicates and redundant collinear interior vertices; preserves endpoints and genuine elbows; does not mutate its input. A second dedup pass after collinear collapse handles the A–B–A → A case where collapsing B (same-y) would otherwise leave a consecutive duplicate at A. |
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
+| `test_no_junction_dots_wire_excluded` | A wire flagged `no_junction_dots` does not contribute to junction degree (its T-junction gets no dot). |
+| `test_no_junction_dots_does_not_remove_others` | A flagged wire does not suppress a dot that other wires/pins independently justify at the same coordinate. |
+| `test_no_termination_dots_suppresses_open_endpoints` | A wire flagged `no_termination_dots` contributes no open endpoints. |
+| `test_no_termination_dots_does_not_affect_other_wires` | A flagged wire still counts as a connection for another wire ending on it (only its own free ends lose terminals). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
 | `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect); a degenerate single-point wire connects nothing, so it does not suppress a real endpoint at the same coordinate. |
 | `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect; a degenerate single-point wire on a pin does not mark it connected. |
@@ -1863,7 +1895,7 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it).
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; `SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand` do/undo/redo on a wire; and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it).
 
 #### Preview Worker (`test_worker.py`)
 

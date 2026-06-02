@@ -253,12 +253,23 @@ def generate(
 
         draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
 
+    styled_wire_lines: list[str] = []
     for wire in schematic.wires:
         # Skip degenerate wires (fewer than two points): they have no segment to
         # draw and would emit a stray lone coordinate in the \draw path.
         if len(wire.points) < 2:
             continue
-        draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
+        style = compose_style_options(
+            line_style=wire.line_style, border_width=wire.line_width
+        )
+        if style:
+            # Styled wires are emitted as their own \draw[...] statement so the
+            # style applies only to that wire, not the whole shared path.
+            styled_wire_lines.append(
+                rf"\draw[{style}] {_wire_line(wire, pin_coord_to_ref, _y)};"
+            )
+        else:
+            draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
 
     wired_coords: set[tuple[float, float]] = set()
     for wire in schematic.wires:
@@ -278,6 +289,10 @@ def generate(
             lines.append(f"    {dl}")
 
     lines.append(r"  ;")
+
+    # Styled wires: each its own \draw[...] statement after the shared path.
+    for swl in styled_wire_lines:
+        lines.append(f"  {swl}")
 
     # Connection dots at junctions.
     for x, y in sorted(junction_points(schematic)):

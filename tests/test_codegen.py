@@ -439,6 +439,49 @@ def test_no_open_endpoints_no_ocirc() -> None:
     assert r"\node[ocirc]" not in generate(s)
 
 
+def test_plain_wire_in_shared_draw() -> None:
+    """A default-styled wire is emitted inside the shared \\draw path."""
+    s = _schematic(wires=[_wire([(0.0, 0.0), (4.0, 0.0)])])
+    src = generate(s)
+    assert "    (0,0) -- (4,0)" in src
+    assert r"\draw[" not in src  # no per-wire styled statement
+
+
+def test_styled_wire_separate_draw() -> None:
+    """A wire with a non-default style is emitted as its own \\draw[...] line."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             line_style="dashed", line_width=0.8)
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[dashed, line width=0.8pt] (0,0) -- (4,0);" in src
+
+
+def test_styled_wire_line_width_only() -> None:
+    """line_width alone (no dash) still triggers a styled statement."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], line_width=1.0)
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[line width=1pt] (0,0) -- (4,0);" in src
+
+
+def test_no_junction_dots_wire_suppresses_circ() -> None:
+    """A wire flagged no_junction_dots emits no \\node[circ] at its T-junction."""
+    main = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)])
+    branch = Wire(id=_uid(), points=[(2.0, 0.0), (2.0, 2.0)], no_junction_dots=True)
+    src = generate(_schematic(wires=[main, branch]))
+    assert r"\node[circ]" not in src
+    # Without the flag the same topology DOES produce a junction dot.
+    branch_on = Wire(id=_uid(), points=[(2.0, 0.0), (2.0, 2.0)])
+    assert r"\node[circ] at (2,0) {};" in generate(_schematic(wires=[main, branch_on]))
+
+
+def test_no_termination_dots_wire_suppresses_ocirc() -> None:
+    """A wire flagged no_termination_dots emits no \\node[ocirc] at its ends."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], no_termination_dots=True)
+    assert r"\node[ocirc]" not in generate(_schematic(wires=[w]))
+    # The same free wire without the flag DOES get open-circle terminals.
+    plain = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
+    assert r"\node[ocirc] at (0,0) {};" in generate(_schematic(wires=[plain]))
+
+
 def test_mark_unconnected_pins_off_by_default() -> None:
     """A lone resistor emits no ocirc unless the option is set."""
     s = _schematic(_comp("R", position=(0.0, 0.0)))

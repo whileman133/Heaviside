@@ -604,6 +604,92 @@ class FillBorderSection(InspectorSection):
         scene.set_fill_color(cid, _LABEL_TO_TIKZ_FILL.get(self._fill.currentText(), ""))
 
 
+class WireStyleSection(InspectorSection):
+    """Line style + width for a selected wire.
+
+    Wires are not Components, so this section binds to a wire id explicitly via
+    :meth:`bind_wire` (managed by the panel) rather than the component loop.
+    """
+
+    title = "Wire style"
+
+    def _build(self) -> None:
+        self._ls_row, self._line_style = _make_combo_row(
+            "Line style", [lbl for lbl, _ in _LINE_STYLE_OPTIONS],
+            lambda _i: self._timer.start(),
+        )
+        self.body.addLayout(self._ls_row)
+
+        lw_row, self._width = _make_double_spin_row(
+            "Line width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
+        )
+        self.body.addLayout(lw_row)
+
+        self._no_dots = QCheckBox("No junction dots")
+        self._no_dots.setToolTip(
+            "Don't draw connection dots where this wire meets others — use for "
+            "annotation wires that aren't real electrical connections."
+        )
+        self._no_dots.stateChanged.connect(self._on_no_dots)
+        self.body.addWidget(self._no_dots)
+
+        self._no_term = QCheckBox("No termination dots")
+        self._no_term.setToolTip(
+            "Don't draw open-circle terminals at this wire's unconnected ends."
+        )
+        self._no_term.stateChanged.connect(self._on_no_term)
+        self.body.addWidget(self._no_term)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+        self._wire_id: str | None = None
+
+    def applies_to(self, comp: Component) -> bool:
+        return False  # bound explicitly for wires, not via the component loop
+
+    def _load(self, comp: Component) -> None:  # pragma: no cover - never called
+        pass
+
+    def bind_wire(self, wire, scene: SchematicScene) -> None:  # noqa: ANN001
+        self._scene = scene
+        self._wire_id = wire.id
+        _set_combo(self._line_style, _TIKZ_TO_LABEL_STYLE.get(wire.line_style, "Solid"))
+        self._width.blockSignals(True)
+        self._width.setValue(wire.line_width)
+        self._width.blockSignals(False)
+        self._no_dots.blockSignals(True)
+        self._no_dots.setChecked(wire.no_junction_dots)
+        self._no_dots.blockSignals(False)
+        self._no_term.blockSignals(True)
+        self._no_term.setChecked(wire.no_termination_dots)
+        self._no_term.blockSignals(False)
+        self.set_top_separator_visible(False)
+        self.show()
+
+    def unbind(self) -> None:
+        self._wire_id = None
+        self.hide()
+
+    def _commit(self) -> None:
+        if self._scene is None or self._wire_id is None:
+            return
+        self._scene.set_wire_line_style(
+            self._wire_id, _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), "")
+        )
+        self._scene.set_wire_line_width(self._wire_id, self._width.value())
+
+    def _on_no_dots(self, state: int) -> None:
+        # Checkbox commits immediately (no debounce), like other boolean toggles.
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_no_junction_dots(self._wire_id, bool(state))
+
+    def _on_no_term(self, state: int) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_no_termination_dots(self._wire_id, bool(state))
+
+
 class TransformSection(InspectorSection):
     """Rotation buttons + mirror checkbox.
 
@@ -767,6 +853,11 @@ class PropertiesPanel(QWidget):
         ]
         for sec in self._sections:
             col.addWidget(sec)
+
+        # Wire inspector — managed separately (wires are not Components).
+        self._wire_section = WireStyleSection()
+        col.addWidget(self._wire_section)
+
         col.addStretch(1)
         scroll.setWidget(content)
 
@@ -784,6 +875,7 @@ class PropertiesPanel(QWidget):
             self.clear()
             return
 
+        self._wire_section.unbind()
         defn = REGISTRY[comp.kind]
         self._header.setText(f"{defn.display_name}\n({comp.kind})")
 
@@ -796,13 +888,30 @@ class PropertiesPanel(QWidget):
             else:
                 sec.unbind()
 
+    def show_wire(self, wire_id: str) -> None:
+        """Bind the wire-style inspector for the selected wire."""
+        wire = None
+        if self._scene is not None:
+            wire = next(
+                (w for w in self._scene.schematic.wires if w.id == wire_id), None
+            )
+        if wire is None or self._scene is None:
+            self.clear()
+            return
+        for sec in self._sections:
+            sec.unbind()
+        self._header.setText("Wire")
+        self._wire_section.bind_wire(wire, self._scene)
+
     def clear(self) -> None:
         """Show 'No selection' state."""
         self._header.setText("No selection")
         for sec in self._sections:
             sec.unbind()
+        self._wire_section.unbind()
 
     def show_multi_select(self, count: int) -> None:
-        self._header.setText(f"{count} components selected")
+        self._header.setText(f"{count} items selected")
         for sec in self._sections:
             sec.unbind()
+        self._wire_section.unbind()

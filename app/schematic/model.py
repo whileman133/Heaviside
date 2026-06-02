@@ -46,6 +46,28 @@ class Wire:
     - At least two points (a single segment).
     """
 
+    line_style: str = ""
+    """Raw TikZ line-style tokens, e.g. ``"dashed"``; ``""`` = solid."""
+
+    line_width: float = 0.4
+    """Line width in pt (TikZ default 0.4). Drawn proportionally on the canvas."""
+
+    no_junction_dots: bool = False
+    """When True, this wire does not contribute to junction-dot placement.
+
+    Useful when a wire is an annotation (e.g. a lead into a voltage annotation)
+    rather than a real electrical connection: it suppresses the solid ``circ``
+    dots that would otherwise appear where it meets other wires/pins. Other
+    wires/pins at the same coordinate still count, so a dot they independently
+    justify is unaffected (see :func:`junction_points`)."""
+
+    no_termination_dots: bool = False
+    """When True, this wire's dangling ends do not get open-circle terminals.
+
+    Suppresses the ``ocirc`` markers (see :func:`open_endpoints`) at the wire's
+    own unconnected endpoints — useful for annotation leads that should simply
+    stop without a visible terminal. Does not affect other wires' endpoints."""
+
 
 @dataclass
 class Schematic:
@@ -223,6 +245,9 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
         degree[pt] = degree.get(pt, 0) + d
 
     for wire in schematic.wires:
+        # Annotation wires opt out of junction-dot placement entirely.
+        if wire.no_junction_dots:
+            continue
         pts = wire.points
         if len(pts) < 2:
             continue
@@ -292,6 +317,11 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
 
     candidates: set[tuple[float, float]] = set()
     for wire in schematic.wires:
+        # Annotation wires opt out of terminal (ocirc) markers on their own ends.
+        # They still count toward all_wire_points above, so other wires ending
+        # on this wire remain connected.
+        if wire.no_termination_dots:
+            continue
         pts = wire.points
         if len(pts) < 2:
             continue

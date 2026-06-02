@@ -1581,6 +1581,71 @@ def test_options_item_begin_edit(scene: SchematicScene):
     assert item._options_item.is_editing
 
 
+def test_set_wire_line_style_and_width(scene: SchematicScene):
+    """Wire style setters push undoable commands and update the model."""
+    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    assert wire is not None
+    scene.set_wire_line_style(wire.id, "dashed")
+    scene.set_wire_line_width(wire.id, 0.8)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.line_style == "dashed" and w.line_width == 0.8
+    scene.undo()  # undo the width change
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).line_width == 0.4
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).line_style == "dashed"
+
+
+def test_set_wire_no_junction_dots(scene: SchematicScene):
+    """The no_junction_dots setter is undoable and removes the junction dot."""
+    main = scene.add_wire([(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)])
+    branch = scene.add_wire([(2.0, 0.0), (2.0, 2.0)])
+    assert (2.0, 0.0) in scene._junction_items  # T-junction dot present
+    scene.set_wire_no_junction_dots(branch.id, True)
+    w = next(x for x in scene.schematic.wires if x.id == branch.id)
+    assert w.no_junction_dots is True
+    assert (2.0, 0.0) not in scene._junction_items  # dot removed
+    scene.undo()
+    assert (2.0, 0.0) in scene._junction_items  # restored
+
+
+def test_set_wire_no_termination_dots(scene: SchematicScene):
+    """The no_termination_dots setter is undoable and removes the open circles."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])  # free wire -> two ocircs
+    assert (0.0, 0.0) in scene._open_circle_items
+    scene.set_wire_no_termination_dots(wire.id, True)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.no_termination_dots is True
+    assert (0.0, 0.0) not in scene._open_circle_items
+    assert (4.0, 0.0) not in scene._open_circle_items
+    scene.undo()
+    assert (0.0, 0.0) in scene._open_circle_items
+
+
+def test_set_wire_style_noop_when_unchanged(scene: SchematicScene):
+    """Setting an unchanged wire style leaves the model (and undo state) alone."""
+    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    can_undo_before = scene._stack.can_undo()
+    scene.set_wire_line_style(wire.id, "")    # already solid
+    scene.set_wire_line_width(wire.id, 0.4)   # already default
+    assert scene._stack.can_undo() == can_undo_before  # no new command pushed
+
+
+def test_properties_panel_shows_wire(scene: SchematicScene):
+    """Selecting a single wire binds the wire-style inspector; a component
+    selection unbinds it."""
+    from app.ui.properties import PropertiesPanel
+
+    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    scene.set_wire_line_style(wire.id, "dashed")
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_wire(wire.id)
+    assert panel._wire_section.isVisibleTo(panel)
+    assert panel._wire_section._line_style.currentText() == "Dashed"
+    comp = scene.place_component("R", (5.0, 5.0))
+    panel.show_component(comp.id)
+    assert not panel._wire_section.isVisibleTo(panel)
+
+
 def test_double_click_slot_label_opens_editor(scene: SchematicScene):
     """Double-clicking a rendered per-side slot label opens the in-place editor.
 

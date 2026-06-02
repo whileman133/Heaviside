@@ -40,6 +40,10 @@ from app.canvas.commands import (
     MoveWireVertexCommand,
     PlaceCommand,
     ResizeCommand,
+    SetWireLineStyleCommand,
+    SetWireLineWidthCommand,
+    SetWireNoJunctionDotsCommand,
+    SetWireNoTerminationDotsCommand,
     SplitWireCommand,
     UndoStack,
     WireCommand,
@@ -1178,3 +1182,48 @@ def test_codegen_ground():
     ))
     src = generate(s)
     assert "node[ground]" in src
+
+
+# ---------------------------------------------------------------------------
+# Wire style commands (SetWireLineStyleCommand / SetWireLineWidthCommand)
+# ---------------------------------------------------------------------------
+
+def _wire_stack() -> tuple[UndoStack, str]:
+    wid = _uid()
+    sch = Schematic(version="0.1", name="t",
+                    wires=[Wire(id=wid, points=[(0.0, 0.0), (2.0, 0.0)])])
+    return UndoStack(sch), wid
+
+
+def test_set_wire_line_style_do_undo_redo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireLineStyleCommand(wid, "dashed", ""))
+    assert stack.schematic.wires[0].line_style == "dashed"
+    stack.undo()
+    assert stack.schematic.wires[0].line_style == ""
+    stack.redo()
+    assert stack.schematic.wires[0].line_style == "dashed"
+
+
+def test_set_wire_line_width_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireLineWidthCommand(wid, 1.2, 0.4))
+    assert stack.schematic.wires[0].line_width == 1.2
+    stack.undo()
+    assert stack.schematic.wires[0].line_width == 0.4
+
+
+def test_set_wire_no_junction_dots_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireNoJunctionDotsCommand(wid, True, False))
+    assert stack.schematic.wires[0].no_junction_dots is True
+    stack.undo()
+    assert stack.schematic.wires[0].no_junction_dots is False
+
+
+def test_set_wire_no_termination_dots_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireNoTerminationDotsCommand(wid, True, False))
+    assert stack.schematic.wires[0].no_termination_dots is True
+    stack.undo()
+    assert stack.schematic.wires[0].no_termination_dots is False

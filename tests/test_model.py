@@ -367,6 +367,24 @@ def test_junction_T_split_has_dot() -> None:
     assert junction_points(s) == {(2.0, 2.0)}
 
 
+def test_no_junction_dots_wire_excluded() -> None:
+    """A wire flagged no_junction_dots does not contribute to junction degree."""
+    main = _W("a", [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)])  # passes through (2,2)
+    branch = Wire(id="b", points=[(2.0, 2.0), (2.0, 5.0)], no_junction_dots=True)
+    s = _make_schematic(wires=(main, branch))
+    assert junction_points(s) == set()  # branch's degree-1 is not counted
+
+
+def test_no_junction_dots_does_not_remove_others() -> None:
+    """A flagged wire doesn't suppress a dot that other wires independently
+    justify at the same coordinate."""
+    a = _W("a", [(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)])   # interior vertex (deg 2)
+    b = _W("b", [(2.0, 0.0), (2.0, 2.0)])               # endpoint (deg 1) -> 3
+    flagged = Wire(id="c", points=[(2.0, 2.0), (2.0, 5.0)], no_junction_dots=True)
+    s = _make_schematic(wires=(a, b, flagged))
+    assert junction_points(s) == {(2.0, 2.0)}  # a + b still make the dot
+
+
 def test_junction_pin_pass_through_has_dot() -> None:
     """A pin meeting a wire that passes straight through it → dot (1 + 2 = 3)."""
     s = _make_schematic(
@@ -483,6 +501,22 @@ def test_open_endpoints_free_wire_both_ends() -> None:
     """A wire with no component pins at either end has both endpoints open."""
     s = _make_schematic(wires=(_W("a", [(0.0, 0.0), (4.0, 0.0)]),))
     assert open_endpoints(s) == {(0.0, 0.0), (4.0, 0.0)}
+
+
+def test_no_termination_dots_suppresses_open_endpoints() -> None:
+    """A wire flagged no_termination_dots contributes no open endpoints."""
+    w = Wire(id="a", points=[(0.0, 0.0), (4.0, 0.0)], no_termination_dots=True)
+    assert open_endpoints(_make_schematic(wires=(w,))) == set()
+
+
+def test_no_termination_dots_does_not_affect_other_wires() -> None:
+    """A flagged wire still counts as a connection for another wire ending on
+    it (the other wire's shared end is not flagged open)."""
+    flagged = Wire(id="a", points=[(0.0, 0.0), (4.0, 0.0)], no_termination_dots=True)
+    other = _W("b", [(4.0, 0.0), (4.0, 2.0)])  # ends on flagged wire's endpoint
+    result = open_endpoints(_make_schematic(wires=(flagged, other)))
+    assert (4.0, 0.0) not in result   # shared end is connected (degree>1)
+    assert (4.0, 2.0) in result       # other wire's far end is still open
 
 
 def test_open_endpoints_pin_connected_end_excluded() -> None:

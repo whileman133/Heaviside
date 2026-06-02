@@ -551,3 +551,106 @@ def test_mosfet_body_diode_false_not_saved(tmp_path: Path) -> None:
     save(s, p)
     raw = json.loads(p.read_text())
     assert "body_diode" not in raw["components"][0]
+
+
+# ---------------------------------------------------------------------------
+# Wire line_style / line_width round-trip
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_wire_style(tmp_path: Path) -> None:
+    """A wire's line_style and line_width are serialised and restored."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
+             line_style="dashed", line_width=0.8)
+    original = Schematic(version="0.1", name="ws", wires=[w])
+    p = tmp_path / "ws.hv"
+    save(original, p)
+    loaded = load(p)
+    assert loaded.wires[0].line_style == "dashed"
+    assert loaded.wires[0].line_width == 0.8
+
+
+def test_wire_default_style_not_serialised(tmp_path: Path) -> None:
+    """Default style fields are omitted from the JSON (backward-compatible)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    save(Schematic(version="0.1", name="ws", wires=[w]), tmp_path / "ws.hv")
+    raw = json.loads((tmp_path / "ws.hv").read_text())
+    assert "line_style" not in raw["wires"][0]
+    assert "line_width" not in raw["wires"][0]
+
+
+def test_wire_missing_style_loads_defaults(tmp_path: Path) -> None:
+    """Old files without wire style fields load with the defaults."""
+    doc = {
+        "version": "0.1", "name": "old", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]]}],
+    }
+    p = tmp_path / "old.hv"
+    p.write_text(json.dumps(doc))
+    loaded = load(p)
+    assert loaded.wires[0].line_style == ""
+    assert loaded.wires[0].line_width == 0.4
+
+
+def test_wire_bad_style_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "line_width": "wide"}],
+    }
+    p = tmp_path / "bad.hv"
+    p.write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="line_width"):
+        load(p)
+
+
+def test_roundtrip_wire_no_junction_dots(tmp_path: Path) -> None:
+    """A wire's no_junction_dots flag round-trips through save+load."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], no_junction_dots=True)
+    save(Schematic(version="0.1", name="nj", wires=[w]), tmp_path / "nj.hv")
+    loaded = load(tmp_path / "nj.hv")
+    assert loaded.wires[0].no_junction_dots is True
+
+
+def test_wire_no_junction_dots_default_omitted(tmp_path: Path) -> None:
+    """The default (False) is omitted from the JSON; old files load as False."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    save(Schematic(version="0.1", name="nj", wires=[w]), tmp_path / "nj.hv")
+    raw = json.loads((tmp_path / "nj.hv").read_text())
+    assert "no_junction_dots" not in raw["wires"][0]
+
+
+def test_wire_no_junction_dots_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "no_junction_dots": "yes"}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="no_junction_dots"):
+        load(tmp_path / "bad.hv")
+
+
+def test_roundtrip_wire_no_termination_dots(tmp_path: Path) -> None:
+    """A wire's no_termination_dots flag round-trips through save+load."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], no_termination_dots=True)
+    save(Schematic(version="0.1", name="nt", wires=[w]), tmp_path / "nt.hv")
+    loaded = load(tmp_path / "nt.hv")
+    assert loaded.wires[0].no_termination_dots is True
+
+
+def test_wire_no_termination_dots_default_omitted(tmp_path: Path) -> None:
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    save(Schematic(version="0.1", name="nt", wires=[w]), tmp_path / "nt.hv")
+    raw = json.loads((tmp_path / "nt.hv").read_text())
+    assert "no_termination_dots" not in raw["wires"][0]
+
+
+def test_wire_no_termination_dots_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "no_termination_dots": 1}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="no_termination_dots"):
+        load(tmp_path / "bad.hv")

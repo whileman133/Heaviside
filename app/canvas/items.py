@@ -1183,6 +1183,15 @@ class WireItem(QGraphicsItem):
     def _draw_points(self) -> list[tuple[float, float]]:
         return self._preview_points if self._preview_points is not None else self.wire.points
 
+    # -- style ------------------------------------------------------------
+
+    def _line_width_px(self) -> float:
+        """Pen width in px, proportional to ``line_width`` (0.4 pt -> LINE_W)."""
+        return LINE_W * (getattr(self.wire, "line_width", 0.4) / 0.4)
+
+    def _line_pen_style(self) -> Qt.PenStyle:
+        return _resolve_pen_style(getattr(self.wire, "line_style", ""))
+
     # -- events -----------------------------------------------------------
 
     def hoverEnterEvent(self, event):  # noqa: N802
@@ -1201,7 +1210,7 @@ class WireItem(QGraphicsItem):
             return QRectF()
         xs = [p[0] * GRID_PX for p in pts]
         ys = [p[1] * GRID_PX for p in pts]
-        margin = LINE_W + PIN_R + 3
+        margin = max(LINE_W, self._line_width_px()) + PIN_R + 3
         return QRectF(
             min(xs) - margin,
             min(ys) - margin,
@@ -1255,7 +1264,7 @@ class WireItem(QGraphicsItem):
             color = COLOR_HOVER
         else:
             color = COLOR_NORMAL
-        painter.setPen(_pen(color, LINE_W))
+        painter.setPen(_pen(color, self._line_width_px(), self._line_pen_style()))
         painter.setBrush(Qt.NoBrush)
         pts = [QPointF(x * GRID_PX, y * GRID_PX) for x, y in pts_gu]
         path = QPainterPath()
