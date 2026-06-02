@@ -1,8 +1,8 @@
 """
 Schematic file I/O.
 
-save(schematic, path) — serializes a Schematic to a UTF-8 JSON .ctikz file.
-load(path)            — deserializes and validates a .ctikz file, returning a
+save(schematic, path) — serializes a Schematic to a UTF-8 JSON .hv file.
+load(path)            — deserializes and validates a .hv file, returning a
                         Schematic or raising SchematicLoadError on any problem.
 
 No Qt dependency. No side effects beyond filesystem access.
@@ -35,7 +35,7 @@ _KNOWN_VERSIONS: set[str] = {"0.1"}
 
 
 class SchematicLoadError(Exception):
-    """Raised when a .ctikz file cannot be loaded for any reason."""
+    """Raised when a .hv file cannot be loaded for any reason."""
 
 
 # ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ def save(schematic: Schematic, path: str | Path) -> None:
 
 
 def load(path: str | Path) -> Schematic:
-    """Load and validate a .ctikz file.
+    """Load and validate a .hv file.
 
     Raises SchematicLoadError with a descriptive message on any problem:
     - malformed JSON

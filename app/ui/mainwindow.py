@@ -538,7 +538,7 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open Schematic", "", "Heaviside Schematics (*.ctikz);;All Files (*)"
+            self, "Open Schematic", "", "Heaviside Schematics (*.hv);;All Files (*)"
         )
         if not path:
             return
@@ -563,12 +563,12 @@ class MainWindow(QMainWindow):
 
     def _on_save_as(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Schematic", "", "Heaviside Schematics (*.ctikz);;All Files (*)"
+            self, "Save Schematic", "", "Heaviside Schematics (*.hv);;All Files (*)"
         )
         if not path:
             return
-        if not path.endswith(".ctikz"):
-            path += ".ctikz"
+        if not path.endswith(".hv"):
+            path += ".hv"
         self._do_save(Path(path))
 
     def _do_save(self, path: Path) -> None:

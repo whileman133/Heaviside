@@ -109,7 +109,7 @@ class PreferencesDialog(QDialog):
         group_layout.addWidget(self._chk_eps)
 
         hint = QLabel(
-            "When saving <name>.ctikz, also write <name>.pdf / <name>.eps to the "
+            "When saving <name>.hv, also write <name>.pdf / <name>.eps to the "
             "same folder so an \\includegraphics in your LaTeX document stays up "
             "to date.  Requires pdflatex (and pdftocairo for EPS)."
         )

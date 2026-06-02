@@ -7,7 +7,7 @@ need schematics with typeset mathematical annotations.
 
 - Grid-disciplined, fixed-component-size canvas for schematic entry
 - Clean, human-readable CircuiTikZ source as the primary output
-- Lossless save/load via a JSON `.ctikz` format
+- Lossless save/load via a JSON `.hv` format
 - Live, rendered PDF preview of the current schematic
 - Wire-to-wire connectivity with automatic junction dots
 

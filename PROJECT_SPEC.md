@@ -1208,7 +1208,7 @@ PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
 
 ### 9.1 Save Format
 
-Schematics are saved as UTF-8 JSON files (no byte-order mark) with the extension `.ctikz`.
+Schematics are saved as UTF-8 JSON files (no byte-order mark) with the extension `.hv`.
 
 Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.tmp`) and then renamed over the target via `os.replace`, so an interrupted or failed write never corrupts an existing file.
 
@@ -1377,7 +1377,7 @@ Current settings:
 
 | Setting | Key | Default | Effect |
 |---------|-----|---------|--------|
-| Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.ctikz`, also write `<name>.pdf` to the same directory. |
+| Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 
@@ -1387,7 +1387,7 @@ file(s) — the single PDF is converted to EPS via `pdf_to_eps()` when both are
 requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`) in a LaTeX
 document in sync with the schematic without a manual export step.
 
-Auto-export never blocks or aborts the save: it runs only *after* the `.ctikz`
+Auto-export never blocks or aborts the save: it runs only *after* the `.hv`
 is written, and any failure (invalid schematic, missing `pdflatex`/`pdftocairo`,
 or a `pdflatex` error) is reported in the status bar only — not as a modal
 dialog, which would be intrusive on every save. The compile is synchronous, so
@@ -1646,12 +1646,12 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_label_offset_missing_loads_as_none` | Old files without `label_offset` field deserialise with `label_offset=None`. |
 | `test_label_offset_bad_type_raises` | `label_offset` with wrong type (string instead of two-element array) raises `SchematicLoadError`. |
 | `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
-| `test_load_unknown_version` | Loading a `.ctikz` file with an unrecognized `version` string raises a descriptive error. |
+| `test_load_unknown_version` | Loading a `.hv` file with an unrecognized `version` string raises a descriptive error. |
 | `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
 | `test_load_missing_field` | Loading a JSON file missing a required field raises a descriptive error. |
 | `test_load_invalid_invariant` | Loading a JSON file that violates an invariant (e.g., diagonal wire) raises a descriptive error. |
 | `test_save_creates_file` | `save()` creates a file at the specified path. |
-| `test_save_is_utf8` | Saved `.ctikz` files are valid UTF-8 and contain no byte-order marks. |
+| `test_save_is_utf8` | Saved `.hv` files are valid UTF-8 and contain no byte-order marks. |
 | `test_save_is_atomic_overwrite` | `save()` atomically replaces an existing file (latest write wins) and leaves no `.tmp` file behind. |
 | `test_bipole_fill_color_roundtrip` | `BipoleComponent.fill_color` survives a save/load cycle. |
 | `test_bipole_border_width_roundtrip` | `BipoleComponent.border_width` survives a save/load cycle. |
@@ -1818,7 +1818,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] The main UI remains responsive during compilation (main thread not blocked).
 
 #### AC-8: Save and Load
-- [ ] `Ctrl+S` saves the schematic to a `.ctikz` file.
+- [ ] `Ctrl+S` saves the schematic to a `.hv` file.
 - [ ] The saved file is valid UTF-8 JSON readable in a text editor.
 - [ ] Loading a saved file restores all components, wires, labels, rotations, and mirror states exactly.
 - [ ] Loading a corrupted or invalid file shows an error dialog and leaves the current schematic unchanged.
@@ -1829,7 +1829,7 @@ The following scenario must complete without error:
 2. Place a voltage source, two resistors, an op-amp, and connecting wires to form a simple inverting amplifier circuit.
 3. Assign LaTeX labels to all components, including at least one equation of the form `$\frac{R_2}{R_1}$`.
 4. Compile the preview and verify it matches the intended circuit visually.
-5. Save the schematic to a `.ctikz` file.
+5. Save the schematic to a `.hv` file.
 6. Close and relaunch the application.
 7. Load the saved file and verify all components, wires, and labels are restored identically.
 8. Compile the preview again and verify it matches the pre-save output.
