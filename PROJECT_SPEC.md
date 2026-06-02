@@ -59,7 +59,7 @@ This document specifies a graphical editor for creating publication-quality circ
 | **Pin** | A named connection point on a component, located at a fixed offset from the component origin, always on a 0.5 GU boundary. |
 | **Wire** | A Manhattan-routed (horizontal + vertical segments only) polyline connecting pins, other wires, and/or open grid points. |
 | **Junction** | A coordinate where wires/pins are electrically tied together such that a connection must be marked — defined by the degree rule in §6.4. Rendered as a solid dot on the canvas and emitted as `\node[circ]` in the output. |
-| **Open endpoint** | A wire endpoint that does not coincide with any component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. |
+| **Open endpoint** | A wire endpoint that does not coincide with any *connecting* component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. A voltage annotation (`open`) pin does not connect, so a wire ending on one is still open (see `NON_CONNECTING_KINDS`). |
 | **Options string** | A raw CircuiTikZ option string stored on a component, passed verbatim into the `to[]` or `node[]` argument (e.g. `l=$R_1$, v=$V_s$, color=red`). Replaces the former per-slot label dict. |
 | **Schematic** | The complete logical description of a circuit: a list of components, a list of wires, and metadata. |
 | **Registry** | The global static dictionary mapping CircuiTikZ keywords to `ComponentDef` objects. |
@@ -1037,7 +1037,9 @@ junction dots, then open-endpoint circles — before `\end{circuitikz}`.
 ```
 
 **Open-endpoint circles** — one per wire endpoint not coinciding with any
-component pin (§6.4):
+*connecting* component pin (§6.4). Pins of `NON_CONNECTING_KINDS` (the `open`
+voltage annotation, which renders as `to[open]` — an open circuit) do **not**
+connect a wire end, so a wire that only touches one stays open:
 
 ```latex
 \node[ocirc] at (x, y) {};
@@ -1051,8 +1053,13 @@ geometry at generation time — they are not stored in the model.
 `mark_unconnected_pins=True`, an additional `\node[ocirc]` is emitted at every
 *component pin* that nothing connects to (`unconnected_pins()` in
 `app/schematic/model.py`: a pin with no wire vertex on its coordinate and no
-second component pin sharing it). This is the pin-side counterpart of the
-open-endpoint circles above, and the two sets are disjoint by construction. The
+second connecting component pin sharing it). Pins of `NON_CONNECTING_KINDS` —
+currently the `open` **voltage annotation**, which renders as `to[open]` (an
+open circuit that draws nothing) — are ignored entirely: they form no
+connection, so they neither suppress a real pin's circle nor get one of their
+own. The current annotation `short` is a real closed wire and is *not* in this
+set, so it does connect. This is the pin-side counterpart of the open-endpoint
+circles above, and the two sets are disjoint by construction. The
 flag is driven by the **Mark unconnected component pins** display preference
 (§10.8) and defaults to `False`, so output is unchanged unless requested. All
 call sites that should honor the preference (source panel, preview compilation,
@@ -1610,9 +1617,11 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_junction_emits_circ_node` / `test_no_junction_no_circ_node` / `test_junction_node_count_matches` | Junction coordinates emit `\node[circ]`; non-junctions do not; count matches the number of junction points. |
 | `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
 | `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
+| `test_voltage_annotation_endpoint_emits_ocirc` | A wire ending on a voltage annotation (`open`) pin still emits `\node[ocirc]` — the annotation is an open circuit, not a connection. |
 | `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
 | `test_mark_unconnected_pins_off_by_default` / `test_mark_unconnected_pins_marks_dangling_pins` | With `mark_unconnected_pins=False` (default) a lone resistor emits no `ocirc`; with it `True`, both free pins get a `\node[ocirc]` (§7.6). |
 | `test_mark_unconnected_pins_skips_wired_pin` / `test_mark_unconnected_pins_respects_y_flip` | A pin with a wire on it is never marked even when the option is on; marked pins honor the `y_flip` convention. |
+| `test_mark_unconnected_pins_voltage_annotation_not_a_connection` | A voltage annotation (`open`) abutting a pin does not suppress that pin's `ocirc` (it is an open circuit, not a connection). |
 | `test_text_node_basic` | A `text_node` at (2,3) with options "Hello" emits `\node at (2,3) {Hello};` outside the `\draw` block. |
 | `test_text_node_with_font_size` | A `text_node` with `span_override=(14,0)` emits `\node[font=\fontsize{14}…\selectfont] at (…) {…};`. |
 | `test_text_node_y_flip` | A `text_node` at (2,3) with `y_flip=True` emits `\node at (2,-3) {…};`. |
@@ -1679,8 +1688,8 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `simplify_points` / `test_simplify_u_turn_collapses_to_straight` | Collapses consecutive duplicates and redundant collinear interior vertices; preserves endpoints and genuine elbows; does not mutate its input. A second dedup pass after collinear collapse handles the A–B–A → A case where collapsing B (same-y) would otherwise leave a consecutive duplicate at A. |
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
-| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a pin-connected end is excluded. |
-| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. |
+| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect). |
+| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect. |
 | `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |

@@ -76,12 +76,17 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
 # Label child item
 # ---------------------------------------------------------------------------
 
-_LABEL_FONT_SIZE = 10.0
-_LABEL_LINE_H = 17   # px height per label row for 10pt font
-_LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
-
 # LaTeX points per grid unit (1 GU = 1 cm). Canvas pixels = pt * GRID_PX / this.
 _PT_PER_GU = 28.35
+
+# Options-label sizing. The label is sized in canvas *pixels* derived from a
+# LaTeX point size the same way text-node fonts are (see _fonted_qfont), so the
+# on-canvas label matches the proportions of the compiled output rather than
+# rendering at a small fixed point size.
+_LABEL_FONT_PT = 10.0
+_LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
+_LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
+_LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
 
 # Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
 # uses the first installed face, so at least one matches on any platform.
@@ -136,7 +141,7 @@ class LabelTextItem(QGraphicsTextItem):
         self.setFlag(QGraphicsItem.ItemSendsGeometryChanges, True)
         self.setAcceptHoverEvents(True)
         f = self.font()
-        f.setPointSizeF(_LABEL_FONT_SIZE)
+        f.setPixelSize(_LABEL_FONT_PX)
         self.setFont(f)
         self.setDefaultTextColor(QColor(COLOR_NORMAL))
 

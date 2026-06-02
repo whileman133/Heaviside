@@ -406,6 +406,18 @@ def test_pin_connected_endpoint_no_ocirc() -> None:
     assert r"\node[ocirc] at (5,0) {};" in src
 
 
+def test_voltage_annotation_endpoint_emits_ocirc() -> None:
+    """A wire ending on a voltage annotation (`open`) pin still gets ocirc.
+
+    The annotation is an open circuit, so it does not connect the wire end.
+    """
+    va = _comp("open", position=(2.0, 0.0))   # pins (2,0),(4,0)
+    s = _schematic(va, wires=[_wire([(0.0, 0.0), (2.0, 0.0)])])
+    src = generate(s)
+    assert r"\node[ocirc] at (2,0) {};" in src   # wire end on annotation → open
+    assert r"\node[ocirc] at (0,0) {};" in src
+
+
 def test_no_open_endpoints_no_ocirc() -> None:
     """A wire whose both ends land on pins emits no \\node[ocirc]."""
     r1 = _comp("R", position=(0.0, 0.0))
@@ -443,6 +455,15 @@ def test_mark_unconnected_pins_respects_y_flip() -> None:
     src = generate(s, y_flip=True, mark_unconnected_pins=True)
     assert r"\node[ocirc] at (0,0) {};" in src
     assert r"\node[ocirc] at (0,-2) {};" in src
+
+
+def test_mark_unconnected_pins_voltage_annotation_not_a_connection() -> None:
+    """A voltage annotation (`open`) on a pin does not suppress its ocirc."""
+    r = _comp("R", position=(0.0, 0.0))         # pins (0,0),(2,0)
+    va = _comp("open", position=(2.0, 0.0))     # annotation pin coincides with (2,0)
+    src = generate(_schematic(r, va), mark_unconnected_pins=True)
+    assert r"\node[ocirc] at (2,0) {};" in src  # real pin still flagged
+    assert r"\node[ocirc] at (0,0) {};" in src
 
 
 # ---------------------------------------------------------------------------

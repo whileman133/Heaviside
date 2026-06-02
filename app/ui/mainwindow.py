@@ -784,30 +784,29 @@ class MainWindow(QMainWindow):
 # Welcome overlay
 # ---------------------------------------------------------------------------
 
-_HINTS = [
-    "Click a component in the palette to place it",
-    "W  draw wire   ·   S  select   ·   P  pan",
-]
+_ROW_H = 18.0   # height of one reference-table row
 
-# Quick-reference table: (code_snippet, plain_description)
-# Left column: two-terminal label/annotation options (complete set).
-# Right column: node / MOSFET options.
-_REF_LEFT = [
-    ("l=$R_1$",   "label"),
-    ("l_=$R_1$",  "label, far side"),
-    ("v=$V$",     "voltage ＋→－"),
-    ("v_=$V$",    "voltage, far side"),
-    ("v^=$V$",    "voltage, reversed"),
-    ("i=$I$",     "current"),
-    ("i_=$I$",    "current, far side"),
-    ("i^=$I$",    "current, reversed"),
+# Keyboard-shortcut reference: (keys, action).
+# Left column: canvas tools and editing; right column: file / view commands.
+_SHORTCUTS_LEFT = [
+    ("S",       "Select tool"),
+    ("W",       "Wire tool"),
+    ("P",       "Pan / Space-drag"),
+    ("R",       "Rotate 90° CW"),
+    ("Del",     "Delete selection"),
+    ("Arrows",  "Nudge 0.5 units"),
+    ("Ctrl+A",  "Select all"),
+    ("Esc",     "Cancel / deselect"),
 ]
-_REF_RIGHT = [
-    ("label=above:$Q_1$", "node label above"),
-    ("label=right:$Q_1$", "node label right"),
-    ("label=below:$Q_1$", "node label below"),
-    ("label=left:$Q_1$",  "node label left"),
-    ("bodydiode",          "add body diode"),
+_SHORTCUTS_RIGHT = [
+    ("Ctrl+N",        "New schematic"),
+    ("Ctrl+O",        "Open"),
+    ("Ctrl+S",        "Save"),
+    ("Ctrl+E",        "Export to TeX"),
+    ("Ctrl+Z",        "Undo"),
+    ("Ctrl+Shift+Z",  "Redo"),
+    ("Ctrl+0",        "Fit to view"),
+    ("Ctrl+Return",   "Compile preview"),
 ]
 
 # Colours for the welcome screen
@@ -815,15 +814,15 @@ _C_BG    = QColor(245, 247, 250)        # solid background
 _C_STEP  = QColor( 80, 120, 175, 200)   # step-function line
 _C_AXIS  = QColor(160, 175, 190, 180)   # axis lines
 _C_LABEL = QColor(100, 130, 170, 210)   # H(t) / 1 / t annotations
-_C_TITLE = QColor( 60,  80, 110, 220)   # "Heaviside" heading
+_C_TITLE = QColor( 60,  80, 110, 220)   # section headers
 _C_HINT  = QColor(120, 140, 165, 200)   # hint lines
 
 
 class _WelcomeScreen(QWidget):
     """
     Solid welcome screen shown in the canvas slot before any document is
-    active.  Draws the Heaviside unit step function H(t) as a centred
-    diagram with quick-start hints below.
+    active.  Draws the Heaviside unit step function H(t) as a centred diagram,
+    followed by a keyboard-shortcut list.
 
     Replaced by the live SchematicView (via QStackedWidget) as soon as the
     user creates/opens a document or begins component placement.
@@ -837,18 +836,14 @@ class _WelcomeScreen(QWidget):
         painter.fillRect(self.rect(), _C_BG)
 
         # ---- layout constants ------------------------------------------
-        step_w  = min(w * 0.38, 240.0)
-        step_h  = min(h * 0.24, 130.0)
-        row_h   = 18.0
-        n_rows  = max(len(_REF_LEFT), len(_REF_RIGHT))
-        # block_h derived by tracing actual y positions in the paint code:
-        #   title_y  = top + step_h*1.6 + 28
-        #   hint_y   = title_y + 40  (+2 × 20 = +40)
-        #   ref_top  = hint_y_end + 12
-        #   sep_y    = ref_top + 16
-        #   row_y    = sep_y + 10  (+n_rows × row_h)
-        # → block bottom = top + step_h*1.6 + 146 + n_rows*row_h
-        block_h = step_h * 1.6 + 146 + n_rows * row_h
+        step_w  = min(w * 0.38, 230.0)
+        step_h  = min(h * 0.20, 110.0)
+        n1 = max(len(_SHORTCUTS_LEFT), len(_SHORTCUTS_RIGHT))
+        # A reference block is: header (16) + sep gap (10) + n rows.
+        diagram_h    = step_h * 1.6
+        section_gap  = 22.0
+        block1_h     = 26.0 + n1 * _ROW_H
+        block_h = diagram_h + section_gap + block1_h
         top     = max(12.0, (h - block_h) / 2.0)
         cx   = w / 2.0
 
@@ -888,72 +883,75 @@ class _WelcomeScreen(QWidget):
         painter.drawText(QPointF(origin_x - 15, one_y + 5),  "1")
         painter.drawText(QPointF(right_x + 22,  zero_y + 5), "t")
 
-        # ---- title -----------------------------------------------------
-        title_y = step_cy + step_h * 0.8 + 28
-        title_font = QFont()
-        title_font.setPointSizeF(22)
-        title_font.setWeight(QFont.Light)
-        painter.setFont(title_font)
-        painter.setPen(QPen(_C_TITLE))
-        painter.drawText(QRectF(0, title_y, w, 34),
-                         Qt.AlignHCenter | Qt.AlignTop, "Heaviside")
+        # ---- reference blocks ------------------------------------------
+        y = top + diagram_h
+        self._draw_ref_block(
+            painter, "KEYBOARD SHORTCUTS",
+            _SHORTCUTS_LEFT, _SHORTCUTS_RIGHT, y + section_gap, w, cx,
+            code_frac=0.42,
+        )
 
-        # ---- hints -----------------------------------------------------
-        hint_font = QFont()
-        hint_font.setPointSizeF(9.5)
-        painter.setFont(hint_font)
-        painter.setPen(QPen(_C_HINT))
-        hint_y = title_y + 40
-        for line in _HINTS:
-            painter.drawText(QRectF(0, hint_y, w, 20),
-                             Qt.AlignHCenter | Qt.AlignTop, line)
-            hint_y += 20
+    def _draw_ref_block(
+        self,
+        painter: QPainter,
+        title: str,
+        left: list,
+        right: list,
+        y: float,
+        w: float,
+        cx: float,
+        code_frac: float = 0.5,
+    ) -> float:
+        """Draw a titled two-column reference table starting at *y*.
 
-        # ---- quick-reference table -------------------------------------
-        ref_top  = hint_y + 12
-
-        # section header
+        Returns the y coordinate just below the last row, so the caller can
+        stack the next block beneath it.
+        """
+        # Section header (centred).
         hdr_font = QFont()
         hdr_font.setPointSizeF(8.5)
         hdr_font.setWeight(QFont.DemiBold)
         hdr_font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
         painter.setFont(hdr_font)
-        painter.setPen(QPen(_C_HINT))
-        painter.drawText(QRectF(0, ref_top, w, 14),
-                         Qt.AlignHCenter | Qt.AlignTop, "OPTIONS QUICK REFERENCE")
+        painter.setPen(QPen(_C_TITLE))
+        painter.drawText(QRectF(0, y, w, 14), Qt.AlignHCenter | Qt.AlignTop, title)
 
-        # thin separator
-        sep_y = ref_top + 16
-        painter.setPen(QPen(QColor(180, 195, 210, 140), 0.75))
+        # Thin separator.
+        sep_y = y + 16
         margin = max(20.0, (w - 520) / 2)
+        painter.setPen(QPen(QColor(180, 195, 210, 140), 0.75))
         painter.drawLine(QPointF(margin, sep_y), QPointF(w - margin, sep_y))
 
-        # two-column rows
+        # Two-column rows: monospaced code on the left of each column, plain
+        # description on the right.
         code_font = QFont("Menlo")
         code_font.setStyleHint(QFont.TypeWriter)
         code_font.setPointSizeF(8.5)
         desc_font = QFont()
         desc_font.setPointSizeF(8.5)
 
-        col_w   = min(260.0, (w - 2 * margin) / 2)
-        lx      = cx - col_w          # left column x start
-        rx      = cx + 4              # right column x start
-        row_y   = sep_y + 10
+        col_w = min(250.0, (w - 2 * margin) / 2)
+        lx = cx - col_w               # left column x start
+        rx = cx + 4                   # right column x start
+        desc_x = code_frac + 0.02     # description starts just after the code
+        row_y = sep_y + 10
+        n_rows = max(len(left), len(right))
 
         for i in range(n_rows):
-            for col_data, x0 in ((_REF_LEFT, lx), (_REF_RIGHT, rx)):
+            for col_data, x0 in ((left, lx), (right, rx)):
                 if i >= len(col_data):
                     continue
                 code, desc = col_data[i]
                 painter.setFont(code_font)
                 painter.setPen(QPen(_C_STEP))
-                painter.drawText(QRectF(x0, row_y, col_w * 0.52, row_h),
+                painter.drawText(QRectF(x0, row_y, col_w * code_frac, _ROW_H),
                                  Qt.AlignLeft | Qt.AlignVCenter, code)
                 painter.setFont(desc_font)
                 painter.setPen(QPen(_C_HINT))
-                painter.drawText(QRectF(x0 + col_w * 0.54, row_y, col_w * 0.46, row_h),
+                painter.drawText(QRectF(x0 + col_w * desc_x, row_y, col_w * (1 - desc_x), _ROW_H),
                                  Qt.AlignLeft | Qt.AlignVCenter, desc)
-            row_y += row_h
+            row_y += _ROW_H
+        return row_y
 
 
 # ---------------------------------------------------------------------------

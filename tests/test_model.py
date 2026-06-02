@@ -523,6 +523,27 @@ def test_open_endpoints_interior_vertices_excluded() -> None:
     assert (2.0, 3.0) in result
 
 
+def test_open_endpoints_voltage_annotation_does_not_connect_wire() -> None:
+    """A wire ending on a voltage annotation pin stays an open endpoint.
+
+    The `open` annotation is an open circuit, so it must not turn a dangling
+    wire end into a connected one.
+    """
+    va = Component(id="va", kind="open", position=(2.0, 0.0),
+                   rotation=0, options="v=$V$")          # pins (2,0),(4,0)
+    s = _make_schematic(va, wires=(_W("a", [(0.0, 0.0), (2.0, 0.0)]),))
+    result = open_endpoints(s)
+    assert (2.0, 0.0) in result   # wire end on the annotation pin → still open
+    assert (0.0, 0.0) in result
+
+
+def test_open_endpoints_real_pin_still_connects_wire() -> None:
+    """A wire ending on a real component pin is still excluded (sanity)."""
+    r = _R("r1", (2.0, 0.0))   # pins (2,0),(4,0)
+    s = _make_schematic(r, wires=(_W("a", [(0.0, 0.0), (2.0, 0.0)]),))
+    assert (2.0, 0.0) not in open_endpoints(s)
+
+
 # ---------------------------------------------------------------------------
 # unconnected_pins
 # ---------------------------------------------------------------------------
@@ -563,3 +584,36 @@ def test_unconnected_pins_no_components() -> None:
     """No components → no unconnected pins (and a stray wire is irrelevant)."""
     s = _make_schematic(wires=(_W("a", [(0.0, 0.0), (4.0, 0.0)]),))
     assert unconnected_pins(s) == set()
+
+
+def _open(cid, pos):
+    """Voltage annotation (CircuiTikZ `open`) — draws no wire."""
+    return Component(id=cid, kind="open", position=pos, rotation=0, options="v=$V$")
+
+
+def test_unconnected_pins_voltage_annotation_does_not_connect() -> None:
+    """A voltage annotation abutting a real pin must NOT suppress its ocirc.
+
+    The `open` annotation is an open circuit (draws nothing), so the resistor
+    pin it touches is still electrically dangling and stays in the set.
+    """
+    r = _R("r1", (0.0, 0.0))      # pins at (0,0) and (2,0)
+    va = _open("va", (2.0, 0.0))  # voltage annotation pin coincides with (2,0)
+    result = unconnected_pins(_make_schematic(r, va))
+    assert (2.0, 0.0) in result   # real pin still flagged despite the annotation
+    assert (0.0, 0.0) in result
+
+
+def test_unconnected_pins_voltage_annotation_pins_not_flagged() -> None:
+    """The voltage annotation's own pins are never flagged (not a terminal)."""
+    va = _open("va", (5.0, 5.0))  # free-floating annotation, pins (5,5),(7,5)
+    assert unconnected_pins(_make_schematic(va)) == set()
+
+
+def test_unconnected_pins_current_annotation_still_connects() -> None:
+    """A current annotation (`short`) IS a real wire, so it connects the pin."""
+    r = _R("r1", (0.0, 0.0))   # pins at (0,0) and (2,0)
+    short = Component(id="ca", kind="short", position=(2.0, 0.0),
+                      rotation=0, options="i=$i$")  # pins (2,0),(4,0)
+    result = unconnected_pins(_make_schematic(r, short))
+    assert (2.0, 0.0) not in result   # shared with the short → connected

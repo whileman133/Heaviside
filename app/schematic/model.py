@@ -244,21 +244,35 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
     return {pt for pt, d in degree.items() if d >= 3}
 
 
+# Kinds whose pins do not form an electrical connection. The voltage
+# annotation (``open``) renders as a CircuiTikZ ``to[open]`` — an open circuit
+# that draws nothing but a voltage label — so anything that merely abuts a
+# voltage annotation pin is still electrically open. Such pins neither connect a
+# wire endpoint (``open_endpoints``) nor a component pin (``unconnected_pins``),
+# and are never themselves flagged. (The current annotation ``short`` is a real
+# closed wire and is intentionally NOT listed here.)
+NON_CONNECTING_KINDS: frozenset[str] = frozenset({"open"})
+
+
 def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
     """Wire endpoints that do not connect to any component pin.
 
     An open endpoint is a wire's first or last point that lies at a position
-    not occupied by any component pin. These are rendered as open circles
-    (\\node[ocirc]) to indicate unconnected terminals.
+    not occupied by any connecting component pin. These are rendered as open
+    circles (\\node[ocirc]) to indicate unconnected terminals.
 
     Interior wire vertices are never open endpoints — only the first and last
-    point of each wire are candidates.
+    point of each wire are candidates.  Pins of :data:`NON_CONNECTING_KINDS`
+    (the ``open`` voltage annotation) do not count as a connection, so a wire
+    end that only touches one stays open.
 
     Pure function; returns a set of (x, y) tuples in grid units.
     """
-    # Collect all component pin positions.
+    # Collect connecting component pin positions (voltage annotations excluded).
     pin_positions: set[tuple[float, float]] = set()
     for comp in schematic.components:
+        if comp.kind in NON_CONNECTING_KINDS:
+            continue
         for p in component_pin_positions(comp):
             pin_positions.add((round(p[0], 6), round(p[1], 6)))
 
@@ -293,11 +307,15 @@ def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
     """Component pin positions that nothing connects to.
 
     A pin is *unconnected* when no wire vertex (endpoint or interior) lies at
-    its coordinate and no other component pin shares that exact coordinate.
-    These can be marked with open circles (``\\node[ocirc]``) to flag dangling
-    terminals — the counterpart of :func:`open_endpoints`, which flags dangling
-    *wire* ends. The two sets are disjoint by construction: open endpoints are
-    wire ends *not* at a pin, while these are pins with *no* wire.
+    its coordinate and no other connecting component pin shares that exact
+    coordinate. These can be marked with open circles (``\\node[ocirc]``) to
+    flag dangling terminals — the counterpart of :func:`open_endpoints`, which
+    flags dangling *wire* ends. The two sets are disjoint by construction: open
+    endpoints are wire ends *not* at a pin, while these are pins with *no* wire.
+
+    Pins of :data:`NON_CONNECTING_KINDS` (e.g. the ``open`` voltage annotation)
+    are ignored entirely: they form no connection, so they neither count as a
+    connection for a real pin nor are flagged themselves.
 
     Pure function; returns a set of (x, y) tuples in grid units.
     """
@@ -308,8 +326,11 @@ def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
             wire_points.add((round(pt[0], 6), round(pt[1], 6)))
 
     # Count component pins per coordinate so two abutting pins are not flagged.
+    # Non-connecting kinds (voltage annotation) are skipped entirely.
     pin_count: dict[tuple[float, float], int] = {}
     for comp in schematic.components:
+        if comp.kind in NON_CONNECTING_KINDS:
+            continue
         for p in component_pin_positions(comp):
             key = (round(p[0], 6), round(p[1], 6))
             pin_count[key] = pin_count.get(key, 0) + 1

@@ -51,6 +51,7 @@ from app.canvas.items import (
     _ResizableTwoTerminalItem,
 )
 from app.schematic.model import (
+    NON_CONNECTING_KINDS,
     component_pin_positions,
     route,
     simplify_points,
@@ -111,17 +112,22 @@ class DragPreviewController:
     # Shared helpers
     # ------------------------------------------------------------------
 
-    def _static_pin_positions(self) -> set[tuple[float, float]]:
+    def _static_pin_positions(self, connecting_only: bool = False) -> set[tuple[float, float]]:
         """Rounded pin coordinates of components NOT currently being dragged.
 
         Dragged components are excluded because their model positions are stale
         mid-drag; callers supply the live (dragged) pins via ``extra_pin_positions``.
+
+        When *connecting_only* is True, pins of ``NON_CONNECTING_KINDS`` (the
+        ``open`` voltage annotation) are omitted, so the open-endpoint preview
+        matches ``open_endpoints`` — a voltage annotation does not connect a wire.
         """
         dragged = set(self.drag_start.keys())
         return {
             _round_pt(p)
             for comp in self._scene._schematic.components
             if comp.id not in dragged
+            and not (connecting_only and comp.kind in NON_CONNECTING_KINDS)
             for p in component_pin_positions(comp)
         }
 
@@ -356,6 +362,8 @@ class DragPreviewController:
         for cid, start in self.drag_start.items():
             comp = next((c for c in scene._schematic.components if c.id == cid), None)
             item = scene._comp_items.get(cid)
+            if comp is not None and comp.kind in NON_CONNECTING_KINDS:
+                continue  # voltage annotation forms no connection
             if comp is not None and item is not None:
                 cur = scene_to_gu(item.pos())
                 ddx = cur[0] - start[0]
@@ -430,9 +438,10 @@ class DragPreviewController:
         otherwise cause connected wire endpoints to falsely appear as open.
         """
         scene = self._scene
-        # All pin positions, using live (dragged) positions via extra_pin_positions
+        # Connecting pin positions only (voltage annotations excluded, matching
+        # open_endpoints), using live (dragged) positions via extra_pin_positions
         # for components currently being dragged (their model positions are stale).
-        pin_positions = self._static_pin_positions()
+        pin_positions = self._static_pin_positions(connecting_only=True)
         if extra_pin_positions:
             pin_positions |= extra_pin_positions
 
@@ -493,6 +502,8 @@ class DragPreviewController:
         # everything else at its model position.
         pin_count: dict[tuple[float, float], int] = {}
         for comp in scene._schematic.components:
+            if comp.kind in NON_CONNECTING_KINDS:
+                continue  # voltage annotation forms no connection (mirrors unconnected_pins)
             live = comp
             if comp.id in self.drag_start:
                 item = scene._comp_items.get(comp.id)
