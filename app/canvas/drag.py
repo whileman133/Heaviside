@@ -265,6 +265,7 @@ class DragPreviewController:
         simplified = simplify_points(rebuilt)
         item.set_preview_points(simplified)
         self.update_ocirc_preview({wire_id: simplified})
+        self.update_pin_circle_preview({wire_id: simplified})
 
     # ------------------------------------------------------------------
     # Component drag
@@ -365,6 +366,7 @@ class DragPreviewController:
 
         self.update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)
         self.update_junction_preview(preview_pts, dragged_pins)
+        self.update_pin_circle_preview(preview_pts)
 
     def commit_component_drag(self) -> None:
         """Push the MoveCommand(s) for a finished component drag, then reset state.
@@ -470,6 +472,64 @@ class DragPreviewController:
                 oc.setPos(gu_to_scene(*coord))
                 scene.addItem(oc)
                 scene._open_circle_items[coord] = oc
+
+    def update_pin_circle_preview(
+        self,
+        preview_pts_by_wire: dict[str, list[tuple[float, float]]],
+    ) -> None:
+        """Keep unconnected-pin circles in sync during a drag (§10.8).
+
+        Recomputes which component pins are unconnected using the *live*
+        positions of any components currently being dragged (their model
+        positions are stale until commit) and preview wire points, then
+        reconciles ``scene._pin_circle_items``.  No-op unless the display
+        preference is enabled.
+        """
+        scene = self._scene
+        if not scene._mark_unconnected_pins:
+            return
+
+        # Live pin multiplicity: dragged components at their current item pos,
+        # everything else at its model position.
+        pin_count: dict[tuple[float, float], int] = {}
+        for comp in scene._schematic.components:
+            live = comp
+            if comp.id in self.drag_start:
+                item = scene._comp_items.get(comp.id)
+                if item is not None:
+                    cur = scene_to_gu(item.pos())
+                    start = self.drag_start[comp.id]
+                    ddx, ddy = cur[0] - start[0], cur[1] - start[1]
+                    live = replace(
+                        comp,
+                        position=(comp.position[0] + ddx, comp.position[1] + ddy),
+                    )
+            for p in component_pin_positions(live):
+                pr = _round_pt(p)
+                pin_count[pr] = pin_count.get(pr, 0) + 1
+
+        # Live wire vertices (preview-substituted where a wire is being dragged).
+        wire_points: set[tuple[float, float]] = set()
+        for wire in scene._schematic.wires:
+            pts = preview_pts_by_wire.get(wire.id, wire.points)
+            for pt in pts:
+                wire_points.add(_round_pt(pt))
+
+        desired = {
+            coord
+            for coord, count in pin_count.items()
+            if count == 1 and coord not in wire_points
+        }
+
+        for coord in list(scene._pin_circle_items):
+            if coord not in desired:
+                scene._remove_item(scene._pin_circle_items.pop(coord))
+        for coord in desired:
+            if coord not in scene._pin_circle_items:
+                pc = OpenCircleItem()
+                pc.setPos(gu_to_scene(*coord))
+                scene.addItem(pc)
+                scene._pin_circle_items[coord] = pc
 
     def update_junction_preview(
         self,

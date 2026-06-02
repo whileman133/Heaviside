@@ -6,6 +6,10 @@ Public API
 build_tex(circuitikz_source: str) -> str
     Wrap a CircuiTikZ environment in the minimal standalone template (§8.3).
 
+build_snippet(circuitikz_source: str) -> str
+    Prepend a preamble-requirements comment to a CircuiTikZ environment so the
+    result can be \input into an existing LaTeX document (§8.5).
+
 compile_tex(tex_source: str, *, timeout: int = 30) -> bytes
     Write *tex_source* to a temp directory, run pdflatex, and return the PDF
     bytes on success.  Raises CompileError on pdflatex failure or timeout.
@@ -13,6 +17,10 @@ compile_tex(tex_source: str, *, timeout: int = 30) -> bytes
 pdf_to_qimage(pdf_bytes: bytes, dpi: int = 150) -> QImage
     Convert the first page of a PDF (given as bytes) to a QImage using
     pdf2image / pdftoppm.
+
+pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes
+    Convert a PDF (given as bytes) to an EPS with a tight bounding box using
+    pdftocairo.  Raises CompileError if pdftocairo is missing or fails (§8.6).
 
 check_dependencies() -> list[str]
     Return a list of human-readable warning strings for each missing system
@@ -61,6 +69,30 @@ def build_tex(circuitikz_source: str) -> str:
     codegen layer, not here.
     """
     return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
+
+
+_SNIPPET_HEADER = r"""% CircuiTikZ schematic exported from Heaviside.
+% Include in your document with \input{<this file>}.
+% Your document preamble must contain:
+%   \usepackage[american]{circuitikz}
+%   \ctikzset{voltage=american, current=american, resistor=american}
+"""
+
+
+def build_snippet(circuitikz_source: str) -> str:
+    r"""
+    Return an includable ``.tex`` snippet for *circuitikz_source*.
+
+    The result is a comment block listing the required preamble packages
+    followed by the bare ``circuitikz`` environment, suitable for ``\input``
+    into an existing LaTeX document.  Unlike :func:`build_tex`, it adds no
+    ``\documentclass`` or ``\begin{document}`` so it does not stand alone.
+
+    The source must already be in CircuiTikZ Y-up convention — i.e. generated
+    with ``generate(schematic, y_flip=True)`` — so the included figure renders
+    in the same orientation as the canvas.
+    """
+    return _SNIPPET_HEADER + circuitikz_source + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +160,62 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
             raise CompileError("pdflatex produced no PDF output.", log=log)
 
         return pdf_file.read_bytes()
+
+
+# ---------------------------------------------------------------------------
+# PDF → EPS
+# ---------------------------------------------------------------------------
+
+def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
+    """
+    Convert *pdf_bytes* to an EPS document and return the EPS as bytes.
+
+    Uses ``pdftocairo -eps`` (from Poppler, the same package that provides the
+    ``pdftoppm`` used for preview).  ``-eps`` emits Encapsulated PostScript with
+    a tight bounding box derived from the PDF's crop box, which is exactly what
+    ``\\includegraphics`` expects.
+
+    The conversion happens in a fresh temporary directory that is removed
+    afterward regardless of outcome.
+
+    Raises
+    ------
+    CompileError
+        If ``pdftocairo`` is not found on PATH, exits non-zero, times out, or
+        produces no EPS output.
+    """
+    if shutil.which("pdftocairo") is None:
+        raise CompileError(
+            "pdftocairo not found on PATH. "
+            "Install Poppler (poppler-utils) to enable EPS export."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        pdf_file = tmp_path / "schematic.pdf"
+        eps_file = tmp_path / "schematic.eps"
+        pdf_file.write_bytes(pdf_bytes)
+
+        try:
+            result = subprocess.run(
+                ["pdftocairo", "-eps", str(pdf_file), str(eps_file)],
+                cwd=tmp,
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise CompileError(f"pdftocairo timed out after {timeout}s.") from exc
+
+        if result.returncode != 0:
+            log = result.stderr.decode("utf-8", errors="replace")
+            raise CompileError(
+                f"pdftocairo exited with code {result.returncode}.", log=log
+            )
+
+        if not eps_file.exists():
+            raise CompileError("pdftocairo produced no EPS output.")
+
+        return eps_file.read_bytes()
 
 
 # ---------------------------------------------------------------------------

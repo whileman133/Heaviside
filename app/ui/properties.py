@@ -1,45 +1,39 @@
 """
 Properties Panel (spec §10.3).
 
-Shows the selected component's CircuiTikZ options string, rotation controls,
-and mirror toggle.  Double-clicking a component on the canvas calls
-``show_component(comp_id)`` on this panel (wired up by MainWindow).
+The panel is built from **capability-based inspector sections** rather than one
+monolithic panel per component type.  Each :class:`InspectorSection` edits one
+capability (CircuiTikZ options, font, fill/border, layer, …) and declares which
+components it ``applies_to`` (by ``isinstance`` against the model hierarchy and
+its capability mixins ``FontedComponent`` / ``StyledComponent``).
 
-For circuit components the options field accepts an arbitrary CircuiTikZ option
-string exactly as it would appear inside ``to[KIND, ...]`` or ``node[KIND, ...]``.
+``PropertiesPanel`` holds an ordered list of sections in a scroll area.  On
+every selection change it walks the list, ``bind``-ing the sections that apply
+to the selected component (which shows them) and ``unbind``-ing the rest (which
+hides them).  Adding a component type that is, say, "fonted + filled" needs no
+new panel — the existing sections compose automatically.
 
-For drawing annotations the panel shows kind-specific controls:
-  - text_node: text-content field + font-size spinbox + z-order spinbox.
-  - rect:      line-style combo + line-width spinbox + fill combo + z-order spinbox.
+Section → applicability map:
+  OptionsSection      – plain circuit components (not DrawingComponent)
+  TextContentSection  – text_node
+  BipoleLabelSection  – bipole
+  DiodeSection        – diode (filled checkbox)
+  MosfetSection       – mosfet (body-diode checkbox)
+  FontSection         – FontedComponent (text_node, bipole)
+  FillBorderSection   – StyledComponent (rect, bipole)
+  TransformSection    – rotation (all but rect, whose rotation is a codegen no-op)
+                        + mirror (circuit + bipole only)
+  LayerSection        – DrawingComponent (z-order + move front/back)
 
-Rect visual properties (line style, line width, fill) are stored together in
-``Component.options`` as a comma-separated TikZ draw-options string that the
-code generator passes verbatim into ``\\draw[...] ... rectangle ...;``.
-The panel parses and recomposes this string from individual controls.
-
-Z-order is stored in the dedicated ``Component.z_order`` field (not in options).
-
-Panel architecture
-------------------
-``PropertiesPanel`` is a thin outer shell (header + separator + QStackedWidget).
-Each component type gets its own panel subclass that only builds the widgets it
-needs:
-
-  _CircuitPanel   – plain circuit components (opts, hint, rotation, mirror)
-  _DiodePanel     – _CircuitPanel + filled-variant checkbox
-  _MosfetPanel    – _CircuitPanel + body-diode checkbox
-  _TextNodePanel  – text content, font controls, z-order, rotation
-  _RectPanel      – line style/width/fill, move-to-front/back, z-order
-
-``PropertiesPanel`` maps ``type(comp)`` → panel subclass instance and swaps the
-stack to the matching panel on every selection change.
+All edits funnel through SchematicScene methods, which push undoable commands.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Callable
 
-from PySide6.QtCore import QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -52,19 +46,28 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QFrame,
+    QScrollArea,
     QSizePolicy,
     QButtonGroup,
-    QStackedWidget,
 )
 
 from app.canvas.scene import SchematicScene
-from app.components.model import BipoleComponent, DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
+from app.components.model import (
+    BipoleComponent,
+    DiodeComponent,
+    DrawingComponent,
+    FontedComponent,
+    MosfetComponent,
+    RectComponent,
+    StyledComponent,
+    TextNodeComponent,
+)
 from app.components.registry import REGISTRY
 from app.schematic.model import Component
 
 _PANEL_WIDTH = 250
 
-# ── Rect: line style ─────────────────────────────────────────────────────────
+# ── Line style ────────────────────────────────────────────────────────────────
 _LINE_STYLE_OPTIONS: list[tuple[str, str]] = [
     ("Solid",     ""),
     ("Dashed",    "dashed"),
@@ -74,7 +77,7 @@ _LINE_STYLE_OPTIONS: list[tuple[str, str]] = [
 _LABEL_TO_TIKZ_STYLE = {label: tikz for label, tikz in _LINE_STYLE_OPTIONS}
 _TIKZ_TO_LABEL_STYLE = {tikz: label for label, tikz in _LINE_STYLE_OPTIONS}
 
-# ── Rect: fill color ─────────────────────────────────────────────────────────
+# ── Fill color ──────────────────────────────────────────────────────────────
 _FILL_OPTIONS: list[tuple[str, str]] = [
     ("None",       ""),
     ("White",      "white"),
@@ -87,39 +90,92 @@ _FILL_OPTIONS: list[tuple[str, str]] = [
 _LABEL_TO_TIKZ_FILL = {label: tikz for label, tikz in _FILL_OPTIONS}
 _TIKZ_FILL_TO_LABEL: dict[str, str] = {tikz: label for label, tikz in _FILL_OPTIONS}
 
+_ROT_BTN_WIDTH = 52
+_Z_ORDER_TOOLTIP = "Negative = behind circuit elements; 0 = default; positive = in front"
+_DEBOUNCE_MS = 300
 
-# ── Rect options string helpers ───────────────────────────────────────────────
 
-def _parse_rect_options(options: str) -> tuple[str, float, str]:
-    """Parse a rect options string into (line_style, line_width_pt, fill).
+# ---------------------------------------------------------------------------
+# Small widget factories (shared across sections)
+# ---------------------------------------------------------------------------
 
-    Returns defaults (``""``, 0.4, ``""``) for any missing part.
+def _make_section_label(text: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
+    return lbl
+
+
+def _make_separator() -> QFrame:
+    """A sunken horizontal rule used between panel sections."""
+    sep = QFrame()
+    sep.setFrameShape(QFrame.HLine)
+    sep.setFrameShadow(QFrame.Sunken)
+    return sep
+
+
+def _make_rotation_row(
+    owner: QWidget, on_rotate: Callable[[int], None]
+) -> tuple[QHBoxLayout, dict[int, QPushButton]]:
+    """Build the exclusive 0/90/180/270° rotation button row.
+
+    Returns the row layout and the ``{angle: button}`` map. *on_rotate* is
+    invoked with the angle when a button is clicked. *owner* parents the
+    QButtonGroup so it stays alive.
     """
-    opts = options.strip()
+    row = QHBoxLayout()
+    row.setSpacing(4)
+    buttons: dict[int, QPushButton] = {}
+    group = QButtonGroup(owner)
+    group.setExclusive(True)
+    for angle in (0, 90, 180, 270):
+        btn = QPushButton(f"{angle}°")
+        btn.setCheckable(True)
+        btn.setFixedWidth(_ROT_BTN_WIDTH)
+        group.addButton(btn)
+        buttons[angle] = btn
+        btn.clicked.connect(lambda checked, a=angle: on_rotate(a))
+        row.addWidget(btn)
+    return row, buttons
 
-    lw_match = re.search(r"line\s+width\s*=\s*([\d.]+)\s*pt", opts)
-    line_width = float(lw_match.group(1)) if lw_match else 0.4
-    opts_no_lw = re.sub(r",?\s*line\s+width\s*=\s*[\d.]+\s*pt", "", opts).strip(", ")
 
-    fill_match = re.search(r"fill\s*=\s*([^,]+)", opts_no_lw)
-    fill = fill_match.group(1).strip() if fill_match else ""
-    opts_no_fill = re.sub(r",?\s*fill\s*=\s*[^,]+", "", opts_no_lw).strip(", ")
+def _make_combo_row(
+    label: str, items: list[str], on_change: Callable[[int], None]
+) -> tuple[QHBoxLayout, QComboBox]:
+    """Build a ``label: [combo]`` row populated with *items*."""
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel(label))
+    combo = QComboBox()
+    for it in items:
+        combo.addItem(it)
+    combo.currentIndexChanged.connect(on_change)
+    row.addWidget(combo, 1)
+    return row, combo
 
-    line_style = opts_no_fill.strip()
-    return line_style, line_width, fill
+
+def _make_double_spin_row(
+    label: str, lo: float, hi: float, step: float, decimals: int,
+    default: float, on_change: Callable[[float], None],
+) -> tuple[QHBoxLayout, QDoubleSpinBox]:
+    """Build a ``label: [double spinbox]`` row."""
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel(label))
+    spin = QDoubleSpinBox()
+    spin.setRange(lo, hi)
+    spin.setSingleStep(step)
+    spin.setDecimals(decimals)
+    spin.setValue(default)
+    spin.valueChanged.connect(on_change)
+    row.addWidget(spin, 1)
+    return row, spin
 
 
-def _compose_rect_options(line_style: str, line_width: float, fill: str) -> str:
-    """Compose a TikZ draw-options string from individual rect properties."""
-    parts: list[str] = []
-    if line_style:
-        parts.append(line_style)
-    if abs(line_width - 0.4) > 1e-6:
-        lw_str = f"{line_width:.1f}" if line_width == round(line_width, 1) else f"{line_width:.2f}"
-        parts.append(f"line width={lw_str}pt")
-    if fill:
-        parts.append(f"fill={fill}")
-    return ", ".join(parts)
+def _set_combo(combo: QComboBox, label: str) -> None:
+    """Select *label* in *combo* without emitting signals (falls back to index 0)."""
+    combo.blockSignals(True)
+    combo.setCurrentIndex(max(0, combo.findText(label)))
+    combo.blockSignals(False)
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +190,9 @@ _FF_MAP = {label: i for i, label in enumerate(_FF_LABELS)}
 class _FontControls(QWidget):
     """Reusable font-control group: size spinbox, bold/italic checkboxes, family combo.
 
-    Emits ``size_committed(float)`` after a 300 ms debounce when the size spinbox
-    changes, and ``style_committed(bool, bool, str)`` immediately when bold, italic,
-    or family changes.  Call :meth:`load` to populate without triggering signals.
+    Emits ``size_committed(float)`` after a debounce when the size spinbox
+    changes, and ``style_committed(bool, bool, str)`` immediately when bold,
+    italic, or family changes.  Call :meth:`load` to populate without signals.
     """
 
     size_committed = Signal(float)
@@ -183,7 +239,7 @@ class _FontControls(QWidget):
 
         self._size_timer = QTimer(self)
         self._size_timer.setSingleShot(True)
-        self._size_timer.setInterval(300)
+        self._size_timer.setInterval(_DEBOUNCE_MS)
         self._size_timer.timeout.connect(self._emit_size)
 
     def load(self, font_size: float, bold: bool, italic: bool, family: str) -> None:
@@ -201,10 +257,6 @@ class _FontControls(QWidget):
         self._family_combo.setCurrentIndex(_FF_MAP.get(family, 0))
         self._family_combo.blockSignals(False)
 
-    def set_enabled(self, enabled: bool) -> None:
-        for w in (self._size_spin, self._bold_cb, self._italic_cb, self._family_combo):
-            w.setEnabled(enabled)
-
     def _on_size_changed(self) -> None:
         self._size_timer.start()
 
@@ -220,509 +272,7 @@ class _FontControls(QWidget):
 
 
 # ---------------------------------------------------------------------------
-# Per-type panel base
-# ---------------------------------------------------------------------------
-
-class _BasePanel(QWidget):
-    """Common interface for all per-type property panels."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._scene: SchematicScene | None = None
-        self._current_comp_id: str | None = None
-
-    def set_scene(self, scene: SchematicScene) -> None:
-        self._scene = scene
-
-    def show_component(self, comp: Component) -> None:
-        raise NotImplementedError
-
-    def clear(self) -> None:
-        self._current_comp_id = None
-
-
-# ---------------------------------------------------------------------------
-# Circuit component panel (plain + diode subclass)
-# ---------------------------------------------------------------------------
-
-def _make_section_label(text: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
-    return lbl
-
-
-_ROT_BTN_WIDTH = 52
-_Z_ORDER_TOOLTIP = (
-    "Negative = behind circuit elements; 0 = default; positive = in front"
-)
-
-
-def _make_separator() -> QFrame:
-    """A sunken horizontal rule used between panel sections."""
-    sep = QFrame()
-    sep.setFrameShape(QFrame.HLine)
-    sep.setFrameShadow(QFrame.Sunken)
-    return sep
-
-
-def _make_rotation_row(
-    owner: QWidget, on_rotate: "Callable[[int], None]"
-) -> "tuple[QHBoxLayout, dict[int, QPushButton]]":
-    """Build the exclusive 0/90/180/270° rotation button row.
-
-    Returns the row layout and the ``{angle: button}`` map (the caller stores the
-    map for selection/enable updates). *on_rotate* is invoked with the angle when
-    a button is clicked. The owning widget parents the QButtonGroup so it stays
-    alive.
-    """
-    row = QHBoxLayout()
-    row.setSpacing(4)
-    buttons: dict[int, QPushButton] = {}
-    group = QButtonGroup(owner)
-    group.setExclusive(True)
-    for angle in (0, 90, 180, 270):
-        btn = QPushButton(f"{angle}°")
-        btn.setCheckable(True)
-        btn.setFixedWidth(_ROT_BTN_WIDTH)
-        group.addButton(btn)
-        buttons[angle] = btn
-        btn.clicked.connect(lambda checked, a=angle: on_rotate(a))
-        row.addWidget(btn)
-    return row, buttons
-
-
-def _make_z_order_row(
-    on_changed: "Callable[[int], None]"
-) -> "tuple[QHBoxLayout, QSpinBox]":
-    """Build the "Z-order" label + spin-box row (range -99..99).
-
-    Returns the row layout and the spin box (the caller stores it for value
-    updates). *on_changed* is connected to ``valueChanged``.
-    """
-    row = QHBoxLayout()
-    row.setSpacing(6)
-    row.addWidget(QLabel("Z-order"))
-    spin = QSpinBox()
-    spin.setRange(-99, 99)
-    spin.setToolTip(_Z_ORDER_TOOLTIP)
-    spin.valueChanged.connect(on_changed)
-    row.addWidget(spin)
-    row.addStretch(1)
-    return row, spin
-
-
-class _CircuitPanel(_BasePanel):
-    """
-    Panel for plain circuit components.
-
-    Layout: options field → hint → separator → rotation buttons → mirror →
-    (subclass extras via _build_extra_controls) → stretch.
-    """
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        layout.addWidget(_make_section_label("CircuiTikZ options"))
-
-        self._opts_field = QLineEdit()
-        self._opts_field.setPlaceholderText("e.g. l=$R_1$, v=$V_s$")
-        self._opts_field.textChanged.connect(self._on_options_changed)
-        layout.addWidget(self._opts_field)
-
-        self._hint_label = QLabel()
-        self._hint_label.setStyleSheet("color: #888; font-size: 10px;")
-        self._hint_label.setWordWrap(True)
-        layout.addWidget(self._hint_label)
-
-        layout.addWidget(_make_separator())
-
-        layout.addWidget(_make_section_label("Rotation"))
-
-        rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
-        layout.addLayout(rot_row)
-
-        self._mirror_cb = QCheckBox("Mirror (horizontal)")
-        self._mirror_cb.stateChanged.connect(self._on_mirror)
-        layout.addWidget(self._mirror_cb)
-
-        self._build_extra_controls(layout)
-        layout.addStretch(1)
-
-        self._commit_timer = QTimer(self)
-        self._commit_timer.setSingleShot(True)
-        self._commit_timer.setInterval(300)
-        self._commit_timer.timeout.connect(self._do_commit)
-
-        self._set_enabled(False)
-
-    def _build_extra_controls(self, layout: QVBoxLayout) -> None:
-        """Override in subclasses to append extra widgets before the stretch."""
-
-    def show_component(self, comp: Component) -> None:
-        self._current_comp_id = comp.id
-        defn = REGISTRY[comp.kind]
-
-        self._opts_field.blockSignals(True)
-        self._opts_field.setText(comp.options)
-        self._opts_field.blockSignals(False)
-
-        self._hint_label.setText(
-            "Slots: " + ", ".join(defn.label_slots) if defn.label_slots else ""
-        )
-
-        btn = self._rot_buttons.get(comp.rotation)
-        if btn:
-            btn.setChecked(True)
-
-        self._mirror_cb.blockSignals(True)
-        self._mirror_cb.setChecked(comp.mirror)
-        self._mirror_cb.blockSignals(False)
-
-        self._set_enabled(True)
-
-    def clear(self) -> None:
-        super().clear()
-        self._opts_field.blockSignals(True)
-        self._opts_field.clear()
-        self._opts_field.blockSignals(False)
-        self._hint_label.clear()
-        self._set_enabled(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        self._opts_field.setEnabled(enabled)
-        for btn in self._rot_buttons.values():
-            btn.setEnabled(enabled)
-        self._mirror_cb.setEnabled(enabled)
-
-    def _on_options_changed(self, text: str) -> None:
-        self._commit_timer.start()
-
-    def _do_commit(self) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.edit_component_options(
-                self._current_comp_id, self._opts_field.text().strip()
-            )
-
-    def _on_rotate(self, angle: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.rotate_component(self._current_comp_id, angle)
-
-    def _on_mirror(self, state: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.mirror_component(self._current_comp_id, bool(state))
-
-
-class _DiodePanel(_CircuitPanel):
-    """Circuit panel extended with a filled-variant checkbox."""
-
-    def _build_extra_controls(self, layout: QVBoxLayout) -> None:
-        self._filled_cb = QCheckBox("Filled")
-        self._filled_cb.stateChanged.connect(self._on_filled_changed)
-        layout.addWidget(self._filled_cb)
-
-    def show_component(self, comp: DiodeComponent) -> None:  # type: ignore[override]
-        super().show_component(comp)
-        self._filled_cb.blockSignals(True)
-        self._filled_cb.setChecked(comp.filled)
-        self._filled_cb.blockSignals(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        super()._set_enabled(enabled)
-        if hasattr(self, "_filled_cb"):
-            self._filled_cb.setEnabled(enabled)
-
-    def _on_filled_changed(self, state: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_component_filled(self._current_comp_id, bool(state))
-
-
-class _MosfetPanel(_CircuitPanel):
-    """Circuit panel extended with a body-diode checkbox."""
-
-    def _build_extra_controls(self, layout: QVBoxLayout) -> None:
-        self._body_diode_cb = QCheckBox("Body diode")
-        self._body_diode_cb.stateChanged.connect(self._on_body_diode_changed)
-        layout.addWidget(self._body_diode_cb)
-
-    def show_component(self, comp: MosfetComponent) -> None:  # type: ignore[override]
-        super().show_component(comp)
-        self._body_diode_cb.blockSignals(True)
-        self._body_diode_cb.setChecked(comp.body_diode)
-        self._body_diode_cb.blockSignals(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        super()._set_enabled(enabled)
-        if hasattr(self, "_body_diode_cb"):
-            self._body_diode_cb.setEnabled(enabled)
-
-    def _on_body_diode_changed(self, state: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_component_body_diode(self._current_comp_id, bool(state))
-
-
-# ---------------------------------------------------------------------------
-# Text node panel
-# ---------------------------------------------------------------------------
-
-class _TextNodePanel(_BasePanel):
-    """Panel for text annotations: text content, font controls, z-order, rotation."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        layout.addWidget(_make_section_label("Text content"))
-
-        self._text_field = QLineEdit()
-        self._text_field.setPlaceholderText("Your text here")
-        self._text_field.textChanged.connect(self._on_text_changed)
-        layout.addWidget(self._text_field)
-
-        layout.addWidget(_make_separator())
-
-        layout.addWidget(_make_section_label("Font"))
-        self._font_ctrl = _FontControls()
-        self._font_ctrl.size_committed.connect(self._on_font_size)
-        self._font_ctrl.style_committed.connect(self._on_font_style)
-        layout.addWidget(self._font_ctrl)
-
-        layout.addWidget(_make_separator())
-
-        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
-        layout.addLayout(z_row)
-
-        layout.addWidget(_make_separator())
-
-        layout.addWidget(_make_section_label("Rotation"))
-
-        rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
-        layout.addLayout(rot_row)
-
-        layout.addStretch(1)
-
-        self._commit_timer = QTimer(self)
-        self._commit_timer.setSingleShot(True)
-        self._commit_timer.setInterval(300)
-        self._commit_timer.timeout.connect(self._do_commit_text)
-
-        self._set_enabled(False)
-
-    def show_component(self, comp: TextNodeComponent) -> None:  # type: ignore[override]
-        self._current_comp_id = comp.id
-
-        self._text_field.blockSignals(True)
-        self._text_field.setText(comp.options)
-        self._text_field.blockSignals(False)
-
-        self._font_ctrl.load(comp.font_size, comp.font_bold, comp.font_italic, comp.font_family)
-
-        self._z_order_spin.blockSignals(True)
-        self._z_order_spin.setValue(comp.z_order)
-        self._z_order_spin.blockSignals(False)
-
-        btn = self._rot_buttons.get(comp.rotation)
-        if btn:
-            btn.setChecked(True)
-
-        self._set_enabled(True)
-
-    def clear(self) -> None:
-        super().clear()
-        self._text_field.blockSignals(True)
-        self._text_field.clear()
-        self._text_field.blockSignals(False)
-        self._set_enabled(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        self._text_field.setEnabled(enabled)
-        self._font_ctrl.set_enabled(enabled)
-        self._z_order_spin.setEnabled(enabled)
-        for btn in self._rot_buttons.values():
-            btn.setEnabled(enabled)
-
-    def _on_text_changed(self, _text: str) -> None:
-        self._commit_timer.start()
-
-    def _do_commit_text(self) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.edit_component_options(
-                self._current_comp_id, self._text_field.text().strip()
-            )
-
-    def _on_font_size(self, size: float) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_font_size(self._current_comp_id, size)
-
-    def _on_font_style(self, bold: bool, italic: bool, family: str) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_font_style(self._current_comp_id, bold, italic, family)
-
-    def _on_z_order_changed(self, value: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_component_z_order(self._current_comp_id, value)
-
-    def _on_rotate(self, angle: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.rotate_component(self._current_comp_id, angle)
-
-
-# ---------------------------------------------------------------------------
-# Rect panel
-# ---------------------------------------------------------------------------
-
-class _RectPanel(_BasePanel):
-    """Panel for rectangle annotations: line style/width/fill, z-order."""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-
-        layout.addWidget(_make_section_label("Rectangle style"))
-
-        ls_row = QHBoxLayout()
-        ls_row.setSpacing(6)
-        ls_row.addWidget(QLabel("Line style"))
-        self._line_style_combo = QComboBox()
-        for label, _ in _LINE_STYLE_OPTIONS:
-            self._line_style_combo.addItem(label)
-        self._line_style_combo.currentIndexChanged.connect(self._on_rect_changed)
-        ls_row.addWidget(self._line_style_combo, 1)
-        layout.addLayout(ls_row)
-
-        lw_row = QHBoxLayout()
-        lw_row.setSpacing(6)
-        lw_row.addWidget(QLabel("Line width (pt)"))
-        self._line_width_spin = QDoubleSpinBox()
-        self._line_width_spin.setRange(0.1, 10.0)
-        self._line_width_spin.setSingleStep(0.2)
-        self._line_width_spin.setDecimals(1)
-        self._line_width_spin.setValue(0.4)
-        self._line_width_spin.valueChanged.connect(self._on_rect_changed)
-        lw_row.addWidget(self._line_width_spin, 1)
-        layout.addLayout(lw_row)
-
-        fill_row = QHBoxLayout()
-        fill_row.setSpacing(6)
-        fill_row.addWidget(QLabel("Fill"))
-        self._fill_combo = QComboBox()
-        for label, _ in _FILL_OPTIONS:
-            self._fill_combo.addItem(label)
-        self._fill_combo.currentIndexChanged.connect(self._on_rect_changed)
-        fill_row.addWidget(self._fill_combo, 1)
-        layout.addLayout(fill_row)
-
-        layer_row = QHBoxLayout()
-        layer_row.setSpacing(6)
-        self._move_front_btn = QPushButton("Move to front")
-        self._move_front_btn.clicked.connect(self._on_move_to_front)
-        self._move_back_btn = QPushButton("Move to back")
-        self._move_back_btn.clicked.connect(self._on_move_to_back)
-        layer_row.addWidget(self._move_front_btn)
-        layer_row.addWidget(self._move_back_btn)
-        layout.addLayout(layer_row)
-
-        layout.addWidget(_make_separator())
-
-        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
-        layout.addLayout(z_row)
-
-        layout.addStretch(1)
-
-        self._rect_timer = QTimer(self)
-        self._rect_timer.setSingleShot(True)
-        self._rect_timer.setInterval(300)
-        self._rect_timer.timeout.connect(self._do_commit_rect)
-
-        self._set_enabled(False)
-
-    def show_component(self, comp: RectComponent) -> None:  # type: ignore[override]
-        self._current_comp_id = comp.id
-
-        line_style, line_width, fill = _parse_rect_options(comp.options)
-
-        self._line_style_combo.blockSignals(True)
-        label = _TIKZ_TO_LABEL_STYLE.get(line_style, "Solid")
-        self._line_style_combo.setCurrentIndex(max(0, self._line_style_combo.findText(label)))
-        self._line_style_combo.blockSignals(False)
-
-        self._line_width_spin.blockSignals(True)
-        self._line_width_spin.setValue(line_width)
-        self._line_width_spin.blockSignals(False)
-
-        self._fill_combo.blockSignals(True)
-        fill_label = _TIKZ_FILL_TO_LABEL.get(fill, "None")
-        self._fill_combo.setCurrentIndex(max(0, self._fill_combo.findText(fill_label)))
-        self._fill_combo.blockSignals(False)
-
-        self._z_order_spin.blockSignals(True)
-        self._z_order_spin.setValue(comp.z_order)
-        self._z_order_spin.blockSignals(False)
-
-        self._set_enabled(True)
-
-    def clear(self) -> None:
-        super().clear()
-        self._set_enabled(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        self._line_style_combo.setEnabled(enabled)
-        self._line_width_spin.setEnabled(enabled)
-        self._fill_combo.setEnabled(enabled)
-        self._move_front_btn.setEnabled(enabled)
-        self._move_back_btn.setEnabled(enabled)
-        self._z_order_spin.setEnabled(enabled)
-
-    def _on_rect_changed(self) -> None:
-        self._rect_timer.start()
-
-    def _do_commit_rect(self) -> None:
-        if self._scene and self._current_comp_id:
-            tikz_style = _LABEL_TO_TIKZ_STYLE.get(self._line_style_combo.currentText(), "")
-            fill = _LABEL_TO_TIKZ_FILL.get(self._fill_combo.currentText(), "")
-            options = _compose_rect_options(tikz_style, self._line_width_spin.value(), fill)
-            self._scene.edit_component_options(self._current_comp_id, options)
-
-    def _on_move_to_front(self) -> None:
-        if self._scene and self._current_comp_id:
-            z_orders = [
-                c.z_order for c in self._scene.schematic.components
-                if c.id != self._current_comp_id
-            ]
-            new_z = (max(z_orders) + 1) if z_orders else 1
-            self._scene.set_component_z_order(self._current_comp_id, new_z)
-            self._z_order_spin.blockSignals(True)
-            self._z_order_spin.setValue(new_z)
-            self._z_order_spin.blockSignals(False)
-
-    def _on_move_to_back(self) -> None:
-        if self._scene and self._current_comp_id:
-            z_orders = [
-                c.z_order for c in self._scene.schematic.components
-                if c.id != self._current_comp_id
-            ]
-            new_z = (min(z_orders) - 1) if z_orders else -1
-            self._scene.set_component_z_order(self._current_comp_id, new_z)
-            self._z_order_spin.blockSignals(True)
-            self._z_order_spin.setValue(new_z)
-            self._z_order_spin.blockSignals(False)
-
-    def _on_z_order_changed(self, value: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_component_z_order(self._current_comp_id, value)
-
-
-# ---------------------------------------------------------------------------
-# Bipole panel helpers
+# Bipole label helpers
 # ---------------------------------------------------------------------------
 
 def _extract_bipole_label(options: str) -> str:
@@ -740,205 +290,424 @@ def _replace_bipole_label(options: str, label: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Bipole panel
+# Inspector section base
 # ---------------------------------------------------------------------------
 
-class _BipolePanel(_BasePanel):
-    """Panel for the bipole: label text, CircuiTikZ options, rotation, mirror."""
+class InspectorSection(QWidget):
+    """Self-contained editor for one capability of a component.
+
+    Subclasses set :attr:`title`, build widgets into ``self.body`` in
+    :meth:`_build`, implement :meth:`applies_to` and :meth:`_load`, and wire
+    their own controls to scene-write callbacks.  The base owns the binding
+    lifecycle: :meth:`bind` populates + shows, :meth:`unbind` hides.
+
+    The leading separator is part of the section (so show/hide toggles it with
+    the section) but the owning panel hides it on the first visible section via
+    :meth:`set_top_separator_visible` to avoid a double rule under the header.
+    """
+
+    title: str | None = None
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._scene: SchematicScene | None = None
+        self._comp_id: str | None = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(6)
+        self._top_sep = _make_separator()
+        outer.addWidget(self._top_sep)
+        if self.title:
+            outer.addWidget(_make_section_label(self.title))
+        self.body = QVBoxLayout()
+        self.body.setSpacing(6)
+        outer.addLayout(self.body)
 
-        layout.addWidget(_make_section_label("Bipole label (t=)"))
+        self._build()
+        self.hide()
 
+    # --- subclass contract ----------------------------------------------
+    def _build(self) -> None:
+        """Construct the section's widgets into ``self.body``."""
+        raise NotImplementedError
+
+    def applies_to(self, comp: Component) -> bool:
+        raise NotImplementedError
+
+    def _load(self, comp: Component) -> None:
+        """Populate widgets from *comp* (signals already safe to block)."""
+        raise NotImplementedError
+
+    # --- lifecycle ------------------------------------------------------
+    def bind(self, comp: Component, scene: SchematicScene) -> None:
+        self._scene = scene
+        self._comp_id = comp.id
+        self._load(comp)
+        self.show()
+
+    def unbind(self) -> None:
+        self._comp_id = None
+        self.hide()
+
+    def set_top_separator_visible(self, visible: bool) -> None:
+        self._top_sep.setVisible(visible)
+
+    # --- helper for write callbacks -------------------------------------
+    def _target(self) -> tuple[SchematicScene, str] | None:
+        if self._scene is not None and self._comp_id is not None:
+            return self._scene, self._comp_id
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+
+class OptionsSection(InspectorSection):
+    """CircuiTikZ options string + slot hint, for plain circuit components."""
+
+    title = "CircuiTikZ options"
+
+    def _build(self) -> None:
+        self._field = QLineEdit()
+        self._field.setPlaceholderText("e.g. l=$R_1$, v=$V_s$")
+        self._field.textChanged.connect(lambda _t: self._timer.start())
+        self.body.addWidget(self._field)
+
+        self._hint = QLabel()
+        self._hint.setStyleSheet("color: #888; font-size: 10px;")
+        self._hint.setWordWrap(True)
+        self.body.addWidget(self._hint)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        return not isinstance(comp, DrawingComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._field.blockSignals(True)
+        self._field.setText(comp.options)
+        self._field.blockSignals(False)
+        slots = REGISTRY[comp.kind].label_slots
+        self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
+
+    def _commit(self) -> None:
+        t = self._target()
+        if t:
+            t[0].edit_component_options(t[1], self._field.text().strip())
+
+
+class TextContentSection(InspectorSection):
+    """Text content (stored in ``options``) for text_node."""
+
+    title = "Text content"
+
+    def _build(self) -> None:
+        self._field = QLineEdit()
+        self._field.setPlaceholderText("Your text here")
+        self._field.textChanged.connect(lambda _t: self._timer.start())
+        self.body.addWidget(self._field)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, TextNodeComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._field.blockSignals(True)
+        self._field.setText(comp.options)
+        self._field.blockSignals(False)
+
+    def _commit(self) -> None:
+        t = self._target()
+        if t:
+            t[0].edit_component_options(t[1], self._field.text().strip())
+
+
+class BipoleLabelSection(InspectorSection):
+    """Bipole ``t=`` label + other CircuiTikZ options, recomposed into ``options``."""
+
+    title = "Bipole label (t=)"
+
+    def _build(self) -> None:
         self._label_field = QLineEdit()
         self._label_field.setPlaceholderText("e.g. Processor")
-        self._label_field.textChanged.connect(self._on_label_changed)
-        layout.addWidget(self._label_field)
+        self._label_field.textChanged.connect(lambda _t: self._timer.start())
+        self.body.addWidget(self._label_field)
 
-        layout.addWidget(_make_separator())
-
-        layout.addWidget(_make_section_label("Other CircuiTikZ options"))
-
+        self.body.addWidget(_make_section_label("Other CircuiTikZ options"))
         self._opts_field = QLineEdit()
         self._opts_field.setPlaceholderText("e.g. l=$H(s)$, v=$V_o$")
-        self._opts_field.textChanged.connect(self._on_opts_changed)
-        layout.addWidget(self._opts_field)
+        self._opts_field.textChanged.connect(lambda _t: self._timer.start())
+        self.body.addWidget(self._opts_field)
 
         hint = QLabel("Slots: l, l_, v, v^, i, i_")
         hint.setStyleSheet("color: #888; font-size: 10px;")
-        layout.addWidget(hint)
+        self.body.addWidget(hint)
 
-        layout.addWidget(_make_separator())
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
 
-        layout.addWidget(_make_section_label("Font"))
-        self._font_ctrl = _FontControls()
-        self._font_ctrl.size_committed.connect(self._on_font_size)
-        self._font_ctrl.style_committed.connect(self._on_font_style)
-        layout.addWidget(self._font_ctrl)
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, BipoleComponent)
 
-        layout.addWidget(_make_separator())
+    def _load(self, comp: Component) -> None:
+        label = _extract_bipole_label(comp.options)
+        other = re.sub(r'\bt\s*=\s*[^,]+(,\s*)?', '', comp.options).strip(', ')
+        for field, val in ((self._label_field, label), (self._opts_field, other)):
+            field.blockSignals(True)
+            field.setText(val)
+            field.blockSignals(False)
 
-        layout.addWidget(_make_section_label("Appearance"))
+    def _commit(self) -> None:
+        t = self._target()
+        if t:
+            options = _replace_bipole_label(
+                self._opts_field.text().strip(), self._label_field.text().strip()
+            )
+            t[0].edit_component_options(t[1], options)
 
-        fill_row = QHBoxLayout()
-        fill_row.setSpacing(6)
-        fill_row.addWidget(QLabel("Fill"))
-        self._fill_combo = QComboBox()
-        for label, _ in _FILL_OPTIONS:
-            self._fill_combo.addItem(label)
-        self._fill_combo.currentIndexChanged.connect(self._on_fill_changed)
-        fill_row.addWidget(self._fill_combo, 1)
-        layout.addLayout(fill_row)
 
-        bw_row = QHBoxLayout()
-        bw_row.setSpacing(6)
-        bw_row.addWidget(QLabel("Border width (pt)"))
-        self._border_width_spin = QDoubleSpinBox()
-        self._border_width_spin.setRange(0.1, 10.0)
-        self._border_width_spin.setSingleStep(0.2)
-        self._border_width_spin.setDecimals(1)
-        self._border_width_spin.setValue(0.4)
-        self._border_width_spin.valueChanged.connect(self._on_border_width_changed)
-        bw_row.addWidget(self._border_width_spin, 1)
-        layout.addLayout(bw_row)
+class DiodeSection(InspectorSection):
+    """Filled-variant checkbox for diodes."""
 
-        layout.addWidget(_make_separator())
+    title = None
 
-        layout.addWidget(_make_section_label("Rotation"))
+    def _build(self) -> None:
+        self._cb = QCheckBox("Filled")
+        self._cb.stateChanged.connect(self._on_changed)
+        self.body.addWidget(self._cb)
 
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, DiodeComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._cb.blockSignals(True)
+        self._cb.setChecked(comp.filled)
+        self._cb.blockSignals(False)
+
+    def _on_changed(self, state: int) -> None:
+        t = self._target()
+        if t:
+            t[0].set_component_filled(t[1], bool(state))
+
+
+class MosfetSection(InspectorSection):
+    """Body-diode checkbox for MOSFETs."""
+
+    title = None
+
+    def _build(self) -> None:
+        self._cb = QCheckBox("Body diode")
+        self._cb.stateChanged.connect(self._on_changed)
+        self.body.addWidget(self._cb)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, MosfetComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._cb.blockSignals(True)
+        self._cb.setChecked(comp.body_diode)
+        self._cb.blockSignals(False)
+
+    def _on_changed(self, state: int) -> None:
+        t = self._target()
+        if t:
+            t[0].set_component_body_diode(t[1], bool(state))
+
+
+class FontSection(InspectorSection):
+    """Font controls for any FontedComponent (text_node, bipole)."""
+
+    title = "Font"
+
+    def _build(self) -> None:
+        self._font = _FontControls()
+        self._font.size_committed.connect(self._on_size)
+        self._font.style_committed.connect(self._on_style)
+        self.body.addWidget(self._font)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, FontedComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._font.load(comp.font_size, comp.font_bold, comp.font_italic, comp.font_family)
+
+    def _on_size(self, size: float) -> None:
+        t = self._target()
+        if t:
+            t[0].set_font_size(t[1], size)
+
+    def _on_style(self, bold: bool, italic: bool, family: str) -> None:
+        t = self._target()
+        if t:
+            t[0].set_font_style(t[1], bold, italic, family)
+
+
+class FillBorderSection(InspectorSection):
+    """Fill color, border width, and line style for any StyledComponent (rect, bipole).
+
+    Reads/writes the StyledComponent fields directly via the generic per-field
+    scene setters — no string parsing, no per-type branching.
+    """
+
+    title = "Fill & border"
+
+    def _build(self) -> None:
+        self._ls_row, self._line_style = _make_combo_row(
+            "Line style", [lbl for lbl, _ in _LINE_STYLE_OPTIONS], lambda _i: self._timer.start()
+        )
+        self.body.addLayout(self._ls_row)
+
+        bw_row, self._width = _make_double_spin_row(
+            "Border width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
+        )
+        self.body.addLayout(bw_row)
+
+        self._fill_row, self._fill = _make_combo_row(
+            "Fill", [lbl for lbl, _ in _FILL_OPTIONS], lambda _i: self._timer.start()
+        )
+        self.body.addLayout(self._fill_row)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, StyledComponent)
+
+    def _load(self, comp: Component) -> None:
+        _set_combo(self._line_style, _TIKZ_TO_LABEL_STYLE.get(comp.line_style, "Solid"))
+        self._width.blockSignals(True)
+        self._width.setValue(comp.border_width)
+        self._width.blockSignals(False)
+        _set_combo(self._fill, _TIKZ_FILL_TO_LABEL.get(comp.fill_color, "None"))
+
+    def _commit(self) -> None:
+        t = self._target()
+        if not t:
+            return
+        scene, cid = t
+        # Per-field undoable commands (no-ops when unchanged).
+        scene.set_line_style(cid, _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), ""))
+        scene.set_border_width(cid, self._width.value())
+        scene.set_fill_color(cid, _LABEL_TO_TIKZ_FILL.get(self._fill.currentText(), ""))
+
+
+class TransformSection(InspectorSection):
+    """Rotation buttons + mirror checkbox.
+
+    Rotation applies to everything except rect (whose rotation is a codegen
+    no-op).  Mirror is only meaningful for path-emitted circuit components and
+    the bipole node, so it is shown for those and hidden otherwise.
+    """
+
+    title = "Rotation"
+
+    def _build(self) -> None:
         rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
-        layout.addLayout(rot_row)
+        self.body.addLayout(rot_row)
 
         self._mirror_cb = QCheckBox("Mirror (horizontal)")
         self._mirror_cb.stateChanged.connect(self._on_mirror)
-        layout.addWidget(self._mirror_cb)
+        self.body.addWidget(self._mirror_cb)
 
-        layout.addWidget(_make_separator())
+    def applies_to(self, comp: Component) -> bool:
+        return not isinstance(comp, RectComponent)
 
-        z_row, self._z_order_spin = _make_z_order_row(self._on_z_order_changed)
-        layout.addLayout(z_row)
+    @staticmethod
+    def _mirror_applies(comp: Component) -> bool:
+        return not isinstance(comp, DrawingComponent) or isinstance(comp, BipoleComponent)
 
-        layout.addStretch(1)
+    def _load(self, comp: Component) -> None:
+        for angle, btn in self._rot_buttons.items():
+            btn.blockSignals(True)
+            btn.setChecked(angle == comp.rotation)
+            btn.blockSignals(False)
 
-        self._label_timer = QTimer(self)
-        self._label_timer.setSingleShot(True)
-        self._label_timer.setInterval(300)
-        self._label_timer.timeout.connect(self._do_commit)
-
-        self._opts_timer = QTimer(self)
-        self._opts_timer.setSingleShot(True)
-        self._opts_timer.setInterval(300)
-        self._opts_timer.timeout.connect(self._do_commit)
-
-        self._set_enabled(False)
-
-    def _current_options(self) -> str:
-        """Compose the full options string from label + other fields."""
-        return _replace_bipole_label(self._opts_field.text().strip(), self._label_field.text().strip())
-
-    def show_component(self, comp: BipoleComponent) -> None:  # type: ignore[override]
-        self._current_comp_id = comp.id
-
-        label = _extract_bipole_label(comp.options)
-        other = re.sub(r'\bt\s*=\s*[^,]+(,\s*)?', '', comp.options).strip(', ')
-
-        self._label_field.blockSignals(True)
-        self._label_field.setText(label)
-        self._label_field.blockSignals(False)
-
-        self._opts_field.blockSignals(True)
-        self._opts_field.setText(other)
-        self._opts_field.blockSignals(False)
-
-        self._font_ctrl.load(comp.font_size, comp.font_bold, comp.font_italic, comp.font_family)
-
-        self._fill_combo.blockSignals(True)
-        fill_label = _TIKZ_FILL_TO_LABEL.get(comp.fill_color, "None")
-        self._fill_combo.setCurrentIndex(max(0, self._fill_combo.findText(fill_label)))
-        self._fill_combo.blockSignals(False)
-
-        self._border_width_spin.blockSignals(True)
-        self._border_width_spin.setValue(comp.border_width)
-        self._border_width_spin.blockSignals(False)
-
-        btn = self._rot_buttons.get(comp.rotation)
-        if btn:
-            btn.setChecked(True)
-
-        self._mirror_cb.blockSignals(True)
-        self._mirror_cb.setChecked(comp.mirror)
-        self._mirror_cb.blockSignals(False)
-
-        self._z_order_spin.blockSignals(True)
-        self._z_order_spin.setValue(comp.z_order)
-        self._z_order_spin.blockSignals(False)
-
-        self._set_enabled(True)
-
-    def clear(self) -> None:
-        super().clear()
-        self._label_field.blockSignals(True)
-        self._label_field.clear()
-        self._label_field.blockSignals(False)
-        self._opts_field.blockSignals(True)
-        self._opts_field.clear()
-        self._opts_field.blockSignals(False)
-        self._set_enabled(False)
-
-    def _set_enabled(self, enabled: bool) -> None:
-        self._label_field.setEnabled(enabled)
-        self._opts_field.setEnabled(enabled)
-        self._font_ctrl.set_enabled(enabled)
-        self._fill_combo.setEnabled(enabled)
-        self._border_width_spin.setEnabled(enabled)
-        self._mirror_cb.setEnabled(enabled)
-        self._z_order_spin.setEnabled(enabled)
-        for btn in self._rot_buttons.values():
-            btn.setEnabled(enabled)
-
-    def _on_label_changed(self, _text: str) -> None:
-        self._label_timer.start()
-
-    def _on_opts_changed(self, _text: str) -> None:
-        self._opts_timer.start()
-
-    def _do_commit(self) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.edit_component_options(self._current_comp_id, self._current_options())
+        if self._mirror_applies(comp):
+            self._mirror_cb.show()
+            self._mirror_cb.blockSignals(True)
+            self._mirror_cb.setChecked(comp.mirror)
+            self._mirror_cb.blockSignals(False)
+        else:
+            self._mirror_cb.hide()
 
     def _on_rotate(self, angle: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.rotate_component(self._current_comp_id, angle)
-
-    def _on_font_size(self, size: float) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_font_size(self._current_comp_id, size)
-
-    def _on_font_style(self, bold: bool, italic: bool, family: str) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_font_style(self._current_comp_id, bold, italic, family)
-
-    def _on_fill_changed(self, _index: int) -> None:
-        if self._scene and self._current_comp_id:
-            fill = _LABEL_TO_TIKZ_FILL.get(self._fill_combo.currentText(), "")
-            self._scene.set_bipole_fill_color(self._current_comp_id, fill)
-
-    def _on_border_width_changed(self, value: float) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_bipole_border_width(self._current_comp_id, value)
+        t = self._target()
+        if t:
+            t[0].rotate_component(t[1], angle)
 
     def _on_mirror(self, state: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.mirror_component(self._current_comp_id, bool(state))
+        t = self._target()
+        if t:
+            t[0].mirror_component(t[1], bool(state))
 
-    def _on_z_order_changed(self, value: int) -> None:
-        if self._scene and self._current_comp_id:
-            self._scene.set_component_z_order(self._current_comp_id, value)
+
+class LayerSection(InspectorSection):
+    """Z-order spinbox + move-to-front/back buttons for any DrawingComponent."""
+
+    title = "Layer"
+
+    def _build(self) -> None:
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self._front_btn = QPushButton("Move to front")
+        self._front_btn.clicked.connect(lambda: self._move(to_front=True))
+        self._back_btn = QPushButton("Move to back")
+        self._back_btn.clicked.connect(lambda: self._move(to_front=False))
+        btn_row.addWidget(self._front_btn)
+        btn_row.addWidget(self._back_btn)
+        self.body.addLayout(btn_row)
+
+        z_row = QHBoxLayout()
+        z_row.setSpacing(6)
+        z_row.addWidget(QLabel("Z-order"))
+        self._z_spin = QSpinBox()
+        self._z_spin.setRange(-99, 99)
+        self._z_spin.setToolTip(_Z_ORDER_TOOLTIP)
+        self._z_spin.valueChanged.connect(self._on_z_changed)
+        z_row.addWidget(self._z_spin)
+        z_row.addStretch(1)
+        self.body.addLayout(z_row)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, DrawingComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._z_spin.blockSignals(True)
+        self._z_spin.setValue(comp.z_order)
+        self._z_spin.blockSignals(False)
+
+    def _on_z_changed(self, value: int) -> None:
+        t = self._target()
+        if t:
+            t[0].set_component_z_order(t[1], value)
+
+    def _move(self, *, to_front: bool) -> None:
+        t = self._target()
+        if not t:
+            return
+        scene, cid = t
+        z_orders = [c.z_order for c in scene.schematic.components if c.id != cid]
+        if to_front:
+            new_z = (max(z_orders) + 1) if z_orders else 1
+        else:
+            new_z = (min(z_orders) - 1) if z_orders else -1
+        scene.set_component_z_order(cid, new_z)
+        self._z_spin.blockSignals(True)
+        self._z_spin.setValue(new_z)
+        self._z_spin.blockSignals(False)
 
 
 # ---------------------------------------------------------------------------
@@ -949,14 +718,17 @@ class PropertiesPanel(QWidget):
     """
     Right-panel properties editor (spec §10.3).
 
-    Thin shell: header label + separator + QStackedWidget.  Each component
-    type has a dedicated panel subclass; the stack is swapped on selection.
+    Header label + a scrollable column of capability sections.  On selection the
+    sections that apply to the component are bound (shown) and the rest unbound
+    (hidden); see module docstring for the section → applicability map.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedWidth(_PANEL_WIDTH)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+
+        self._scene: SchematicScene | None = None
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(6, 6, 6, 6)
@@ -969,57 +741,68 @@ class PropertiesPanel(QWidget):
 
         outer.addWidget(_make_separator())
 
-        self._stack = QStackedWidget()
-        outer.addWidget(self._stack)
+        # Scrollable column of sections.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll)
 
-        self._empty = QWidget()
-        self._circuit = _CircuitPanel()
-        self._diode = _DiodePanel()
-        self._mosfet = _MosfetPanel()
-        self._text_node = _TextNodePanel()
-        self._rect = _RectPanel()
-        self._bipole = _BipolePanel()
+        content = QWidget()
+        col = QVBoxLayout(content)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(6)
 
-        for panel in (self._empty, self._circuit, self._diode, self._mosfet,
-                      self._text_node, self._rect, self._bipole):
-            self._stack.addWidget(panel)
-
-        self._type_to_panel: dict[type, _BasePanel] = {
-            DiodeComponent:    self._diode,
-            MosfetComponent:   self._mosfet,
-            TextNodeComponent: self._text_node,
-            RectComponent:     self._rect,
-            BipoleComponent:    self._bipole,
-        }
-
-        self._stack.setCurrentWidget(self._empty)
+        # Ordered section list — order is the visual order in the panel.
+        self._sections: list[InspectorSection] = [
+            OptionsSection(),
+            TextContentSection(),
+            BipoleLabelSection(),
+            DiodeSection(),
+            MosfetSection(),
+            FontSection(),
+            FillBorderSection(),
+            TransformSection(),
+            LayerSection(),
+        ]
+        for sec in self._sections:
+            col.addWidget(sec)
+        col.addStretch(1)
+        scroll.setWidget(content)
 
     def set_scene(self, scene: SchematicScene) -> None:
-        for panel in (self._circuit, self._diode, self._mosfet, self._text_node, self._rect, self._bipole):
-            panel.set_scene(scene)
         self._scene = scene
 
     def show_component(self, comp_id: str) -> None:
-        """Populate the panel for the component with the given id."""
-        comp = next(
-            (c for c in self._scene.schematic.components if c.id == comp_id), None
-        )
-        if comp is None:
+        """Bind every section that applies to the selected component; hide the rest."""
+        comp = None
+        if self._scene is not None:
+            comp = next(
+                (c for c in self._scene.schematic.components if c.id == comp_id), None
+            )
+        if comp is None or self._scene is None:
             self.clear()
             return
 
         defn = REGISTRY[comp.kind]
         self._header.setText(f"{defn.display_name}\n({comp.kind})")
 
-        panel = self._type_to_panel.get(type(comp), self._circuit)
-        self._stack.setCurrentWidget(panel)
-        panel.show_component(comp)
+        first_visible = True
+        for sec in self._sections:
+            if sec.applies_to(comp):
+                sec.bind(comp, self._scene)
+                sec.set_top_separator_visible(not first_visible)
+                first_visible = False
+            else:
+                sec.unbind()
 
     def clear(self) -> None:
         """Show 'No selection' state."""
         self._header.setText("No selection")
-        self._stack.setCurrentWidget(self._empty)
+        for sec in self._sections:
+            sec.unbind()
 
     def show_multi_select(self, count: int) -> None:
         self._header.setText(f"{count} components selected")
-        self._stack.setCurrentWidget(self._empty)
+        for sec in self._sections:
+            sec.unbind()

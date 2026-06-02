@@ -1070,6 +1070,40 @@ def test_unconnected_pin_at_skips_connected_pin(scene: SchematicScene):
     assert scene.unconnected_pin_at(scene.gu_to_scene(2.0, 0.0)) is None
 
 
+# ---------------------------------------------------------------------------
+# Unconnected-pin open circles on the canvas (display preference, §10.8)
+# ---------------------------------------------------------------------------
+
+def test_pin_circles_absent_by_default(scene: SchematicScene):
+    """No pin circles are drawn unless the preference is enabled."""
+    scene.place_component("R", (0.0, 0.0))
+    assert scene._pin_circle_items == {}
+
+
+def test_pin_circles_appear_when_enabled(scene: SchematicScene):
+    """Enabling the preference draws a circle at each unconnected pin."""
+    scene.place_component("R", (0.0, 0.0))   # free pins (0,0),(2,0)
+    scene.set_mark_unconnected_pins(True)
+    assert set(scene._pin_circle_items) == {(0.0, 0.0), (2.0, 0.0)}
+
+
+def test_pin_circles_toggle_off_removes_items(scene: SchematicScene):
+    """Disabling the preference removes the markers again."""
+    scene.place_component("R", (0.0, 0.0))
+    scene.set_mark_unconnected_pins(True)
+    scene.set_mark_unconnected_pins(False)
+    assert scene._pin_circle_items == {}
+
+
+def test_pin_circle_removed_when_pin_gets_wired(scene: SchematicScene):
+    """A pin that becomes wired loses its circle on the next rebuild."""
+    scene.place_component("R", (0.0, 0.0))   # free pins (0,0),(2,0)
+    scene.set_mark_unconnected_pins(True)
+    scene.add_wire([(2.0, 0.0), (4.0, 0.0)])  # wire now attaches (2,0)
+    assert (2.0, 0.0) not in scene._pin_circle_items
+    assert (0.0, 0.0) in scene._pin_circle_items
+
+
 def test_click_free_pin_enters_wire_mode(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))   # free pin (2,0)
     assert scene.mode == Mode.SELECT
@@ -1733,3 +1767,51 @@ def test_random_mutation_sequences_never_crash_paint():
                 pass
 
             paint()   # <- would segfault on a dangling item pointer
+
+
+# ---------------------------------------------------------------------------
+# Line-style rendering (regression: bipole ignored line_style on canvas)
+# ---------------------------------------------------------------------------
+
+def test_resolve_pen_style_mapping():
+    """The shared line_style → Qt pen-style mapping used by rect and bipole items."""
+    from PySide6.QtCore import Qt
+    from app.canvas.items import _resolve_pen_style
+    assert _resolve_pen_style("") == Qt.SolidLine
+    assert _resolve_pen_style("dashed") == Qt.DashLine
+    assert _resolve_pen_style("DOTTED") == Qt.DotLine        # case-insensitive
+    assert _resolve_pen_style("dash dot") == Qt.DashDotLine
+    assert _resolve_pen_style("bogus") == Qt.SolidLine        # unknown → solid
+
+
+def _render_scene(scene: SchematicScene) -> bytes:
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+    img = QImage(400, 240, QImage.Format_ARGB32)
+    img.fill(0)
+    p = QPainter(img)
+    # Map the items' bounding rect to fill the image so a thick dashed border
+    # spans many pixels and resolves distinctly from a solid one.
+    scene.render(p, QRectF(img.rect()), scene.itemsBoundingRect())
+    p.end()
+    return bytes(img.constBits())
+
+
+def test_bipole_line_style_changes_canvas_rendering(scene: SchematicScene):
+    """Changing a bipole's line_style repaints its border with the new style.
+
+    Regression: BipoleItem._draw_body previously built its pen without applying
+    line_style, so dashed/dotted borders looked solid on the canvas.
+    """
+    comp = scene.place_component("bipole", (1.0, 0.0))
+    # Drive edits through the scene (as the inspector does) so the canvas item
+    # is refreshed; thick border makes the dash pattern visible at render scale.
+    scene.set_border_width(comp.id, 3.0)
+
+    scene.set_line_style(comp.id, "")
+    solid = _render_scene(scene)
+
+    scene.set_line_style(comp.id, "dashed")
+    dashed = _render_scene(scene)
+
+    assert solid != dashed, "dashed bipole border should render differently from solid"

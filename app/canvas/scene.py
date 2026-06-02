@@ -83,6 +83,7 @@ from app.schematic.model import (
     component_pin_positions as _component_pin_positions,
     junction_points,
     open_endpoints,
+    unconnected_pins,
     route,
     simplify_points,
     wire_corner_splits_at,
@@ -157,6 +158,10 @@ class SchematicScene(QGraphicsScene):
         self._junction_items: dict[tuple[float, float], JunctionItem] = {}
         # open-endpoint coordinate (gu) -> open-circle item
         self._open_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
+        # unconnected-pin coordinate (gu) -> open-circle item (display preference)
+        self._pin_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
+        # Whether to draw open circles at unconnected component pins (§10.8).
+        self._mark_unconnected_pins: bool = False
 
         # Placement state
         self._place_kind: str | None = None
@@ -753,23 +758,32 @@ class SchematicScene(QGraphicsScene):
         """Set the body_diode state of a MosfetComponent via an undoable command."""
         self._push(SetBodyDiodeCommand(component_id, new_body_diode))
 
-    def set_bipole_fill_color(self, component_id: str, new_fill: str) -> None:
-        """Set fill_color on a BipoleComponent via an undoable command."""
-        from app.components.model import BipoleComponent
-        from app.canvas.commands import SetBipoleFillCommand
+    def set_fill_color(self, component_id: str, new_fill: str) -> None:
+        """Set fill_color on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetFillColorCommand
         comp = self._component_by_id(component_id)
-        if comp is None or not isinstance(comp, BipoleComponent) or comp.fill_color == new_fill:
+        if comp is None or not isinstance(comp, StyledComponent) or comp.fill_color == new_fill:
             return
-        self._push(SetBipoleFillCommand(component_id, new_fill, comp.fill_color))
+        self._push(SetFillColorCommand(component_id, new_fill, comp.fill_color))
 
-    def set_bipole_border_width(self, component_id: str, new_width: float) -> None:
-        """Set border_width on a BipoleComponent via an undoable command."""
-        from app.components.model import BipoleComponent
-        from app.canvas.commands import SetBipoleBorderWidthCommand
+    def set_border_width(self, component_id: str, new_width: float) -> None:
+        """Set border_width on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetBorderWidthCommand
         comp = self._component_by_id(component_id)
-        if comp is None or not isinstance(comp, BipoleComponent) or abs(comp.border_width - new_width) < 1e-6:
+        if comp is None or not isinstance(comp, StyledComponent) or abs(comp.border_width - new_width) < 1e-6:
             return
-        self._push(SetBipoleBorderWidthCommand(component_id, new_width, comp.border_width))
+        self._push(SetBorderWidthCommand(component_id, new_width, comp.border_width))
+
+    def set_line_style(self, component_id: str, new_style: str) -> None:
+        """Set line_style on a StyledComponent (bipole or rect) via an undoable command."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetLineStyleCommand
+        comp = self._component_by_id(component_id)
+        if comp is None or not isinstance(comp, StyledComponent) or comp.line_style == new_style:
+            return
+        self._push(SetLineStyleCommand(component_id, new_style, comp.line_style))
 
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
@@ -971,6 +985,20 @@ class SchematicScene(QGraphicsScene):
                 self.addItem(oc)
                 self._open_circle_items[coord] = oc
 
+        # --- unconnected-pin circles (display preference, §10.8) -----------
+        # Open circles at component pins nothing connects to.  Mirrors the
+        # generator's mark_unconnected_pins option; same OpenCircleItem visual.
+        wanted_pc = unconnected_pins(self._schematic) if self._mark_unconnected_pins else set()
+        for coord in list(self._pin_circle_items):
+            if coord not in wanted_pc:
+                self._remove_item(self._pin_circle_items.pop(coord))
+        for coord in wanted_pc:
+            if coord not in self._pin_circle_items:
+                pc = OpenCircleItem()
+                pc.setPos(self.gu_to_scene(*coord))
+                self.addItem(pc)
+                self._pin_circle_items[coord] = pc
+
         # Gate interactivity on the current mode (newly created items are
         # movable/selectable by default).
         self._apply_item_flags()
@@ -1059,6 +1087,18 @@ class SchematicScene(QGraphicsScene):
 
     def unconnected_pin_at(self, scene_pt: QPointF) -> tuple[float, float] | None:
         return self._wire_geom.unconnected_pin_at(scene_pt)
+
+    def set_mark_unconnected_pins(self, enabled: bool) -> None:
+        """Toggle open-circle markers at unconnected component pins (§10.8).
+
+        No-op if unchanged; otherwise rebuilds canvas items so the markers
+        appear or disappear immediately.
+        """
+        enabled = bool(enabled)
+        if enabled == self._mark_unconnected_pins:
+            return
+        self._mark_unconnected_pins = enabled
+        self._rebuild_items()
 
     def vertex_is_draggable(
         self, wire: Wire, index: int, pins: set[tuple[float, float]] | None = None

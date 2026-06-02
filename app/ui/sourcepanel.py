@@ -27,11 +27,12 @@ _DEBOUNCE_MS = 300
 class SourcePanel(QWidget):
     """Bottom panel with live CircuiTikZ source (spec §10.4)."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, preferences=None) -> None:
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self._scene: SchematicScene | None = None
+        self._prefs = preferences
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(_DEBOUNCE_MS)
@@ -72,11 +73,16 @@ class SourcePanel(QWidget):
         """Debounce source refresh to avoid regenerating on every mouse-move."""
         self._debounce.start()
 
+    def refresh(self) -> None:
+        """Regenerate the source immediately (e.g. after a preference change)."""
+        self._refresh()
+
     def _refresh(self) -> None:
         if self._scene is None:
             return
+        mark_pins = bool(self._prefs and self._prefs.mark_unconnected_pins)
         try:
-            source = generate(self._scene.schematic)
+            source = generate(self._scene.schematic, mark_unconnected_pins=mark_pins)
         except Exception as exc:
             source = f"% Error generating source: {exc}"
         self._text.setPlainText(source)

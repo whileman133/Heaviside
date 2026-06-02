@@ -58,8 +58,9 @@ __all__ = [
     "SetTextStyleCommand",
     "SetFilledCommand",
     "SetBodyDiodeCommand",
-    "SetBipoleFillCommand",
-    "SetBipoleBorderWidthCommand",
+    "SetFillColorCommand",
+    "SetBorderWidthCommand",
+    "SetLineStyleCommand",
     "MoveWireVertexCommand",
     "SplitWireCommand",
     "MergeWireCommand",
@@ -1054,8 +1055,8 @@ class SetBodyDiodeCommand(Command):
         comp.body_diode = self._old_body_diode if self._old_body_diode is not None else False
 
 
-class SetBipoleFillCommand(Command):
-    """Set fill_color on a BipoleComponent."""
+class SetFillColorCommand(Command):
+    """Set fill_color on a StyledComponent (bipole or rect)."""
 
     label = "Set Fill"
 
@@ -1065,18 +1066,18 @@ class SetBipoleFillCommand(Command):
         self._old_fill = old_fill
 
     def do(self, schematic: Schematic) -> None:
-        from app.components.model import BipoleComponent
-        comp = _typed_component(schematic, self._component_id, BipoleComponent)
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.fill_color = self._new_fill
 
     def undo(self, schematic: Schematic) -> None:
-        from app.components.model import BipoleComponent
-        comp = _typed_component(schematic, self._component_id, BipoleComponent)
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.fill_color = self._old_fill
 
 
-class SetBipoleBorderWidthCommand(Command):
-    """Set border_width on a BipoleComponent."""
+class SetBorderWidthCommand(Command):
+    """Set border_width on a StyledComponent (bipole or rect)."""
 
     label = "Set Border Width"
 
@@ -1086,14 +1087,35 @@ class SetBipoleBorderWidthCommand(Command):
         self._old_width = old_width
 
     def do(self, schematic: Schematic) -> None:
-        from app.components.model import BipoleComponent
-        comp = _typed_component(schematic, self._component_id, BipoleComponent)
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.border_width = self._new_width
 
     def undo(self, schematic: Schematic) -> None:
-        from app.components.model import BipoleComponent
-        comp = _typed_component(schematic, self._component_id, BipoleComponent)
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.border_width = self._old_width
+
+
+class SetLineStyleCommand(Command):
+    """Set line_style on a StyledComponent (bipole or rect)."""
+
+    label = "Set Line Style"
+
+    def __init__(self, component_id: str, new_style: str, old_style: str) -> None:
+        self._component_id = component_id
+        self._new_style = new_style
+        self._old_style = old_style
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
+        comp.line_style = self._new_style
+
+    def undo(self, schematic: Schematic) -> None:
+        from app.components.model import StyledComponent
+        comp = _typed_component(schematic, self._component_id, StyledComponent)
+        comp.line_style = self._old_style
 
 
 class GroupRotateCommand(Command):

@@ -128,7 +128,7 @@ class ComponentDef:
     component_class: type = Component  # Component subclass to instantiate for placed instances
 ```
 
-`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `BipoleComponent` for `bipole`. All of the last group extend `DrawingComponent` (`BipoleComponent` via `FontedComponent`). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
+`component_class` defaults to `Component`. Overridden in the registry for kinds that carry extra per-instance state: `DiodeComponent` for diodes, `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `BipoleComponent` for `bipole`. All of the last group extend the `DrawingComponent` base and compose capability mixins (`FontedComponent`, `StyledComponent`) for font and fill/border state respectively. The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
 
 ### 4.2 `Component` hierarchy
 
@@ -155,19 +155,37 @@ class MosfetComponent(Component):       # nigfete, nigfetd, pigfete, pigfetd
     body_diode: bool = False            # True → emit "bodydiode" option and use *_bodydiode SVG
 
 @dataclass
-class DrawingComponent(Component):      # text_node, rect, bipole
+class DrawingComponent(Component):      # base for text_node, rect, bipole
     z_order: int = 0                    # layer order (negative = behind circuit elements)
 
+# Capability mixins — standalone dataclasses, never instantiated alone.
+# CRITICAL: concrete classes must list mixins BEFORE DrawingComponent, or
+# dataclass reverse-MRO field ordering raises "non-default argument follows
+# default argument" at import.
 @dataclass
-class TextNodeComponent(DrawingComponent):
+class FontedComponent:                  # mixed into text_node and bipole
     font_size: float = 12.0             # points; emitted as \fontsize{N} in LaTeX
     font_bold: bool = False             # \bfseries
     font_italic: bool = False           # \itshape
     font_family: str = ""               # "" = default, "serif"/"sans"/"mono"
 
 @dataclass
-class RectComponent(DrawingComponent):  # options = TikZ draw-options; span_override = (w,h)
+class StyledComponent:                  # mixed into rect and bipole
+    fill_color: str = ""                # TikZ fill color, e.g. "yellow!20"; "" = transparent
+    border_width: float = 0.4           # border/line width in pt (TikZ default 0.4)
+    line_style: str = ""                # raw TikZ line-style tokens, e.g. "dashed"; "" = solid
+
+@dataclass
+class TextNodeComponent(FontedComponent, DrawingComponent):
     pass
+
+@dataclass
+class RectComponent(StyledComponent, DrawingComponent):  # span_override = (w,h)
+    pass
+
+@dataclass
+class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
+    font_size: float = 7.0              # override: smaller box default
 ```
 
 `label_offset` is `None` until the user manually drags the options label or the auto-placement algorithm sets it (see §8.3). Once set it is persisted in the file as a two-element JSON array; absent or `null` values load as `None`.
@@ -259,7 +277,7 @@ The script supports three component categories, each with a corresponding output
 |----------|-------------|----------------|---------|
 | `bipoles` | `bipoles/` | `\draw (0,0) to[kind] (2,0);` | R, C, L, open |
 | `tripoles` | `tripoles/` | `\node[kind] (X) at (0,0) {};` | op amp, nigfete |
-| `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground |
+| `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
 
 To add a new component: add it to the appropriate list in the script, re-run it, then add the `Placement` anchor in `svgsym.py` (see §5.5 for the measurement procedure) and an `ITEM_CLASSES` entry in `items.py`.
 
@@ -391,11 +409,21 @@ Both BJTs are placed with `anchor=B` (base pin) at `Component.position`. SVG sym
 
 Single-terminal components are placed as `\node[kind] at (x,y) {};` in the generated LaTeX. They have one pin (`in` at (0,0)) and `default_span=(0,0)`.
 
-| Kind | Display Name | Canvas Symbol |
-|------|-------------|--------------|
-| `ground` | Ground | Three horizontal bars of decreasing width |
-| `sground` | Signal Ground | Downward-pointing triangle |
-| `cground` | Chassis Ground | Horizontal bar with three diagonal ticks |
+| Kind | Display Name | Canvas Symbol | Label Slots |
+|------|-------------|--------------|-------------|
+| `ground` | Ground | Three horizontal bars of decreasing width | — |
+| `sground` | Signal Ground | Downward-pointing triangle | — |
+| `cground` | Chassis Ground | Horizontal bar with three diagonal ticks | — |
+| `rground` | Reference Ground | Single horizontal bar | — |
+| `nground` | Noiseless Ground | Wider horizontal bars | — |
+| `pground` | Protective Earth | Bar with diagonal ticks | — |
+| `eground` | Earth Ground | Protective earth variant | — |
+| `vcc` | VCC | Upward-pointing triangle with bar | `l` |
+| `vdd` | VDD | Upward-pointing triangle | `l` |
+| `vee` | VEE | Downward-pointing triangle with bar | `l` |
+| `vss` | VSS | Downward-pointing triangle | `l` |
+
+**Power rails** (`vcc`, `vdd`, `vee`, `vss`) support an optional `l=` label slot. The label is emitted as `label=right:{value}`, placing the voltage name to the right of the symbol bar — the conventional schematic position for power-rail net names.
 
 #### Annotations
 
@@ -412,7 +440,7 @@ Drawing annotations are non-circuit visual elements that appear in the palette u
 | Kind | Display Name | Pins | Default Span | Resizable | Inspector Controls |
 |------|-------------|------|-------------|-----------|-------------------|
 | `text_node` | Text | none | (0,0) | No | Text content field, Font size spinbox (6–72 pt), Bold/Italic checkboxes, Font family combo, Z-order spinbox, Rotation buttons (0°/90°/180°/270°) |
-| `rect` | Rectangle | none | (2,2) | Yes (corner drag) | Line style combo, Line width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
+| `rect` | Rectangle | none | (2,2) | Yes (corner drag) | Line style combo, Border width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
 
 #### Bipole Component (`bipole`)
 
@@ -422,19 +450,17 @@ The `bipole` kind is a generic labelled rectangular box representing an arbitrar
 |------|-------------|----------|------|-------------|-----------|
 | `bipole` | Bipole | Bipoles | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
 
-**Model:** `BipoleComponent(FontedComponent)` — extends `FontedComponent` → `DrawingComponent` (gains `z_order` for layer control and `font_*` for the label). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
+**Model:** `BipoleComponent(FontedComponent, StyledComponent, DrawingComponent)` — composes both capability mixins (gains `font_*` for the label and `fill_color`/`border_width`/`line_style` for the box) over the `DrawingComponent` base (`z_order`). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
 
-**Canvas rendering (`BipoleItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a solid rectangle of half-height `_BIPOLE_HALF_H` (0.25 GU) centered on the connecting line, from the origin pin to the terminal pin. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
+**Canvas rendering (`BipoleItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a rectangle of half-height `_BIPOLE_HALF_H` (0.25 GU) centered on the connecting line, from the origin pin to the terminal pin, using the `fill_color`, `border_width`, and `line_style` from the StyledComponent fields. The pen style is resolved from `line_style` via the shared `_resolve_pen_style()` helper (same mapping as `RectItem`), so dashed/dotted borders render on the canvas. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
 
 **Resizing:** Dragging the right endpoint handle changes `span_override`. The resize directly controls the box width in both the canvas preview and the LaTeX output. Committed via `ResizeCommand`.
 
-**Properties inspector (`_BipolePanel`):** Shows a **Bipole label (t=)** field, an **Other CircuiTikZ options** field, **Font** controls, an **Appearance** section with **Fill** color combo and **Border width (pt)** spinbox, **Rotation** buttons, **Mirror** checkbox, and **Z-order** spinbox.
+**Properties inspector:** The capability sections that apply to a bipole are `BipoleLabelSection` (label `t=` + other options), `FontSection`, `FillBorderSection` (line style, border width, fill), `TransformSection` (rotation + mirror), and `LayerSection` (front/back + z-order). See §10.3 for the section architecture. `line_style` is edited through the shared `FillBorderSection` (the same control rect uses), so bipoles support dashed/dotted borders.
 
 **Inline label editing:** Double-clicking a `BipoleItem` activates an inline text editor centred inside the box showing only the `t=` label text (not the full options string). On commit the edited text is spliced back into `options` using `_replace_bipole_label`, preserving all other slots. The painted label is suppressed while the editor is active.
 
-**Fill color** (`fill_color: str`, default `""`) — TikZ color string, e.g. `"yellow!20"`. Empty = no fill (transparent). The same palette as rect annotations is offered: None, White, Light gray, Yellow, Blue, Green, Red. Rendered on canvas using `_resolve_tikz_color`. Saved in JSON only when non-empty.
-
-**Border width** (`border_width: float`, default `0.4`) — border line width in points. Saved in JSON only when it differs from the default (0.4 pt). Rendered on canvas with the equivalent pixel width (pt × GRID_PX / 28.35).
+**Fill color, border width, line style** — carried by the shared `StyledComponent` mixin (same fields as rect): `fill_color: str` (default `""`, TikZ color e.g. `"yellow!20"`, empty = transparent; palette None/White/Light gray/Yellow/Blue/Green/Red), `border_width: float` (default `0.4` pt), and `line_style: str` (default `""` = solid, raw TikZ tokens e.g. `"dashed"`). Each is saved in JSON only when non-default and rendered on canvas (`_resolve_tikz_color` for fill; pixel-equivalent width for the border). Edited via per-field undoable commands (`SetFillColorCommand`, `SetBorderWidthCommand`, `SetLineStyleCommand`).
 
 **Code generation:** Bipole is NOT in `_TWO_TERMINAL_KINDS`. It is handled in the same background/foreground drawing-annotation passes as `rect` and `text_node`, via `_bipole_node_line()`. Emits a standalone TikZ node whose dimensions are derived from `span_override` so the box exactly fills the pin-to-pin space (example with a 3 cm custom span):
 ```latex
@@ -446,7 +472,7 @@ The `bipole` kind is a generic labelled rectangular box representing an arbitrar
 % empty label:
 \node[draw, minimum width=3cm, minimum height=0.5cm] at (1.5,0) {};
 ```
-`minimum width` = `span_override` length in GU (= cm in CircuiTikZ's default coordinate system); `minimum height` = 0.5 cm (2 × `_BIPOLE_HALF_H_GU` = 2 × 0.25 GU, matching standard bipole height). The TikZ `rotate=` value is the negated canvas rotation (TikZ is CCW, canvas is CW). `fill=` and `line width=` are appended when `fill_color` is non-empty or `border_width` differs from 0.4 pt. Wires whose endpoints coincide with the bipole's `in`/`out` pin coordinates connect naturally at the node's left/right edges.
+`minimum width` = `span_override` length in GU (= cm in CircuiTikZ's default coordinate system); `minimum height` = 0.5 cm (2 × `_BIPOLE_HALF_H_GU` = 2 × 0.25 GU, matching standard bipole height). The TikZ `rotate=` value is the negated canvas rotation (TikZ is CCW, canvas is CW). The style tokens (`line_style`, then `line width=`, then `fill=`) are composed by the shared `compose_style_options()` helper (`app/components/style.py`) and appended when non-default — the same helper used for `rect`. Wires whose endpoints coincide with the bipole's `in`/`out` pin coordinates connect naturally at the node's left/right edges.
 
 **Text node (`text_node`):**  
 `TextNodeComponent.position` is the `at` coordinate of the `\node`. `TextNodeComponent.options` is the text content (the `{…}` argument). The following fields on `TextNodeComponent` control text appearance:
@@ -463,11 +489,11 @@ The canvas item draws the text centered at the position using a QFont with match
 ```
 
 **Rectangle (`rect`):**  
-`RectComponent.position` is the first corner (top-left when span is positive). `RectComponent.span_override` (or `default_span` = (2,2) when not set) gives the offset `(dx, dy)` to the opposite corner. `RectComponent.options` is a TikZ draw-options string composed from the individual inspector controls — it may contain any combination of line style (`dashed`, `dotted`, `dash dot`), line width (`line width=Xpt`), and fill (`fill=color`), e.g. `"dashed, line width=1.5pt, fill=yellow!20"`. The string is passed verbatim as the `\draw[…]` argument. The canvas item draws the rectangle with the selected style and shows a square drag handle at the far corner when selected (no circuit pin dots). Resizing via the corner handle is undoable via `ResizeCommand`.
+`RectComponent.position` is the first corner (top-left when span is positive). `RectComponent.span_override` (or `default_span` = (2,2) when not set) gives the offset `(dx, dy)` to the opposite corner. The draw style is carried by the shared `StyledComponent` fields — `line_style` (e.g. `dashed`, `dotted`, `dash dot`), `border_width` (pt), and `fill_color` — and composed into the `\draw[…]` argument by `compose_style_options()` (the same helper used for `bipole`). `RectComponent.options` is unused; legacy files that stored the style string in `options` are migrated into the fields on load (and `options` cleared) by `schematic/io.py`. The canvas item draws the rectangle with the selected style and shows a square drag handle at the far corner when selected (no circuit pin dots). Resizing via the corner handle is undoable via `ResizeCommand`; style edits via the per-field `SetFillColorCommand` / `SetBorderWidthCommand` / `SetLineStyleCommand`.
 
 New rects default to `z_order = -10` (behind circuit elements). TikZ color strings in `fill=` (e.g. `yellow!20`, `gray!15`) are resolved to Qt colors using the `color!percent` mixing formula (percent% of the named color blended with white) before rendering on the Qt canvas. The hit region for selection is the full rectangle interior (not just a band along the diagonal), so clicking anywhere inside the rect selects it.
 
-The inspector shows **Move to front** and **Move to back** buttons: "Move to front" sets `z_order` to `max(all existing z_orders) + 1`; "Move to back" sets it to `min(all existing z_orders) - 1`. Both operations are undoable via `SetZOrderCommand` and update the Z-order spinbox. Code generation emits:
+The `LayerSection` of the inspector — shared by all `DrawingComponent` kinds (text_node, rect, bipole) — shows **Move to front** and **Move to back** buttons: "Move to front" sets `z_order` to `max(all existing z_orders) + 1`; "Move to back" sets it to `min(all existing z_orders) - 1`. Both operations are undoable via `SetZOrderCommand` and update the Z-order spinbox. Code generation emits:
 ```latex
 \draw[dashed, line width=1.5pt, fill=yellow!20] (x1,y1) rectangle (x2,y2);
 % solid with no extra options:
@@ -658,6 +684,21 @@ endpoints. Like junction dots, they are recomputed whenever the schematic change
 and are not stored in the model. During a **live drag preview** (vertex drag or
 component drag), open-circle items track the previewed endpoint positions in
 real time — they do not wait for the drag to be committed.
+
+#### Open-Circle Nodes (Unconnected Component Pins)
+
+When the **Mark unconnected component pins** display preference (§10.8) is on,
+the canvas also draws an open circle (the same `OpenCircleItem`) at every
+component pin that nothing connects to — the canvas counterpart of
+`generate(..., mark_unconnected_pins=True)` (§7.6), derived from
+`unconnected_pins()`. These are kept in a separate `_pin_circle_items` map so
+they never collide with the wire-endpoint circles, and are reconciled in
+`_rebuild_items` on every schematic change. `SchematicScene.set_mark_unconnected_pins()`
+toggles the preference and rebuilds immediately. During a **live drag preview**,
+`DragPreviewController.update_pin_circle_preview()` recomputes them from the
+dragged components' live positions and previewed wire points so the markers
+follow the gesture (e.g. a pin that picks up or loses a wire mid-drag) rather
+than waiting for commit. When the preference is off, no such items exist.
 
 ---
 
@@ -1006,6 +1047,18 @@ Both sets of nodes are placed after the path's terminating `;`. Coordinates use
 the same formatting rules as §7.3. Both sets are **derived** from the schematic
 geometry at generation time — they are not stored in the model.
 
+**Unconnected-pin circles** (optional) — when `generate()` is called with
+`mark_unconnected_pins=True`, an additional `\node[ocirc]` is emitted at every
+*component pin* that nothing connects to (`unconnected_pins()` in
+`app/schematic/model.py`: a pin with no wire vertex on its coordinate and no
+second component pin sharing it). This is the pin-side counterpart of the
+open-endpoint circles above, and the two sets are disjoint by construction. The
+flag is driven by the **Mark unconnected component pins** display preference
+(§10.8) and defaults to `False`, so output is unchanged unless requested. All
+call sites that should honor the preference (source panel, preview compilation,
+and the PDF/EPS/TeX exports) pass the current preference value through. The Qt
+canvas mirrors the same markers — see §10.5.
+
 ### 7.7 Drawing Annotation Commands
 
 After junction and open-endpoint nodes, the generator emits standalone commands for drawing annotations (`text_node`, `rect`). These produce nothing inside the `\draw` path block — `_component_lines()` returns `[]` for drawing kinds.
@@ -1096,10 +1149,57 @@ The string `% CIRCUITIKZ_SOURCE` is replaced verbatim by the output of
 
 The `border=4pt` option on `standalone` provides a small uniform margin.
 
+### 8.5 Export to TeX
+
+**File → Export to TeX…** (`Ctrl+E`) writes the schematic as an includable
+CircuiTikZ `.tex` snippet, chosen via a save dialog (default filename derived
+from the current document, defaulting to `untitled.tex`). The output is produced
+by `build_snippet()` in `app/preview/latex.py`:
+
+```latex
+% CircuiTikZ schematic exported from Heaviside.
+% Include in your document with \input{<this file>}.
+% Your document preamble must contain:
+%   \usepackage[american]{circuitikz}
+%   \ctikzset{voltage=american, current=american, resistor=american}
+\begin{circuitikz}
+  ...
+\end{circuitikz}
+```
+
+The snippet is a bare `circuitikz` environment preceded by a comment listing the
+preamble packages the host document must load — it deliberately omits
+`\documentclass` and `\begin{document}` so it can be `\input` into an existing
+document rather than compiled on its own. The source is generated with
+`generate(schematic, y_flip=True)` (Y-up convention, like preview compilation in
+§8.4) so the included figure renders in the same orientation as the canvas.
+
+### 8.6 Export to PDF / EPS
+
+**File → Export to PDF…** and **File → Export to EPS…** write a compiled image
+of the schematic, suitable for `\includegraphics` in a LaTeX document (or any
+other consumer). Both reuse the §8.1 compile pipeline:
+
+1. `generate(schematic, y_flip=True)` → `build_tex()` → `compile_tex()` yields
+   PDF bytes (run synchronously on the UI thread; the status bar shows
+   "Compiling…").
+2. **PDF export** writes those bytes directly.
+3. **EPS export** converts them with `pdf_to_eps()`, which runs
+   `pdftocairo -eps`. The `-eps` flag emits Encapsulated PostScript with a tight
+   bounding box derived from the PDF crop box.
+
+Unlike the §8.5 `.tex` snippet, these formats require `pdflatex` to be available
+at export time (and `pdftocairo` for EPS), but the result is a self-contained
+image that does not need the host document to load `circuitikz`. Compile or
+conversion failures are reported in a dialog (the `pdflatex` log is included for
+compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
+PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
+
 ### 8.4 Dependencies
 
 - `pdflatex` must be on the system `PATH`. Checked at startup; a warning dialog is shown if not found.
 - `pdf2image` Python package (wraps `pdftoppm` from Poppler).
+- `pdftocairo` (also from Poppler) is required for EPS export (§8.6); other features do not need it.
 - The `circuitikz` LaTeX package must be installed in the TeX distribution.
 
 ---
@@ -1108,7 +1208,7 @@ The `border=4pt` option on `standalone` provides a small uniform margin.
 
 ### 9.1 Save Format
 
-Schematics are saved as UTF-8 JSON files (no byte-order mark) with the extension `.ctikz`.
+Schematics are saved as UTF-8 JSON files (no byte-order mark) with the extension `.hv`.
 
 Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.tmp`) and then renamed over the target via `os.replace`, so an interrupted or failed write never corrupts an existing file.
 
@@ -1187,12 +1287,24 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 
 ### 10.3 Properties Panel
 
-- Right panel, fixed width ~240px.
-- Shows the `ComponentDef.display_name` and `kind` of the selected component.
-- A single `QLineEdit` for the raw CircuiTikZ options string, with valid slot names shown as hint text.
-- Rotation control: four buttons (0°, 90°, 180°, 270°) or a cycle button.
-- Mirror toggle checkbox.
+- Right panel, fixed width ~250px, header showing the `ComponentDef.display_name` and `kind`, followed by a vertical scroll area of **capability sections**.
 - Empty when no component is selected; shows multi-select count when multiple are selected.
+
+**Architecture — capability sections.** The panel is composed of `InspectorSection` widgets rather than one monolithic panel per component type. Each section edits one capability and declares which components it `applies_to` (by `isinstance` against the model hierarchy and the `FontedComponent` / `StyledComponent` mixins). On selection the panel walks an ordered section list, `bind`-ing (showing) the sections that apply and `unbind`-ing (hiding) the rest; the first visible section's leading separator is suppressed. Adding a component type that combines existing capabilities needs no new panel — the sections compose. Section → applicability:
+
+| Section | Applies to | Controls |
+|---------|-----------|----------|
+| `OptionsSection` | plain circuit (not `DrawingComponent`) | CircuiTikZ options field + slot hint |
+| `TextContentSection` | `text_node` | text-content field (stored in `options`) |
+| `BipoleLabelSection` | `bipole` | `t=` label field + other-options field + hint |
+| `DiodeSection` | `DiodeComponent` | **Filled** checkbox |
+| `MosfetSection` | `MosfetComponent` | **Body diode** checkbox |
+| `FontSection` | `FontedComponent` (text_node, bipole) | size / bold / italic / family |
+| `FillBorderSection` | `StyledComponent` (rect, bipole) | line style, border width, fill |
+| `TransformSection` | all but `rect` (rect rotation is a codegen no-op) | rotation buttons; mirror checkbox (circuit + bipole only) |
+| `LayerSection` | `DrawingComponent` (text_node, rect, bipole) | move front/back buttons + z-order spinbox |
+
+All section edits funnel through `SchematicScene` methods that push undoable commands. Text/options fields and the fill/border controls debounce commits 300 ms; checkboxes, rotation, mirror, and z-order commit immediately.
 
 ### 10.4 Source Panel
 
@@ -1216,6 +1328,7 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 | Open | `Ctrl+O` |
 | Save | `Ctrl+S` |
 | Save As | `Ctrl+Shift+S` |
+| Export to TeX | `Ctrl+E` |
 | Undo | `Ctrl+Z` |
 | Redo | `Ctrl+Shift+Z` |
 | Copy | `Ctrl+C` |
@@ -1223,6 +1336,7 @@ The `version` field in the JSON corresponds to the spec version. Future spec ver
 | Duplicate | `Ctrl+D` |
 | Delete | `Delete` / `Backspace` |
 | Select All | `Ctrl+A` |
+| Preferences | `Ctrl+,` |
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
@@ -1246,6 +1360,38 @@ A narrow vertical ribbon toolbar is docked on the **left edge** of the window (Q
 - Clicking a button invokes the corresponding `enter_*_mode()` on the scene.
 - The scene's `mode_changed` signal keeps the buttons in sync when mode changes originate from the keyboard.
 - The ribbon is non-movable (cannot be dragged to another dock area).
+
+### 10.8 Preferences
+
+**Edit → Preferences…** (`Ctrl+,`) opens a modal `PreferencesDialog`
+(`app/ui/preferences.py`). On macOS the action carries `QAction.PreferencesRole`
+so Qt relocates it to the standard application menu. Settings are persisted via
+`QSettings` (keyed by the organization/application names set in `main.py`) and
+accessed through the typed `Preferences` wrapper rather than raw string keys.
+The dialog reads current values on open and writes them back only on **OK**;
+**Cancel** discards changes. Accepting the dialog refreshes the source panel and
+recompiles the preview so a display change (e.g. marking unconnected pins) is
+reflected immediately.
+
+Current settings:
+
+| Setting | Key | Default | Effect |
+|---------|-----|---------|--------|
+| Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
+| Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
+| Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
+
+When either is enabled, `_do_save()` calls `_auto_export()`, which compiles the
+schematic **once** (reusing the §8.6 pipeline) and writes the requested sibling
+file(s) — the single PDF is converted to EPS via `pdf_to_eps()` when both are
+requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`) in a LaTeX
+document in sync with the schematic without a manual export step.
+
+Auto-export never blocks or aborts the save: it runs only *after* the `.hv`
+is written, and any failure (invalid schematic, missing `pdflatex`/`pdftocairo`,
+or a `pdflatex` error) is reported in the status bar only — not as a modal
+dialog, which would be intrusive on every save. The compile is synchronous, so
+saving adds the compile latency when auto-export is enabled.
 
 ---
 
@@ -1282,11 +1428,12 @@ heaviside/
 │   │   └── circuitikz.py          # generate(schematic) → str
 │   ├── preview/
 │   │   ├── worker.py              # PreviewWorker(QThread)
-│   │   └── latex.py               # build_tex(source) → str, helpers
+│   │   └── latex.py               # build_tex / build_snippet / pdf_to_eps, helpers
 │   └── ui/
 │       ├── mainwindow.py          # MainWindow(QMainWindow)
 │       ├── palette.py             # ComponentPalette(QWidget)
 │       ├── properties.py          # PropertiesPanel(QWidget)
+│       ├── preferences.py         # Preferences (QSettings), PreferencesDialog
 │       └── sourcepanel.py         # SourcePanel(QWidget)
 └── tests/
     ├── test_model.py              # model + validation + geometry helpers (simplify,
@@ -1420,6 +1567,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 
 | Test | Description |
 |------|-------------|
+| `test_component_mixin_composition` | `BipoleComponent` is an instance of both `FontedComponent` and `StyledComponent` (and `DrawingComponent`); `rect` is `StyledComponent`-only, `text_node` is `FontedComponent`-only; bipole's `font_size` override is 7.0. Guards mixin base-ordering. |
 | `test_component_valid` | A `Component` with a known `kind`, valid rotation, and valid position passes `validate()` with no errors. |
 | `test_component_invalid_kind` | A `Component` with a `kind` not in `REGISTRY` produces a validation error. |
 | `test_component_invalid_rotation` | A `Component` with rotation `45` produces a validation error. |
@@ -1463,18 +1611,27 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
 | `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
 | `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
+| `test_mark_unconnected_pins_off_by_default` / `test_mark_unconnected_pins_marks_dangling_pins` | With `mark_unconnected_pins=False` (default) a lone resistor emits no `ocirc`; with it `True`, both free pins get a `\node[ocirc]` (§7.6). |
+| `test_mark_unconnected_pins_skips_wired_pin` / `test_mark_unconnected_pins_respects_y_flip` | A pin with a wire on it is never marked even when the option is on; marked pins honor the `y_flip` convention. |
 | `test_text_node_basic` | A `text_node` at (2,3) with options "Hello" emits `\node at (2,3) {Hello};` outside the `\draw` block. |
 | `test_text_node_with_font_size` | A `text_node` with `span_override=(14,0)` emits `\node[font=\fontsize{14}…\selectfont] at (…) {…};`. |
 | `test_text_node_y_flip` | A `text_node` at (2,3) with `y_flip=True` emits `\node at (2,-3) {…};`. |
 | `test_text_node_rotation` | A `text_node` with `rotation=90` emits `\node[rotate=270] at (…) {…};` (negated: CW-visual maps to TikZ CCW convention). |
 | `test_text_node_rotation_with_font` | A `text_node` with `rotation=270` and `font_bold=True` emits `rotate=90` and `\bfseries` in the option list. |
 | `test_rect_solid` | A `rect` with no options and `span_override=(5,1)` at (-0.5,-0.5) emits `\draw (-0.5,-0.5) rectangle (4.5,0.5);`. |
-| `test_rect_dashed` | A `rect` with `options="dashed"` emits `\draw[dashed] … rectangle …;`. |
+| `test_rect_dashed` | A `rect` with `line_style="dashed"` emits `\draw[dashed] … rectangle …;`. |
 | `test_rect_uses_default_span_when_none` | A `rect` with `span_override=None` falls back to `default_span=(2,2)`. |
+| `test_rect_line_style_and_fill_combined` | A `rect` with `line_style="dotted"` + `fill_color="cyan!15"` emits `\draw[dotted, fill=cyan!15] … rectangle …;`. |
 | `test_drawing_kinds_not_in_draw_block` | `text_node` and `rect` produce nothing inside the main `\draw … ;` block. |
 | `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
 | `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
 | `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
+| `test_bipole_line_style` | A `bipole` with `line_style="dashed"` → emits `dashed` in the `\node[…]` options. |
+| `test_build_snippet_wraps_environment` | `build_snippet()` keeps the `circuitikz` environment intact and includes the generated source verbatim (§8.5). |
+| `test_build_snippet_lists_required_preamble` | The snippet documents the required `\usepackage[american]{circuitikz}` preamble and the `\input` usage. |
+| `test_build_snippet_has_no_document_wrapper` | The snippet is includable, not standalone: it emits no `\documentclass` or `\begin{document}`. |
+| `test_pdf_to_eps_missing_tool` | `pdf_to_eps()` raises `CompileError` mentioning `pdftocairo` when the tool is absent (§8.6). |
+| `test_pdf_to_eps_roundtrip` | A compiled schematic PDF converts to a valid EPS (`%!PS-Adobe`, `EPSF`, `%%BoundingBox`). Skipped without `pdflatex`+`pdftocairo`. |
 
 #### File I/O (`test_io.py`)
 
@@ -1489,16 +1646,20 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_label_offset_missing_loads_as_none` | Old files without `label_offset` field deserialise with `label_offset=None`. |
 | `test_label_offset_bad_type_raises` | `label_offset` with wrong type (string instead of two-element array) raises `SchematicLoadError`. |
 | `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
-| `test_load_unknown_version` | Loading a `.ctikz` file with an unrecognized `version` string raises a descriptive error. |
+| `test_load_unknown_version` | Loading a `.hv` file with an unrecognized `version` string raises a descriptive error. |
 | `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
 | `test_load_missing_field` | Loading a JSON file missing a required field raises a descriptive error. |
 | `test_load_invalid_invariant` | Loading a JSON file that violates an invariant (e.g., diagonal wire) raises a descriptive error. |
 | `test_save_creates_file` | `save()` creates a file at the specified path. |
-| `test_save_is_utf8` | Saved `.ctikz` files are valid UTF-8 and contain no byte-order marks. |
+| `test_save_is_utf8` | Saved `.hv` files are valid UTF-8 and contain no byte-order marks. |
 | `test_save_is_atomic_overwrite` | `save()` atomically replaces an existing file (latest write wins) and leaves no `.tmp` file behind. |
 | `test_bipole_fill_color_roundtrip` | `BipoleComponent.fill_color` survives a save/load cycle. |
 | `test_bipole_border_width_roundtrip` | `BipoleComponent.border_width` survives a save/load cycle. |
 | `test_bipole_defaults_not_saved` | Default `fill_color=""` and `border_width=0.4` are omitted from the JSON. |
+| `test_bipole_line_style_roundtrip` | `BipoleComponent.line_style="dashed"` survives a save/load cycle. |
+| `test_rect_style_fields_roundtrip` | `RectComponent` `fill_color`/`border_width`/`line_style` survive a save/load cycle with empty `options`. |
+| `test_rect_legacy_options_migrated_to_fields` | A legacy `rect` storing its style in `options` is migrated into the `StyledComponent` fields on load (and `options` cleared). |
+| `test_styled_defaults_not_saved` | Default `fill_color`/`border_width`/`line_style` are omitted from the JSON. |
 | `test_mosfet_body_diode_roundtrip` | `MosfetComponent.body_diode=True` survives a save/load cycle. |
 | `test_mosfet_body_diode_false_not_saved` | Default `body_diode=False` is omitted from the JSON. |
 
@@ -1519,6 +1680,7 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
 | `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a pin-connected end is excluded. |
+| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. |
 | `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
 | `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
 | `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
@@ -1538,6 +1700,16 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 #### Preview Worker (`test_worker.py`)
 
 `PreviewWorker` thread lifecycle: `shutdown()` stops the background `QThread`; it is idempotent (safe to call from both `closeEvent` and `aboutToQuit`); and emitting `QApplication.aboutToQuit` stops the thread even when the window's `closeEvent` never fired.
+
+#### Preferences (`test_preferences.py`)
+
+The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
+isolated `QSettings` backed by a temp INI file (never touching the real user
+store): auto-export and mark-unconnected-pins defaults are off; PDF/EPS and the
+display flag round-trip and persist across new `Preferences` instances over the
+same backing file; `_to_bool` normalizes the string booleans `QSettings` may
+return; the dialog persists all checkbox state on accept and discards it on
+cancel.
 
 ### 13.3 Integration Tests
 
@@ -1567,6 +1739,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_double_click_wire_near_component_enters_wire_mode` | Wire double-click is detected even when the wire is inside a component's bounding box — the wire check runs before the component check (regression: component bbox previously swallowed the event). |
 | `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
 | `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
+| `test_pin_circles_absent_by_default` / `test_pin_circles_appear_when_enabled` / `test_pin_circles_toggle_off_removes_items` | Unconnected-pin circles (§10.5) are absent until `set_mark_unconnected_pins(True)`, then drawn at each free pin, and removed again when toggled off. |
+| `test_pin_circle_removed_when_pin_gets_wired` | With the preference on, attaching a wire to a previously-free pin removes that pin's circle on the next rebuild while the still-free pin keeps its own. |
 | `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
 | `test_drag_release_at_same_spot_is_noop` / `test_click_near_endpoint_selects_short_wire` / `test_click_on_segment_near_vertex_does_not_move_it` | A vertex grab is a drag only if the snapped cursor moves between press and release; a stationary click selects the wire (no command, no geometry change), so a short wire with an open-circle end is selectable/deletable near its ends and clicking a segment near a vertex never relocates the vertex or inserts a spurious junction (regression). |
 | `test_click_at_t_junction_selects_through_wire_half` | With split-on-join, each half of a split through wire is a separate wire object; clicking on the body of each half selects that half (not the stub). |
@@ -1578,6 +1752,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
 | `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). Enforces the §6.8 memory-safety invariant. |
 | `test_random_mutation_sequences_never_crash_paint` | Randomized sequences of place/wire/rotate/delete/nudge/undo/redo, painting through a real view (and `scene.render`) after each step, never crash. A probabilistic safety net for the §6.8 graphics-item-lifetime invariant (a use-after-free faults nondeterministically and cannot be checked deterministically without a native sanitizer). |
+| `test_resolve_pen_style_mapping` | `_resolve_pen_style()` maps line-style tokens to Qt pen styles (case-insensitive; unknown/empty → solid), shared by rect and bipole items. |
+| `test_bipole_line_style_changes_canvas_rendering` | Setting a bipole's `line_style` to `"dashed"` via the scene renders a different canvas image than solid. Regression: `BipoleItem` previously ignored `line_style` when building its pen. |
 
 ### 13.4 Acceptance Criteria
 
@@ -1642,7 +1818,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] The main UI remains responsive during compilation (main thread not blocked).
 
 #### AC-8: Save and Load
-- [ ] `Ctrl+S` saves the schematic to a `.ctikz` file.
+- [ ] `Ctrl+S` saves the schematic to a `.hv` file.
 - [ ] The saved file is valid UTF-8 JSON readable in a text editor.
 - [ ] Loading a saved file restores all components, wires, labels, rotations, and mirror states exactly.
 - [ ] Loading a corrupted or invalid file shows an error dialog and leaves the current schematic unchanged.
@@ -1653,7 +1829,7 @@ The following scenario must complete without error:
 2. Place a voltage source, two resistors, an op-amp, and connecting wires to form a simple inverting amplifier circuit.
 3. Assign LaTeX labels to all components, including at least one equation of the form `$\frac{R_2}{R_1}$`.
 4. Compile the preview and verify it matches the intended circuit visually.
-5. Save the schematic to a `.ctikz` file.
+5. Save the schematic to a `.hv` file.
 6. Close and relaunch the application.
 7. Load the saved file and verify all components, wires, and labels are restored identically.
 8. Compile the preview again and verify it matches the pre-save output.

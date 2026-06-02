@@ -456,6 +456,54 @@ _EGROUND = ComponentDef(
 )
 
 # ---------------------------------------------------------------------------
+# Power rails (single-terminal, positive supplies point up, negative down)
+# ---------------------------------------------------------------------------
+
+_VCC = ComponentDef(
+    kind="vcc",
+    display_name="VCC",
+    category="Nodes",
+    bbox=(-0.5, -0.75, 0.5, 0.0),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=["l"],
+    tikz_keyword="vcc",
+    default_span=(0.0, 0.0),
+)
+
+_VDD = ComponentDef(
+    kind="vdd",
+    display_name="VDD",
+    category="Nodes",
+    bbox=(-0.5, -0.75, 0.5, 0.0),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=["l"],
+    tikz_keyword="vdd",
+    default_span=(0.0, 0.0),
+)
+
+_VEE = ComponentDef(
+    kind="vee",
+    display_name="VEE",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=["l"],
+    tikz_keyword="vee",
+    default_span=(0.0, 0.0),
+)
+
+_VSS = ComponentDef(
+    kind="vss",
+    display_name="VSS",
+    category="Nodes",
+    bbox=(-0.5, 0.0, 0.5, 0.75),
+    pins=[PinDef(name="in", offset=(0.0, 0.0))],
+    label_slots=["l"],
+    tikz_keyword="vss",
+    default_span=(0.0, 0.0),
+)
+
+# ---------------------------------------------------------------------------
 # Drawing annotations (non-circuit visual elements)
 # ---------------------------------------------------------------------------
 
@@ -543,6 +591,10 @@ REGISTRY: dict[str, ComponentDef] = {
         _PGROUND,
         _CGROUND,
         _EGROUND,
+        _VCC,
+        _VDD,
+        _VEE,
+        _VSS,
         _TEXT_NODE,
         _RECT,
     ]

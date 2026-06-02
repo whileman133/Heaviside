@@ -713,6 +713,23 @@ class EgroundItem(_GroundBase):
 
 
 # ---------------------------------------------------------------------------
+# Power rails (single-terminal, positive supplies point up, negative down)
+# ---------------------------------------------------------------------------
+
+class VccItem(_GroundBase):
+    """VCC power rail node (SVG: vcc)."""
+
+class VddItem(_GroundBase):
+    """VDD power rail node (SVG: vdd)."""
+
+class VeeItem(_GroundBase):
+    """VEE power rail node (SVG: vee)."""
+
+class VssItem(_GroundBase):
+    """VSS power rail node (SVG: vss)."""
+
+
+# ---------------------------------------------------------------------------
 # Wire item
 # ---------------------------------------------------------------------------
 
@@ -1040,6 +1057,15 @@ _RECT_STYLE_MAP: dict[str, Qt.PenStyle] = {
 }
 
 
+def _resolve_pen_style(line_style: str) -> Qt.PenStyle:
+    """Map a StyledComponent ``line_style`` token to a Qt pen style.
+
+    Shared by RectItem and BipoleItem so both render the same line styles
+    (unknown/empty → solid).
+    """
+    return _RECT_STYLE_MAP.get(line_style.strip().lower(), Qt.SolidLine)
+
+
 class TextNodeItem(_DrawingAnnotationBase):
     """Text annotation placed at a point on the canvas.
 
@@ -1166,32 +1192,19 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 
     ``component.position`` is the first corner; ``component.span_override`` (or
     ``default_span``) gives the offset (dx, dy) to the opposite corner.
-    ``component.options`` is a TikZ draw-options string that may contain any
-    combination of line style, line width, and fill, e.g.
-    ``"dashed, line width=1.5pt, fill=yellow!20"``.  No circuit pins.
+    Fill, border width, and line style come from the StyledComponent fields
+    (``fill_color``, ``border_width``, ``line_style``).  No circuit pins.
     """
 
     def _sync_options_item(self) -> None:
         self._options_item.setVisible(False)
 
     def _parse_options(self) -> tuple[Qt.PenStyle, float, str]:
-        """Return (pen_style, line_width_px, fill_color_name) from options."""
-        opts = self._component.options
-
-        lw_match = re.search(r"line\s+width\s*=\s*([\d.]+)\s*pt", opts)
-        line_width_pt = float(lw_match.group(1)) if lw_match else 0.4
+        """Return (pen_style, line_width_px, fill_color_name) from the style fields."""
+        comp = self._component
         # Convert pt to pixels: 1 pt ≈ 1.333 px at 96 dpi; keep proportional.
-        line_width_px = line_width_pt * 1.333
-
-        fill_match = re.search(r"fill\s*=\s*([^,]+)", opts)
-        fill = fill_match.group(1).strip() if fill_match else ""
-
-        # Identify line style keyword (strip line width and fill tokens).
-        remainder = re.sub(r",?\s*line\s+width\s*=\s*[\d.]+\s*pt", "", opts)
-        remainder = re.sub(r",?\s*fill\s*=\s*[^,]+", "", remainder).strip(", ")
-        pen_style = _RECT_STYLE_MAP.get(remainder.strip().lower(), Qt.SolidLine)
-
-        return pen_style, line_width_px, fill
+        line_width_px = comp.border_width * 1.333
+        return _resolve_pen_style(comp.line_style), line_width_px, comp.fill_color
 
     def shape(self) -> QPainterPath:
         """Full rectangle area (interior + border) as the hit region.
@@ -1352,7 +1365,7 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         comp = self._component
         assert isinstance(comp, _BipoleComponent)
         bw_px = comp.border_width * GRID_PX / _PT_PER_GU
-        painter.setPen(_pen(color, bw_px))
+        painter.setPen(_pen(color, bw_px, _resolve_pen_style(comp.line_style)))
         if comp.fill_color and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(comp.fill_color)))
         else:
@@ -1424,6 +1437,10 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "pground":  PgroundItem,
     "cground":  CgroundItem,
     "eground":  EgroundItem,
+    "vcc":      VccItem,
+    "vdd":      VddItem,
+    "vee":      VeeItem,
+    "vss":      VssItem,
 }
 
 # Push into the registry so other modules can look up item classes without

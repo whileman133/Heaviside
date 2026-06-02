@@ -85,9 +85,23 @@ class DrawingComponent(Component):
     """
 
 
+# ── Capability mixins ──────────────────────────────────────────────────────
+#
+# FontedComponent and StyledComponent are standalone dataclass mixins (despite
+# the ``Component`` suffix, kept for naming consistency and to preserve existing
+# ``isinstance`` checks).  They are never instantiated alone — concrete classes
+# compose them with the DrawingComponent base.
+#
+# CRITICAL: in every concrete class below, the mixins MUST be listed *before*
+# DrawingComponent.  Dataclass fields are ordered by reverse-MRO; listing a
+# mixin after DrawingComponent would place its (defaulted) fields ahead of
+# Component's required fields and raise "non-default argument follows default
+# argument" at import time.
+
+
 @dataclass
-class FontedComponent(DrawingComponent):
-    """Drawing component that carries font styling (shared by text_node and bipole)."""
+class FontedComponent:
+    """Mixin: font styling (shared by text_node and bipole)."""
 
     font_size: float = 12.0
     """Font size in points for the canvas preview and LaTeX output."""
@@ -105,21 +119,36 @@ class FontedComponent(DrawingComponent):
 
 
 @dataclass
-class TextNodeComponent(FontedComponent):
-    """Freestanding text annotation.  Inherits font fields from FontedComponent."""
+class StyledComponent:
+    """Mixin: fill + border styling (shared by rect and bipole)."""
+
+    fill_color: str = ""
+    """TikZ fill color string (e.g. ``"yellow!20"``).  Empty = no fill (transparent)."""
+
+    border_width: float = 0.4
+    """Border/line width in points.  Default matches the TikZ default (0.4 pt)."""
+
+    line_style: str = ""
+    """Raw TikZ line-style tokens (e.g. ``"dashed"``, ``"dotted"``).  Empty = solid."""
 
 
 @dataclass
-class RectComponent(DrawingComponent):
+class TextNodeComponent(FontedComponent, DrawingComponent):
+    """Freestanding text annotation.  Carries font fields via FontedComponent."""
+
+
+@dataclass
+class RectComponent(StyledComponent, DrawingComponent):
     """Rectangle drawing element.
 
-    ``options`` holds a TikZ draw-options string (line style, fill, etc.);
-    ``span_override`` holds the (width, height) in GU.
+    Fill, border width, and line style are carried as StyledComponent fields;
+    ``span_override`` holds the (width, height) in GU.  (``options`` is unused
+    for rects — legacy files that stored the style there are migrated on load.)
     """
 
 
 @dataclass
-class BipoleComponent(FontedComponent):
+class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
     """Generic labelled bipole with resizable width.
 
     Emitted as a standalone TikZ node (``\\node[draw, minimum width=W,
@@ -136,12 +165,6 @@ class BipoleComponent(FontedComponent):
 
     font_size: float = 7.0
     """Override default: bipole box is smaller so 7 pt fits better than 12 pt."""
-
-    fill_color: str = ""
-    """TikZ fill color string (e.g. ``"yellow!20"``).  Empty = no fill (transparent)."""
-
-    border_width: float = 0.4
-    """Border line width in points.  Default matches TikZ default (0.4 pt)."""
 
 
 # ---------------------------------------------------------------------------

@@ -118,6 +118,7 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.style import compose_style_options
 from app.schematic.model import (
     Component,
     Schematic,
@@ -125,6 +126,7 @@ from app.schematic.model import (
     component_pin_positions,
     junction_points,
     open_endpoints,
+    unconnected_pins,
     simplify_points,
 )
 from app.schematic.validate import validate
@@ -153,6 +155,7 @@ _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
 # Single-terminal node components: emitted as \node[kind] at (x,y) {};
 _NODE_KINDS: frozenset[str] = frozenset({
     "ground", "sground", "cground", "rground", "nground", "pground", "eground",
+    "vcc", "vdd", "vee", "vss",
 })
 
 
@@ -160,7 +163,11 @@ _NODE_KINDS: frozenset[str] = frozenset({
 # Public API
 # ---------------------------------------------------------------------------
 
-def generate(schematic: Schematic, y_flip: bool = False) -> str:
+def generate(
+    schematic: Schematic,
+    y_flip: bool = False,
+    mark_unconnected_pins: bool = False,
+) -> str:
     """
     Return a CircuiTikZ environment string for *schematic*.
 
@@ -173,6 +180,11 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
 
         When False (default), coordinates are emitted in the canvas Y-down
         convention.  Use this for the source panel display and file export.
+    mark_unconnected_pins:
+        When True, an open circle (``\\node[ocirc]``) is emitted at every
+        component pin that nothing connects to (see ``unconnected_pins``).  This
+        is a display preference; it defaults to False so output is unchanged
+        unless explicitly requested.
 
     Raises ValueError if the schematic violates any invariant.
     """
@@ -270,6 +282,11 @@ def generate(schematic: Schematic, y_flip: bool = False) -> str:
     # Open-circle nodes at wire endpoints not connected to any component pin.
     for x, y in sorted(open_endpoints(schematic)):
         lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
+
+    # Optionally, open-circle nodes at component pins that nothing connects to.
+    if mark_unconnected_pins:
+        for x, y in sorted(unconnected_pins(schematic)):
+            lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
 
     # Foreground drawing annotations (z_order >= 0) — emitted after the draw
     # block so they appear in front of circuit elements.
@@ -525,13 +542,28 @@ _validate_codegen_tables()
 # Node rendering (single-terminal: ground, sground, etc.)
 # ---------------------------------------------------------------------------
 
+_POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
+
+
 def _node_line(comp: Component, y_fn=lambda y: y) -> str:
-    """Render a single-terminal node as: (x,y) node[kind, rotate=R] {}"""
+    """Render a single-terminal node as: (x,y) node[kind, options] {}
+
+    For power rail kinds, an ``l=`` slot in comp.options is converted to a
+    CircuiTikZ ``label=right:VALUE`` argument.  Using the east anchor places
+    the label at the bar level (right of the symbol tip) which matches the
+    conventional schematic style for power-rail voltage names.
+    """
     x, y = comp.position
-    rotate_arg = ""
+    args = comp.kind
     if comp.rotation:
-        rotate_arg = f", rotate={comp.rotation}"
-    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{comp.kind}{rotate_arg}] {{}}"
+        args += f", rotate={comp.rotation}"
+    if comp.kind in _POWER_RAIL_KINDS:
+        raw = comp.options.strip()
+        m = re.search(r'\bl\s*=\s*([^,]+)', raw)
+        if m:
+            value = m.group(1).strip()
+            args += f", label=right:{{{value}}}"
+    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{}}"
 
 
 # ---------------------------------------------------------------------------
@@ -623,9 +655,9 @@ def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
 def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     r"""Render a rectangle annotation as \draw[style] (x1,y1) rectangle (x2,y2);
 
-    ``comp.options`` is a raw TikZ style string (e.g. "dashed", "dotted", "").
-    The second corner is computed from ``comp.span_override`` (falling back to
-    ``default_span`` from the registry).
+    The draw style (line style, line width, fill) comes from the
+    StyledComponent fields.  The second corner is computed from
+    ``comp.span_override`` (falling back to ``default_span`` from the registry).
     """
     defn = REGISTRY[comp.kind]
     x1, y1 = comp.position
@@ -633,7 +665,11 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
     dx, dy = so
     x2, y2 = x1 + dx, y1 + dy
 
-    style = comp.options.strip()
+    style = compose_style_options(
+        fill_color=comp.fill_color,
+        border_width=comp.border_width,
+        line_style=comp.line_style,
+    )
     style_arg = f"[{style}]" if style else ""
 
     return (
@@ -692,13 +728,12 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
         font_cmds += _FONT_FAMILY_CMD[comp.font_family]
     font_opt = rf", font={font_cmds}"
 
-    extra_opts = ""
-    if comp.fill_color:
-        extra_opts += f", fill={comp.fill_color}"
-    if abs(comp.border_width - 0.4) > 1e-6:
-        bw = comp.border_width
-        bw_str = str(int(bw)) if bw == int(bw) else (f"{bw:.1f}" if bw == round(bw, 1) else f"{bw:.2f}")
-        extra_opts += f", line width={bw_str}pt"
+    style = compose_style_options(
+        fill_color=comp.fill_color,
+        border_width=comp.border_width,
+        line_style=comp.line_style,
+    )
+    extra_opts = f", {style}" if style else ""
 
     return (
         rf"\node[draw, minimum width={_fmt(span_len)}cm, "

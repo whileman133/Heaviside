@@ -1,8 +1,8 @@
 """
 Schematic file I/O.
 
-save(schematic, path) — serializes a Schematic to a UTF-8 JSON .ctikz file.
-load(path)            — deserializes and validates a .ctikz file, returning a
+save(schematic, path) — serializes a Schematic to a UTF-8 JSON .hv file.
+load(path)            — deserializes and validates a .hv file, returning a
                         Schematic or raising SchematicLoadError on any problem.
 
 No Qt dependency. No side effects beyond filesystem access.
@@ -16,15 +16,17 @@ from pathlib import Path
 from typing import Any
 
 from app.components.model import (
-    BipoleComponent,
     Component,
     DiodeComponent,
     DrawingComponent,
     FontedComponent,
     MosfetComponent,
+    RectComponent,
+    StyledComponent,
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.style import parse_style_options
 from app.schematic.model import Schematic, Wire
 from app.schematic.validate import validate
 
@@ -33,7 +35,7 @@ _KNOWN_VERSIONS: set[str] = {"0.1"}
 
 
 class SchematicLoadError(Exception):
-    """Raised when a .ctikz file cannot be loaded for any reason."""
+    """Raised when a .hv file cannot be loaded for any reason."""
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +60,7 @@ def save(schematic: Schematic, path: str | Path) -> None:
 
 
 def load(path: str | Path) -> Schematic:
-    """Load and validate a .ctikz file.
+    """Load and validate a .hv file.
 
     Raises SchematicLoadError with a descriptive message on any problem:
     - malformed JSON
@@ -130,11 +132,13 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         d["filled"] = True
     if isinstance(c, MosfetComponent) and c.body_diode:
         d["body_diode"] = True
-    if isinstance(c, BipoleComponent):
+    if isinstance(c, StyledComponent):
         if c.fill_color:
             d["fill_color"] = c.fill_color
         if abs(c.border_width - 0.4) > 1e-6:
             d["border_width"] = c.border_width
+        if c.line_style:
+            d["line_style"] = c.line_style
     if isinstance(c, FontedComponent):
         # Omit fields equal to the class-level default to keep files compact.
         cls_default_size = type(c).__dataclass_fields__["font_size"].default
@@ -295,13 +299,27 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if issubclass(cls, MosfetComponent):
         kwargs["body_diode"] = bool(data.get("body_diode", False))
 
-    if issubclass(cls, BipoleComponent):
-        kwargs["fill_color"] = str(data.get("fill_color", ""))
-        raw_bw = data.get("border_width", 0.4)
-        try:
-            kwargs["border_width"] = float(raw_bw)
-        except (TypeError, ValueError) as exc:
-            raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
+    if issubclass(cls, StyledComponent):
+        has_style_fields = any(
+            k in data for k in ("fill_color", "border_width", "line_style")
+        )
+        if issubclass(cls, RectComponent) and not has_style_fields and options:
+            # Migrate legacy rect files that stored the style in the options
+            # string; promote it into the StyledComponent fields and clear
+            # options (which is unused for rects in the field-based format).
+            fill, bw, ls = parse_style_options(options)
+            kwargs["fill_color"] = fill
+            kwargs["border_width"] = bw
+            kwargs["line_style"] = ls
+            kwargs["options"] = ""
+        else:
+            kwargs["fill_color"] = str(data.get("fill_color", ""))
+            raw_bw = data.get("border_width", 0.4)
+            try:
+                kwargs["border_width"] = float(raw_bw)
+            except (TypeError, ValueError) as exc:
+                raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
+            kwargs["line_style"] = str(data.get("line_style", ""))
 
     if issubclass(cls, FontedComponent):
         raw_ff = data.get("font_family", "")

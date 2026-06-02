@@ -17,6 +17,7 @@ from app.schematic.model import (
     Wire,
     junction_points,
     open_endpoints,
+    unconnected_pins,
     route,
     simplify_points,
 )
@@ -50,6 +51,45 @@ def _wire(points, **kwargs) -> Wire:
     defaults = dict(id=_uid())
     defaults.update(kwargs)
     return Wire(points=points, **defaults)
+
+
+# ---------------------------------------------------------------------------
+# Component capability mixins (FontedComponent / StyledComponent)
+# ---------------------------------------------------------------------------
+
+def test_component_mixin_composition() -> None:
+    """Bipole composes both mixins; rect only style; text_node only font.
+
+    Also a regression guard: if the mixins are ever listed *after*
+    DrawingComponent in the bases, dataclass field ordering raises at import,
+    so merely importing/constructing here would fail.
+    """
+    from app.components.model import (
+        BipoleComponent,
+        DrawingComponent,
+        FontedComponent,
+        RectComponent,
+        StyledComponent,
+        TextNodeComponent,
+    )
+
+    bipole = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0), rotation=0, options="",
+        fill_color="red!20", border_width=1.5, line_style="dashed", font_bold=True,
+    )
+    assert isinstance(bipole, FontedComponent)
+    assert isinstance(bipole, StyledComponent)
+    assert isinstance(bipole, DrawingComponent)
+    assert (bipole.fill_color, bipole.line_style, bipole.font_bold) == ("red!20", "dashed", True)
+    assert bipole.font_size == 7.0  # bipole override of FontedComponent's 12.0
+
+    rect = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    assert isinstance(rect, StyledComponent)
+    assert not isinstance(rect, FontedComponent)
+
+    text = TextNodeComponent(id=_uid(), kind="text_node", position=(0.0, 0.0), rotation=0, options="Hi")
+    assert isinstance(text, FontedComponent)
+    assert not isinstance(text, StyledComponent)
 
 
 # ---------------------------------------------------------------------------
@@ -481,3 +521,45 @@ def test_open_endpoints_interior_vertices_excluded() -> None:
     assert (2.0, 0.0) not in result   # interior vertex
     assert (0.0, 0.0) in result
     assert (2.0, 3.0) in result
+
+
+# ---------------------------------------------------------------------------
+# unconnected_pins
+# ---------------------------------------------------------------------------
+
+def test_unconnected_pins_lone_component() -> None:
+    """A component with no wires has every pin reported as unconnected."""
+    r = _R("r1", (0.0, 0.0))   # pins at (0,0) and (2,0)
+    s = _make_schematic(r)
+    assert unconnected_pins(s) == {(0.0, 0.0), (2.0, 0.0)}
+
+
+def test_unconnected_pins_wired_pin_excluded() -> None:
+    """A pin with a wire vertex on it is not reported; the bare pin is."""
+    r = _R("r1", (0.0, 0.0))   # pins at (0,0) and (2,0)
+    s = _make_schematic(r, wires=(_W("a", [(2.0, 0.0), (5.0, 0.0)]),))
+    result = unconnected_pins(s)
+    assert (2.0, 0.0) not in result   # has a wire on it
+    assert (0.0, 0.0) in result       # still dangling
+
+
+def test_unconnected_pins_interior_wire_vertex_connects() -> None:
+    """A wire passing *through* a pin (interior vertex) counts as connected."""
+    r = _R("r1", (0.0, 0.0))   # pins at (0,0) and (2,0)
+    s = _make_schematic(r, wires=(_W("a", [(2.0, -2.0), (2.0, 0.0), (2.0, 2.0)]),))
+    assert (2.0, 0.0) not in unconnected_pins(s)
+
+
+def test_unconnected_pins_abutting_pins_excluded() -> None:
+    """Two component pins sharing a coordinate are connected to each other."""
+    r1 = _R("r1", (0.0, 0.0))   # pins at (0,0) and (2,0)
+    r2 = _R("r2", (2.0, 0.0))   # pins at (2,0) and (4,0)
+    result = unconnected_pins(s := _make_schematic(r1, r2))
+    assert (2.0, 0.0) not in result          # shared pin
+    assert {(0.0, 0.0), (4.0, 0.0)} <= result
+
+
+def test_unconnected_pins_no_components() -> None:
+    """No components → no unconnected pins (and a stray wire is irrelevant)."""
+    s = _make_schematic(wires=(_W("a", [(0.0, 0.0), (4.0, 0.0)]),))
+    assert unconnected_pins(s) == set()
