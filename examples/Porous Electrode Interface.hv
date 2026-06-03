@@ -292,7 +292,10 @@
           76.0,
           82.0
         ]
-      ]
+      ],
+      "line_style": "dotted",
+      "line_width": 0.6,
+      "no_junction_dots": true
     },
     {
       "id": "f9e27c00-eb9d-4104-8498-92631469aad0",
@@ -305,7 +308,10 @@
           80.0,
           82.0
         ]
-      ]
+      ],
+      "line_style": "dotted",
+      "line_width": 0.6,
+      "no_junction_dots": true
     }
   ],
   "metadata": {}

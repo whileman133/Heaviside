@@ -1218,6 +1218,108 @@ class SetWireNoTerminationDotsCommand(Command):
         _find_wire(schematic, self._wire_id).no_termination_dots = self._old_value
 
 
+class SetWireStartMarkerCommand(Command):
+    """Set the custom endpoint marker on a Wire's first point."""
+
+    label = "Set Wire Start Marker"
+
+    def __init__(self, wire_id: str, new_marker: str, old_marker: str) -> None:
+        self._wire_id = wire_id
+        self._new_marker = new_marker
+        self._old_marker = old_marker
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_marker = self._new_marker
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_marker = self._old_marker
+
+
+class SetWireEndMarkerCommand(Command):
+    """Set the custom endpoint marker on a Wire's last point."""
+
+    label = "Set Wire End Marker"
+
+    def __init__(self, wire_id: str, new_marker: str, old_marker: str) -> None:
+        self._wire_id = wire_id
+        self._new_marker = new_marker
+        self._old_marker = old_marker
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_marker = self._new_marker
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_marker = self._old_marker
+
+
+class SetWireStartLabelCommand(Command):
+    """Set the text/math label at a Wire's first point."""
+
+    label = "Set Wire Start Label"
+
+    def __init__(self, wire_id: str, new_label: str, old_label: str) -> None:
+        self._wire_id = wire_id
+        self._new_label = new_label
+        self._old_label = old_label
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_label = self._new_label
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_label = self._old_label
+
+
+class SetWireEndLabelCommand(Command):
+    """Set the text/math label at a Wire's last point."""
+
+    label = "Set Wire End Label"
+
+    def __init__(self, wire_id: str, new_label: str, old_label: str) -> None:
+        self._wire_id = wire_id
+        self._new_label = new_label
+        self._old_label = old_label
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_label = self._new_label
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_label = self._old_label
+
+
+class SetWireMidLabelCommand(Command):
+    """Set the text/math label drawn over the middle of a Wire."""
+
+    label = "Set Wire Mid Label"
+
+    def __init__(self, wire_id: str, new_label: str, old_label: str) -> None:
+        self._wire_id = wire_id
+        self._new_label = new_label
+        self._old_label = old_label
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).mid_label = self._new_label
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).mid_label = self._old_label
+
+
+class SetWireMidLabelPosCommand(Command):
+    """Set the fractional position of a Wire's mid-label."""
+
+    label = "Move Wire Mid Label"
+
+    def __init__(self, wire_id: str, new_pos: float, old_pos: float) -> None:
+        self._wire_id = wire_id
+        self._new_pos = new_pos
+        self._old_pos = old_pos
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).mid_label_pos = self._new_pos
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).mid_label_pos = self._old_pos
+
+
 class GroupRotateCommand(Command):
     """Rotate a group of components and wires 90° CW around a shared centroid.
 

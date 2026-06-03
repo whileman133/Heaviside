@@ -33,8 +33,8 @@ def _r(cid: str, pos) -> Component:
 
 def test_nearest_pin_within_and_outside_radius():
     wg = _wg(_r("r1", (0.0, 0.0)))
-    assert wg.nearest_pin((0.2, 0.0)) == (0.0, 0.0)   # within PIN_SNAP_GU
-    assert wg.nearest_pin((0.4, 0.0)) is None          # outside 0.25
+    assert wg.nearest_pin((0.1, 0.0)) == (0.0, 0.0)   # within PIN_SNAP_GU (0.125)
+    assert wg.nearest_pin((0.2, 0.0)) is None          # outside 0.125
 
 
 def test_all_pin_positions():
@@ -61,7 +61,7 @@ def test_wire_snap_target_falls_back_to_grid():
 def test_wire_snap_target_onto_segment():
     w = Wire(id="w1", points=[(0.0, 0.0), (4.0, 0.0)])
     wg = _wg(wires=[w])
-    pt, connectable = wg.wire_snap_target((2.0, 0.2))
+    pt, connectable = wg.wire_snap_target((2.0, 0.1))   # within PIN_SNAP_GU (0.125)
     assert pt == (2.0, 0.0)
     assert connectable is True
 

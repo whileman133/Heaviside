@@ -43,7 +43,11 @@ COLOR_NORMAL    = "#FF000000"   # black
 COLOR_SELECTED  = "#FF0055CC"   # blue highlight
 COLOR_HOVER     = "#FF228B22"   # forest green
 COLOR_GHOST     = "#80000000"   # 50 % transparent black (placement preview)
-COLOR_PIN       = "#FFCC0000"   # dark red  (pin indicator dots)
+COLOR_PIN       = "#FFCC0000"   # dark red (pin indicator dots)
+
+# Opacity applied to the voltage-annotation (open) connecting line so it reads
+# as a translucent annotation rather than a solid/dashed wire (§5.9).
+OPEN_ANNOTATION_OPACITY: float = 0.3
 
 # ---------------------------------------------------------------------------
 # SVG symbol reference (see app/canvas/svgsym.py)

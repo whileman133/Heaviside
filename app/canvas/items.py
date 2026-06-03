@@ -25,6 +25,7 @@ component kind to its item class without importing Qt everywhere.
 
 from __future__ import annotations
 
+import math
 import re
 
 from typing import TYPE_CHECKING
@@ -38,6 +39,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPainterPathStroker,
     QPen,
+    QPolygonF,
     QTransform,
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
@@ -52,6 +54,7 @@ from app.canvas.style import (
     GRID_PX,
     LINE_W,
     LINE_W_THICK,
+    OPEN_ANNOTATION_OPACITY,
     PIN_R,
 )
 from app.canvas.svgsym import is_thick, symbol_paths
@@ -102,6 +105,14 @@ _LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
 # Current annotations (`i=`) hug the wire (lead axis) instead of clearing the
 # whole body, matching where CircuiTikZ draws the current label.
 _CURRENT_GAP = 3.0
+# Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
+# annotation line does not appear to run into the text.
+_LABEL_BG_PAD = 3.0
+# Voltage sources whose default (unsuffixed) `v=` label sits on the opposite
+# side from passives — CircuiTikZ's source voltage convention (see
+# ComponentItem._slot_direction).  Current sources (I/cI/isourcesin) follow the
+# passive default and are NOT listed.
+_VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
 
 # Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
 # uses the first installed face, so at least one matches on any platform.
@@ -148,6 +159,7 @@ class LabelTextItem(QGraphicsTextItem):
         self._hovered = False
         self._saved_text: str = ""
         self._commit_cb = None  # callable(text: str) -> None
+        self._end_cb = None     # callable() -> None, fired when editing ends
         self._move_cb = None    # callable(QPointF) -> None
         self._drag_origin: QPointF | None = None  # pos at mouse-press
         self._saved_parent_z: float | None = None  # parent z restored after edit
@@ -168,6 +180,10 @@ class LabelTextItem(QGraphicsTextItem):
 
     def set_commit_callback(self, cb) -> None:  # noqa: ANN001
         self._commit_cb = cb
+
+    def set_end_callback(self, cb) -> None:  # noqa: ANN001
+        """Set a callback fired whenever editing ends (commit *or* cancel)."""
+        self._end_cb = cb
 
     def set_move_callback(self, cb) -> None:  # noqa: ANN001
         """Set callback fired with the final QPointF position after a drag."""
@@ -212,6 +228,8 @@ class LabelTextItem(QGraphicsTextItem):
                 self._commit_cb(new_text)
         else:
             self.setPlainText(self._saved_text)
+        if self._end_cb is not None:
+            self._end_cb()
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
         self.end_edit(commit=True)
@@ -366,6 +384,7 @@ class _SlotLabel(QGraphicsItem):
         self._base_dist = 0.0                 # clearance from centre along _dir
         self._step = 0.0                      # stacking offset along _dir
         self._inv = QTransform()              # screen-rel -> parent-local
+        self._centered = False                # centre on the axis vs. beside it
 
     def configure(
         self,
@@ -375,13 +394,20 @@ class _SlotLabel(QGraphicsItem):
         base_dist: float,
         step: float,
         inv: QTransform,
+        centered: bool = False,
     ) -> None:
-        """Set this slot's text and screen-space offset direction/placement."""
+        """Set this slot's text and screen-space offset direction/placement.
+
+        When ``centered`` is set the label centre is pinned to ``center_rel``
+        (offset only by ``step`` for stacking), so it sits *over* the axis
+        rather than clearing it by half the label's extent.
+        """
         self._dir = direction
         self._center_rel = center_rel
         self._base_dist = base_dist
         self._step = step
         self._inv = inv
+        self._centered = centered
         if fragment != (self._fragment or ""):
             self._fragment = fragment or None
             if not fragment:
@@ -411,7 +437,9 @@ class _SlotLabel(QGraphicsItem):
         u = self._dir
         # The upright label's half-extent along the offset direction.
         label_half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
-        dist = self._base_dist + label_half + self._step
+        # Centred labels sit on the axis (no half-extent clearance); otherwise
+        # clear the body/centre by the label's half-extent plus the base gap.
+        dist = self._step if self._centered else self._base_dist + label_half + self._step
         # Label centre, screen-relative to the item origin.
         cx = self._center_rel.x() + u.x() * dist
         cy = self._center_rel.y() + u.y() * dist
@@ -419,14 +447,17 @@ class _SlotLabel(QGraphicsItem):
         anchor = QPointF(cx - w / 2.0, cy - r.center().y() * s)
         self.setPos(self._inv.map(anchor))
 
+    def _scaled_rect(self) -> QRectF:
+        """The rendered glyph bounds in item-local px (path bounds × scale)."""
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        return QRectF(r.left() * s, r.top() * s, r.width() * s, r.height() * s)
+
     def boundingRect(self) -> QRectF:  # noqa: N802
         if self._path is None:
             return QRectF()
-        r = self._path.boundingRect()
-        s = _VEC_SCALE
-        return QRectF(
-            r.left() * s, r.top() * s, r.width() * s, r.height() * s
-        ).adjusted(-1.0, -1.0, 1.0, 1.0)
+        pad = _LABEL_BG_PAD if self._centered else 1.0
+        return self._scaled_rect().adjusted(-pad, -pad, pad, pad)
 
     def hoverEnterEvent(self, event) -> None:  # noqa: N802
         parent = self.parentItem()
@@ -446,6 +477,16 @@ class _SlotLabel(QGraphicsItem):
         parent = self.parentItem()
         color = parent._label_color() if hasattr(parent, "_label_color") else QColor(COLOR_NORMAL)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        # Axis-centred labels (e.g. the voltage annotation) sit on top of the
+        # line, so give them an opaque backdrop with a little padding to keep
+        # the line from appearing to run into the text.
+        if self._centered:
+            painter.fillRect(
+                self._scaled_rect().adjusted(
+                    -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
+                ),
+                QColor("#FFFFFFFF"),
+            )
         painter.save()
         painter.scale(_VEC_SCALE, _VEC_SCALE)
         painter.fillPath(self._path, QBrush(color))
@@ -564,6 +605,15 @@ class ComponentItem(QGraphicsItem):
         self._options_item.setVisible(False)
         self._layout_slots()
 
+    def _labels_centered_on_axis(self) -> bool:
+        """Whether annotation labels sit *over* the lead axis instead of beside it.
+
+        Default: labels clear the body on their conventional side.  Resizable
+        annotation lines (open) override this so the label is centred on the
+        middle of the line, matching where CircuiTikZ places the arrow label.
+        """
+        return False
+
     def _layout_slots(self) -> None:
         """Render each annotation slot on its conventional side of the body.
 
@@ -578,6 +628,7 @@ class ComponentItem(QGraphicsItem):
 
         geom = self._slot_geometry()
         counter = self._label_counter_transform()
+        centered = self._labels_centered_on_axis()
         counts: dict[tuple[float, float], int] = {}
         for idx, item in enumerate(self._slot_items):
             if idx < len(slots):
@@ -588,15 +639,17 @@ class ComponentItem(QGraphicsItem):
                 i = counts.get(dk, 0)
                 counts[dk] = i + 1
                 # Currents hug the wire (lead axis through the centre); other
-                # slots clear the body's perpendicular thickness.
-                base = (
+                # slots clear the body's perpendicular thickness.  When labels
+                # are centred on the axis, there is no clearance — the first
+                # slot sits on the line and any siblings stack off it.
+                base = 0.0 if centered else (
                     _CURRENT_GAP if key.startswith("i")
                     else geom["perp_thickness"] + _LABEL_GAP
                 )
                 item.setTransform(counter)
                 item.configure(
                     latex, direction, geom["center_rel"],
-                    base, _LABEL_LINE_H * i, geom["inv"],
+                    base, _LABEL_LINE_H * i, geom["inv"], centered,
                 )
                 item.setVisible(True)
             else:
@@ -608,22 +661,27 @@ class ComponentItem(QGraphicsItem):
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
 
-        Labels/currents (`l`/`i`/`a`) are placed on the *traversal-relative* side
-        — left of the lead direction for the plain/`^` form, right for the `_`
-        form — matching CircuiTikZ under any rotation. Voltage (`v`) uses the
-        screen-positive perpendicular (down, else right), which reproduces
-        CircuiTikZ's default voltage-label side for both horizontal and vertical
-        elements; `v^` flips it.
+        Every family (`l`/`v`/`i`/`a`) is placed on its *traversal-relative*
+        side: the ``^`` (and default-`l`) form sits left of the lead direction,
+        the ``_`` (and default-`v`) form sits right.  Because the preview's
+        Y-flip makes the rendered PDF a faithful visual match of the canvas, the
+        on-screen left/right side equals the side CircuiTikZ draws the
+        annotation on — for both horizontal and rotated elements alike.
+        :func:`slot_side` encodes the per-family default (`l` above, `v` below)
+        and the ``^``/``_`` overrides.
+
+        Exception: a **voltage source** places its *default* (unsuffixed) ``v``
+        label on the opposite side from passives — CircuiTikZ's source voltage
+        convention (the ``+`` terminal leads).  The explicit ``v^``/``v_`` forms
+        are component-independent, so only the bare ``v`` is flipped.
         """
         from app.preview.mathrender import slot_side
 
         left, right = geom["left"], geom["right"]
-        fam = key[0] if key else "l"
-        suffix = key[-1] if key and key[-1] in "^_" else ""
-        if fam == "v":
-            pos = left if (left.y(), left.x()) >= (right.y(), right.x()) else right
-            return QPointF(-pos.x(), -pos.y()) if suffix == "^" else pos
-        return left if slot_side(key) == "above" else right
+        side = slot_side(key)
+        if key == "v" and self._component.kind in _VOLTAGE_SOURCE_KINDS:
+            side = "above"
+        return left if side == "above" else right
 
     def _lead_terminals_local(self) -> tuple[QPointF, QPointF]:
         """The component's two lead terminals in local px (origin + endpoint).
@@ -903,7 +961,7 @@ class OpAmpItem(ComponentItem):
 
     The op-amp SVG is exported with grid-aligned terminal leads (input +/-,
     output, and vs+/vs- power rails all routed to half-grid points — see
-    ``tools/export_circuitikz_svgs.sh``), so the base ``paint`` renders every
+    ``tools/export_circuitikz_svgs.py``), so the base ``paint`` renders every
     terminal directly onto its registry pin.  No bridging required.
     """
 
@@ -1071,12 +1129,24 @@ class _ResizableTwoTerminalItem(ComponentItem):
 
 
 class OpenItem(_ResizableTwoTerminalItem):
-    """Voltage annotation — dashed line between two resizable endpoints."""
+    """Voltage annotation — translucent line between two resizable endpoints.
+
+    Drawn as a mostly-opaque (translucent) solid line rather than dashed so it
+    is not confused with a dashed wire; the annotation label is centred over
+    the middle of the line (see :meth:`_labels_centered_on_axis`) to mirror the
+    LaTeX output, where the voltage/current arrow sits across the element.
+    """
 
     def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
-        painter.setPen(_pen(color, LINE_W, Qt.DashLine))
+        painter.save()
+        painter.setOpacity(OPEN_ANNOTATION_OPACITY)
+        painter.setPen(_pen(color, LINE_W))
         painter.setBrush(Qt.NoBrush)
         painter.drawLine(QPointF(0.0, 0.0), ep)
+        painter.restore()
+
+    def _labels_centered_on_axis(self) -> bool:
+        return True
 
 
 class ShortItem(_ResizableTwoTerminalItem):
@@ -1145,6 +1215,184 @@ class VssItem(_GroundBase):
 # Wire item
 # ---------------------------------------------------------------------------
 
+#: Clearance (px) between a wire endpoint and the near edge of its label, so the
+#: label clears the wire end / arrow tip. Mirrors codegen's ``_WIRE_LABEL_GAP``.
+_WIRE_LABEL_GAP_PX = 6.0
+
+
+class _WireEndLabel(QGraphicsItem):
+    """Async-rendered text/math label sitting just beyond a wire endpoint.
+
+    A child of :class:`WireItem`. Mirrors :class:`_SlotLabel`: it shows nothing
+    until its vector render lands, then places its (baseline-normalised) path so
+    the near edge clears the endpoint by ``_WIRE_LABEL_GAP_PX`` along the wire's
+    outward direction.  All coordinates are parent-local pixels.
+    """
+
+    def __init__(self, parent: "WireItem", end: str = "end") -> None:
+        super().__init__(parent)
+        self.setAcceptedMouseButtons(Qt.NoButton)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.IBeamCursor)     # hint: double-click to edit
+        self.end = end                     # "start" or "end" (which wire endpoint)
+        self._path: QPainterPath | None = None
+        self._fragment: str | None = None
+        self._center = QPointF(0.0, 0.0)   # endpoint, parent-local px
+        self._out = QPointF(1.0, 0.0)      # unit outward direction (canvas)
+
+    def configure(self, fragment: str, center: QPointF, out: QPointF) -> None:
+        """Set the label text, its endpoint, and the outward direction."""
+        self._center = center
+        self._out = out
+        if fragment != (self._fragment or ""):
+            self._fragment = fragment or None
+            if not fragment:
+                self.prepareGeometryChange()
+                self._path = None
+            else:
+                from app.preview.mathrender import render_async
+
+                def _done(path, frag=fragment):  # noqa: ANN001
+                    if not isValid(self) or frag != (self._fragment or ""):
+                        return
+                    self.prepareGeometryChange()
+                    self._path = path
+                    self._reposition()
+                    self.update()
+
+                render_async(fragment, _done)
+        self._reposition()
+        self.update()
+
+    def _reposition(self) -> None:
+        if self._path is None:
+            return
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        w, h = r.width() * s, r.height() * s
+        u = self._out
+        # Half-extent of the label along the outward direction (it is axis-
+        # aligned, so only one of |u.x|, |u.y| is 1).
+        half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
+        dist = _WIRE_LABEL_GAP_PX + half
+        cx = self._center.x() + u.x() * dist
+        cy = self._center.y() + u.y() * dist
+        # Position so the path's ink centre maps to (cx, cy) after painter.scale.
+        self.setPos(QPointF(cx - r.center().x() * s, cy - r.center().y() * s))
+
+    def _scaled_rect(self) -> QRectF:
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        return QRectF(r.left() * s, r.top() * s, r.width() * s, r.height() * s)
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        if self._path is None:
+            return QRectF()
+        return self._scaled_rect().adjusted(-1.0, -1.0, 1.0, 1.0)
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
+        if self._path is None:
+            return
+        parent = self.parentItem()
+        color = parent.label_color() if hasattr(parent, "label_color") else QColor(COLOR_NORMAL)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.save()
+        painter.scale(_VEC_SCALE, _VEC_SCALE)
+        painter.fillPath(self._path, QBrush(color))
+        painter.restore()
+
+
+class _WireMidLabel(QGraphicsItem):
+    """Async-rendered text/math label centred *over* a wire, with an opaque
+    backdrop so the line does not run through it.
+
+    A child of :class:`WireItem`. The drag along the wire is driven by the scene
+    (see ``_mid_label_drag``); double-clicking it edits in place. Coordinates are
+    parent-local pixels. A non-None ``_preview_center`` (set during a drag) is
+    painted instead of the committed centre.
+    """
+
+    def __init__(self, parent: "WireItem") -> None:
+        super().__init__(parent)
+        self.setAcceptedMouseButtons(Qt.NoButton)
+        self.setAcceptHoverEvents(True)
+        self.setCursor(Qt.SizeAllCursor)   # hint: drag along the wire
+        self._path: QPainterPath | None = None
+        self._fragment: str | None = None
+        self._center = QPointF(0.0, 0.0)        # committed centre, parent-local px
+        self._preview_center: QPointF | None = None
+
+    def configure(self, fragment: str, center: QPointF) -> None:
+        self._center = center
+        if fragment != (self._fragment or ""):
+            self._fragment = fragment or None
+            if not fragment:
+                self.prepareGeometryChange()
+                self._path = None
+            else:
+                from app.preview.mathrender import render_async
+
+                def _done(path, frag=fragment):  # noqa: ANN001
+                    if not isValid(self) or frag != (self._fragment or ""):
+                        return
+                    self.prepareGeometryChange()
+                    self._path = path
+                    self._reposition()
+                    self.update()
+
+                render_async(fragment, _done)
+        self._reposition()
+        self.update()
+
+    def set_preview_center(self, center: QPointF) -> None:
+        self._preview_center = center
+        self._reposition()
+        self.update()
+
+    def clear_preview_center(self) -> None:
+        self._preview_center = None
+        self._reposition()
+        self.update()
+
+    def _reposition(self) -> None:
+        if self._path is None:
+            return
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        c = self._preview_center if self._preview_center is not None else self._center
+        self.setPos(c.x() - r.center().x() * s, c.y() - r.center().y() * s)
+
+    def _scaled_rect(self) -> QRectF:
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        return QRectF(r.left() * s, r.top() * s, r.width() * s, r.height() * s)
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        if self._path is None:
+            return QRectF()
+        return self._scaled_rect().adjusted(
+            -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
+        )
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
+        if self._path is None:
+            return
+        parent = self.parentItem()
+        color = parent.label_color() if hasattr(parent, "label_color") else QColor(COLOR_NORMAL)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        # Opaque backdrop so the wire doesn't run through the text.
+        painter.fillRect(
+            self._scaled_rect().adjusted(
+                -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
+            ),
+            QColor("#FFFFFFFF"),
+        )
+        painter.save()
+        painter.scale(_VEC_SCALE, _VEC_SCALE)
+        painter.fillPath(self._path, QBrush(color))
+        painter.restore()
+
+
 class WireItem(QGraphicsItem):
     """A polyline wire drawn as a Manhattan path.
 
@@ -1162,17 +1410,33 @@ class WireItem(QGraphicsItem):
         self.locked_indices: set[int] = set()
         # Live drag preview: when set, painted instead of self.wire.points.
         self._preview_points: list[tuple[float, float]] | None = None
+        # Text/math labels at each end (children); configured by refresh_labels.
+        self._start_label_item = _WireEndLabel(self, end="start")
+        self._end_label_item = _WireEndLabel(self, end="end")
+        # Mid-wire label drawn over the line with a solid backdrop.
+        self._mid_label_item = _WireMidLabel(self)
+        # Shared in-place editor for the labels (hidden unless editing), mirroring
+        # ComponentItem/TextNodeItem's options editor.
+        self._label_editor = LabelTextItem(self)
+        self._label_editor.setFlag(QGraphicsItem.ItemIsMovable, False)
+        self._label_editor.set_commit_callback(self._on_label_commit)
+        self._label_editor.set_end_callback(self._on_label_edit_end)
+        self._label_editor.setVisible(False)
+        self._editing_end: str | None = None
+        self.refresh_labels()
 
     # -- drag preview -----------------------------------------------------
 
     def set_preview_points(self, points: list[tuple[float, float]]) -> None:
         self.prepareGeometryChange()
         self._preview_points = list(points)
+        self.refresh_labels()
         self.update()
 
     def clear_preview_points(self) -> None:
         self.prepareGeometryChange()
         self._preview_points = None
+        self.refresh_labels()
         self.update()
 
     @property
@@ -1183,6 +1447,149 @@ class WireItem(QGraphicsItem):
     def _draw_points(self) -> list[tuple[float, float]]:
         return self._preview_points if self._preview_points is not None else self.wire.points
 
+    # -- endpoint labels --------------------------------------------------
+
+    def label_color(self) -> QColor:
+        """Current paint colour for endpoint labels (follows selection/hover)."""
+        if self.isSelected():
+            return QColor(COLOR_SELECTED)
+        if self._hovered:
+            return QColor(COLOR_HOVER)
+        return QColor(COLOR_NORMAL)
+
+    @staticmethod
+    def _outward(tip: tuple[float, float], neighbour: tuple[float, float]) -> QPointF:
+        """Unit direction (canvas px space) pointing outward from *neighbour*."""
+        dx = tip[0] - neighbour[0]
+        dy = tip[1] - neighbour[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-9:
+            return QPointF(1.0, 0.0)
+        return QPointF(dx / length, dy / length)
+
+    def refresh_labels(self) -> None:
+        """Re-bind the start/end/mid label children to the wire's geometry."""
+        pts = self._draw_points()
+        start_text = getattr(self.wire, "start_label", "")
+        end_text = getattr(self.wire, "end_label", "")
+        mid_text = getattr(self.wire, "mid_label", "")
+        if len(pts) < 2:
+            self._start_label_item.configure("", QPointF(), QPointF(1.0, 0.0))
+            self._end_label_item.configure("", QPointF(), QPointF(1.0, 0.0))
+            self._mid_label_item.configure("", QPointF())
+            return
+        start_nb = next((p for p in pts[1:] if p != pts[0]), pts[-1])
+        end_nb = next((p for p in reversed(pts[:-1]) if p != pts[-1]), pts[0])
+        self._start_label_item.configure(
+            start_text,
+            QPointF(pts[0][0] * GRID_PX, pts[0][1] * GRID_PX),
+            self._outward(pts[0], start_nb),
+        )
+        self._end_label_item.configure(
+            end_text,
+            QPointF(pts[-1][0] * GRID_PX, pts[-1][1] * GRID_PX),
+            self._outward(pts[-1], end_nb),
+        )
+        self._mid_label_item.configure(mid_text, self._mid_center_px(pts))
+
+    def _mid_center_px(self, pts: list[tuple[float, float]]) -> QPointF:
+        from app.schematic.model import wire_point_at_fraction
+        mx, my = wire_point_at_fraction(pts, getattr(self.wire, "mid_label_pos", 0.5))
+        return QPointF(mx * GRID_PX, my * GRID_PX)
+
+    def preview_mid_label(self, frac: float) -> None:
+        """Live-preview the mid-label at fractional position *frac* (during drag)."""
+        pts = self._draw_points()
+        if len(pts) < 2:
+            return
+        from app.schematic.model import wire_point_at_fraction
+        mx, my = wire_point_at_fraction(pts, frac)
+        self._mid_label_item.set_preview_center(QPointF(mx * GRID_PX, my * GRID_PX))
+
+    def clear_mid_label_preview(self) -> None:
+        self._mid_label_item.clear_preview_center()
+
+    def itemChange(self, change, value):  # noqa: ANN001, N802
+        if change == QGraphicsItem.ItemSelectedChange:
+            self._start_label_item.update()
+            self._end_label_item.update()
+            self._mid_label_item.update()
+        return super().itemChange(change, value)
+
+    # -- inline label editing ---------------------------------------------
+
+    def begin_label_edit(self, which: str) -> None:
+        """Start in-place editing of the *which* label ("start"/"end"/"mid").
+
+        Shows the raw LaTeX fragment in a text editor positioned at the label,
+        mirroring how a component's rendered label opens its options editor.
+        """
+        pts = self._draw_points()
+        if len(pts) < 2:
+            return
+        ed = self._label_editor
+        ed.setTransform(QTransform())
+
+        if which == "mid":
+            text = getattr(self.wire, "mid_label", "")
+            self._mid_label_item.setVisible(False)
+            ed.setPlainText(text)
+            er = ed.boundingRect()
+            center = self._mid_center_px(pts)
+            ed.setPos(center.x() - er.width() / 2.0, center.y() - er.height() / 2.0)
+        else:
+            if which == "start":
+                tip = pts[0]
+                neighbour = next((p for p in pts[1:] if p != pts[0]), pts[-1])
+                text = getattr(self.wire, "start_label", "")
+                self._start_label_item.setVisible(False)
+            else:
+                tip = pts[-1]
+                neighbour = next((p for p in reversed(pts[:-1]) if p != pts[-1]), pts[0])
+                text = getattr(self.wire, "end_label", "")
+                self._end_label_item.setVisible(False)
+            out = self._outward(tip, neighbour)
+            ed.setPlainText(text)
+            er = ed.boundingRect()
+            tip_px = QPointF(tip[0] * GRID_PX, tip[1] * GRID_PX)
+            x = tip_px.x() + out.x() * _WIRE_LABEL_GAP_PX
+            y = tip_px.y() + out.y() * _WIRE_LABEL_GAP_PX
+            # The editor box grows right/down from its top-left, so shift it so the
+            # edge facing the wire sits at the gap, and centre it across the wire.
+            if out.x() < 0:
+                x -= er.width()
+            if out.y() < 0:
+                y -= er.height()
+            if abs(out.x()) >= abs(out.y()):
+                y -= er.height() / 2.0
+            else:
+                x -= er.width() / 2.0
+            ed.setPos(x, y)
+
+        self._editing_end = which
+        ed.setVisible(True)
+        ed.begin_edit()
+
+    def _on_label_commit(self, text: str) -> None:
+        scene = self.scene()
+        if scene is None or self._editing_end is None:
+            return
+        if self._editing_end == "start" and hasattr(scene, "set_wire_start_label"):
+            scene.set_wire_start_label(self.wire.id, text)
+        elif self._editing_end == "end" and hasattr(scene, "set_wire_end_label"):
+            scene.set_wire_end_label(self.wire.id, text)
+        elif self._editing_end == "mid" and hasattr(scene, "set_wire_mid_label"):
+            scene.set_wire_mid_label(self.wire.id, text)
+
+    def _on_label_edit_end(self) -> None:
+        # Fired on commit and cancel; restore the display labels and re-bind.
+        self._editing_end = None
+        self._label_editor.setVisible(False)
+        self._start_label_item.setVisible(True)
+        self._end_label_item.setVisible(True)
+        self._mid_label_item.setVisible(True)
+        self.refresh_labels()
+
     # -- style ------------------------------------------------------------
 
     def _line_width_px(self) -> float:
@@ -1192,16 +1599,86 @@ class WireItem(QGraphicsItem):
     def _line_pen_style(self) -> Qt.PenStyle:
         return _resolve_pen_style(getattr(self.wire, "line_style", ""))
 
+    #: Endpoint-marker geometry (px): length back from the tip and half the base
+    #: width. Mirrors the relative proportions of the exported arrows.meta tips.
+    ARROW_LEN: float = 9.0
+    ARROW_HALF_W: float = 4.0
+
+    def _draw_markers(self, painter: QPainter, pts: list[QPointF], color: QColor) -> None:
+        """Paint custom endpoint markers for the wire, one per marked end.
+
+        The on-canvas glyphs approximate the exported ``arrows.meta`` tips:
+        ``arrow`` → filled triangle (Latex), ``stealth`` → concave filled
+        (Stealth), ``open`` → outlined triangle (Latex[open]), ``bar`` → a
+        perpendicular terminal bar (Bar).
+        """
+        if len(pts) < 2:
+            return
+        ends = (
+            (getattr(self.wire, "start_marker", ""), pts[0], pts[0] - pts[1]),
+            (getattr(self.wire, "end_marker", ""), pts[-1], pts[-1] - pts[-2]),
+        )
+        for marker, tip, outward in ends:
+            if marker:
+                self._paint_marker(painter, marker, tip, outward, color)
+
+    def _paint_marker(
+        self, painter: QPainter, kind: str, tip: QPointF, outward: QPointF, color: QColor
+    ) -> None:
+        """Paint a single endpoint marker of *kind* at *tip*, aimed along *outward*."""
+        length = math.hypot(outward.x(), outward.y())
+        if length < 1e-9:
+            return
+        ux, uy = outward.x() / length, outward.y() / length  # unit, outward
+        px, py = -uy, ux  # unit perpendicular
+        L, W = self.ARROW_LEN, self.ARROW_HALF_W
+        base = QPointF(tip.x() - ux * L, tip.y() - uy * L)
+        left = QPointF(base.x() + px * W, base.y() + py * W)
+        right = QPointF(base.x() - px * W, base.y() - py * W)
+
+        if kind == "bar":
+            # A perpendicular terminal bar centred on the endpoint.
+            a = QPointF(tip.x() + px * W, tip.y() + py * W)
+            b = QPointF(tip.x() - px * W, tip.y() - py * W)
+            painter.setPen(_pen(color, self._line_width_px()))
+            painter.drawLine(a, b)
+            return
+
+        if kind == "open":
+            # Outlined triangle (no fill).
+            painter.setPen(_pen(color, self._line_width_px()))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPolygon(QPolygonF([tip, left, right]))
+            return
+
+        painter.setPen(_pen(color, 1.0))
+        painter.setBrush(QBrush(color))
+        if kind == "stealth":
+            # Filled triangle with a notch in its back edge, recessed toward the
+            # tip — the sharper Stealth silhouette.
+            notch = QPointF(tip.x() - ux * (L * 0.55), tip.y() - uy * (L * 0.55))
+            painter.drawPolygon(QPolygonF([tip, left, notch, right]))
+            return
+
+        # Default ("arrow"): filled triangle (Latex).
+        painter.drawPolygon(QPolygonF([tip, left, right]))
+
     # -- events -----------------------------------------------------------
 
     def hoverEnterEvent(self, event):  # noqa: N802
         self._hovered = True
         self.update()
+        self._start_label_item.update()
+        self._end_label_item.update()
+        self._mid_label_item.update()
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):  # noqa: N802
         self._hovered = False
         self.update()
+        self._start_label_item.update()
+        self._end_label_item.update()
+        self._mid_label_item.update()
         super().hoverLeaveEvent(event)
 
     def boundingRect(self) -> QRectF:
@@ -1210,7 +1687,7 @@ class WireItem(QGraphicsItem):
             return QRectF()
         xs = [p[0] * GRID_PX for p in pts]
         ys = [p[1] * GRID_PX for p in pts]
-        margin = max(LINE_W, self._line_width_px()) + PIN_R + 3
+        margin = max(LINE_W, self._line_width_px()) + max(PIN_R, self.ARROW_LEN) + 3
         return QRectF(
             min(xs) - margin,
             min(ys) - margin,
@@ -1272,6 +1749,9 @@ class WireItem(QGraphicsItem):
         for pt in pts[1:]:
             path.lineTo(pt)
         painter.drawPath(path)
+
+        # Custom endpoint markers (e.g. arrowheads for block diagrams).
+        self._draw_markers(painter, pts, color)
 
         # Draw draggable vertex handles when the wire is selected or hovered,
         # so the user can see which nodes can be moved. Locked endpoints (on a

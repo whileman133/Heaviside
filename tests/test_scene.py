@@ -116,14 +116,14 @@ def test_delete_selected_removes_component(scene: SchematicScene):
 # ---------------------------------------------------------------------------
 
 def test_snap_to_grid(scene: SchematicScene):
-    # Placement snaps an off-grid request to the nearest 0.5 GU point.
+    # Placement snaps an off-grid request to the nearest 0.25 GU point.
     comp = scene.place_component("R", (0.7, 1.24))
-    assert comp.position == (0.5, 1.0)
+    assert comp.position == (0.75, 1.25)
 
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [(0.0, 0.0), (0.24, 0.0), (0.26, 0.5), (0.7, 0.5), (0.74, 0.5), (0.76, 1.0)],
+    [(0.0, 0.0), (0.12, 0.0), (0.13, 0.25), (0.26, 0.25), (0.7, 0.75), (0.76, 0.75)],
 )
 def test_snap_gu_rounding(scene: SchematicScene, raw, expected):
     assert scene.snap_gu(raw) == expected
@@ -140,9 +140,9 @@ def test_pin_snap(scene: SchematicScene):
 
 def test_pin_snap_respects_radius(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
-    # 0.25 GU is the snap radius; just inside snaps, just outside does not.
-    assert scene._nearest_pin_gu((0.2, 0.0)) == (0.0, 0.0)
-    assert scene._nearest_pin_gu((0.4, 0.0)) is None
+    # PIN_SNAP_GU is 0.125 GU; just inside snaps, just outside does not.
+    assert scene._nearest_pin_gu((0.1, 0.0)) == (0.0, 0.0)
+    assert scene._nearest_pin_gu((0.2, 0.0)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +236,24 @@ def test_view_fit_empty(scene: SchematicScene):
     # Fit with no items should not raise and resets to a sane zoom.
     view.fit_to_schematic()
     assert view.zoom > 0
+
+
+def test_view_arrow_nudge_step(scene: SchematicScene):
+    """Arrow keys nudge by one 0.25 GU minor-grid cell (§3.1)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    comp = scene.place_component("R", (5.0, 5.0))
+    scene._comp_items[comp.id].setSelected(True)
+
+    def press(key):
+        view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, key, Qt.NoModifier))
+
+    press(Qt.Key_Down)
+    assert scene._component_by_id(comp.id).position == (5.0, 5.25)
+    press(Qt.Key_Right)
+    assert scene._component_by_id(comp.id).position == (5.25, 5.25)
 
 
 # ---------------------------------------------------------------------------
@@ -1052,6 +1070,45 @@ def test_component_drag_snaps_to_grid_mid_drag(scene: SchematicScene):
     )
 
 
+def test_click_on_component_does_not_push_spurious_move(scene: SchematicScene):
+    """A plain click (press+release, no drag) on a component pushes no move and
+    preserves its exact position (regression, §5.9)."""
+    a = scene.place_component("R", (5.0, 5.0))
+    scene._comp_items[a.id].setSelected(True)
+    scene.nudge_selected(0.0, -0.25)                 # → (5.0, 4.75), one minor cell
+    assert scene._component_by_id(a.id).position == (5.0, 4.75)
+
+    count_before = scene.undo_stack.undo_count
+    _begin_component_drag(scene, a.id)               # press at body centre
+    _release_component(scene, a.id)                  # release without moving
+    # Position preserved, no spurious MoveCommand pushed.
+    assert scene._component_by_id(a.id).position == (5.0, 4.75)
+    assert scene.undo_stack.undo_count == count_before
+
+
+def test_nudge_025_any_direction_keeps_wires_valid(scene: SchematicScene):
+    """On the 0.25 grid a 0.25 nudge in ANY direction keeps connected wires
+    valid — a perpendicular nudge elbows on-grid instead of jogging off it (§3.1)."""
+    from app.schematic.validate import validate
+
+    r = scene.place_component("R", (0.0, 0.0))       # pins (0,0),(2,0)
+    scene.place_component("R", (10.0, 10.0))         # 2nd component → not a select-all move
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])         # vertical lead off the right pin
+    scene.clearSelection()
+    scene._comp_items[r.id].setSelected(True)
+
+    # Perpendicular (horizontal) 0.25 nudge: the lead's auto-elbow lands on a
+    # 0.25 node, so the schematic stays valid (no rejection, the move happens).
+    scene.nudge_selected(0.25, 0.0)
+    assert scene._component_by_id(r.id).position == (0.25, 0.0)
+    assert validate(scene.schematic) == []
+
+    # Parallel (vertical) nudge along the lead is also fine.
+    scene.nudge_selected(0.0, 0.25)
+    assert scene._component_by_id(r.id).position == (0.25, 0.25)
+    assert validate(scene.schematic) == []
+
+
 # ---------------------------------------------------------------------------
 # Auto-enter / auto-exit wire mode via pin clicks
 # ---------------------------------------------------------------------------
@@ -1214,6 +1271,33 @@ def test_double_click_wire_vertex_enters_wire_mode(scene: SchematicScene):
 
     assert scene.mode == Mode.WIRE
     assert scene._wire_pts == [(0.0, 2.0)]
+
+
+def test_double_click_free_endpoint_opens_label_editor(scene: SchematicScene):
+    """Double-clicking a free wire endpoint opens its endpoint-label editor
+    (even with no label set), instead of entering WIRE mode."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    item = scene._wire_items[wire.id]
+
+    _dbl_click(scene, (4.0, 0.0))   # free END endpoint
+    assert scene.mode == Mode.SELECT
+    assert item._label_editor.is_editing
+    assert item._editing_end == "end"
+    item._label_editor.end_edit(commit=False)  # clean up the editor
+
+    _dbl_click(scene, (0.0, 0.0))   # free START endpoint
+    assert item._editing_end == "start"
+
+
+def test_double_click_connected_endpoint_enters_wire_mode(scene: SchematicScene):
+    """A wire endpoint on a component pin is not a label target — it falls
+    through to WIRE-mode routing (pin-locked endpoints aren't draggable)."""
+    scene.place_component("R", (0.0, 0.0))      # pins at (0,0) and (2,0)
+    scene.add_wire([(2.0, 0.0), (5.0, 0.0)])    # (2,0) on the pin; (5,0) free
+
+    _dbl_click(scene, (2.0, 0.0))               # connected endpoint
+    assert scene.mode == Mode.WIRE
+    assert scene._wire_pts == [(2.0, 0.0)]
 
 
 def test_double_click_empty_space_enters_wire_mode(scene: SchematicScene):
@@ -1561,6 +1645,64 @@ def test_label_slot_side(scene: SchematicScene):
     assert visible[0]._dir.y() < 0
 
 
+def test_voltage_and_label_slots_opposite_sides_when_rotated(scene: SchematicScene):
+    """On a rotated component, `l_` and `v^` land on opposite sides matching the
+    LaTeX output (regression): for a 90°-rotated capacitor the rendered PDF puts
+    `l_` on the screen-left and `v^` on the screen-right. The voltage slot must
+    use the same traversal-relative basis as the label, not a separate heuristic
+    that collapses both onto the same side."""
+    comp = scene.place_component("C", (0.0, 0.0), rotation=90)
+    scene.edit_component_options(comp.id, r"l_=$C$, v^=$V$")
+    item = scene._comp_items[comp.id]
+    visible = [s for s in item._slot_items if s.isVisible()]
+    assert len(visible) == 2
+    by_dir = {round(s._dir.x()): s for s in visible}
+    # Opposite horizontal sides (one -x, one +x), not collapsed together.
+    assert set(by_dir) == {-1, 1}
+    # l_ to screen-left (C), v^ to screen-right (V) — see /tmp render comparison.
+    l_slot = next(s for s in visible if s._fragment == "$C$")
+    v_slot = next(s for s in visible if s._fragment == "$V$")
+    assert l_slot._dir.x() < 0
+    assert v_slot._dir.x() > 0
+
+
+def test_voltage_source_default_v_label_flips_side(scene: SchematicScene):
+    """A voltage source's default `v=` label sits on the opposite side from a
+    passive's — CircuiTikZ's source voltage convention (regression).
+
+    All three are vertical (pins (0,0)-(0,2), traversal down): a voltage source
+    (cV) puts plain `v` on the screen-right, while a current source (I) and a
+    passive default to the screen-left. The explicit `v^`/`v_` forms are not
+    flipped (component-independent)."""
+    cv = scene.place_component("cV", (0.0, 0.0))
+    scene.edit_component_options(cv.id, "v=$V$")
+    i = scene.place_component("I", (4.0, 0.0))
+    scene.edit_component_options(i.id, "v=$V$")
+
+    def vdir(comp):
+        item = scene._comp_items[comp.id]
+        return next(s for s in item._slot_items if s.isVisible())._dir
+
+    assert vdir(cv).x() > 0.5, "voltage source default v must be screen-right"
+    assert vdir(i).x() < -0.5, "current source default v must be screen-left"
+
+    # The explicit v_ on the voltage source is NOT flipped (stays screen-left).
+    scene.edit_component_options(cv.id, "v_=$V$")
+    assert vdir(cv).x() < -0.5
+
+
+def test_open_annotation_labels_centered_on_axis(scene: SchematicScene):
+    """The `open` voltage annotation centres its slot labels over the line
+    (no perpendicular clearance) so they mirror the LaTeX arrow placement."""
+    comp = scene.place_component("open", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "v=$V_s$")
+    item = scene._comp_items[comp.id]
+    visible = [s for s in item._slot_items if s.isVisible()]
+    assert len(visible) == 1
+    assert visible[0]._centered is True
+    assert visible[0]._base_dist == 0.0
+
+
 def test_options_undo_hides_slots(scene: SchematicScene):
     """Undoing an options edit hides the slot labels again."""
     comp = scene.place_component("R", (0.0, 0.0))
@@ -1620,6 +1762,221 @@ def test_set_wire_no_termination_dots(scene: SchematicScene):
     assert (0.0, 0.0) in scene._open_circle_items
 
 
+def test_set_wire_marker_suppresses_open_circle(scene: SchematicScene):
+    """Setting an endpoint marker is undoable and removes that end's open circle."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])  # free wire -> two ocircs
+    assert (0.0, 0.0) in scene._open_circle_items
+    assert (4.0, 0.0) in scene._open_circle_items
+    scene.set_wire_end_marker(wire.id, "arrow")
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.end_marker == "arrow"
+    assert (4.0, 0.0) not in scene._open_circle_items  # marked end: terminal gone
+    assert (0.0, 0.0) in scene._open_circle_items       # unmarked end: terminal kept
+    scene.undo()
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).end_marker == ""
+    assert (4.0, 0.0) in scene._open_circle_items       # restored
+
+
+def test_set_wire_marker_noop_when_unchanged(scene: SchematicScene):
+    """Setting an unchanged marker pushes no command."""
+    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    can_undo_before = scene._stack.can_undo()
+    scene.set_wire_start_marker(wire.id, "")  # already none
+    scene.set_wire_end_marker(wire.id, "")    # already none
+    assert scene._stack.can_undo() == can_undo_before
+
+
+def test_set_wire_labels_undoable(scene: SchematicScene):
+    """Wire endpoint label setters push undoable commands and update the model."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_start_label(wire.id, "in")
+    scene.set_wire_end_label(wire.id, "$y(t)$")
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.start_label == "in" and w.end_label == "$y(t)$"
+    scene.undo()  # undo end label
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).end_label == ""
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).start_label == "in"
+
+
+def test_set_wire_label_noop_when_unchanged(scene: SchematicScene):
+    """Setting an unchanged label pushes no command."""
+    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    can_undo_before = scene._stack.can_undo()
+    scene.set_wire_start_label(wire.id, "")  # already empty
+    scene.set_wire_end_label(wire.id, "")    # already empty
+    assert scene._stack.can_undo() == can_undo_before
+
+
+def test_tab_cycle_endpoint_marker(scene: SchematicScene):
+    """cycle_at on a free endpoint steps its marker through the cycle (and wraps)."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+
+    def end_marker():
+        return next(w for w in scene.schematic.wires if w.id == wire.id).end_marker
+
+    expected = ["arrow", "stealth", "open", "bar", "", "arrow"]
+    for want in expected:
+        scene.cycle_at(scene.gu_to_scene(4.0, 0.0))
+        assert end_marker() == want
+    # Shift+Tab steps backward.
+    scene.cycle_at(scene.gu_to_scene(4.0, 0.0), backward=True)
+    assert end_marker() == ""
+    # Marker cycling does not touch line_style.
+    assert next(w for w in scene.schematic.wires if w.id == wire.id).line_style == ""
+    # Each step is undoable.
+    scene.undo()
+    assert end_marker() == "arrow"
+
+
+def test_tab_cycle_start_vs_end_endpoint(scene: SchematicScene):
+    """The cursor's endpoint determines which marker cycles."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.cycle_at(scene.gu_to_scene(0.0, 0.0))   # START endpoint
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.start_marker == "arrow" and w.end_marker == ""
+
+
+def test_tab_cycle_line_style_on_body(scene: SchematicScene):
+    """cycle_at on a wire body steps the line style through the cycle (and wraps)."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+
+    def line_style():
+        return next(w for w in scene.schematic.wires if w.id == wire.id).line_style
+
+    for want in ["dashed", "dotted", "dash dot", "", "dashed"]:
+        scene.cycle_at(scene.gu_to_scene(2.0, 0.0))   # body midpoint
+        assert line_style() == want
+    # Body cycling leaves endpoint markers alone.
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.start_marker == "" and w.end_marker == ""
+
+
+def test_tab_cycle_interior_vertex_cycles_line_style(scene: SchematicScene):
+    """An interior vertex is not an endpoint, so it cycles the line style."""
+    wire = scene.add_wire([(0.0, 0.0), (0.0, 2.0), (4.0, 2.0)])  # corner at (0,2)
+    scene.cycle_at(scene.gu_to_scene(0.0, 2.0))   # interior corner
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.line_style == "dashed"
+    assert w.start_marker == "" and w.end_marker == ""
+
+
+def test_tab_cycle_empty_space_is_noop(scene: SchematicScene):
+    """cycle_at off any wire changes nothing and reports no change."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    changed = scene.cycle_at(scene.gu_to_scene(2.0, 5.0))   # blank space
+    assert changed is False
+
+
+def test_set_wire_mid_label_and_pos(scene: SchematicScene):
+    """Mid-label text and position setters are undoable; position clamps to [0,1]."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_mid_label(wire.id, "$V_{bus}$")
+    scene.set_wire_mid_label_pos(wire.id, 0.25)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.mid_label == "$V_{bus}$" and w.mid_label_pos == 0.25
+    scene.set_wire_mid_label_pos(wire.id, 5.0)   # clamps
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).mid_label_pos == 1.0
+    scene.undo()  # undo the clamp
+    assert next(x for x in scene.schematic.wires if x.id == wire.id).mid_label_pos == 0.25
+
+
+def test_mid_label_noop_when_unchanged(scene: SchematicScene):
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    can_undo_before = scene._stack.can_undo()
+    scene.set_wire_mid_label(wire.id, "")        # already empty
+    scene.set_wire_mid_label_pos(wire.id, 0.5)   # already default
+    assert scene._stack.can_undo() == can_undo_before
+
+
+def test_mid_label_inline_edit_commits(scene: SchematicScene):
+    """Double-click editing of the mid-label commits via the scene."""
+    from app.canvas.items import _WireMidLabel, WireItem
+
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_mid_label(wire.id, "$V_{bus}$")
+    item = scene._wire_items[wire.id]
+    assert isinstance(item._mid_label_item, _WireMidLabel)
+    assert isinstance(item._mid_label_item.parentItem(), WireItem)
+
+    ed = item._label_editor
+    item.begin_label_edit("mid")
+    assert ed.is_editing
+    assert ed.toPlainText() == "$V_{bus}$"
+    assert not item._mid_label_item.isVisible()   # display hidden while editing
+
+    ed.setPlainText("$I_o$")
+    ed.end_edit(commit=True)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.mid_label == "$I_o$"
+    assert item._mid_label_item.isVisible()        # display restored
+
+
+def test_wire_label_inline_edit_commits(scene: SchematicScene):
+    """Double-click editing of an end label commits the new text via the scene."""
+    from app.canvas.items import _WireEndLabel, WireItem
+
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_end_label(wire.id, "$y(t)$")
+    item = scene._wire_items[wire.id]
+    assert isinstance(item._end_label_item, _WireEndLabel)
+    assert item._end_label_item.end == "end"
+    assert isinstance(item._end_label_item.parentItem(), WireItem)
+
+    ed = item._label_editor
+    item.begin_label_edit("end")
+    assert ed.is_editing
+    assert ed.toPlainText() == "$y(t)$"          # editor pre-filled with the fragment
+    assert not item._end_label_item.isVisible()  # display hidden while editing
+
+    ed.setPlainText("$z(t)$")
+    ed.end_edit(commit=True)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.end_label == "$z(t)$"
+    assert item._end_label_item.isVisible()       # display restored
+    assert not ed.isVisible()                     # editor hidden after commit
+
+
+def test_wire_label_inline_edit_cancel_leaves_model(scene: SchematicScene):
+    """Escape (cancel) restores the display label without changing the model."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_start_label(wire.id, "in")
+    item = scene._wire_items[wire.id]
+    ed = item._label_editor
+
+    item.begin_label_edit("start")
+    ed.setPlainText("CHANGED")
+    ed.end_edit(commit=False)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.start_label == "in"                  # unchanged on cancel
+    assert item._start_label_item.isVisible()
+
+
+def test_wire_label_field_commits_on_editing_finished_not_typing(scene: SchematicScene):
+    """Typing in a label field must not commit mid-edit (cursor-jump regression).
+
+    A keystroke (textChanged) used to fire the debounced commit, which re-bound
+    the panel and reset the field's cursor to the end. Labels now commit only on
+    editingFinished (Enter / focus-out).
+    """
+    from app.ui.properties import PropertiesPanel
+
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_wire(wire.id)
+    sec = panel._wire_section
+
+    # Simulate typing: setText emits textChanged, which must NOT commit.
+    can_undo_before = scene._stack.can_undo()
+    sec._end_label.setText("$y(t)$")
+    assert scene._stack.can_undo() == can_undo_before
+    assert next(w for w in scene.schematic.wires if w.id == wire.id).end_label == ""
+
+    # editingFinished (Enter / focus-out) commits.
+    sec._end_label.editingFinished.emit()
+    assert next(w for w in scene.schematic.wires if w.id == wire.id).end_label == "$y(t)$"
+
+
 def test_set_wire_style_noop_when_unchanged(scene: SchematicScene):
     """Setting an unchanged wire style leaves the model (and undo state) alone."""
     wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
@@ -1636,11 +1993,17 @@ def test_properties_panel_shows_wire(scene: SchematicScene):
 
     wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
     scene.set_wire_line_style(wire.id, "dashed")
+    scene.set_wire_end_marker(wire.id, "arrow")
+    scene.set_wire_end_label(wire.id, "$y(t)$")
     panel = PropertiesPanel()
     panel.set_scene(scene)
     panel.show_wire(wire.id)
     assert panel._wire_section.isVisibleTo(panel)
     assert panel._wire_section._line_style.currentText() == "Dashed"
+    assert panel._wire_section._end_marker.currentText() == "Arrow"
+    assert panel._wire_section._start_marker.currentText() == "None"
+    assert panel._wire_section._end_label.text() == "$y(t)$"
+    assert panel._wire_section._start_label.text() == ""
     comp = scene.place_component("R", (5.0, 5.0))
     panel.show_component(comp.id)
     assert not panel._wire_section.isVisibleTo(panel)

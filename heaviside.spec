@@ -27,12 +27,11 @@ from PyInstaller.utils.hooks import collect_data_files
 # app/resources.py expects.
 datas = [
     ("assets/icon.png", "assets"),
-    # The whole SVG export tree, not just the manifest: svgsym.py reads the
-    # original .svg files at runtime to reconstruct glyph marks (the +/- of a
-    # voltage/controlled source, op-amp labels, etc.) that the manifest records
-    # only as opaque <use> references. Bundling just manifest.json drops those
-    # marks in the frozen app. The tree is small (~0.5 MB).
-    ("tools/circuitikz_svgs", "tools/circuitikz_svgs"),
+    # The manifest is self-contained — it bakes in all symbol geometry including
+    # resolved +/- glyph marks (see tools/export_circuitikz_svgs.py), so svgsym.py
+    # reads ONLY the manifest at runtime. The intermediate .svg files are build
+    # artifacts and are not bundled.
+    ("tools/circuitikz_svgs/manifest.json", "tools/circuitikz_svgs"),
 ]
 # Example schematics for the File → Open Example menu. Only the .hv sources are
 # bundled — the co-located .pdf/.eps are regenerable and intentionally skipped.

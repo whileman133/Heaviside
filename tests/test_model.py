@@ -15,11 +15,14 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    component_pin_positions,
     junction_points,
     open_endpoints,
     unconnected_pins,
     route,
     simplify_points,
+    wire_fraction_at_point,
+    wire_point_at_fraction,
 )
 from app.schematic.validate import validate
 
@@ -141,10 +144,18 @@ def test_wire_valid() -> None:
 # ---------------------------------------------------------------------------
 
 def test_wire_off_grid() -> None:
-    """A Wire with a vertex at (0.3, 0.0) produces a validation error."""
-    wire = _wire([(0.3, 0.0), (2.0, 0.0)])
+    """A Wire with a vertex off the 0.25 GU grid produces a validation error."""
+    wire = _wire([(0.3, 0.0), (2.0, 0.0)])   # 0.3 is not a multiple of 0.25
     errors = validate(_make_schematic(wires=[wire]))
-    assert any("0.5 GU boundary" in e for e in errors), errors
+    assert any("0.25 GU boundary" in e for e in errors), errors
+
+
+def test_wire_on_quarter_grid_is_valid() -> None:
+    """Vertices on the 0.25 GU grid (e.g. a fine-nudged pin at y=0.25) validate."""
+    fet = Component(id=_uid(), kind="nigfete", position=(0.0, -0.25), rotation=0, options="")
+    src = component_pin_positions(fet)[2]    # source pin at (1.0, 0.25) — on the 0.25 grid
+    wire = _wire([src, (src[0], 2.0)])
+    assert validate(_make_schematic(fet, wires=[wire])) == []
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +530,33 @@ def test_no_termination_dots_does_not_affect_other_wires() -> None:
     assert (4.0, 2.0) in result       # other wire's far end is still open
 
 
+def test_custom_marker_suppresses_open_endpoint() -> None:
+    """An endpoint bearing a custom marker gets no automatic open-circle terminal."""
+    # end_marker is on points[-1] == (4,0); start (0,0) keeps its terminal.
+    w = Wire(id="a", points=[(0.0, 0.0), (4.0, 0.0)], end_marker="arrow")
+    assert open_endpoints(_make_schematic(wires=(w,))) == {(0.0, 0.0)}
+
+
+def test_custom_marker_start_and_end_suppress_both_endpoints() -> None:
+    """Markers on both ends suppress both automatic terminals."""
+    w = Wire(
+        id="a",
+        points=[(0.0, 0.0), (4.0, 0.0)],
+        start_marker="arrow",
+        end_marker="arrow",
+    )
+    assert open_endpoints(_make_schematic(wires=(w,))) == set()
+
+
+def test_custom_marker_does_not_affect_other_wires() -> None:
+    """A marked end still counts as a connection for another wire ending there."""
+    marked = Wire(id="a", points=[(0.0, 0.0), (4.0, 0.0)], end_marker="arrow")
+    other = _W("b", [(4.0, 0.0), (4.0, 2.0)])  # shares the marked endpoint
+    result = open_endpoints(_make_schematic(wires=(marked, other)))
+    assert (4.0, 0.0) not in result   # shared end is connected (degree>1)
+    assert (4.0, 2.0) in result       # other wire's far end is still open
+
+
 def test_open_endpoints_pin_connected_end_excluded() -> None:
     """An endpoint coinciding with a component pin is not open.
 
@@ -673,3 +711,44 @@ def test_unconnected_pins_current_annotation_still_connects() -> None:
                       rotation=0, options="i=$i$")  # pins (2,0),(4,0)
     result = unconnected_pins(_make_schematic(r, short))
     assert (2.0, 0.0) not in result   # shared with the short → connected
+
+
+# ---------------------------------------------------------------------------
+# wire_point_at_fraction / wire_fraction_at_point
+# ---------------------------------------------------------------------------
+
+def test_point_at_fraction_straight() -> None:
+    pts = [(0.0, 0.0), (4.0, 0.0)]
+    assert wire_point_at_fraction(pts, 0.0) == (0.0, 0.0)
+    assert wire_point_at_fraction(pts, 0.5) == (2.0, 0.0)
+    assert wire_point_at_fraction(pts, 1.0) == (4.0, 0.0)
+
+
+def test_point_at_fraction_l_wire_uses_arc_length() -> None:
+    # L-wire, total length 4 + 2 = 6. Half = arc-length 3 → (3,0) on first leg.
+    pts = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0)]
+    assert wire_point_at_fraction(pts, 0.5) == (3.0, 0.0)
+    assert wire_point_at_fraction(pts, 1.0) == (4.0, 2.0)
+
+
+def test_point_at_fraction_clamps_and_degenerate() -> None:
+    pts = [(0.0, 0.0), (4.0, 0.0)]
+    assert wire_point_at_fraction(pts, -1.0) == (0.0, 0.0)
+    assert wire_point_at_fraction(pts, 2.0) == (4.0, 0.0)
+    assert wire_point_at_fraction([(1.0, 1.0)], 0.5) == (1.0, 1.0)   # single point
+    assert wire_point_at_fraction([], 0.5) == (0.0, 0.0)            # empty
+
+
+def test_fraction_at_point_projects_onto_polyline() -> None:
+    pts = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0)]   # total 6
+    assert abs(wire_fraction_at_point(pts, (2.0, 0.0)) - (2.0 / 6.0)) < 1e-9
+    assert abs(wire_fraction_at_point(pts, (4.0, 1.0)) - (5.0 / 6.0)) < 1e-9
+    # Off the line: projects to the nearest point on the polyline.
+    assert abs(wire_fraction_at_point(pts, (2.0, 1.0)) - (2.0 / 6.0)) < 1e-9
+
+
+def test_fraction_round_trips_with_point() -> None:
+    pts = [(0.0, 0.0), (4.0, 0.0), (4.0, 2.0)]
+    for frac in (0.1, 0.5, 0.83):
+        pt = wire_point_at_fraction(pts, frac)
+        assert abs(wire_fraction_at_point(pts, pt) - frac) < 1e-9

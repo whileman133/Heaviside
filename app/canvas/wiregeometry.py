@@ -80,7 +80,7 @@ class WireGeometry:
     def nearest_wire_segment_point(
         self, gu: tuple[float, float], exclude_wire_id: str | None = None
     ) -> tuple[float, float] | None:
-        """Nearest point on an existing wire segment, snapped to 0.5 GU.
+        """Nearest point on an existing wire segment, snapped to 0.25 GU.
 
         Returns the snapped foot of the perpendicular from *gu* onto the closest
         Manhattan segment, but only if it is within PIN_SNAP_GU and lands on the
@@ -118,7 +118,7 @@ class WireGeometry:
         """Resolve a wire endpoint for cursor position *gu* (already snapped).
 
         Snap priority: component pin → existing wire vertex → nearest point on
-        an existing wire segment → bare 0.5 GU grid node. Snapping to a pin or
+        an existing wire segment → bare 0.25 GU grid node. Snapping to a pin or
         to existing wire geometry forms a junction (and is treated as a
         "connectable" target). Returns ``(point, is_connectable)`` where the
         flag drives the preview marker (ring vs. plain dot) and termination.

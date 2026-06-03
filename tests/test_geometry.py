@@ -23,7 +23,9 @@ from app.canvas.style import GRID_PX
 
 
 @pytest.mark.parametrize("raw, expected", [
-    (0.0, 0.0), (0.24, 0.0), (0.26, 0.5), (0.75, 1.0), (-0.26, -0.5), (1.5, 1.5),
+    # Grid is 0.25 GU: round to the nearest quarter.
+    (0.0, 0.0), (0.12, 0.0), (0.13, 0.25), (0.24, 0.25), (0.26, 0.25),
+    (0.6, 0.5), (0.75, 0.75), (-0.13, -0.25), (1.5, 1.5),
 ])
 def test_snap_gu(raw, expected):
     assert snap_gu(raw) == expected
@@ -36,9 +38,9 @@ def test_scene_gu_roundtrip():
 
 
 def test_snap_point_gu():
-    # 0.26 GU rounds up to 0.5, -0.1 GU rounds to 0.0.
+    # On the 0.25 grid: 0.26 GU rounds to 0.25, -0.1 GU rounds to 0.0.
     pt = QPointF(0.26 * GRID_PX, -0.1 * GRID_PX)
-    assert snap_point_gu(pt) == (0.5, 0.0)
+    assert snap_point_gu(pt) == (0.25, 0.0)
 
 
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])

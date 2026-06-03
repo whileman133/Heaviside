@@ -25,18 +25,28 @@ try:
 except Exception as exc:  # pragma: no cover - environment-dependent
     pytest.skip(f"Qt platform unavailable: {exc}", allow_module_level=True)
 
-from app.canvas.svgsym import _source_svg_path, symbol_paths  # noqa: E402
+import json  # noqa: E402
+
+from app.canvas.style import MANIFEST_PATH  # noqa: E402
+from app.canvas.svgsym import manifest_key, symbol_paths  # noqa: E402
 
 
-def test_source_svg_present_for_glyph_kind() -> None:
-    """The controlled-source .svg (carrying its +/- glyphs) must be findable."""
-    assert _source_svg_path("cV") is not None
+def test_manifest_is_self_contained_for_glyph_kind() -> None:
+    """The controlled-source's +/- marks are baked into the manifest (`glyphs`),
+    so the app needs no .svg access at run time."""
+    with open(MANIFEST_PATH, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    entry = manifest[manifest_key("cV")]
+    assert entry["glyphs"], "cV must carry baked glyph marks"
+    g = entry["glyphs"][0]
+    assert g["d"].lstrip()[:1] in "Mm"          # real path geometry, not a placeholder
+    assert len(g["matrix"]) == 6                 # baked affine transform
 
 
 def test_cV_paths_all_real_geometry() -> None:
     """Every path returned for cV has real geometry — no opaque glyph-ref leaks.
 
-    The manifest stores the +/- as `g…`-style <use> placeholders; if svgsym let
+    The +/- glyph marks are resolved into concrete filled paths; if svgsym let
     one through unresolved it would be an empty/degenerate path. All returned
     paths must carry actual elements.
     """
@@ -59,3 +69,21 @@ def test_plain_resistor_unaffected() -> None:
     r = symbol_paths("R")
     assert len(r) >= 1
     assert all(sp.path.elementCount() > 0 for sp in r)
+
+
+def test_filled_diode_body_is_filled() -> None:
+    """A filled diode (`D*`) has a filled body path; the plain diode (`D`) does
+    not — so toggling the filled option visibly changes the canvas (regression).
+
+    The fill is a bare dvisvgm `<path>` (SVG default black fill); recording it as
+    `fill='none'` previously made `D` and `D*` render identically.
+    """
+    assert not any(sp.filled for sp in symbol_paths("D")), "plain D must be unfilled"
+    assert any(sp.filled for sp in symbol_paths("D*")), "D* must have a filled body"
+
+
+def test_stroke_only_symbols_not_filled() -> None:
+    """Pure outline symbols (inductor, capacitor, resistor) have no filled paths
+    — a guard that the 'bare path = fill' rule does not over-fill stroked bodies."""
+    for kind in ("L", "C", "R"):
+        assert not any(sp.filled for sp in symbol_paths(kind)), kind

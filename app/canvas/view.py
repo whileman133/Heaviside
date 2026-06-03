@@ -8,7 +8,7 @@ Responsibilities:
   * Translating key presses into scene mode changes / commands:
         W        → wire mode
         Escape   → cancel / select mode
-        arrows   → nudge selection by 0.5 GU
+        arrows   → nudge selection by 0.25 GU (one minor-grid cell)
         Del/Bksp → delete selection
         Ctrl+Z / Ctrl+Shift+Z → undo / redo
   * Reporting the live zoom level via the ``zoom_changed`` signal.
@@ -19,10 +19,11 @@ schematic coordinates; only the view transform changes (spec §3.4).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QEvent, QPointF, Qt, Signal
+from PySide6.QtGui import QCursor, QPainter
 from PySide6.QtWidgets import QGraphicsView
 
+from app.canvas.geometry import NUDGE_GU
 from app.canvas.items import LabelTextItem
 from app.canvas.scene import Mode, SchematicScene
 
@@ -180,6 +181,23 @@ class SchematicView(QGraphicsView):
     # Keyboard
     # ------------------------------------------------------------------
 
+    def event(self, event) -> bool:  # noqa: N802, ANN001
+        # Intercept Tab / Shift+Tab *before* Qt consumes it for focus navigation
+        # (which happens in QWidget.event, ahead of keyPressEvent). While the
+        # cursor hovers a wire endpoint, Tab cycles that endpoint's marker; over
+        # a wire body it cycles the line style. Shift+Tab steps backward.
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            if not isinstance(self._scene.focusItem(), LabelTextItem):
+                backward = (
+                    event.key() == Qt.Key_Backtab
+                    or bool(event.modifiers() & Qt.ShiftModifier)
+                )
+                scene_pt = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+                if self._scene.cycle_at(scene_pt, backward):
+                    event.accept()
+                    return True
+        return super().event(event)
+
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
         # When a label is being in-place edited, let all key events route to
         # the focused QGraphicsTextItem instead of being intercepted here.
@@ -226,12 +244,13 @@ class SchematicView(QGraphicsView):
             event.accept()
             return
 
-        # Arrow-key nudge by 0.5 GU.
+        # Arrow-key nudge by one minor-grid cell (NUDGE_GU = 0.25) in any
+        # direction; connected wires follow and stay grid-valid (spec §3.1).
         nudges = {
-            Qt.Key_Left: (-0.5, 0.0),
-            Qt.Key_Right: (0.5, 0.0),
-            Qt.Key_Up: (0.0, -0.5),
-            Qt.Key_Down: (0.0, 0.5),
+            Qt.Key_Left: (-NUDGE_GU, 0.0),
+            Qt.Key_Right: (NUDGE_GU, 0.0),
+            Qt.Key_Up: (0.0, -NUDGE_GU),
+            Qt.Key_Down: (0.0, NUDGE_GU),
         }
         if key in nudges and self._scene.selected_component_ids():
             dx, dy = nudges[key]
