@@ -168,6 +168,18 @@ def _wire_to_dict(w: Wire) -> dict[str, Any]:
         d["no_junction_dots"] = True
     if w.no_termination_dots:
         d["no_termination_dots"] = True
+    if w.start_marker:
+        d["start_marker"] = w.start_marker
+    if w.end_marker:
+        d["end_marker"] = w.end_marker
+    if w.start_label:
+        d["start_label"] = w.start_label
+    if w.end_label:
+        d["end_label"] = w.end_label
+    if w.mid_label:
+        d["mid_label"] = w.mid_label
+    if w.mid_label_pos != 0.5:
+        d["mid_label_pos"] = w.mid_label_pos
     return d
 
 
@@ -391,7 +403,37 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
     if not isinstance(no_termination_dots, bool):
         raise SchematicLoadError(f"{ctx}.no_termination_dots must be a boolean")
 
+    start_marker = data.get("start_marker", "")
+    if not isinstance(start_marker, str):
+        raise SchematicLoadError(f"{ctx}.start_marker must be a string")
+
+    end_marker = data.get("end_marker", "")
+    if not isinstance(end_marker, str):
+        raise SchematicLoadError(f"{ctx}.end_marker must be a string")
+
+    start_label = data.get("start_label", "")
+    if not isinstance(start_label, str):
+        raise SchematicLoadError(f"{ctx}.start_label must be a string")
+
+    end_label = data.get("end_label", "")
+    if not isinstance(end_label, str):
+        raise SchematicLoadError(f"{ctx}.end_label must be a string")
+
+    mid_label = data.get("mid_label", "")
+    if not isinstance(mid_label, str):
+        raise SchematicLoadError(f"{ctx}.mid_label must be a string")
+
+    raw_mid_pos = data.get("mid_label_pos", 0.5)
+    try:
+        mid_label_pos = float(raw_mid_pos)
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.mid_label_pos must be a number") from exc
+    mid_label_pos = max(0.0, min(1.0, mid_label_pos))
+
     return Wire(
         id=wire_id, points=points, line_style=line_style, line_width=line_width,
         no_junction_dots=no_junction_dots, no_termination_dots=no_termination_dots,
+        start_marker=start_marker, end_marker=end_marker,
+        start_label=start_label, end_label=end_label,
+        mid_label=mid_label, mid_label_pos=mid_label_pos,
     )

@@ -654,3 +654,103 @@ def test_wire_no_termination_dots_bad_type_raises(tmp_path: Path) -> None:
     (tmp_path / "bad.hv").write_text(json.dumps(doc))
     with pytest.raises(SchematicLoadError, match="no_termination_dots"):
         load(tmp_path / "bad.hv")
+
+
+def test_roundtrip_wire_markers(tmp_path: Path) -> None:
+    """A wire's start_marker/end_marker survive a save+load cycle."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
+             start_marker="arrow", end_marker="arrow")
+    save(Schematic(version="0.1", name="mk", wires=[w]), tmp_path / "mk.hv")
+    loaded = load(tmp_path / "mk.hv")
+    assert loaded.wires[0].start_marker == "arrow"
+    assert loaded.wires[0].end_marker == "arrow"
+
+
+def test_wire_markers_default_omitted(tmp_path: Path) -> None:
+    """Empty markers are omitted from the JSON; old files load with defaults."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    save(Schematic(version="0.1", name="mk", wires=[w]), tmp_path / "mk.hv")
+    raw = json.loads((tmp_path / "mk.hv").read_text())
+    assert "start_marker" not in raw["wires"][0]
+    assert "end_marker" not in raw["wires"][0]
+
+
+def test_wire_marker_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "end_marker": 1}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="end_marker"):
+        load(tmp_path / "bad.hv")
+
+
+def test_roundtrip_wire_labels(tmp_path: Path) -> None:
+    """A wire's start_label/end_label survive a save+load cycle."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
+             start_label="in", end_label="$y(t)$")
+    save(Schematic(version="0.1", name="lb", wires=[w]), tmp_path / "lb.hv")
+    loaded = load(tmp_path / "lb.hv")
+    assert loaded.wires[0].start_label == "in"
+    assert loaded.wires[0].end_label == "$y(t)$"
+
+
+def test_wire_labels_default_omitted(tmp_path: Path) -> None:
+    """Empty labels are omitted from the JSON (back-compat)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    save(Schematic(version="0.1", name="lb", wires=[w]), tmp_path / "lb.hv")
+    raw = json.loads((tmp_path / "lb.hv").read_text())
+    assert "start_label" not in raw["wires"][0]
+    assert "end_label" not in raw["wires"][0]
+
+
+def test_wire_label_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "start_label": 5}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="start_label"):
+        load(tmp_path / "bad.hv")
+
+
+def test_roundtrip_wire_mid_label(tmp_path: Path) -> None:
+    """A wire's mid_label and mid_label_pos survive a save+load cycle."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             mid_label="$V_{bus}$", mid_label_pos=0.25)
+    save(Schematic(version="0.1", name="m", wires=[w]), tmp_path / "m.hv")
+    loaded = load(tmp_path / "m.hv")
+    assert loaded.wires[0].mid_label == "$V_{bus}$"
+    assert loaded.wires[0].mid_label_pos == 0.25
+
+
+def test_wire_mid_label_defaults_omitted(tmp_path: Path) -> None:
+    """Empty mid_label and the default 0.5 position are omitted from JSON."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
+    save(Schematic(version="0.1", name="m", wires=[w]), tmp_path / "m.hv")
+    raw = json.loads((tmp_path / "m.hv").read_text())
+    assert "mid_label" not in raw["wires"][0]
+    assert "mid_label_pos" not in raw["wires"][0]
+
+
+def test_wire_mid_label_pos_clamped_on_load(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "m", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "mid_label": "x", "mid_label_pos": 1.5}],
+    }
+    (tmp_path / "m.hv").write_text(json.dumps(doc))
+    assert load(tmp_path / "m.hv").wires[0].mid_label_pos == 1.0
+
+
+def test_wire_mid_label_pos_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "mid_label_pos": "halfway"}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="mid_label_pos"):
+        load(tmp_path / "bad.hv")

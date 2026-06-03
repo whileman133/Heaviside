@@ -40,10 +40,16 @@ from app.canvas.commands import (
     MoveWireVertexCommand,
     PlaceCommand,
     ResizeCommand,
+    SetWireEndLabelCommand,
+    SetWireEndMarkerCommand,
     SetWireLineStyleCommand,
     SetWireLineWidthCommand,
+    SetWireMidLabelCommand,
+    SetWireMidLabelPosCommand,
     SetWireNoJunctionDotsCommand,
     SetWireNoTerminationDotsCommand,
+    SetWireStartLabelCommand,
+    SetWireStartMarkerCommand,
     SplitWireCommand,
     UndoStack,
     WireCommand,
@@ -1227,3 +1233,57 @@ def test_set_wire_no_termination_dots_do_undo():
     assert stack.schematic.wires[0].no_termination_dots is True
     stack.undo()
     assert stack.schematic.wires[0].no_termination_dots is False
+
+
+def test_set_wire_start_marker_do_undo_redo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireStartMarkerCommand(wid, "arrow", ""))
+    assert stack.schematic.wires[0].start_marker == "arrow"
+    stack.undo()
+    assert stack.schematic.wires[0].start_marker == ""
+    stack.redo()
+    assert stack.schematic.wires[0].start_marker == "arrow"
+
+
+def test_set_wire_end_marker_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireEndMarkerCommand(wid, "arrow", ""))
+    assert stack.schematic.wires[0].end_marker == "arrow"
+    stack.undo()
+    assert stack.schematic.wires[0].end_marker == ""
+
+
+def test_set_wire_start_label_do_undo_redo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireStartLabelCommand(wid, "$x(t)$", ""))
+    assert stack.schematic.wires[0].start_label == "$x(t)$"
+    stack.undo()
+    assert stack.schematic.wires[0].start_label == ""
+    stack.redo()
+    assert stack.schematic.wires[0].start_label == "$x(t)$"
+
+
+def test_set_wire_end_label_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireEndLabelCommand(wid, "$y(t)$", ""))
+    assert stack.schematic.wires[0].end_label == "$y(t)$"
+    stack.undo()
+    assert stack.schematic.wires[0].end_label == ""
+
+
+def test_set_wire_mid_label_do_undo_redo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireMidLabelCommand(wid, "$V_{bus}$", ""))
+    assert stack.schematic.wires[0].mid_label == "$V_{bus}$"
+    stack.undo()
+    assert stack.schematic.wires[0].mid_label == ""
+    stack.redo()
+    assert stack.schematic.wires[0].mid_label == "$V_{bus}$"
+
+
+def test_set_wire_mid_label_pos_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireMidLabelPosCommand(wid, 0.25, 0.5))
+    assert stack.schematic.wires[0].mid_label_pos == 0.25
+    stack.undo()
+    assert stack.schematic.wires[0].mid_label_pos == 0.5

@@ -506,6 +506,134 @@ def test_styled_wire_line_width_only() -> None:
     assert r"\draw[line width=1pt] (0,0) -- (4,0);" in src
 
 
+def test_wire_end_marker_emits_arrow() -> None:
+    """A wire with end_marker='arrow' becomes a \\draw[-{Latex}] statement."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], end_marker="arrow")
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[-{Latex}] (0,0) -- (4,0);" in src
+
+
+def test_wire_start_marker_emits_reverse_arrow() -> None:
+    """start_marker='arrow' puts the tip on the first point: \\draw[{Latex}-]."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], start_marker="arrow")
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[{Latex}-] (0,0) -- (4,0);" in src
+
+
+def test_wire_both_markers_emit_double_arrow() -> None:
+    """Markers on both ends emit \\draw[{Latex}-{Latex}]."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             start_marker="arrow", end_marker="arrow")
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[{Latex}-{Latex}] (0,0) -- (4,0);" in src
+
+
+def test_wire_marker_styles_map_to_arrows_meta_tips() -> None:
+    """Each marker kind maps to its arrows.meta tip on the end endpoint."""
+    cases = {
+        "stealth": r"\draw[-{Stealth}] (0,0) -- (4,0);",
+        "open":    r"\draw[-{Latex[open]}] (0,0) -- (4,0);",
+        "bar":     r"\draw[-{Bar}] (0,0) -- (4,0);",
+    }
+    for kind, expected in cases.items():
+        w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], end_marker=kind)
+        assert expected in generate(_schematic(wires=[w]))
+
+
+def test_wire_mixed_markers_emit_distinct_tips() -> None:
+    """Different start/end kinds compose independently."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             start_marker="bar", end_marker="stealth")
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[{Bar}-{Stealth}] (0,0) -- (4,0);" in src
+
+
+def test_wire_marker_combines_with_style() -> None:
+    """Arrow spec leads, followed by the line style/width options."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             end_marker="arrow", line_style="dashed", line_width=0.8)
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[-{Latex}, dashed, line width=0.8pt] (0,0) -- (4,0);" in src
+
+
+# ---------------------------------------------------------------------------
+# Wire endpoint text/math labels
+# ---------------------------------------------------------------------------
+
+def test_wire_end_label_horizontal_anchor_west() -> None:
+    """A label past a rightward end anchors west (text extends right of the tip)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], end_label="$y(t)$")
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[anchor=west, inner sep=0] at (4.10,0) {$y(t)$};" in src
+
+
+def test_wire_start_label_horizontal_anchor_east() -> None:
+    """A label past a leftward start anchors east (text extends left of the tip)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], start_label="in")
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[anchor=east, inner sep=0] at (-0.10,0) {in};" in src
+
+
+def test_wire_label_vertical_anchor_under_yflip() -> None:
+    """Vertical-wire labels anchor by emitted-space direction (Y-flip aware)."""
+    # Canvas-down wire: start at top (0,0), end at bottom (0,3).
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (0.0, 3.0)],
+             start_label="top", end_label="bottom")
+    src = generate(_schematic(wires=[w]), y_flip=True)
+    assert r"\node[anchor=south, inner sep=0] at (0,0.10) {top};" in src       # above the top end
+    assert r"\node[anchor=north, inner sep=0] at (0,-3.10) {bottom};" in src   # below the bottom end
+
+
+def test_wire_label_empty_emits_no_node() -> None:
+    """A wire with no labels emits no label node."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
+    src = generate(_schematic(wires=[w]))
+    assert "anchor=" not in src
+
+
+def test_wire_label_degenerate_wire_skipped() -> None:
+    """A degenerate (single-point) wire emits no label node."""
+    w = Wire(id=_uid(), points=[(2.0, 2.0)], end_label="x")
+    src = generate(_schematic(wires=[w]))
+    assert "{x}" not in src
+
+
+def test_wire_label_coexists_with_arrow_marker() -> None:
+    """An arrow marker and an end label render together (arrow into text)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             end_marker="arrow", end_label="$y(t)$")
+    src = generate(_schematic(wires=[w]))
+    assert r"\draw[-{Latex}] (0,0) -- (4,0);" in src
+    assert r"\node[anchor=west, inner sep=0] at (4.10,0) {$y(t)$};" in src
+
+
+def test_wire_mid_label_node_with_white_fill() -> None:
+    """A mid-label emits a white-filled node at the fractional midpoint."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], mid_label="$V_{bus}$")
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[fill=white, inner sep=1pt] at (2,0) {$V_{bus}$};" in src
+
+
+def test_wire_mid_label_respects_position() -> None:
+    """mid_label_pos places the node at the fractional arc-length point."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], mid_label="X", mid_label_pos=0.25)
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[fill=white, inner sep=1pt] at (1,0) {X};" in src
+
+
+def test_wire_mid_label_empty_emits_no_node() -> None:
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
+    assert "fill=white" not in generate(_schematic(wires=[w]))
+
+
+def test_wire_marker_suppresses_ocirc_at_that_end() -> None:
+    """The marked end gets no \\node[ocirc]; the unmarked end still does."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], end_marker="arrow")
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[ocirc] at (0,0) {};" in src        # unmarked end keeps terminal
+    assert r"\node[ocirc] at (4,0) {};" not in src    # marked end suppressed
+
+
 def test_no_junction_dots_wire_suppresses_circ() -> None:
     """A wire flagged no_junction_dots emits no \\node[circ] at its T-junction."""
     main = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)])
@@ -971,7 +1099,16 @@ def test_build_snippet_lists_required_preamble() -> None:
 
     snippet = build_snippet(generate(_schematic(_comp("R")), y_flip=True))
     assert r"\usepackage[american]{circuitikz}" in snippet
+    assert r"\usetikzlibrary{arrows.meta}" in snippet  # for wire endpoint markers
     assert r"\input" in snippet
+
+
+def test_build_tex_loads_arrows_meta() -> None:
+    """The standalone template loads arrows.meta so wire markers compile."""
+    from app.preview.latex import build_tex
+
+    tex = build_tex(generate(_schematic(_comp("R")), y_flip=True))
+    assert r"\usetikzlibrary{arrows.meta}" in tex
 
 
 def test_build_snippet_has_no_document_wrapper() -> None:

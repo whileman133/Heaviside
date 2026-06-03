@@ -77,6 +77,19 @@ _LINE_STYLE_OPTIONS: list[tuple[str, str]] = [
 _LABEL_TO_TIKZ_STYLE = {label: tikz for label, tikz in _LINE_STYLE_OPTIONS}
 _TIKZ_TO_LABEL_STYLE = {tikz: label for label, tikz in _LINE_STYLE_OPTIONS}
 
+# ── Wire endpoint markers ─────────────────────────────────────────────────────
+# Custom decorations a user can place at a wire's start/end point — distinct
+# from the automatic junction/termination dots. "Arrow" supports block diagrams.
+_WIRE_MARKER_OPTIONS: list[tuple[str, str]] = [
+    ("None",       ""),
+    ("Arrow",      "arrow"),
+    ("Stealth",    "stealth"),
+    ("Open arrow", "open"),
+    ("Bar",        "bar"),
+]
+_LABEL_TO_MARKER = {label: kind for label, kind in _WIRE_MARKER_OPTIONS}
+_MARKER_TO_LABEL = {kind: label for label, kind in _WIRE_MARKER_OPTIONS}
+
 # ── Fill color ──────────────────────────────────────────────────────────────
 _FILL_OPTIONS: list[tuple[str, str]] = [
     ("None",       ""),
@@ -151,6 +164,25 @@ def _make_combo_row(
     combo.currentIndexChanged.connect(on_change)
     row.addWidget(combo, 1)
     return row, combo
+
+
+def _make_line_edit_row(
+    label: str, placeholder: str, on_change: Callable[[str], None] | None = None
+) -> tuple[QHBoxLayout, QLineEdit]:
+    """Build a ``label: [line edit]`` row.
+
+    *on_change* (if given) is connected to ``textChanged`` for live updates;
+    omit it when the caller wants to commit only on ``editingFinished``.
+    """
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel(label))
+    field = QLineEdit()
+    field.setPlaceholderText(placeholder)
+    if on_change is not None:
+        field.textChanged.connect(on_change)
+    row.addWidget(field, 1)
+    return row, field
 
 
 def _make_double_spin_row(
@@ -640,10 +672,48 @@ class WireStyleSection(InspectorSection):
         self._no_term.stateChanged.connect(self._on_no_term)
         self.body.addWidget(self._no_term)
 
+        marker_labels = [lbl for lbl, _ in _WIRE_MARKER_OPTIONS]
+        start_row, self._start_marker = _make_combo_row(
+            "Start endpoint", marker_labels, lambda _i: self._on_start_marker()
+        )
+        self.body.addLayout(start_row)
+        self._start_marker.setToolTip(
+            "Custom decoration at the wire's first point — independent of the "
+            "automatic junction/termination dots. Use Arrow for block diagrams."
+        )
+
+        end_row, self._end_marker = _make_combo_row(
+            "End endpoint", marker_labels, lambda _i: self._on_end_marker()
+        )
+        self.body.addLayout(end_row)
+        self._end_marker.setToolTip(
+            "Custom decoration at the wire's last point — independent of the "
+            "automatic junction/termination dots. Use Arrow for block diagrams."
+        )
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(_DEBOUNCE_MS)
         self._timer.timeout.connect(self._commit)
+
+        # Labels commit on editingFinished (Enter / focus-out), NOT on every
+        # keystroke: a live commit re-binds the panel mid-edit, which calls
+        # setText and jerks the cursor to the end of the field.
+        self.body.addWidget(_make_section_label("Endpoint labels (text / $math$)"))
+        start_lbl_row, self._start_label = _make_line_edit_row("Start", "e.g. $x(t)$")
+        self._start_label.editingFinished.connect(self._on_start_label)
+        self.body.addLayout(start_lbl_row)
+        end_lbl_row, self._end_label = _make_line_edit_row("End", "e.g. $y(t)$")
+        self._end_label.editingFinished.connect(self._on_end_label)
+        self.body.addLayout(end_lbl_row)
+        mid_lbl_row, self._mid_label = _make_line_edit_row("Middle", "e.g. $V_{bus}$")
+        self._mid_label.setToolTip(
+            "Label drawn over the wire with a solid background; drag it along the "
+            "wire on the canvas to reposition."
+        )
+        self._mid_label.editingFinished.connect(self._on_mid_label)
+        self.body.addLayout(mid_lbl_row)
+
         self._wire_id: str | None = None
 
     def applies_to(self, comp: Component) -> bool:
@@ -665,6 +735,17 @@ class WireStyleSection(InspectorSection):
         self._no_term.blockSignals(True)
         self._no_term.setChecked(wire.no_termination_dots)
         self._no_term.blockSignals(False)
+        _set_combo(self._start_marker, _MARKER_TO_LABEL.get(wire.start_marker, "None"))
+        _set_combo(self._end_marker, _MARKER_TO_LABEL.get(wire.end_marker, "None"))
+        # Don't clobber a label field the user is actively editing — re-setting
+        # its text would jump the cursor to the end. A re-bind while typing can
+        # be triggered by any concurrent schematic change, not just our own.
+        if not self._start_label.hasFocus():
+            self._start_label.setText(wire.start_label)
+        if not self._end_label.hasFocus():
+            self._end_label.setText(wire.end_label)
+        if not self._mid_label.hasFocus():
+            self._mid_label.setText(wire.mid_label)
         self.set_top_separator_visible(False)
         self.show()
 
@@ -688,6 +769,31 @@ class WireStyleSection(InspectorSection):
     def _on_no_term(self, state: int) -> None:
         if self._scene is not None and self._wire_id is not None:
             self._scene.set_wire_no_termination_dots(self._wire_id, bool(state))
+
+    def _on_start_marker(self) -> None:
+        # Combo selection is a discrete action — commit immediately (no debounce).
+        if self._scene is not None and self._wire_id is not None:
+            kind = _LABEL_TO_MARKER.get(self._start_marker.currentText(), "")
+            self._scene.set_wire_start_marker(self._wire_id, kind)
+
+    def _on_end_marker(self) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            kind = _LABEL_TO_MARKER.get(self._end_marker.currentText(), "")
+            self._scene.set_wire_end_marker(self._wire_id, kind)
+
+    def _on_start_label(self) -> None:
+        # editingFinished fires on Enter or focus-out; the scene setter is a
+        # no-op when the text is unchanged, so the double-fire is harmless.
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_start_label(self._wire_id, self._start_label.text())
+
+    def _on_end_label(self) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_end_label(self._wire_id, self._end_label.text())
+
+    def _on_mid_label(self) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_mid_label(self._wire_id, self._mid_label.text())
 
 
 class TransformSection(InspectorSection):

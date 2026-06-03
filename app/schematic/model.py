@@ -7,6 +7,7 @@ ComponentDef; they are re-exported here for backwards-compatible imports.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -68,6 +69,71 @@ class Wire:
     own unconnected endpoints — useful for annotation leads that should simply
     stop without a visible terminal. Does not affect other wires' endpoints."""
 
+    start_marker: str = ""
+    """Custom endpoint decoration drawn at the wire's first point (``points[0]``).
+
+    ``""`` = no custom marker (default). Non-empty kinds (see
+    :data:`WIRE_MARKER_KINDS`) draw a tip pointing outward along the first
+    segment — ``"arrow"``/``"stealth"``/``"open"`` arrowheads or a ``"bar"``
+    terminal — used mainly to draw block diagrams.
+
+    A custom marker is independent of the automatic ``circ``/``ocirc`` dots: it
+    is the user's explicit choice, not topology-derived. When a marker is set at
+    an end, that end does not also receive an automatic open-circle terminal
+    (see :func:`open_endpoints`) — the marker replaces it."""
+
+    end_marker: str = ""
+    """Custom endpoint decoration drawn at the wire's last point (``points[-1]``).
+
+    Same semantics as :attr:`start_marker`, applied to the wire's final point
+    and oriented along the last segment."""
+
+    start_label: str = ""
+    """Text/math label placed just beyond the wire's first point (``points[0]``).
+
+    ``""`` = no label. The string is a raw LaTeX fragment (same convention as a
+    text annotation's content), so ``"$y(t)$"`` typesets as math and plain text
+    renders verbatim. The label sits on the far side of the endpoint along the
+    first segment, so an arrow marker reads as terminating *into* the text. Used
+    mainly to caption block-diagram signal lines."""
+
+    end_label: str = ""
+    """Text/math label placed just beyond the wire's last point (``points[-1]``).
+
+    Same semantics as :attr:`start_label`, applied to the wire's final point and
+    oriented along the last segment."""
+
+    mid_label: str = ""
+    """Text/math label drawn *over* the wire (with a solid background).
+
+    ``""`` = no label. A raw LaTeX fragment (``$…$`` typesets as math, plain text
+    renders verbatim), centred on the wire at the fractional arc-length position
+    :attr:`mid_label_pos`. Drawn with an opaque backdrop so the line does not run
+    through the text. Used to caption a signal/bus mid-run; draggable along the
+    wire on the canvas."""
+
+    mid_label_pos: float = 0.5
+    """Fractional arc-length position of :attr:`mid_label` along the wire.
+
+    ``0.0`` = the first point, ``1.0`` = the last point, ``0.5`` (default) = the
+    midpoint by path length. Clamped to ``[0, 1]``."""
+
+
+#: Endpoint marker kinds in cycle order (``""`` = none first). Each non-empty
+#: kind maps to a TikZ ``arrows.meta`` tip in code generation and to a canvas
+#: glyph: ``"arrow"`` = filled ``Latex`` tip, ``"stealth"`` = sharp ``Stealth``
+#: tip, ``"open"`` = outlined ``Latex[open]`` tip, ``"bar"`` = ``Bar`` terminal.
+#: The order is also the Tab-cycle order on the canvas (§6.4).
+WIRE_MARKER_CYCLE: tuple[str, ...] = ("", "arrow", "stealth", "open", "bar")
+
+#: Valid values for :attr:`Wire.start_marker` / :attr:`Wire.end_marker` — the
+#: cycle as an unordered set for membership checks.
+WIRE_MARKER_KINDS: frozenset[str] = frozenset(WIRE_MARKER_CYCLE)
+
+#: Wire ``line_style`` tokens in cycle order (``""`` = solid first), as raw TikZ
+#: tokens. The order is the Tab-cycle order over a wire body (§6.4).
+WIRE_LINE_STYLE_CYCLE: tuple[str, ...] = ("", "dashed", "dotted", "dash dot")
+
 
 @dataclass
 class Schematic:
@@ -87,6 +153,81 @@ class Schematic:
 # ---------------------------------------------------------------------------
 # Geometry helpers
 # ---------------------------------------------------------------------------
+
+def _segment_lengths(points: list[tuple[float, float]]) -> list[float]:
+    return [
+        math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1])
+        for i in range(len(points) - 1)
+    ]
+
+
+def wire_point_at_fraction(
+    points: list[tuple[float, float]], frac: float
+) -> tuple[float, float]:
+    """Point at fractional arc-length *frac* (0..1) along the polyline *points*.
+
+    ``0`` → first point, ``1`` → last point, ``0.5`` → the midpoint by path
+    length. *frac* is clamped to ``[0, 1]``. A degenerate or zero-length wire
+    returns its first point. Pure function (grid units in, grid units out).
+    """
+    if not points:
+        return (0.0, 0.0)
+    if len(points) < 2:
+        return points[0]
+    frac = max(0.0, min(1.0, frac))
+    segs = _segment_lengths(points)
+    total = sum(segs)
+    if total == 0.0:
+        return points[0]
+    target = frac * total
+    acc = 0.0
+    for i, length in enumerate(segs):
+        if length > 0.0 and acc + length >= target:
+            t = (target - acc) / length
+            return (
+                points[i][0] + t * (points[i + 1][0] - points[i][0]),
+                points[i][1] + t * (points[i + 1][1] - points[i][1]),
+            )
+        acc += length
+    return points[-1]
+
+
+def wire_fraction_at_point(
+    points: list[tuple[float, float]], pt: tuple[float, float]
+) -> float:
+    """Fractional arc-length (0..1) of the point on *points* nearest *pt*.
+
+    Projects *pt* onto each segment, picks the closest projection, and returns
+    its cumulative arc-length as a fraction of the total. Inverse of
+    :func:`wire_point_at_fraction` for points that lie on the polyline. Pure
+    function; returns ``0.0`` for a degenerate or zero-length wire.
+    """
+    if len(points) < 2:
+        return 0.0
+    segs = _segment_lengths(points)
+    total = sum(segs)
+    if total == 0.0:
+        return 0.0
+    px, py = pt
+    best_d2 = math.inf
+    best_frac = 0.0
+    acc = 0.0
+    for i, length in enumerate(segs):
+        ax, ay = points[i]
+        bx, by = points[i + 1]
+        if length == 0.0:
+            qx, qy, along = ax, ay, 0.0
+        else:
+            t = ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / (length * length)
+            t = max(0.0, min(1.0, t))
+            qx, qy, along = ax + t * (bx - ax), ay + t * (by - ay), t * length
+        d2 = (px - qx) ** 2 + (py - qy) ** 2
+        if d2 < best_d2:
+            best_d2 = d2
+            best_frac = (acc + along) / total
+        acc += length
+    return best_frac
+
 
 def simplify_points(
     points: list[tuple[float, float]],
@@ -325,7 +466,11 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
         pts = wire.points
         if len(pts) < 2:
             continue
-        for pt in (pts[0], pts[-1]):
+        # A custom endpoint marker (e.g. an arrow) replaces the automatic
+        # open-circle terminal at that specific end, so skip it here.
+        for pt, marker in ((pts[0], wire.start_marker), (pts[-1], wire.end_marker)):
+            if marker:
+                continue
             pt_r = (round(pt[0], 6), round(pt[1], 6))
             if pt_r in pin_positions:
                 continue

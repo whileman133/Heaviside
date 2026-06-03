@@ -19,8 +19,8 @@ schematic coordinates; only the view transform changes (spec §3.4).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, Qt, Signal
-from PySide6.QtGui import QPainter
+from PySide6.QtCore import QEvent, QPointF, Qt, Signal
+from PySide6.QtGui import QCursor, QPainter
 from PySide6.QtWidgets import QGraphicsView
 
 from app.canvas.geometry import NUDGE_GU
@@ -180,6 +180,23 @@ class SchematicView(QGraphicsView):
     # ------------------------------------------------------------------
     # Keyboard
     # ------------------------------------------------------------------
+
+    def event(self, event) -> bool:  # noqa: N802, ANN001
+        # Intercept Tab / Shift+Tab *before* Qt consumes it for focus navigation
+        # (which happens in QWidget.event, ahead of keyPressEvent). While the
+        # cursor hovers a wire endpoint, Tab cycles that endpoint's marker; over
+        # a wire body it cycles the line style. Shift+Tab steps backward.
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            if not isinstance(self._scene.focusItem(), LabelTextItem):
+                backward = (
+                    event.key() == Qt.Key_Backtab
+                    or bool(event.modifiers() & Qt.ShiftModifier)
+                )
+                scene_pt = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+                if self._scene.cycle_at(scene_pt, backward):
+                    event.accept()
+                    return True
+        return super().event(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
         # When a label is being in-place edited, let all key events route to

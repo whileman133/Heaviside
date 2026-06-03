@@ -88,6 +88,7 @@ class CompileError(Exception):
 
 _SCHEMATIC_TEMPLATE = r"""\documentclass[border=4pt]{standalone}
 \usepackage[american]{circuitikz}
+\usetikzlibrary{arrows.meta}
 \ctikzset{voltage=american, current=american, resistor=american}
 \begin{document}
 % CIRCUITIKZ_SOURCE
@@ -111,6 +112,7 @@ _SNIPPET_HEADER = r"""% CircuiTikZ schematic exported from Heaviside.
 % Include in your document with \input{<this file>}.
 % Your document preamble must contain:
 %   \usepackage[american]{circuitikz}
+%   \usetikzlibrary{arrows.meta}
 %   \ctikzset{voltage=american, current=american, resistor=american}
 """
 

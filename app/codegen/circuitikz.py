@@ -132,6 +132,7 @@ from app.schematic.model import (
     open_endpoints,
     unconnected_pins,
     simplify_points,
+    wire_point_at_fraction,
 )
 from app.schematic.validate import validate
 
@@ -283,11 +284,16 @@ def generate(
         style = compose_style_options(
             line_style=wire.line_style, border_width=wire.line_width
         )
-        if style:
-            # Styled wires are emitted as their own \draw[...] statement so the
-            # style applies only to that wire, not the whole shared path.
+        arrow = _wire_arrow_spec(wire)
+        # The arrow spec must lead the option list (``-{Latex}, dashed`` not the
+        # reverse) so PGF parses it as the path's arrow specification.
+        opts = ", ".join(p for p in (arrow, style) if p)
+        if opts:
+            # Wires with a style or an endpoint marker are emitted as their own
+            # \draw[...] statement so the options apply only to that wire, not
+            # the whole shared path.
             styled_wire_lines.append(
-                rf"\draw[{style}] {_wire_line(wire, pin_coord_to_ref, _y)};"
+                rf"\draw[{opts}] {_wire_line(wire, pin_coord_to_ref, _y)};"
             )
         else:
             draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
@@ -327,6 +333,11 @@ def generate(
     if mark_unconnected_pins:
         for x, y in sorted(unconnected_pins(schematic)):
             lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
+
+    # Text/math labels at wire endpoints (e.g. an arrow terminating into text).
+    for wire in schematic.wires:
+        for node in _wire_label_nodes(wire, _y):
+            lines.append(f"  {node}")
 
     # Foreground drawing annotations (z_order >= 0) — emitted after the draw
     # block so they appear in front of circuit elements.
@@ -633,6 +644,120 @@ def _wire_line(
                 continue
         refs.append(f"({_fmt(x)},{_fmt(y_fn(y))})")
     return " -- ".join(refs)
+
+
+# Map a custom endpoint marker kind to its TikZ ``arrows.meta`` tip name. These
+# require ``\usetikzlibrary{arrows.meta}`` (loaded by the standalone template and
+# documented in the snippet preamble — see app/preview/latex.py). ``""`` (no
+# marker) maps to an empty tip.
+_MARKER_TIP: dict[str, str] = {
+    "": "",
+    "arrow": "Latex",
+    "stealth": "Stealth",
+    "open": "Latex[open]",
+    "bar": "Bar",
+}
+
+
+def _wire_arrow_spec(wire: Wire) -> str:
+    r"""Compose a TikZ arrow specification for a wire's endpoint markers.
+
+    Returns an ``arrows.meta`` spec such as ``"-{Latex}"`` (end only),
+    ``"{Latex}-"`` (start only), or ``"{Stealth}-{Latex}"`` (both, possibly
+    different tips), or ``""`` when neither end has a marker. The start/end tips
+    correspond to ``points[0]`` / ``points[-1]`` — the same order
+    :func:`_wire_line` emits coordinates — and ``arrows.meta`` tips auto-orient
+    to point outward from the path at each end.
+    """
+    start = _MARKER_TIP.get(wire.start_marker, "")
+    end = _MARKER_TIP.get(wire.end_marker, "")
+    if not start and not end:
+        return ""
+    start_tip = f"{{{start}}}" if start else ""
+    end_tip = f"{{{end}}}" if end else ""
+    return f"{start_tip}-{end_tip}"
+
+
+#: Gap (GU) between a wire endpoint and its label node, so the label clears the
+#: wire end / arrow tip. The node's own inner sep adds a little more.
+_WIRE_LABEL_GAP: float = 0.1
+
+
+def _first_distinct(pts: list[tuple[float, float]], from_end: bool) -> tuple[float, float]:
+    """The first vertex distinct from the terminal one, scanning inward.
+
+    Used to find the direction of a wire's terminal segment. *from_end* picks the
+    last point (and scans backward); otherwise the first point (scanning forward).
+    Falls back to the opposite terminal for a degenerate all-coincident list.
+    """
+    if from_end:
+        anchor = pts[-1]
+        for p in reversed(pts[:-1]):
+            if p != anchor:
+                return p
+        return pts[0]
+    anchor = pts[0]
+    for p in pts[1:]:
+        if p != anchor:
+            return p
+    return pts[-1]
+
+
+def _wire_label_nodes(wire: Wire, y_fn=lambda y: y) -> list[str]:
+    r"""Emit ``\node[anchor=…] at (x,y) {text};`` lines for a wire's end labels.
+
+    The label sits just beyond its endpoint, on the far side from the wire, so
+    an arrow marker reads as terminating into the text. The anchor is derived
+    from the terminal segment's outward direction **in emitted space** (after
+    *y_fn*), so it stays correct under the preview's Y-flip; a small outward gap
+    clears the wire end / arrow tip.
+
+    ``inner sep=0`` strips the node's default padding (~3.3 pt) so the visible
+    gap is exactly ``_WIRE_LABEL_GAP`` (0.1 GU) — matching the canvas, whose
+    label clearance (``_WIRE_LABEL_GAP_PX`` = 6 px = 0.1 GU) has no such padding.
+    """
+    pts = wire.points
+    if len(pts) < 2:
+        return []
+    lines: list[str] = []
+    ends = (
+        (wire.start_label, pts[0], _first_distinct(pts, from_end=False)),
+        (wire.end_label, pts[-1], _first_distinct(pts, from_end=True)),
+    )
+    for text, tip, neighbour in ends:
+        if not text:
+            continue
+        ex, ey = tip
+        nx, ny = neighbour
+        dx = ex - nx
+        dy = y_fn(ey) - y_fn(ny)  # outward Y in emitted (post-flip) space
+        if abs(dx) >= abs(dy):
+            # Horizontal terminal segment: label left/right of the endpoint.
+            if dx >= 0:
+                anchor, ox, oy = "west", _WIRE_LABEL_GAP, 0.0
+            else:
+                anchor, ox, oy = "east", -_WIRE_LABEL_GAP, 0.0
+        else:
+            # Vertical terminal segment: label above/below (emitted +Y = up).
+            if dy >= 0:
+                anchor, ox, oy = "south", 0.0, _WIRE_LABEL_GAP
+            else:
+                anchor, ox, oy = "north", 0.0, -_WIRE_LABEL_GAP
+        px = ex + ox
+        py = y_fn(ey) + oy
+        lines.append(
+            rf"\node[anchor={anchor}, inner sep=0] at ({_fmt(px)},{_fmt(py)}) {{{text}}};"
+        )
+
+    # Mid-wire label: centred *over* the wire with an opaque (white) backdrop so
+    # the line does not run through the text. Placed at the fractional position.
+    if wire.mid_label:
+        mx, my = wire_point_at_fraction(pts, wire.mid_label_pos)
+        lines.append(
+            rf"\node[fill=white, inner sep=1pt] at "
+            rf"({_fmt(mx)},{_fmt(y_fn(my))}) {{{wire.mid_label}}};"
+        )
+    return lines
 
 
 # ---------------------------------------------------------------------------

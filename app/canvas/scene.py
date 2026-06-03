@@ -65,6 +65,8 @@ from app.canvas.items import (
     WireItem,
     WirePreviewItem,
     _SlotLabel,
+    _WireEndLabel,
+    _WireMidLabel,
 )
 from app.canvas.geometry import (
     gu_to_scene as _gu_to_scene,
@@ -80,6 +82,8 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    WIRE_LINE_STYLE_CYCLE,
+    WIRE_MARKER_CYCLE,
     component_pin_positions as _component_pin_positions,
     junction_points,
     open_endpoints,
@@ -87,6 +91,7 @@ from app.schematic.model import (
     route,
     simplify_points,
     wire_corner_splits_at,
+    wire_fraction_at_point,
     wire_splits_at,
 )
 
@@ -151,6 +156,8 @@ class SchematicScene(QGraphicsScene):
 
         self._mode = Mode.SELECT
         self._panning = False
+        # While dragging a wire's mid-label along its wire: (wire_id, press_pos).
+        self._mid_label_drag: tuple[str, float] | None = None
 
         # kind -> item maps for sync
         self._comp_items: dict[str, ComponentItem] = {}
@@ -821,6 +828,108 @@ class SchematicScene(QGraphicsScene):
             return
         self._push(SetWireNoTerminationDotsCommand(wire_id, value, wire.no_termination_dots))
 
+    def set_wire_start_marker(self, wire_id: str, marker: str) -> None:
+        """Set the custom start-endpoint marker on a wire (no-op if unchanged)."""
+        from app.canvas.commands import SetWireStartMarkerCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.start_marker == marker:
+            return
+        self._push(SetWireStartMarkerCommand(wire_id, marker, wire.start_marker))
+
+    def set_wire_end_marker(self, wire_id: str, marker: str) -> None:
+        """Set the custom end-endpoint marker on a wire (no-op if unchanged)."""
+        from app.canvas.commands import SetWireEndMarkerCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.end_marker == marker:
+            return
+        self._push(SetWireEndMarkerCommand(wire_id, marker, wire.end_marker))
+
+    def set_wire_start_label(self, wire_id: str, text: str) -> None:
+        """Set the text/math label at a wire's first point (no-op if unchanged)."""
+        from app.canvas.commands import SetWireStartLabelCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.start_label == text:
+            return
+        self._push(SetWireStartLabelCommand(wire_id, text, wire.start_label))
+
+    def set_wire_end_label(self, wire_id: str, text: str) -> None:
+        """Set the text/math label at a wire's last point (no-op if unchanged)."""
+        from app.canvas.commands import SetWireEndLabelCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.end_label == text:
+            return
+        self._push(SetWireEndLabelCommand(wire_id, text, wire.end_label))
+
+    def set_wire_mid_label(self, wire_id: str, text: str) -> None:
+        """Set the over-the-wire mid label (no-op if unchanged)."""
+        from app.canvas.commands import SetWireMidLabelCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None or wire.mid_label == text:
+            return
+        self._push(SetWireMidLabelCommand(wire_id, text, wire.mid_label))
+
+    def set_wire_mid_label_pos(self, wire_id: str, pos: float) -> None:
+        """Set the mid-label's fractional position along the wire (no-op if unchanged)."""
+        from app.canvas.commands import SetWireMidLabelPosCommand
+        wire = self._wire_by_id(wire_id)
+        if wire is None:
+            return
+        pos = max(0.0, min(1.0, pos))
+        if abs(wire.mid_label_pos - pos) < 1e-9:
+            return
+        self._push(SetWireMidLabelPosCommand(wire_id, pos, wire.mid_label_pos))
+
+    # -- Tab-cycle of wire styling under the cursor (§6.4) -----------------
+
+    def cycle_at(self, scene_pt: QPointF, backward: bool = False) -> bool:
+        """Tab-cycle wire styling at *scene_pt*; return True if anything changed.
+
+        A point on a free wire endpoint cycles that endpoint's marker
+        (none → arrow → stealth → open → bar → none); a point on a wire body
+        cycles the wire's line style (solid → dashed → dotted → dash-dot →
+        solid). *backward* (Shift+Tab) steps the other way. Connected endpoints
+        and interior vertices fall through to the wire-body case.
+        """
+        hit = self.wire_vertex_at(scene_pt)
+        if hit is not None:
+            wid, idx = hit
+            wire = self._wire_by_id(wid)
+            if wire is not None and idx in (0, len(wire.points) - 1):
+                self._cycle_wire_marker(wid, "start" if idx == 0 else "end", backward)
+                return True
+        for it in self.items(scene_pt):
+            if isinstance(it, WireItem):
+                self._cycle_wire_line_style(it.wire.id, backward)
+                return True
+        return False
+
+    @staticmethod
+    def _cycle_value(cycle: tuple[str, ...], current: str, backward: bool) -> str:
+        step = -1 if backward else 1
+        idx = cycle.index(current) if current in cycle else 0
+        return cycle[(idx + step) % len(cycle)]
+
+    def _cycle_wire_marker(self, wire_id: str, end: str, backward: bool) -> None:
+        wire = self._wire_by_id(wire_id)
+        if wire is None:
+            return
+        if end == "start":
+            self.set_wire_start_marker(
+                wire_id, self._cycle_value(WIRE_MARKER_CYCLE, wire.start_marker, backward)
+            )
+        else:
+            self.set_wire_end_marker(
+                wire_id, self._cycle_value(WIRE_MARKER_CYCLE, wire.end_marker, backward)
+            )
+
+    def _cycle_wire_line_style(self, wire_id: str, backward: bool) -> None:
+        wire = self._wire_by_id(wire_id)
+        if wire is None:
+            return
+        self.set_wire_line_style(
+            wire_id, self._cycle_value(WIRE_LINE_STYLE_CYCLE, wire.line_style, backward)
+        )
+
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
         """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
         from app.components.model import DrawingComponent
@@ -992,6 +1101,7 @@ class SchematicScene(QGraphicsScene):
             else:
                 item.wire = wire
                 item.clear_preview_points()
+                item.refresh_labels()
                 item.prepareGeometryChange()
                 item.update()
             # Mark which vertices are locked (endpoints sitting on a pin), so
@@ -1149,6 +1259,15 @@ class SchematicScene(QGraphicsScene):
     def wire_vertex_at(self, scene_pt: QPointF) -> tuple[str, int] | None:
         return self._wire_geom.wire_vertex_at(scene_pt)
 
+    def _mid_label_wire_at(self, scene_pt: QPointF) -> str | None:
+        """Wire id whose mid-label glyph is under *scene_pt*, else None."""
+        for it in self.items(scene_pt):
+            if isinstance(it, _WireMidLabel):
+                parent = it.parentItem()
+                if isinstance(parent, WireItem):
+                    return parent.wire.id
+        return None
+
     def _click_select_wire_id(self, scene_pt: QPointF, grabbed_id: str) -> str:
         return self._wire_geom.click_select_wire_id(scene_pt, grabbed_id)
 
@@ -1235,6 +1354,16 @@ class SchematicScene(QGraphicsScene):
         if self._mode == Mode.WIRE and self._wire_pts:
             target, is_connectable = self.wire_snap_target(gu)
             self._refresh_wire_preview(target, is_connectable)
+            event.accept()
+            return
+
+        if self._mid_label_drag is not None:
+            wid, _ = self._mid_label_drag
+            wire = self._wire_by_id(wid)
+            item = self._wire_items.get(wid)
+            if wire is not None and item is not None:
+                frac = wire_fraction_at_point(wire.points, self.scene_to_gu(event.scenePos()))
+                item.preview_mid_label(frac)
             event.accept()
             return
 
@@ -1325,6 +1454,21 @@ class SchematicScene(QGraphicsScene):
                     event.accept()
                     return
 
+        # SELECT mode: a press on a wire's mid-label starts dragging it along the
+        # wire (takes priority over vertex drag / selection).
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            mid_wid = self._mid_label_wire_at(event.scenePos())
+            if mid_wid is not None:
+                wire = self._wire_by_id(mid_wid)
+                if wire is not None:
+                    self._mid_label_drag = (mid_wid, wire.mid_label_pos)
+                    item = self._wire_items.get(mid_wid)
+                    if item is not None:
+                        self.clearSelection()
+                        item.setSelected(True)
+                    event.accept()
+                    return
+
         # SELECT mode: a press on a draggable wire vertex starts a vertex drag
         # (takes priority over component drag / rubber-band select).
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
@@ -1389,6 +1533,19 @@ class SchematicScene(QGraphicsScene):
                 for wire_item in self._wire_items.values():
                     wire_item.clear_preview_points()
             # On plain click (no movement) the item is already selected from press.
+            event.accept()
+            return
+
+        # Commit a mid-label drag if one is active.
+        if self._mid_label_drag is not None and event.button() == Qt.LeftButton:
+            wid, _press_pos = self._mid_label_drag
+            self._mid_label_drag = None
+            wire = self._wire_by_id(wid)
+            item = self._wire_items.get(wid)
+            if wire is not None and item is not None:
+                frac = wire_fraction_at_point(wire.points, self.scene_to_gu(event.scenePos()))
+                item.clear_mid_label_preview()
+                self.set_wire_mid_label_pos(wid, frac)
             event.accept()
             return
 
@@ -1460,6 +1617,41 @@ class SchematicScene(QGraphicsScene):
                 self.set_mode(Mode.SELECT)
             event.accept()
             return
+        # In SELECT mode, a double-click on a wire's rendered label (endpoint or
+        # mid) edits it in place (parallels double-clicking a component's
+        # rendered label). These run before the wire-body check so the label
+        # isn't shadowed by the "double-click wire → WIRE mode" gesture.
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            for it in self.items(event.scenePos()):
+                if isinstance(it, _WireMidLabel):
+                    parent = it.parentItem()
+                    if isinstance(parent, WireItem):
+                        parent.begin_label_edit("mid")
+                        event.accept()
+                        return
+                if isinstance(it, _WireEndLabel):
+                    parent = it.parentItem()
+                    if isinstance(parent, WireItem):
+                        parent.begin_label_edit(it.end)
+                        event.accept()
+                        return
+
+        # In SELECT mode, a double-click on a *free* wire endpoint opens that
+        # endpoint's label editor — so a label can be started even when none is
+        # set yet (there is no rendered label to click). wire_vertex_at only
+        # returns draggable vertices, so connected (pin-locked) endpoints and the
+        # segment body fall through to the WIRE-mode routing gestures below.
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            hit = self.wire_vertex_at(event.scenePos())
+            if hit is not None:
+                wid, idx = hit
+                wire = self._wire_by_id(wid)
+                item = self._wire_items.get(wid)
+                if wire is not None and item is not None and idx in (0, len(wire.points) - 1):
+                    item.begin_label_edit("start" if idx == 0 else "end")
+                    event.accept()
+                    return
+
         # In SELECT mode, a double-click on a wire body enters WIRE mode.
         # This check runs before the component check so that wires near (or
         # overlapping with) a component bounding box are not shadowed by the

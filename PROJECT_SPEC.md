@@ -201,6 +201,12 @@ class Wire:
     line_width: float = 0.4          # pt (TikZ default 0.4); drawn proportionally on canvas
     no_junction_dots: bool = False   # exclude this wire from junction-dot placement (§6.4)
     no_termination_dots: bool = False  # suppress open-circle terminals at this wire's free ends (§6.4)
+    start_marker: str = ""           # custom decoration at points[0]; "" = none (see WIRE_MARKER_KINDS)
+    end_marker: str = ""             # custom decoration at points[-1]; "" = none (see WIRE_MARKER_KINDS)
+    start_label: str = ""            # text/math label just beyond points[0]; "" = none
+    end_label: str = ""              # text/math label just beyond points[-1]; "" = none
+    mid_label: str = ""              # text/math label drawn over the wire (solid bg); "" = none
+    mid_label_pos: float = 0.5       # mid_label position as a fraction of arc-length (0..1)
     # All vertices lie on 0.25 GU boundaries
     # All consecutive segment pairs are strictly horizontal or vertical
     # The point list is kept minimal: no consecutive duplicates and no
@@ -211,7 +217,13 @@ class Wire:
 
 `no_termination_dots` likewise excludes the wire from `open_endpoints()` (§6.4), suppressing the `ocirc` open-circle markers at the wire's own dangling ends. It still counts toward *other* wires' connection detection (an endpoint of another wire landing on it stays connected), so only this wire's free ends lose their terminals.
 
-`line_style` / `line_width` / `no_junction_dots` / `no_termination_dots` are edited via the wire property inspector (§10.3) and are undoable (`SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand`). Both are persisted only when non-default, so plain wires' JSON is unchanged; old files without them load as solid / 0.4 pt. On the canvas the pen width is proportional (`LINE_W × line_width/0.4`, so the 0.4 pt default keeps the existing 2 px appearance). In the LaTeX output a styled wire is emitted as its own `\draw[<style>] (…) -- (…);` statement (default wires stay in the shared `\draw` path); see §8.
+**Custom endpoint markers.** `start_marker` (at `points[0]`) and `end_marker` (at `points[-1]`) place a *user-chosen* decoration at a wire end — distinct from the topology-derived `circ`/`ocirc` dots above. The valid kinds are listed in `WIRE_MARKER_KINDS`: `""` (none), `"arrow"` (filled `Latex` tip), `"stealth"` (sharp filled `Stealth` tip), `"open"` (outlined `Latex[open]` tip), and `"bar"` (a perpendicular `Bar` terminal). All exist primarily to draw **block diagrams**, and each end chooses independently. A marker is the user's explicit choice, so an end bearing one is **excluded from `open_endpoints()`** — the marker replaces the automatic open-circle terminal at that specific end (the other end is unaffected, and the marked end still counts as a connection for other wires). Markers do not interact with `junction_points()`. The arrow tips come from TikZ's `arrows.meta` library, which the export pipeline loads (§8.4).
+
+**Endpoint labels.** `start_label` (beyond `points[0]`) and `end_label` (beyond `points[-1]`) place a text/math caption at a wire end — e.g. an arrow marker terminating *into* `$y(t)$`. Each is a raw LaTeX fragment (same convention as a text annotation's content): `$…$` typesets as math, plain text renders verbatim. The label sits on the far side of the endpoint along the terminal segment, with a small gap (`_WIRE_LABEL_GAP` ≈ 0.1 GU) clearing the wire end / arrow tip. Labels are orthogonal to markers and to the automatic dots — they do **not** suppress an `ocirc` (a labelled open terminal is allowed; the arrow marker, if present, is what suppresses it). In the LaTeX output each non-empty label is a `\node[anchor=…, inner sep=0] at (x,y) {…};` whose anchor is derived from the terminal segment's outward direction *in emitted (post-Y-flip) space*, so it stays on the correct side under the preview flip. `inner sep=0` strips the node's default ~3.3 pt padding so the visible gap equals the 0.1 GU offset and matches the canvas (whose label clearance has no padding). On the canvas the label is typeset math (via the shared async `render_async` path, §8.4) positioned just beyond the endpoint. **Double-clicking a rendered label** opens an in-place editor — the shared `LabelTextItem` (`QGraphicsTextItem`) pre-filled with the raw LaTeX fragment, positioned at the label; **Enter** or focus-loss commits via `set_wire_start_label`/`set_wire_end_label`, **Escape** cancels, mirroring component-label editing (§5.8). The display label is hidden while editing and restored when editing ends (commit *or* cancel, via `LabelTextItem`'s end-callback). A label can also be **started from a bare endpoint**: double-clicking a free wire endpoint (no label yet) opens the same editor for that end (§6.4) — so no inspector trip is needed to add one. Connected (pin-locked) endpoints are not label targets.
+
+**Mid-wire label.** `mid_label` is a text/math caption drawn **over** the wire — centred on the wire at the fractional arc-length position `mid_label_pos` ∈ [0, 1] (`wire_point_at_fraction`), with an **opaque (white) backdrop** so the line does not run through the text. Same LaTeX-fragment convention as the endpoint labels. Use for captioning a signal/bus mid-run. It is **draggable along the wire** on the canvas: pressing the rendered label and dragging projects the cursor onto the polyline (`wire_fraction_at_point`) and, on release, commits the new fractional position via `set_wire_mid_label_pos` (`SetWireMidLabelPosCommand`); the position is a fraction of arc-length, so it survives reshaping the wire. Double-clicking the label opens the same in-place editor (`begin_label_edit("mid")`). A mid-label is added through the inspector's **Middle** field (it appears at the midpoint), then dragged/edited on the canvas. In the LaTeX output it is a `\node[fill=white, inner sep=1pt] at (x,y) {…};` emitted after the wire draw so it paints on top.
+
+`line_style` / `line_width` / `no_junction_dots` / `no_termination_dots` / `start_marker` / `end_marker` / `start_label` / `end_label` / `mid_label` / `mid_label_pos` are edited via the wire property inspector (§10.3) and the canvas, and are undoable (`SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand` / `SetWireStartMarkerCommand` / `SetWireEndMarkerCommand` / `SetWireStartLabelCommand` / `SetWireEndLabelCommand` / `SetWireMidLabelCommand` / `SetWireMidLabelPosCommand`). All are persisted only when non-default, so plain wires' JSON is unchanged; old files without them load as solid / 0.4 pt / no markers. On the canvas the pen width is proportional (`LINE_W × line_width/0.4`, so the 0.4 pt default keeps the existing 2 px appearance), and endpoint markers render at the wire ends as on-canvas approximations of their export tips (filled/concave/outlined triangles, or a bar). In the LaTeX output a wire that has a non-default style **or** an endpoint marker is emitted as its own `\draw[<spec>] (…) -- (…);` statement (default wires stay in the shared `\draw` path); the arrow spec (an `arrows.meta` form such as `-{Latex}`, `{Latex}-`, or `{Stealth}-{Latex}`) leads the option list, followed by any style options. See §8.
 
 **Connectivity.** Wires connect to component pins, to other wires, and to bare
 grid points purely by **coincident coordinates** — there is no explicit
@@ -915,7 +927,10 @@ targets are what finalize the wire.
 #### Finalizing and mode transitions
 
 - In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
-- In **Select** mode, **double-clicking on a wire** (segment body or existing vertex) auto-switches to **Wire** mode and begins routing from the clicked point. The start point snaps to the nearest wire vertex (within `PIN_SNAP_GU`) or the nearest point on a wire segment (projected to the segment, grid-snapped to 0.25 GU). Any split needed by the connecting wire is applied automatically when the new wire is committed. The wire check takes priority over the component double-click check so that wires near or inside a component's bounding box remain reachable.
+- In **Select** mode, **double-clicking a wire's rendered label** — an endpoint label (`_WireEndLabel`) or the mid-wire label (`_WireMidLabel`) — opens its in-place text editor (§4.3) instead of routing. These checks run **before** the wire-body check so labels aren't shadowed by the "double-click wire → Wire mode" gesture. The **mid-wire label is also draggable**: a left-press on it (handled in the scene's `mousePressEvent`, ahead of vertex-drag/selection) starts a drag that slides it along the wire; `mouseMoveEvent` previews and `mouseReleaseEvent` commits the new fractional position. A no-movement press falls through to the double-click edit.
+- In **Select** mode, **double-clicking a free wire endpoint** (a draggable first/last vertex, via `wire_vertex_at`) opens that endpoint's label editor (§4.3) too — so a label can be started even when none is set yet and there is no rendered label to click. Only *draggable* endpoints qualify: a pin-locked (connected) endpoint and any interior vertex are **not** returned, so they fall through to the wire-body routing gesture below. This check runs after the rendered-label check and before the wire-body check.
+- In any mode, **`Tab` while the cursor hovers a wire** cycles styling at the cursor without selecting (handled in `SchematicView.event()`, ahead of Qt's focus navigation, via `SchematicScene.cycle_at`): over a **free endpoint** it cycles that endpoint's marker (`WIRE_MARKER_CYCLE`: none → arrow → stealth → open → bar → none); over a **wire body** (or an interior/connected vertex) it cycles the line style (`WIRE_LINE_STYLE_CYCLE`: solid → dashed → dotted → dash-dot → solid). **`Shift+Tab`** steps backward. Each step is an undoable `set_wire_*` command. When a label editor is focused, `Tab` is left to the editor. If the cursor is over nothing, `Tab` keeps its normal focus-navigation behaviour.
+- In **Select** mode, **double-clicking on a wire** (segment body or interior vertex) auto-switches to **Wire** mode and begins routing from the clicked point. (To extend a *free endpoint* into a new leg — now that an endpoint double-click edits its label — double-click the segment just inside the endpoint; it snaps to the endpoint vertex.) The start point snaps to the nearest wire vertex (within `PIN_SNAP_GU`) or the nearest point on a wire segment (projected to the segment, grid-snapped to 0.25 GU). Any split needed by the connecting wire is applied automatically when the new wire is committed. The wire check takes priority over the component double-click check so that wires near or inside a component's bounding box remain reachable.
 - A wire that terminates on a **connectable** target — a pin, an existing wire vertex, or a wire segment — finalizes and returns to **Select** mode.
 - In **Select** mode, a **double-click on blank canvas** (no wire or component hit) also enters **Wire** mode, starting a free wire from the snapped 0.25 GU grid point.
 - A **double-click** on an empty grid node finalizes the wire (its end becomes an open `ocirc` endpoint) but **stays in Wire** mode so the user can immediately draw another wire.
@@ -923,7 +938,7 @@ targets are what finalize the wire.
 #### Junctions and segment splitting
 
 - Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; there is no non-connecting "hop" crossing.) A wire with `no_junction_dots=True` (§4.3) is **excluded from the degree count entirely**, so annotation leads do not create dots; other wires/pins at the coordinate are still counted normally.
-- Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints. A wire with `no_termination_dots=True` (§4.3) is **excluded from `open_endpoints()`**, so its free ends get no terminal — while it still counts as a connection for other wires ending on it.
+- Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints. A wire with `no_termination_dots=True` (§4.3) is **excluded from `open_endpoints()`**, so its free ends get no terminal — while it still counts as a connection for other wires ending on it. An end carrying a **custom marker** (`start_marker`/`end_marker`, §4.3) is likewise excluded at that specific end, so the marker (e.g. an arrowhead) replaces the automatic open-circle terminal there.
 - When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it, by dragging an existing wire vertex onto it, or by **placing or moving a component** such that one of its pins lands mid-segment — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable, and a junction dot is drawn. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand`, `MoveWireVertexCommand`, `PlaceCommand`, or `MoveCommand`) inside a `MacroCommand` so it is one undoable action. Component operations that trigger splits: initial placement, drag-drop, arrow-key nudge, and paste.
 - When a wire is **deleted** and the deletion dissolves a T-junction (a free endpoint now has exactly two remaining wire neighbors and is not a component pin), those two stubs are automatically **merged** into a single wire. The merge is bundled with the `DeleteCommand` inside a `MacroCommand` so delete + merge is one undoable action. Undoing restores the deleted wire and re-splits the merged wire back into its two halves.
 
@@ -1144,6 +1159,21 @@ so a straight run is always emitted as a single segment:
 (x0, y0) -- (x1, y1) -- ... -- (xn, yn)
 ```
 
+A wire with a non-default style (§4.3) or a custom endpoint marker is instead
+emitted as its **own** `\draw[<spec>] (…) -- (…);` statement. The option `<spec>`
+is built as the arrow specification first, followed by the style options
+(`compose_style_options`). The arrow spec is an `arrows.meta` form
+`{<start-tip>}-{<end-tip>}` where each tip comes from the marker kind
+(`arrow`→`Latex`, `stealth`→`Stealth`, `open`→`Latex[open]`, `bar`→`Bar`); an
+absent marker omits its tip, so an end-only arrow is `-{Latex}` and a start-only
+one is `{Latex}-`. The end tip lands on the last point and the start tip on the
+first; `arrows.meta` tips auto-orient to point outward. The library is loaded by
+the export template (§8.4) and listed in the snippet preamble (§8.5).
+
+A non-empty `mid_label` (§4.3) additionally emits `\node[fill=white, inner sep=1pt]
+at (x,y) {…};` at the point `wire_point_at_fraction(points, mid_label_pos)` — after
+the wire draw, so the opaque fill paints over the line behind the text.
+
 ### 7.3 Coordinate Output
 
 - Coordinates are output as decimal numbers rounded to 2 decimal places.
@@ -1284,11 +1314,17 @@ The minimal template used for full schematic preview:
 ```latex
 \documentclass[border=4pt]{standalone}
 \usepackage[american]{circuitikz}
+\usetikzlibrary{arrows.meta}
 \ctikzset{voltage=american, current=american, resistor=american}
 \begin{document}
 % CIRCUITIKZ_SOURCE
 \end{document}
 ```
+
+`\usetikzlibrary{arrows.meta}` provides the named arrow tips (`Latex`,
+`Stealth`, `Latex[open]`, `Bar`) used by wire endpoint markers (§4.3, §7.2). The
+includable snippet (§8.5) lists the same library in its required-preamble
+comment so host documents load it too.
 
 The string `% CIRCUITIKZ_SOURCE` is replaced verbatim by the output of
 `generate(schematic, y_flip=True)`.  Two conventions govern the two call sites:
@@ -1481,7 +1517,7 @@ with the `Base`/`Button` palette roles, not `Window`).
 | `TransformSection` | all but `rect` (rect rotation is a codegen no-op) | rotation buttons; mirror checkbox (circuit + bipole only) |
 | `LayerSection` | `DrawingComponent` (text_node, rect, bipole) | move front/back buttons + z-order spinbox |
 
-`WireStyleSection` is a section for **wires** (not Components, so it is outside the component `applies_to` loop). When a single wire is selected, `PropertiesPanel.show_wire(wire_id)` unbinds the component sections and binds it via `bind_wire`; it offers **Line style** (solid/dashed/dotted/dash-dot), **Line width (pt)**, a **No junction dots** checkbox, and a **No termination dots** checkbox, writing through `set_wire_line_style` / `set_wire_line_width` / `set_wire_no_junction_dots` / `set_wire_no_termination_dots` (the combo/spinbox debounce 300 ms; the checkboxes commit immediately). Selection routing (`MainWindow`) queries both `selected_component_ids()` and `selected_wire_ids()` to choose component / wire / multi-select / empty.
+`WireStyleSection` is a section for **wires** (not Components, so it is outside the component `applies_to` loop). When a single wire is selected, `PropertiesPanel.show_wire(wire_id)` unbinds the component sections and binds it via `bind_wire`; it offers **Line style** (solid/dashed/dotted/dash-dot), **Line width (pt)**, a **No junction dots** checkbox, a **No termination dots** checkbox, **Start endpoint** / **End endpoint** marker combos (None/Arrow/Stealth/Open arrow/Bar), and **Start** / **End** / **Middle** label text fields (text or `$math$`), writing through `set_wire_line_style` / `set_wire_line_width` / `set_wire_no_junction_dots` / `set_wire_no_termination_dots` / `set_wire_start_marker` / `set_wire_end_marker` / `set_wire_start_label` / `set_wire_end_label` / `set_wire_mid_label` (the line-style combo/width spinbox debounce 300 ms; the checkboxes and marker combos commit immediately; the label fields commit on `editingFinished` — Enter or focus-out — *not* per keystroke, so a re-bind can't jerk the cursor mid-edit, and `bind_wire` additionally skips a label field that currently has focus). The endpoint markers are independent of the automatic junction/termination dots and exist mainly to draw block diagrams (the arrowhead); the endpoint labels caption signal lines (an arrow terminating into text); the **Middle** field adds an over-the-wire mid-label (§4.3) that is then dragged/edited on the canvas. Selection routing (`MainWindow`) queries both `selected_component_ids()` and `selected_wire_ids()` to choose component / wire / multi-select / empty.
 
 All section edits funnel through `SchematicScene` methods that push undoable commands. Text/options fields and the fill/border controls debounce commits 300 ms; checkboxes, rotation, mirror, and z-order commit immediately.
 
@@ -1526,6 +1562,7 @@ collapsible.
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
+| Cycle wire endpoint marker / line style (while hovering) | `Tab` / `Shift+Tab` |
 | Cancel / Select mode | `Escape` |
 | Pan (transient) | `Space` + drag |
 | Compile preview | `Ctrl+Return` |
@@ -1878,6 +1915,18 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_styled_wire_line_width_only` | A non-default `line_width` alone triggers a styled `\draw[line width=…pt]` statement. |
 | `test_no_junction_dots_wire_suppresses_circ` | A wire flagged `no_junction_dots` emits no `\node[circ]` at its T-junction (and the same topology unflagged does). |
 | `test_no_termination_dots_wire_suppresses_ocirc` | A wire flagged `no_termination_dots` emits no `\node[ocirc]` at its free ends (and the same wire unflagged does). |
+| `test_wire_end_marker_emits_arrow` / `test_wire_start_marker_emits_reverse_arrow` / `test_wire_both_markers_emit_double_arrow` | An `end_marker`/`start_marker`/both `="arrow"` wire emits `\draw[-{Latex}]` / `\draw[{Latex}-]` / `\draw[{Latex}-{Latex}]`. |
+| `test_wire_marker_styles_map_to_arrows_meta_tips` | `stealth`/`open`/`bar` markers emit `-{Stealth}` / `-{Latex[open]}` / `-{Bar}`. |
+| `test_wire_mixed_markers_emit_distinct_tips` | Different start/end kinds compose independently, e.g. `{Bar}-{Stealth}`. |
+| `test_wire_marker_combines_with_style` | A marked + styled wire emits the arrow spec first: `\draw[-{Latex}, dashed, line width=0.8pt] …`. |
+| `test_wire_marker_suppresses_ocirc_at_that_end` | A marked end emits no `\node[ocirc]`; the unmarked end still does. |
+| `test_build_tex_loads_arrows_meta` / `test_build_snippet_lists_required_preamble` | The standalone template loads `\usetikzlibrary{arrows.meta}`; the snippet preamble documents it. |
+| `test_wire_end_label_horizontal_anchor_west` / `test_wire_start_label_horizontal_anchor_east` | A horizontal-wire end/start label emits `\node[anchor=west/east]` just beyond the tip. |
+| `test_wire_label_vertical_anchor_under_yflip` | Vertical-wire labels anchor by emitted-space (Y-flip-aware) direction: `anchor=south` above the top end, `anchor=north` below the bottom. |
+| `test_wire_label_empty_emits_no_node` / `test_wire_label_degenerate_wire_skipped` | No label node for an unlabelled wire or a degenerate single-point wire. |
+| `test_wire_label_coexists_with_arrow_marker` | An arrow marker and an end label render together (arrow into text). |
+| `test_wire_mid_label_node_with_white_fill` / `test_wire_mid_label_respects_position` / `test_wire_mid_label_empty_emits_no_node` | A `mid_label` emits `\node[fill=white, inner sep=1pt]` at `wire_point_at_fraction(points, mid_label_pos)`; empty emits nothing. |
+| `test_point_at_fraction_*` / `test_fraction_at_point_projects_onto_polyline` / `test_fraction_round_trips_with_point` | `wire_point_at_fraction` / `wire_fraction_at_point` map fractional arc-length ↔ point (straight + L-wire, clamp, degenerate, projection, round-trip). |
 | `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
 | `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
 | `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
@@ -1910,6 +1959,14 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_roundtrip_wire_no_termination_dots` | A wire's `no_termination_dots` flag round-trips through save+load. |
 | `test_wire_no_termination_dots_default_omitted` | The default (`False`) is omitted from the JSON. |
 | `test_wire_no_termination_dots_bad_type_raises` | A non-boolean `no_termination_dots` raises `SchematicLoadError`. |
+| `test_roundtrip_wire_markers` | A wire's `start_marker`/`end_marker` round-trip through save+load. |
+| `test_wire_markers_default_omitted` | Empty markers are omitted from the JSON (back-compat). |
+| `test_wire_marker_bad_type_raises` | A non-string `end_marker` raises `SchematicLoadError`. |
+| `test_roundtrip_wire_labels` | A wire's `start_label`/`end_label` round-trip through save+load. |
+| `test_wire_labels_default_omitted` | Empty labels are omitted from the JSON (back-compat). |
+| `test_wire_label_bad_type_raises` | A non-string `start_label` raises `SchematicLoadError`. |
+| `test_roundtrip_wire_mid_label` / `test_wire_mid_label_defaults_omitted` | A wire's `mid_label`/`mid_label_pos` round-trip; empty label and the default 0.5 position are omitted. |
+| `test_wire_mid_label_pos_clamped_on_load` / `test_wire_mid_label_pos_bad_type_raises` | `mid_label_pos` is clamped to [0,1] on load; a non-numeric value raises `SchematicLoadError`. |
 | `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
 | `test_load_unknown_version` | Loading a `.hv` file with an unrecognized `version` string raises a descriptive error. |
 | `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
@@ -1947,6 +2004,8 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_no_junction_dots_does_not_remove_others` | A flagged wire does not suppress a dot that other wires/pins independently justify at the same coordinate. |
 | `test_no_termination_dots_suppresses_open_endpoints` | A wire flagged `no_termination_dots` contributes no open endpoints. |
 | `test_no_termination_dots_does_not_affect_other_wires` | A flagged wire still counts as a connection for another wire ending on it (only its own free ends lose terminals). |
+| `test_custom_marker_suppresses_open_endpoint` / `test_custom_marker_start_and_end_suppress_both_endpoints` | An end bearing a `start_marker`/`end_marker` is excluded from `open_endpoints()`; the unmarked end keeps its terminal. |
+| `test_custom_marker_does_not_affect_other_wires` | A marked end still counts as a connection for another wire ending on it. |
 | `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
 | `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect); a degenerate single-point wire connects nothing, so it does not suppress a real endpoint at the same coordinate. |
 | `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect; a degenerate single-point wire on a pin does not mark it connected. |
@@ -2018,6 +2077,14 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_click_free_pin_enters_wire_mode` / `test_terminate_on_pin_returns_to_select` | Auto-enter on a free-pin click; auto-exit when ending on a pin; connected-pin clicks and empty-space double-clicks behave per §6.4. |
 | `test_double_click_wire_body_enters_wire_mode` / `test_double_click_wire_commits_splits_on_add` / `test_double_click_wire_vertex_enters_wire_mode` / `test_double_click_empty_space_enters_wire_mode` | Double-clicking a wire, wire vertex, or blank canvas in SELECT mode auto-enters WIRE mode from the snapped grid point; routing away and finalizing splits any target wire as normal. |
 | `test_double_click_wire_near_component_enters_wire_mode` | Wire double-click is detected even when the wire is inside a component's bounding box — the wire check runs before the component check (regression: component bbox previously swallowed the event). |
+| `test_wire_label_inline_edit_commits` / `test_wire_label_inline_edit_cancel_leaves_model` | In-place editing of a wire endpoint label (§4.3): `begin_label_edit` pre-fills the editor with the raw fragment and hides the display; commit writes via `set_wire_*_label` and restores the display; Escape leaves the model unchanged. |
+| `test_set_wire_mid_label_and_pos` / `test_mid_label_noop_when_unchanged` | Mid-label text/position setters are undoable and clamp position to [0,1]; unchanged values push no command. |
+| `test_mid_label_inline_edit_commits` | Double-click editing of the mid-label (`begin_label_edit("mid")`) pre-fills/hides the display and commits via `set_wire_mid_label`, restoring the display. |
+| `test_double_click_free_endpoint_opens_label_editor` | Double-clicking a free wire endpoint opens its label editor for the correct end (start/last) and stays in SELECT mode (§6.4). |
+| `test_double_click_connected_endpoint_enters_wire_mode` | A wire endpoint on a component pin is not a label target — it falls through to WIRE-mode routing. |
+| `test_tab_cycle_endpoint_marker` / `test_tab_cycle_start_vs_end_endpoint` | `cycle_at` on a free endpoint steps that end's marker through `WIRE_MARKER_CYCLE` (wraps; `backward` reverses; undoable); the cursor's endpoint picks start vs. end. |
+| `test_tab_cycle_line_style_on_body` / `test_tab_cycle_interior_vertex_cycles_line_style` | `cycle_at` on a wire body (or interior vertex) steps the line style through `WIRE_LINE_STYLE_CYCLE` without touching endpoint markers. |
+| `test_tab_cycle_empty_space_is_noop` | `cycle_at` off any wire changes nothing and returns False (so `Tab` keeps normal focus behaviour). |
 | `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a draggable wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release); pin-locked endpoints are not draggable. |
 | `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
 | `test_pin_circles_absent_by_default` / `test_pin_circles_appear_when_enabled` / `test_pin_circles_toggle_off_removes_items` | Unconnected-pin circles (§10.5) are absent until `set_mark_unconnected_pins(True)`, then drawn at each free pin, and removed again when toggled off. |
