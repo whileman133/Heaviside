@@ -39,7 +39,7 @@ MULTI-TERMINAL COMPONENT PLACEMENT — DESIGN NOTES
 
 CircuiTikZ multi-terminal nodes (op amp, nigfete) have internal pin geometry
 that does not align with our 0.5-GU grid. The canvas uses SVG lead stubs
-(from tools/export_circuitikz_svgs.sh) to extend the symbol to grid-aligned
+(from tools/export_circuitikz_svgs.py) to extend the symbol to grid-aligned
 endpoints. The codegen must bridge the same gap in the LaTeX output.
 
 op amp
@@ -82,7 +82,7 @@ Registry pins (Qt Y-down, from gate pin = comp.position):
 
 The registry pins were chosen to match the CTikZ anchor positions snapped to
 the nearest 0.5 GU, after placement with anchor=gate. The lead stubs in the
-SVG export (tools/export_circuitikz_svgs.sh → TRIPOLE_LEADS[nigfete]) draw
+SVG export (the nigfete lead routing in tools/export_circuitikz_svgs.py) draw
 to these same coordinates so the canvas symbol matches.
 
 Because the drain/source CTikZ anchors are not rectilinearly aligned with the
@@ -118,7 +118,11 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
-from app.components.style import compose_style_options
+from app.components.style import (
+    compose_style_options,
+    protect_label_commas,
+    split_top_level,
+)
 from app.schematic.model import (
     Component,
     Schematic,
@@ -143,6 +147,16 @@ _TWO_TERMINAL_KINDS: frozenset[str] = frozenset({
     "cV", "cI",
     "open", "short",
 })
+
+# Diode-family bipoles.  CircuiTikZ's default diode body is visually large
+# relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
+# a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
+# exported at the same scale (see tools/export_circuitikz_svgs.py) so the canvas
+# and the rendered output stay in sync (§5.3 / §7.2).
+_DIODE_KINDS: frozenset[str] = frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
+
+#: Body-scale factor applied to every diode in both the output and the canvas.
+DIODE_SYMBOL_SCALE: float = 0.8
 
 # Multi-terminal components use node[] syntax.
 _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
@@ -202,6 +216,13 @@ def generate(
 
     lines: list[str] = []
     lines.append(r"\begin{circuitikz}")
+
+    # Shrink the (visually large) default diode body to better match the other
+    # bipoles, scoped to this picture so it never leaks into the user's other
+    # figures.  Emitted only when a diode is present; the canvas SVGs are
+    # exported at the same scale so the two stay in sync (§5.3 / §7.2).
+    if any(c.kind in _DIODE_KINDS for c in schematic.components):
+        lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
 
     # Background drawing annotations (z_order < 0) — emitted before \draw so
     # they appear behind circuit elements in the rendered PDF.
@@ -577,11 +598,13 @@ def _node_line(comp: Component, y_fn=lambda y: y) -> str:
     if comp.rotation:
         args += f", rotate={comp.rotation}"
     if comp.kind in _POWER_RAIL_KINDS:
-        raw = comp.options.strip()
-        m = re.search(r'\bl\s*=\s*([^,]+)', raw)
-        if m:
-            value = m.group(1).strip()
-            args += f", label=right:{{{value}}}"
+        # Pull the l= slot value with the comma-aware splitter so a label
+        # containing commas (e.g. inside $...$) is not truncated.
+        for seg in split_top_level(comp.options):
+            key, eq, val = seg.partition("=")
+            if eq and key.strip() == "l" and val.strip():
+                args += f", label=right:{{{val.strip()}}}"
+                break
     return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{}}"
 
 
@@ -790,8 +813,11 @@ def _rotate(span: tuple[float, float], rotation: int) -> tuple[float, float]:
 
 
 def _label_args(comp: Component) -> str:
-    """Return the raw options string from comp.options, stripped of whitespace."""
-    return comp.options.strip()
+    """Return comp.options for the ``to[]`` / ``node[]`` argument.
+
+    Label values containing commas (e.g. ``v=$\\phi(0,0)$``) are brace-protected
+    so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3)."""
+    return protect_label_commas(comp.options)
 
 
 def _fmt(value: float) -> str:

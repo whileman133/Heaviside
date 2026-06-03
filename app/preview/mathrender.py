@@ -2,7 +2,7 @@ r"""
 Vector rendering of LaTeX fragments for on-canvas WYSIWYG labels (prototype).
 
 This reuses the *exact* toolchain that produced the component symbols
-(``tools/export_circuitikz_svgs.sh``)::
+(``tools/export_circuitikz_svgs.py``)::
 
     latex -> .dvi -> dvisvgm --no-fonts -> SVG -> svgsym.parse_path -> QPainterPath
 
@@ -42,6 +42,10 @@ from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 from PySide6.QtGui import QPainterPath, QTransform
 
 from app.canvas.svgsym import parse_path
+# The TikZ-style option splitter lives in the no-Qt ``components.style`` module
+# so the code generator can share it; re-exported under its historical private
+# name for the canvas label parser and its tests.
+from app.components.style import split_top_level as _split_top_level
 from app.preview.latex import _ensure_tool_dirs_on_path
 
 # Body font size of the render template, in LaTeX points.  Callers scale a
@@ -380,39 +384,3 @@ def editable_to_options(text: str) -> str:
     ``, ``.  Blank lines are dropped."""
     return ", ".join(ln.strip() for ln in text.split("\n") if ln.strip())
 
-
-def _split_top_level(options: str) -> list[str]:
-    """Split on commas that are not inside ``$...$`` / ``{...}`` or escaped.
-
-    A backslash escapes the next character, so a LaTeX control sequence such as
-    ``\\,`` (thin space) is kept intact and its comma is not treated as an option
-    separator. The escaped character also does not toggle math/brace state
-    (``\\$``, ``\\{``, ``\\}``).
-    """
-    segs: list[str] = []
-    depth = 0
-    in_math = False
-    escaped = False
-    buf: list[str] = []
-    for ch in options:
-        if escaped:
-            buf.append(ch)
-            escaped = False
-            continue
-        if ch == "\\":
-            buf.append(ch)
-            escaped = True
-            continue
-        if ch == "$":
-            in_math = not in_math
-        elif ch == "{" and not in_math:
-            depth += 1
-        elif ch == "}" and not in_math:
-            depth = max(0, depth - 1)
-        if ch == "," and depth == 0 and not in_math:
-            segs.append("".join(buf))
-            buf = []
-        else:
-            buf.append(ch)
-    segs.append("".join(buf))
-    return segs

@@ -15,6 +15,7 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    component_pin_positions,
     junction_points,
     open_endpoints,
     unconnected_pins,
@@ -141,10 +142,18 @@ def test_wire_valid() -> None:
 # ---------------------------------------------------------------------------
 
 def test_wire_off_grid() -> None:
-    """A Wire with a vertex at (0.3, 0.0) produces a validation error."""
-    wire = _wire([(0.3, 0.0), (2.0, 0.0)])
+    """A Wire with a vertex off the 0.25 GU grid produces a validation error."""
+    wire = _wire([(0.3, 0.0), (2.0, 0.0)])   # 0.3 is not a multiple of 0.25
     errors = validate(_make_schematic(wires=[wire]))
-    assert any("0.5 GU boundary" in e for e in errors), errors
+    assert any("0.25 GU boundary" in e for e in errors), errors
+
+
+def test_wire_on_quarter_grid_is_valid() -> None:
+    """Vertices on the 0.25 GU grid (e.g. a fine-nudged pin at y=0.25) validate."""
+    fet = Component(id=_uid(), kind="nigfete", position=(0.0, -0.25), rotation=0, options="")
+    src = component_pin_positions(fet)[2]    # source pin at (1.0, 0.25) — on the 0.25 grid
+    wire = _wire([src, (src[0], 2.0)])
+    assert validate(_make_schematic(fet, wires=[wire])) == []
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,329 @@
+{
+  "version": "0.1",
+  "name": "untitled",
+  "components": [
+    {
+      "id": "6a5674ec-f4e3-4c3e-89ae-305b4f580ec7",
+      "kind": "cV",
+      "position": [
+        74.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "v=$\\tilde{\\phi}^\\mathrm{n}_\\mathrm{se}(0,0^+)$",
+      "label_offset": [
+        -366.71875,
+        126.0
+      ]
+    },
+    {
+      "id": "190860cd-e636-4ba5-99b1-ee4bf0e3c6c4",
+      "kind": "cV",
+      "position": [
+        77.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "v=$\\tilde{\\phi}^\\mathrm{n}_\\mathrm{se}(1,0^+)$",
+      "label_offset": [
+        -363.140625,
+        126.0
+      ]
+    },
+    {
+      "id": "7774a394-054f-45bd-a0a3-4a39f691acaa",
+      "kind": "cV",
+      "position": [
+        80.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "v=$\\tilde{\\phi}^\\mathrm{p}_\\mathrm{se}(2,0^+)$",
+      "label_offset": [
+        36.0,
+        -39.0
+      ]
+    },
+    {
+      "id": "4ac2d6c8-38f6-4507-b74e-3cf322e7bacb",
+      "kind": "cV",
+      "position": [
+        83.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "v=$\\tilde{\\phi}^\\mathrm{p}_\\mathrm{se}(3,0^+)$",
+      "label_offset": [
+        36.0,
+        43.5
+      ]
+    },
+    {
+      "id": "6e0dbebd-1577-4843-8f53-ea2ff5c86cca",
+      "kind": "R",
+      "position": [
+        74.5,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$1/\\bar{\\sigma}^\\mathrm{n}$"
+    },
+    {
+      "id": "cfbbd1e4-44bd-46bb-b8be-5dd03c1a8448",
+      "kind": "R",
+      "position": [
+        74.5,
+        79.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l_=$1/\\bar{\\kappa}^\\mathrm{n}$",
+      "label_offset": [
+        -86.7734375,
+        21.0
+      ]
+    },
+    {
+      "id": "8f76a1a7-3a6f-480f-8338-2a947e3e5e05",
+      "kind": "R",
+      "position": [
+        77.5,
+        79.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l_=$1/\\bar{\\kappa}^\\mathrm{s}$",
+      "label_offset": [
+        -86.1328125,
+        21.0
+      ]
+    },
+    {
+      "id": "8d51bc25-5224-4751-9bf5-f35b6f9358c0",
+      "kind": "R",
+      "position": [
+        80.5,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$1/\\bar{\\sigma}^\\mathrm{p}$"
+    },
+    {
+      "id": "35f46a0d-a99c-4042-b98b-0846746d4012",
+      "kind": "R",
+      "position": [
+        80.5,
+        79.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l_=$1/\\bar{\\kappa}^\\mathrm{p}$",
+      "label_offset": [
+        -87.0390625,
+        21.0
+      ]
+    },
+    {
+      "id": "4beb05b1-8afb-4899-94c3-b235755a1b8a",
+      "kind": "ground",
+      "position": [
+        73.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": ""
+    },
+    {
+      "id": "03a6e19a-3703-40a2-bdb0-b85fc457a787",
+      "kind": "short",
+      "position": [
+        73.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "i=$i_\\mathrm{app}$",
+      "span_override": [
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "id": "802dbe74-6672-4ed7-adda-cec29bc9dfb7",
+      "kind": "text_node",
+      "position": [
+        85.0,
+        77.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "$\\Delta v$"
+    }
+  ],
+  "wires": [
+    {
+      "id": "9731ec23-238e-4a5c-b461-0105382d0d78",
+      "points": [
+        [
+          74.0,
+          77.5
+        ],
+        [
+          74.5,
+          77.5
+        ]
+      ]
+    },
+    {
+      "id": "3cdbd449-1a36-4ece-bd41-4f415c20c62b",
+      "points": [
+        [
+          76.5,
+          77.5
+        ],
+        [
+          77.0,
+          77.5
+        ]
+      ]
+    },
+    {
+      "id": "34df78c8-b5ac-4871-bf49-89c3933ddcd5",
+      "points": [
+        [
+          74.5,
+          79.5
+        ],
+        [
+          74.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "b1f4aca8-015a-47a3-905f-d4fcb8cb15c9",
+      "points": [
+        [
+          76.5,
+          79.5
+        ],
+        [
+          77.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "ff54edb7-6951-4989-99fb-50d5ee2a4f64",
+      "points": [
+        [
+          77.0,
+          79.5
+        ],
+        [
+          77.5,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "3646bd3f-8bf8-4bab-bb8c-42864fbd7664",
+      "points": [
+        [
+          79.5,
+          79.5
+        ],
+        [
+          80.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "0369e238-52f8-4f1a-aa9e-e81c7ec4f25e",
+      "points": [
+        [
+          80.5,
+          79.5
+        ],
+        [
+          80.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "adb404ef-04a9-4a6d-97a7-13235ac9e6fc",
+      "points": [
+        [
+          80.0,
+          77.5
+        ],
+        [
+          80.5,
+          77.5
+        ]
+      ]
+    },
+    {
+      "id": "173ba391-1f10-4566-bafd-154b1fb2d554",
+      "points": [
+        [
+          82.5,
+          79.5
+        ],
+        [
+          83.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "e7934f12-2f83-4d40-b177-102a6499c1c5",
+      "points": [
+        [
+          83.0,
+          77.5
+        ],
+        [
+          82.5,
+          77.5
+        ]
+      ]
+    },
+    {
+      "id": "44d957be-9ec4-4261-bc81-9ed3c88d1ec5",
+      "points": [
+        [
+          84.5,
+          77.5
+        ],
+        [
+          83.0,
+          77.5
+        ]
+      ]
+    },
+    {
+      "id": "9639b4bf-176f-421d-aad2-ec28db59d8f3",
+      "points": [
+        [
+          72.5,
+          77.5
+        ],
+        [
+          73.0,
+          77.5
+        ]
+      ]
+    }
+  ],
+  "metadata": {}
+}

@@ -52,11 +52,11 @@ This document specifies a graphical editor for creating publication-quality circ
 
 | Term | Definition |
 |------|------------|
-| **Grid unit (GU)** | The fundamental spatial unit of the canvas. 1 GU = 1 CircuiTikZ coordinate unit. All coordinates, component sizes, and wire endpoints are integer multiples of 0.5 GU. |
+| **Grid unit (GU)** | The fundamental spatial unit of the canvas. 1 GU = 1 CircuiTikZ coordinate unit. All coordinates, component positions, and wire endpoints are integer multiples of 0.25 GU (the minor grid, §3.1). |
 | **Component** | A placed instance of a component type on the canvas (e.g., a specific resistor at a specific location). |
 | **ComponentDef** | A static definition of a component type: its CircuiTikZ keyword, bounding box, pin locations, and label slots. Lives in the component registry. |
 | **ComponentItem** | A `QGraphicsItem` subclass responsible for painting one component type on the canvas using `QPainter`. One subclass per component type. |
-| **Pin** | A named connection point on a component, located at a fixed offset from the component origin, always on a 0.5 GU boundary. |
+| **Pin** | A named connection point on a component, located at a fixed offset from the component origin (every pin offset is a multiple of 0.25 GU). Its absolute position is on the 0.25 GU grid whenever the component is. |
 | **Wire** | A Manhattan-routed (horizontal + vertical segments only) polyline connecting pins, other wires, and/or open grid points. |
 | **Junction** | A coordinate where wires/pins are electrically tied together such that a connection must be marked — defined by the degree rule in §6.4. Rendered as a solid dot on the canvas and emitted as `\node[circ]` in the output. |
 | **Open endpoint** | A wire endpoint that does not coincide with any *connecting* component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. A voltage annotation (`open`) pin does not connect, so a wire ending on one is still open (see `NON_CONNECTING_KINDS`). |
@@ -73,9 +73,9 @@ This document specifies a graphical editor for creating publication-quality circ
 ### 3.1 Grid Definition
 
 - The canvas grid has spacing of **1.0 GU**.
-- All component placements and wire vertices snap to **0.5 GU** increments (half-grid snap).
-- The grid is rendered as a light dotted or solid line pattern in the canvas background.
-- Grid lines at integer GU intervals are drawn at normal weight; sub-grid lines at 0.5 GU intervals are drawn at reduced opacity.
+- All component placements, wire vertices, and junctions snap to **0.25 GU** increments — the *minor grid* (`SNAP_GU = 0.25`). This lets components be centred a quarter-cell off the half-grid (e.g. the IGFET MOSFET, whose body does not sit on the half-grid) while every connected wire stays grid-valid in any direction; arrow keys nudge one minor cell (0.25 GU).
+- The grid is rendered as a light line pattern in the canvas background. Integer-GU lines are drawn at normal weight; the 0.5 GU midline at reduced opacity; the 0.25/0.75 GU minor lines faintest, so the unit cell stays readable on the denser lattice.
+- Proximity radii for snapping/grabbing (`PIN_SNAP_GU` = 0.125, `VERTEX_HIT_GU` / `PIN_GRAB_GU` = 0.15) are kept below half the 0.25 spacing so a click is never ambiguous between adjacent nodes.
 
 ### 3.2 Coordinate Convention
 
@@ -201,7 +201,7 @@ class Wire:
     line_width: float = 0.4          # pt (TikZ default 0.4); drawn proportionally on canvas
     no_junction_dots: bool = False   # exclude this wire from junction-dot placement (§6.4)
     no_termination_dots: bool = False  # suppress open-circle terminals at this wire's free ends (§6.4)
-    # All vertices lie on 0.5 GU boundaries
+    # All vertices lie on 0.25 GU boundaries
     # All consecutive segment pairs are strictly horizontal or vertical
     # The point list is kept minimal: no consecutive duplicates and no
     # redundant collinear interior vertices (see §6.4 "Wire Simplification")
@@ -240,7 +240,7 @@ The following must hold at all times for a valid schematic:
 
 1. All `Component.kind` values exist as keys in `REGISTRY`.
 2. All `Component.rotation` values are in `{0, 90, 180, 270}`.
-3. All `Wire.points` vertices lie on 0.5 GU boundaries.
+3. All `Wire.points` vertices lie on 0.25 GU boundaries (the minor grid, §3.1). Because every pin offset is a multiple of 0.25 and components snap to the 0.25 grid, a wire endpoint that follows a moved pin stays on grid.
 4. All consecutive wire segment pairs are strictly horizontal or vertical (Manhattan constraint).
 5. No two components share the same `id`; no two wires share the same `id`.
 
@@ -279,19 +279,28 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 **All component symbols must be derived from CircuiTikZ SVG exports.** Hand-drawn symbols are prohibited — they will inevitably diverge from what CircuiTikZ actually renders and produce previews that don't match the canvas.
 
-Symbols come from **CircuiTikZ SVG exports** generated by `tools/export_circuitikz_svgs.sh`. The script renders each component using `latex` + `dvisvgm` with the `[american]` CircuiTikZ option and collects the resulting `<path d="...">` elements into `tools/circuitikz_svgs/manifest.json`.
+Symbols come from **CircuiTikZ SVG exports** produced by the single deterministic Python pipeline `tools/export_circuitikz_svgs.py`. One run (1) renders each component with `latex` + `dvisvgm` (`[american]` option) to a normalised `.svg` on disk, then (2) compiles those SVGs into a **self-contained** `tools/circuitikz_svgs/manifest.json`. **The application reads only the manifest at run time** (`app/canvas/svgsym.py`) — it never touches the `.svg` files; the SVGs are intermediate build artifacts. `python tools/export_circuitikz_svgs.py` rebuilds both; `--no-render` rebuilds just the manifest from the existing SVGs. Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
-The script supports three component categories, each with a corresponding output subdirectory:
+The pipeline supports three component categories, each with an output subdirectory:
 
 | Category | Subdirectory | LaTeX template | Examples |
 |----------|-------------|----------------|---------|
-| `bipoles` | `bipoles/` | `\draw (0,0) to[kind] (2,0);` | R, C, L, open |
-| `tripoles` | `tripoles/` | `\node[kind] (X) at (0,0) {};` | op amp, nigfete |
+| `bipoles` | `bipoles/` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
+| `tripoles` | `tripoles/` | `\node[kind] (X) at (0,0) {}; <leads>` | op amp, nigfete |
 | `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
 
-To add a new component: add it to the appropriate list in the script, re-run it, then add the `Placement` anchor in `svgsym.py` (see §5.5 for the measurement procedure) and an `ITEM_CLASSES` entry in `items.py`.
+The component set is exactly what the registry uses (defined in the `BIPOLES`/`NODES`/`TRIPOLES` tables in the script); multi-terminal parts carry per-component lead routing that extends each named terminal anchor to a grid-aligned coordinate.
 
-To implement a new `ComponentItem`, look up the component in `manifest.json`, read the `paths` array, and translate each SVG path `d` string into `QPainterPath` calls:
+**Manifest schema.** Each entry is keyed by component name and holds `kind`, `name`, `viewBox`, `width_pt`/`height_pt`, and two geometry lists (both in SVG point coordinates):
+
+- **`paths`** — the stroked/filled body geometry: `{d, stroke_width, fill, stroke}`.
+- **`glyphs`** — text marks (the `+`/`−` of sources). dvisvgm emits these as `<use>` references into `<defs>`; the pipeline **resolves them at build time** into `{d, matrix, stroke_width}`, where `matrix` is the composed affine (enclosing-group matrix ∘ `<use>` translation). This is why the manifest is self-contained — no `<use>`/`<defs>` indirection survives, so the app needs no SVG access. `svgsym.symbol_paths` paints each glyph as a filled body via `QTransform(*matrix)` then the component transform.
+
+**Diode body scale.** CircuiTikZ's default diode body is visually large next to the other bipoles, so every diode-family symbol (`D`/`zD`/`sD`/`tD`/`zzD`/`leD` and their filled `*` variants) is rendered with `\ctikzset{diodes/scale=0.8}` and the code generator emits the **same** picture-scoped `\ctikzset{diodes/scale=0.8}` for any schematic containing a diode (see §7.2). `DIODE_SYMBOL_SCALE` in `app/codegen/circuitikz.py` and `DIODE_SCALE` in the export script are the two sources of truth and **must match**. The scale shrinks only the body (the 2-GU span and pin positions are unchanged — leads auto-extend), and it does not affect the MOSFET body-diode (a tripole shape), so the canvas and the rendered output stay in sync.
+
+To add a new component: add it to the relevant table in `tools/export_circuitikz_svgs.py` and re-run it, then add the `Placement` anchor in `svgsym.py` (see §5.5 for the measurement procedure) and an `ITEM_CLASSES` entry in `items.py`.
+
+To implement a new `ComponentItem`, look up the component in `manifest.json`, read the `paths` (and `glyphs`) arrays, and translate each path `d` string into `QPainterPath` calls:
 
 | SVG command | `QPainterPath` equivalent |
 |-------------|--------------------------|
@@ -304,7 +313,7 @@ To implement a new `ComponentItem`, look up the component in `manifest.json`, re
 
 Coordinates are scaled from SVG pt units to `GRID_PX` by dividing by the SVG `viewBox` height and multiplying by the component's height in pixels. The SVG y-axis matches Qt's (y-down), so no axis flip is required.
 
-Paths with `fill='none'` are stroked only; paths with no `fill` attribute (or `fill='#000'`) are filled. `stroke_width` values in the manifest are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`.
+**Fill rule.** dvisvgm emits a solid body (the filled diode triangle, transistor/LED arrowheads, …) as a **bare** `<path>` — no `stroke` and no `fill` attribute — which in SVG is the default **black fill**; the body's outline is a separate `fill='none'` stroke path. The export pipeline records a bare path's fill as `#000` (the SVG default), so `svgsym.symbol_paths` treats a path as **filled** unless its fill is the explicit `none`. (An earlier version recorded the absent attribute as `none`, which made `D` and `D*` — and every other solid body — render identically; the regression test is `test_filled_diode_body_is_filled`.) `stroke_width` values in the manifest are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`. The `glyphs` list is always filled.
 
 The mapping from `kind` to item class is:
 
@@ -445,7 +454,7 @@ Single-terminal components are placed as `\node[kind] at (x,y) {};` in the gener
 |------|-------------|------|-------------|-----------|-------------|
 | `open` | Voltage Annotation | `in` (0,0), `out` (2,0) | (2,0) | Yes | `v`, `v^`, `v_`, `i`, `i_` |
 
-The `open` component renders a dashed line between its two endpoints with a voltage/current annotation from the options string. When selected, square drag handles appear at both endpoints; dragging the terminal handle resizes the span (updating `Component.span_override`). The resize is undoable via `ResizeCommand`. Connected wires follow the moved endpoint.
+The `open` component renders a **translucent** (mostly-opaque) solid line between its two endpoints — drawn at `OPEN_ANNOTATION_OPACITY` (0.5) so it is visually distinct from both solid and dashed wires — with a voltage/current annotation from the options string. Unlike other components, its annotation labels are **centred over the middle of the line** rather than offset to a side, mirroring where CircuiTikZ draws the voltage/current arrow label (see §5.8). When selected, square drag handles appear at both endpoints; dragging the terminal handle resizes the span (updating `Component.span_override`). The resize is undoable via `ResizeCommand`. Connected wires follow the moved endpoint.
 
 #### Drawing Annotations
 
@@ -541,7 +550,7 @@ may be needed for a single component, but they serve different purposes:
 
 | Mechanism | Where | Purpose |
 |-----------|-------|---------|
-| **TRIPOLE_LEADS** in `tools/export_circuitikz_svgs.sh` | Canvas SVG export only | Extends the exported SVG paths so their endpoints (= the values read by `svgsym.py`) land on the grid. Has **no effect** on the LaTeX output. |
+| **Tripole lead routing** in `tools/export_circuitikz_svgs.py` (the `TRIPOLES` table) | Canvas SVG export only | Extends the exported SVG paths so their endpoints (= the values read by `svgsym.py`) land on the grid. Has **no effect** on the LaTeX output. |
 | **`_MULTI_TERMINAL_LEADS`** in `app/codegen/circuitikz.py` | LaTeX output only | Emits explicit `\draw (node_id.PIN) -- (grid_coord)` bridge wires in the generated LaTeX to bridge from a CTikZ anchor to the registry grid position. Has **no effect** on the canvas. |
 | **`_MULTI_TERMINAL_EXTRA_OPTS`** (`xscale`/`yscale`) in `app/codegen/circuitikz.py` | LaTeX output only | Stretches the CTikZ symbol so its anchors land on the grid — **no bridge wires needed**. Also requires a matching scale in `svgsym.py` `Placement` when TRIPOLE_LEADS are NOT used for the canvas. |
 
@@ -612,10 +621,10 @@ no xscale/yscale because CTikZ op amp leads are already axis-aligned with the gr
 
 #### Step 4 — Update the SVG export leads (canvas only)
 
-In `tools/export_circuitikz_svgs.sh`, add or update `TRIPOLE_LEADS[slug]` to
-draw lead stubs from each CTikZ anchor to the **snapped** registry pin coordinates
-(expressed in CTikZ space with the node at `(0,0)`). Re-run the script to
-regenerate `manifest.json`.
+In `tools/export_circuitikz_svgs.py`, add or update the component's entry in the
+`TRIPOLES` table with `leads` that draw lead stubs from each CTikZ anchor to the
+**snapped** registry pin coordinates (expressed in CTikZ space with the node at
+`(0,0)`). Re-run the script to regenerate the SVGs and `manifest.json`.
 
 After regeneration, read the lead endpoint SVG coordinates from `manifest.json`
 to determine the correct `svgsym.py` anchor:
@@ -651,7 +660,7 @@ prevents silent fallback to bare coordinates.
 
 To add a new component type:
 
-1. Run `tools/export_circuitikz_svgs.sh` (or add the component name to its lists and re-run) to generate the SVG reference and update `manifest.json`.
+1. Add the component to the relevant table in `tools/export_circuitikz_svgs.py` and run it to render the SVG and rebuild the self-contained `manifest.json`.
 2. Add a `ComponentDef` entry to `REGISTRY` in `app/components/registry.py`, with `bbox` and `pins` derived from the SVG `viewBox` dimensions and CircuiTikZ anchor positions.
 3. Add a `ComponentItem` subclass to `app/canvas/items.py`, translating the manifest `paths` array to `QPainterPath` calls as described in §5.2.
 4. Add the mapping entry to `ITEM_CLASSES` in `app/canvas/items.py`.
@@ -740,14 +749,24 @@ labels stay crisp at every zoom.
   *actual* lead terminals (`_lead_terminals_local()`, through the item
   transform); resizable components (open/short/bipole) override it so the axis
   and centre track the actual span, not the default registry bbox.
-  `_slot_direction(key, geom)` then chooses the offset direction:
-    - **Labels/currents** (`l`/`i`/`a`) are **traversal-relative** — left of the
-      lead direction for the plain/`^` form, right for the `_` form — so they
-      land on the correct side under any rotation/mirror (e.g. `l_` on a
-      down-pointing source goes left, matching CircuiTikZ).
-    - **Voltage** (`v`) uses the screen-positive perpendicular (down, else
-      right), which reproduces CircuiTikZ's default voltage-label side for both
-      horizontal and vertical elements; `v^` flips it.
+  `_slot_direction(key, geom)` then chooses the offset direction. **All
+  families** (`l`/`v`/`i`/`a`) are **traversal-relative**: the plain/`^` form
+  sits left of the lead direction, the `_` form sits right, with `slot_side()`
+  supplying the per-family default (`l` above, `v` below) and the `^`/`_`
+  override. Because the preview's Y-flip makes the rendered PDF a faithful
+  visual match of the canvas, the on-screen side equals the side CircuiTikZ
+  draws the annotation on — for horizontal and rotated elements alike (e.g. on a
+  90°-rotated capacitor `l_` lands screen-left and `v^` screen-right, the
+  opposite sides CircuiTikZ produces). Voltage uses this **same** basis as the
+  label rather than a separate absolute-screen heuristic (which collapsed `l_`
+  and `v^` onto the same side on rotated components).
+  - **Voltage-source default-`v` flip.** A **voltage source** (`V`/`cV`/`vsourcesin`,
+    listed in `_VOLTAGE_SOURCE_KINDS`) draws its *default* (unsuffixed) `v=`
+    label on the **opposite** side from a passive — CircuiTikZ's source voltage
+    convention (the `+` terminal leads). `_slot_direction` flips the bare `v` to
+    the `above` side for those kinds; current sources (`I`/`cI`/`isourcesin`)
+    follow the passive default, and the explicit `v^`/`v_` forms are
+    component-independent (not flipped).
   Labels are **centred on the component** and offset by the body's
   perpendicular half-thickness (bbox half-height for horizontal leads,
   half-width for vertical) plus a gap; **current** (`i=`) labels instead hug the
@@ -756,6 +775,15 @@ labels stay crisp at every zoom.
   outward when several share a direction. This is a readable convention,
   **not** a pixel-exact reproduction of CircuiTikZ's voltage/current arrow
   rendering (no ± signs or direction arrows are drawn on the canvas).
+    - **Centred placement.** `ComponentItem._labels_centered_on_axis()` (default
+      `False`) lets a component pin its labels *over* the lead axis instead of
+      beside it: when `True` the base clearance is zeroed and the label centre
+      is placed at the component centre (siblings still stack along the offset
+      direction). The `open` voltage annotation overrides it to `True` so its
+      label sits over the middle of the line, matching where CircuiTikZ draws
+      the arrow label. A centred label is painted over an opaque white backdrop
+      padded by `_LABEL_BG_PAD` (3 px) so the annotation line does not appear to
+      run into the text.
 - **Hover association.** Hovering the component body *or* any of its slot labels
   highlights the whole group (body + all slot labels) in `COLOR_HOVER`, so it is
   clear the labels belong to that component. `_SlotLabel` forwards hover events
@@ -771,6 +799,28 @@ labels stay crisp at every zoom.
   are missing — items fall back to raw-text rendering, so the canvas never
   blocks and degrades gracefully. Queued callbacks guard with
   `shiboken6.isValid` so a render landing after its item was deleted is dropped.
+
+### 5.9 Quarter-Grid Placement
+
+The minor grid is **0.25 GU** (§3.1). This granularity exists because some
+CircuiTikZ shapes are not symmetric about a half-grid point — most notably the
+IGFET MOSFET (`nigfete`/`nigfetd` and the p-channel variants), whose gate sits
+≈0.27 GU below the drain–source centre. Anchored at its (grid-aligned) gate pin,
+the transistor body lands ~0.25 GU off from where a symmetric 2 GU bipole
+(source, R, C) centres; nudging it one minor cell (0.25 GU) lines its body up
+with the neighbouring bipoles.
+
+Because pins, wire vertices, and junctions **all** live on the same 0.25 grid,
+this needs no special-casing:
+
+- Arrow keys nudge the selection one minor cell (0.25 GU) in any direction via
+  the normal `MoveCommand`; connected wires follow (§6.6) and an auto-elbow lands
+  on a 0.25 node, so the result is grid-valid regardless of direction — there is
+  no "perpendicular-to-a-lead" failure and no nudge is ever rejected.
+- A plain **click** (press+release with no drag) preserves the component's
+  position — `commit_component_drag` detects that the item never left its start
+  position and pushes no move. A real **drag** re-snaps to the 0.25 grid (the
+  component is live-snapped during `mouseMoveEvent`).
 
 ---
 
@@ -792,7 +842,7 @@ The canvas operates in one of the following mutually exclusive modes at any time
 ### 6.2 Component Placement
 
 1. User clicks a component in the palette → canvas enters **Place** mode.
-2. A ghost (semi-transparent) rendering of the component follows the cursor, snapping to 0.5 GU.
+2. A ghost (semi-transparent) rendering of the component follows the cursor, snapping to 0.25 GU.
 3. Left-click places the component at the snapped position and records an undoable `PlaceCommand`.
 4. Right-click or `Escape` cancels placement and returns to **Select** mode. `Escape` is registered as a **window-level shortcut** so it fires regardless of which widget (palette, canvas, etc.) currently holds keyboard focus — clicking a palette entry to start placement does not require a subsequent click on the canvas before Escape works.
 5. After placement, the canvas remains in **Place** mode for rapid repeated placement of the same component type.
@@ -805,10 +855,10 @@ The canvas operates in one of the following mutually exclusive modes at any time
 - `Ctrl+click` adds to or removes from the selection.
 - Rubber-band drag (drag on empty canvas) selects all components and wire segments within the rectangle.
 - `Ctrl+A` selects all.
-- Selected components can be dragged; the component item snaps to 0.5 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
+- Selected components can be dragged; the component item snaps to 0.25 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
 - **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
-- `R` rotates the selection 90° CW around the bounding-box centroid of the selected component positions (snapped to 0.5 GU); records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. Connected wires are reshaped or rigidly rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `R` cycles the ghost's rotation instead.
-- Arrow keys nudge selected components by 0.5 GU per keypress.
+- `R` rotates the selection 90° CW around the bounding-box centroid of the selected component positions (snapped to 0.25 GU); records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. Connected wires are reshaped or rigidly rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `R` cycles the ghost's rotation instead.
+- Arrow keys nudge selected components by `NUDGE_GU` (0.25 GU, one minor-grid cell) per keypress, in any direction. Connected wires follow (§6.6) and stay grid-valid.
 - `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
 
 ### 6.4 Wire Routing
@@ -851,12 +901,12 @@ degenerate zero-length wire is created). A committed wire is recorded as a
 
 #### Snapping
 
-The snapped cursor target is resolved (within `PIN_SNAP_GU` = 0.25 GU) with this priority:
+The snapped cursor target is resolved (within `PIN_SNAP_GU` = 0.125 GU) with this priority:
 
 1. **Component pin** — connects to the pin.
 2. **Existing wire vertex** — connects to that wire, forming a junction.
 3. **Point on an existing wire segment** — connects mid-segment (see "Junctions and segment splitting").
-4. Otherwise the bare **0.5 GU grid node** under the cursor.
+4. Otherwise the bare **0.25 GU grid node** under the cursor.
 
 Priorities 1–3 are **connectable** targets; the ghost's end marker distinguishes
 a connectable snap (ring) from a plain grid-node anchor (dot), and connectable
@@ -865,9 +915,9 @@ targets are what finalize the wire.
 #### Finalizing and mode transitions
 
 - In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
-- In **Select** mode, **double-clicking on a wire** (segment body or existing vertex) auto-switches to **Wire** mode and begins routing from the clicked point. The start point snaps to the nearest wire vertex (within `PIN_SNAP_GU`) or the nearest point on a wire segment (projected to the segment, grid-snapped to 0.5 GU). Any split needed by the connecting wire is applied automatically when the new wire is committed. The wire check takes priority over the component double-click check so that wires near or inside a component's bounding box remain reachable.
+- In **Select** mode, **double-clicking on a wire** (segment body or existing vertex) auto-switches to **Wire** mode and begins routing from the clicked point. The start point snaps to the nearest wire vertex (within `PIN_SNAP_GU`) or the nearest point on a wire segment (projected to the segment, grid-snapped to 0.25 GU). Any split needed by the connecting wire is applied automatically when the new wire is committed. The wire check takes priority over the component double-click check so that wires near or inside a component's bounding box remain reachable.
 - A wire that terminates on a **connectable** target — a pin, an existing wire vertex, or a wire segment — finalizes and returns to **Select** mode.
-- In **Select** mode, a **double-click on blank canvas** (no wire or component hit) also enters **Wire** mode, starting a free wire from the snapped 0.5 GU grid point.
+- In **Select** mode, a **double-click on blank canvas** (no wire or component hit) also enters **Wire** mode, starting a free wire from the snapped 0.25 GU grid point.
 - A **double-click** on an empty grid node finalizes the wire (its end becomes an open `ocirc` endpoint) but **stays in Wire** mode so the user can immediately draw another wire.
 
 #### Junctions and segment splitting
@@ -949,7 +999,7 @@ Notes:
 - `SplitWireCommand` replaces a wire with two independent halves when another wire connects mid-segment; it is normally bundled with the triggering `WireCommand` / `MoveWireVertexCommand` in a `MacroCommand` so the connection is one undoable action (see §6.4).
 - `MergeWireCommand` merges two wire stubs that share a free endpoint into one wire; it is bundled after a `DeleteCommand` inside a `MacroCommand` when the deletion dissolves a T-junction (see §6.4).
 - `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
-- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.5 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`. If a boundary wire's reshape collapses it to a single point (its moving end folds onto its fixed end), the wire is **removed** rather than left as a degenerate single-point wire — and `undo` re-adds it (same guard `MoveCommand` applies to wire-following).
+- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.25 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`. If a boundary wire's reshape collapses it to a single point (its moving end folds onto its fixed end), the wire is **removed** rather than left as a degenerate single-point wire — and `undo` re-adds it (same guard `MoveCommand` applies to wire-following).
 
 ### 6.7 Copy / Paste
 
@@ -1012,11 +1062,30 @@ Each two-terminal component with origin at `(x0, y0)` and terminal pin at `(x1, 
 (x0, y0) to[KIND, LABELS] (x1, y1)
 ```
 
-Where `OPTIONS` is the component's raw options string passed verbatim, e.g.:
+Where `OPTIONS` is the component's options string, e.g.:
 
 ```latex
 (0,0) to[R, l=$R_1$, v=$V_R$] (2,0)
 ```
+
+**Comma protection.** The options string is mostly passed through verbatim, but
+each `key=value` label slot whose *value* contains a comma is brace-wrapped
+(`v=$\phi(0,0)$` → `v={$\phi(0,0)$}`) by `protect_label_commas()` (in
+`app/components/style.py`). TikZ's pgfkeys parser splits the `to[]`/`node[]`
+option list on commas and — unlike the canvas parser — does **not** treat
+`$...$` as protecting them, so an unwrapped comma inside a math label would be
+read as a bogus key and fail compilation. Values already enclosed in a single
+`{...}` group are left untouched. The shared `split_top_level()` splitter
+(commas not inside `$...$`/`{...}` or escaped) is the single source of truth for
+this, used by both the code generator and the canvas label parser (§5.8).
+
+**Diode scale.** When the schematic contains any diode-family component
+(`D`/`zD`/`sD`/`tD`/`zzD`/`leD`), the generator emits a picture-scoped
+`\ctikzset{diodes/scale=0.8}` as the first line inside `\begin{circuitikz}` (the
+factor is `DIODE_SYMBOL_SCALE`). This shrinks CircuiTikZ's oversized default
+diode to match the canvas SVGs (§5.3) and the user's exported snippet alike;
+being inside the environment's group it never leaks into the user's other
+figures. The line is omitted entirely when no diode is present.
 
 #### Multi-Terminal Components (Tripoles)
 
@@ -1595,20 +1664,16 @@ iconset, so the icon is never distorted. (After replacing the icon you may need
 to clear the macOS icon cache — e.g. relaunch the Dock — to see the change on an
 already-seen bundle.)
 
-**Runtime resources.** Two resource sets are read at runtime and must be
-bundled: `assets/icon.png`, and the whole `tools/circuitikz_svgs/` tree. The
-tree's `manifest.json` holds the baked-in stroke geometry, **and** `svgsym.py`
-reads the original per-symbol `.svg` files to reconstruct glyph marks — the
-`+`/`−` of a voltage/controlled source, op-amp labels, etc. — that the manifest
-records only as opaque `<use>` references. Bundling just `manifest.json` drops
-those marks in the frozen app (they render fine from a source checkout because
-the `.svg` files are on disk), so the spec bundles the entire directory. Because
-a frozen app cannot resolve `__file__`-relative paths the way a source checkout
-does, all three call sites (`main.py`, `app/ui/mainwindow.py`,
-`app/canvas/style.py`) go through `resource_path()` in `app/resources.py`, which
-roots paths at `sys._MEIPASS` when frozen and at the project root otherwise.
-`svgsym.py` finds the `.svg` files relative to `MANIFEST_PATH`, so they must be
-co-located with `manifest.json` (the `datas` entry preserves that layout).
+**Runtime resources.** Two resources are read at runtime and must be bundled:
+`assets/icon.png`, and `tools/circuitikz_svgs/manifest.json`. The manifest is
+**self-contained** — it bakes in every symbol's geometry, including the resolved
+`+`/`−` glyph marks (as `glyphs` entries with a baked affine matrix; see §5.3),
+so `svgsym.py` reads only the manifest and never touches the `.svg` files. The
+intermediate `.svg` files are build artifacts and are **not** bundled. Because a
+frozen app cannot resolve `__file__`-relative paths the way a source checkout
+does, all call sites (`main.py`, `app/ui/mainwindow.py`, `app/canvas/style.py`)
+go through `resource_path()` in `app/resources.py`, which roots paths at
+`sys._MEIPASS` when frozen and at the project root otherwise.
 
 **Not bundled.** `pdflatex` (with `circuitikz`) remains an external
 user-installed dependency (§8.4) — bundling a TeX distribution is impractical.
@@ -1749,8 +1814,9 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 | `test_component_valid` | A `Component` with a known `kind`, valid rotation, and valid position passes `validate()` with no errors. |
 | `test_component_invalid_kind` | A `Component` with a `kind` not in `REGISTRY` produces a validation error. |
 | `test_component_invalid_rotation` | A `Component` with rotation `45` produces a validation error. |
-| `test_wire_valid` | A `Wire` with a valid Manhattan path on 0.5 GU boundaries passes validation. |
-| `test_wire_off_grid` | A `Wire` with a vertex at `(0.3, 0.0)` produces a validation error. |
+| `test_wire_valid` | A `Wire` with a valid Manhattan path on 0.25 GU boundaries passes validation. |
+| `test_wire_off_grid` | A `Wire` with a vertex off the 0.25 GU grid (e.g. `(0.3, 0.0)`) produces a validation error. |
+| `test_wire_on_quarter_grid_is_valid` | Vertices on the 0.25 GU grid (e.g. a 0.25-nudged pin at y=0.25) validate (§3.1). |
 | `test_wire_diagonal` | A `Wire` with a diagonal segment produces a validation error. |
 | `test_schematic_duplicate_ids` | A `Schematic` with two components sharing the same `id` produces a validation error. |
 | `test_schematic_empty_valid` | An empty `Schematic` (no components, no wires) passes validation. |
@@ -1761,11 +1827,14 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 |------|-------------|
 | `test_resistor_horizontal` | A single resistor at (0,0), rotation 0, no labels → produces `(0,0) to[R] (2,0)`. |
 | `test_resistor_with_options` | A resistor with `options="l=$R_1$, v=$V$"` → produces `to[R, l=$R_1$, v=$V$]`. |
+| `test_label_value_with_comma_is_brace_protected` / `test_comma_free_label_value_left_unwrapped` | A label value containing a comma is brace-wrapped (`v=$\phi(0,0^+)$` → `v={$\phi(0,0^+)$}`) so pgfkeys does not mis-split the option list; comma-free values are emitted verbatim (regression). |
+| `test_protect_label_commas_unit` | `protect_label_commas()` wraps only comma-bearing values, leaves already-braced groups and comma-free flags untouched, and is a no-op on empty input. |
 | `test_resistor_rotated_90` | A resistor at (0,0), rotation 90 → origin and terminal pins are correctly rotated; output uses correct coordinates. |
 | `test_capacitor_horizontal` | A capacitor at (2,0), rotation 0 → produces `(2,0) to[C] (4,0)`. |
 | `test_inductor_horizontal` | An inductor at (0,0), rotation 0 → produces `(0,0) to[L] (2,0)`. |
 | `test_diode_horizontal` | A diode at (0,0), rotation 0 → produces `(0,0) to[D] (2,0)`. |
 | `test_diode_filled` | A diode with `filled=True` → produces `(0,0) to[D*] (2,0)`. |
+| `test_diode_emits_picture_scoped_scale` / `test_no_diode_scale_without_diodes` | A schematic with a diode emits `\ctikzset{diodes/scale=0.8}` as the first line inside `\begin{circuitikz}`; schematics without any diode omit it. |
 | `test_zener_diode` | A `zD` component → produces `(0,0) to[zD] (2,0)`. |
 | `test_zener_diode_filled` | A `zD` with `filled=True` → produces `(0,0) to[zD*] (2,0)`. |
 | `test_led` | A `leD` component → produces `(0,0) to[leD] (2,0)`. |
@@ -1911,7 +1980,7 @@ On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests alway
 
 #### Symbol Geometry (`test_svgsym.py`)
 
-`symbol_paths` glyph reconstruction: the controlled-source `.svg` (carrying its `+`/`−` glyphs) is findable; every path returned for `cV` has real geometry (no unresolved `<use>` glyph-ref leaks through as an empty path); a glyph-bearing kind (`cV`) returns strictly more paths than a glyph-free one (`R`); and a plain symbol still renders its strokes. Guards against the `+`/`−` marks silently disappearing (which also manifested as a packaging bug when the `.svg` files were not bundled — see §11.1).
+`symbol_paths` glyph reconstruction (from the **self-contained** manifest, §5.3): `test_manifest_is_self_contained_for_glyph_kind` — `cV`'s `+`/`−` marks are baked into the manifest's `glyphs` list (real path `d` + a 6-element affine `matrix`), so no `.svg` access is needed at run time; every path returned for `cV` has real geometry (no unresolved glyph-ref leaks through as an empty path); a glyph-bearing kind (`cV`) returns strictly more paths than a glyph-free one (`R`); and a plain symbol still renders its strokes. Guards against the `+`/`−` marks silently disappearing. **Fill rule** (§5.2): `test_filled_diode_body_is_filled` — the filled diode `D*` has a filled body path while plain `D` does not (so toggling the filled option visibly updates the canvas); `test_stroke_only_symbols_not_filled` — pure outline symbols (`L`/`C`/`R`) have no filled paths, guarding the rule against over-filling stroked bodies.
 
 #### Preferences (`test_preferences.py`)
 
@@ -1937,8 +2006,8 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 | `test_undo_edit_label` | Editing a label then calling undo restores the previous label value. |
 | `test_undo_stack_depth` | Performing 20 sequential operations then undoing all 20 returns the schematic to its original empty state. |
 | `test_source_reflects_scene` | After placing a component, `generate()` of the scene's model contains the expected CircuiTikZ keyword (proxy for the Phase-9 source panel). |
-| `test_snap_to_grid` | A component dragged to a position between grid points snaps to the nearest 0.5 GU point on release. |
-| `test_component_drag_snaps_to_grid_mid_drag` | Component item position is snapped to 0.5 GU on every mouse-move during a drag, not only on release (regression: previously the visual was unsnapped mid-drag). |
+| `test_snap_to_grid` | A component placed/dragged between grid points snaps to the nearest 0.25 GU point. |
+| `test_component_drag_snaps_to_grid_mid_drag` | Component item position is snapped to 0.25 GU on every mouse-move during a drag, not only on release (regression: previously the visual was unsnapped mid-drag). |
 | `test_pin_snap` | Beginning a wire near a pin snaps the wire start point to the exact pin coordinates. |
 | `test_component_survives_repeated_moves` | A component dragged multiple times in succession stays visible and position-synced (regression: item reconciliation, not destroy/recreate). |
 | `test_items_movable_only_in_select_mode` | Component drag/selection is enabled only in Select mode. |
@@ -1974,15 +2043,15 @@ The following criteria define v1 completion. Each must be verified manually by t
 #### AC-1: Component Placement
 - [ ] All 13 v1 component types appear in the palette, grouped by category.
 - [ ] Each component can be placed on the canvas by clicking the palette entry and clicking the canvas.
-- [ ] Placed components snap to the 0.5 GU grid visibly and consistently.
+- [ ] Placed components snap to the 0.25 GU grid visibly and consistently.
 - [ ] A ghost preview follows the cursor during placement.
 - [ ] Pressing `Escape` cancels placement without modifying the schematic.
 
 #### AC-2: Canvas Interaction
 - [ ] Components can be selected by clicking and deselected by clicking elsewhere.
 - [ ] Multiple components can be selected with rubber-band drag and `Ctrl+click`.
-- [ ] Selected components can be moved by dragging; movement snaps to 0.5 GU.
-- [ ] Arrow key nudging moves selected components by 0.5 GU per keypress.
+- [ ] Selected components can be moved by dragging; movement snaps to 0.25 GU.
+- [ ] Arrow key nudging moves selected components by 0.25 GU per keypress, in any direction.
 - [ ] Delete key removes selected components and their connected wires.
 - [ ] Canvas pan and zoom work via scroll wheel and middle-mouse drag.
 - [ ] "Fit to schematic" correctly frames all placed components.

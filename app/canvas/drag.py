@@ -390,6 +390,14 @@ class DragPreviewController:
             item = scene._comp_items.get(cid)
             if item is None:
                 continue
+            # A plain click leaves the item exactly at its start position (no
+            # mouseMove fired, so it was never live-snapped). Skip it so a click
+            # pushes no spurious zero-distance move. Only a real drag snaps to
+            # the 0.25 grid (§3.1).
+            raw = scene_to_gu(item.pos())
+            if _round_pt(raw) == _round_pt(start):
+                item.setPos(gu_to_scene(*start))  # guard against float drift
+                continue
             new_gu = snap_point_gu(item.pos())
             # Reset the item to its model position; the command moves it.
             item.setPos(gu_to_scene(*start))

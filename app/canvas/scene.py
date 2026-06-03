@@ -16,11 +16,11 @@ Interaction modes (spec §6.1), mutually exclusive:
 
 Coordinate systems
 ------------------
-* **Schematic coords** (GU): what the model stores. Snap granularity 0.5 GU.
+* **Schematic coords** (GU): what the model stores. Snap granularity 0.25 GU.
 * **Scene/pixel coords**: schematic coords × ``GRID_PX``. All items live here.
 
 Helpers :meth:`scene_to_gu` / :meth:`gu_to_scene` convert between them, and
-:meth:`snap_gu` rounds to the nearest 0.5 GU.
+:meth:`snap_gu` rounds to the nearest 0.25 GU.
 """
 
 from __future__ import annotations
@@ -67,7 +67,6 @@ from app.canvas.items import (
     _SlotLabel,
 )
 from app.canvas.geometry import (
-    SNAP_GU,
     gu_to_scene as _gu_to_scene,
     scene_to_gu as _scene_to_gu,
     snap_gu as _snap_gu,
@@ -95,11 +94,12 @@ from app.schematic.model import (
 # Constants
 # ---------------------------------------------------------------------------
 
-# Snap / proximity constants live in app.canvas.geometry. SNAP_GU is imported
-# above for drawBackground; the wire-snap radii are used by WireGeometry.
+# Snap / proximity constants live in app.canvas.geometry; the wire-snap radii
+# are used by WireGeometry.
 
 _GRID_NORMAL = QColor("#FFD0D0D0")   # integer grid lines
-_GRID_SUB = QColor("#22808080")      # 0.5 GU sub-grid lines (reduced opacity)
+_GRID_SUB = QColor("#22808080")      # 0.5 GU midline (reduced opacity)
+_GRID_SUB_FINE = QColor("#11808080")  # 0.25/0.75 GU minor lines (faintest)
 
 _LABEL_CLEARANCE = 6  # px gap used by auto-placement candidates (§8.3)
 
@@ -254,7 +254,7 @@ class SchematicScene(QGraphicsScene):
     # so existing callers (event handlers, tests) use the same names.
     @staticmethod
     def snap_gu(value: float) -> float:
-        """Round a GU value to the nearest 0.5 GU."""
+        """Round a GU value to the nearest 0.25 GU."""
         return _snap_gu(value)
 
     @staticmethod
@@ -725,7 +725,7 @@ class SchematicScene(QGraphicsScene):
 
         # Centroid = bounding-box centre of selected component positions,
         # or wire vertices if only wires are selected.
-        # Snapped to 0.5 GU so rotated positions stay on the grid.
+        # Snapped to 0.25 GU so rotated positions stay on the grid.
         def _snap(v: float) -> float:
             return round(v * 2) / 2
 
@@ -881,7 +881,12 @@ class SchematicScene(QGraphicsScene):
         self._ghost.setPos(pos)
 
     def nudge_selected(self, dx_gu: float, dy_gu: float) -> None:
-        """Move selected components by a delta via MoveCommand (arrow keys)."""
+        """Move selected components by a delta via MoveCommand (arrow keys).
+
+        On the 0.25 GU grid a one-cell nudge in any direction keeps connected
+        wires grid-valid (an auto-elbow lands on a 0.25 node), so no direction
+        needs special handling (spec §3.1).
+        """
         ids = self.selected_component_ids()
         if not ids:
             return
@@ -1533,20 +1538,23 @@ class SchematicScene(QGraphicsScene):
 
         left = int(rect.left()) - (int(rect.left()) % int(GRID_PX))
         top = int(rect.top()) - (int(rect.top()) % int(GRID_PX))
-        half = GRID_PX * SNAP_GU
 
-        # Sub-grid (0.5 GU) — faint.
-        sub_pen = QPen(_GRID_SUB)
-        sub_pen.setWidth(0)
-        painter.setPen(sub_pen)
-        x = left
-        while x < rect.right():
-            painter.drawLine(QPointF(x + half, rect.top()), QPointF(x + half, rect.bottom()))
-            x += GRID_PX
-        y = top
-        while y < rect.bottom():
-            painter.drawLine(QPointF(rect.left(), y + half), QPointF(rect.right(), y + half))
-            y += GRID_PX
+        # Minor grid: lines at every 0.25 GU within each integer cell. The 0.5
+        # midline is drawn a touch stronger than the 0.25/0.75 lines so the
+        # unit cell stays readable on the denser lattice.
+        for frac in (0.25, 0.5, 0.75):
+            pen = QPen(_GRID_SUB if frac == 0.5 else _GRID_SUB_FINE)
+            pen.setWidth(0)
+            painter.setPen(pen)
+            off = GRID_PX * frac
+            x = left
+            while x < rect.right():
+                painter.drawLine(QPointF(x + off, rect.top()), QPointF(x + off, rect.bottom()))
+                x += GRID_PX
+            y = top
+            while y < rect.bottom():
+                painter.drawLine(QPointF(rect.left(), y + off), QPointF(rect.right(), y + off))
+                y += GRID_PX
 
         # Integer grid — normal weight.
         main_pen = QPen(_GRID_NORMAL)

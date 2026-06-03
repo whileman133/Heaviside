@@ -70,6 +70,33 @@ def test_resistor_with_options() -> None:
     assert "to[R, l=$R_1$, v=$V$]" in src
 
 
+def test_label_value_with_comma_is_brace_protected() -> None:
+    """A label value containing a comma is wrapped in braces so pgfkeys does not
+    mis-split the to[] option list into bogus keys (regression)."""
+    comp = _comp("cV", options=r"v=$\phi(0,0^+)$")
+    src = generate(_schematic(comp))
+    assert r"to[cV, v={$\phi(0,0^+)$}]" in src
+
+
+def test_comma_free_label_value_left_unwrapped() -> None:
+    """Values without commas are emitted verbatim (no needless braces)."""
+    comp = _comp("R", options="l=$R_1$")
+    src = generate(_schematic(comp))
+    assert "to[R, l=$R_1$]" in src
+
+
+def test_protect_label_commas_unit() -> None:
+    """protect_label_commas wraps only comma-bearing values, idempotently."""
+    from app.components.style import protect_label_commas as p
+
+    assert p(r"v=$\phi(0,0)$") == r"v={$\phi(0,0)$}"
+    assert p("l=$R_1$") == "l=$R_1$"                      # no comma → untouched
+    assert p(r"l=$R$, v=$\phi(0,1)$") == r"l=$R$, v={$\phi(0,1)$}"
+    assert p(r"v={$\phi(0,0)$}") == r"v={$\phi(0,0)$}"    # already a brace group
+    assert p("mirror, scale=2") == "mirror, scale=2"      # flags unaffected
+    assert p("") == ""
+
+
 # ---------------------------------------------------------------------------
 # test_resistor_rotated_90
 # ---------------------------------------------------------------------------
@@ -120,6 +147,23 @@ def test_diode_filled() -> None:
     comp = DiodeComponent(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", filled=True)
     src = generate(_schematic(comp))
     assert "(0,0) to[D*] (2,0)" in src
+
+
+def test_diode_emits_picture_scoped_scale() -> None:
+    """A schematic containing a diode emits a picture-scoped `diodes/scale`
+    inside the environment so the (large) default diode body is shrunk to match
+    the canvas SVGs; the line sits right after `\\begin{circuitikz}`."""
+    src = generate(_schematic(_comp("D")))
+    assert r"\ctikzset{diodes/scale=0.8}" in src
+    lines = [ln.strip() for ln in src.splitlines()]
+    i = lines.index(r"\begin{circuitikz}")
+    assert lines[i + 1] == r"\ctikzset{diodes/scale=0.8}"
+
+
+def test_no_diode_scale_without_diodes() -> None:
+    """Schematics with no diode-family component omit the diodes/scale line."""
+    src = generate(_schematic(_comp("R"), _comp("C", position=(4.0, 0.0))))
+    assert "diodes/scale" not in src
 
 
 def test_zener_diode() -> None:

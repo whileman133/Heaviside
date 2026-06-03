@@ -7,7 +7,7 @@ isolation without a ``QGraphicsScene`` or a running ``QApplication``.
 
 Two coordinate systems are in play (see :mod:`app.canvas.scene`):
 
-* **Schematic coords** (GU): what the model stores. Snap granularity 0.5 GU.
+* **Schematic coords** (GU): what the model stores. Snap granularity 0.25 GU.
 * **Scene/pixel coords**: GU × ``GRID_PX``. All graphics items live here.
 """
 
@@ -21,16 +21,22 @@ from app.canvas.style import GRID_PX
 # Snap / proximity constants (spec §3.1, §6.4)
 # ---------------------------------------------------------------------------
 
-SNAP_GU: float = 0.5
-"""Half-grid snap granularity (spec §3.1)."""
+SNAP_GU: float = 0.25
+"""Grid snap granularity — the minor grid (spec §3.1). Components, wire vertices,
+and junctions all live on this 0.25 GU lattice."""
 
-PIN_SNAP_GU: float = 0.25
+NUDGE_GU: float = 0.25
+"""Arrow-key nudge step (one minor-grid cell)."""
+
+# Proximity radii are kept below half the grid spacing (0.125 GU) so a click is
+# never ambiguous between two adjacent 0.25 GU nodes.
+PIN_SNAP_GU: float = 0.125
 """Wire endpoints snap to a pin within this radius (spec §6.4)."""
 
-VERTEX_HIT_GU: float = 0.3
+VERTEX_HIT_GU: float = 0.15
 """A wire vertex is grabbable for dragging within this radius of the cursor."""
 
-PIN_GRAB_GU: float = 0.3
+PIN_GRAB_GU: float = 0.15
 """Auto-start a wire only when the click is within this radius of a free pin."""
 
 
@@ -39,7 +45,7 @@ PIN_GRAB_GU: float = 0.3
 # ---------------------------------------------------------------------------
 
 def snap_gu(value: float) -> float:
-    """Round a GU value to the nearest 0.5 GU."""
+    """Round a GU value to the nearest grid node (SNAP_GU = 0.25)."""
     return round(value / SNAP_GU) * SNAP_GU
 
 
@@ -54,7 +60,7 @@ def gu_to_scene(x: float, y: float) -> QPointF:
 
 
 def snap_point_gu(pt: QPointF) -> tuple[float, float]:
-    """Convert a scene point to GU and snap to the nearest 0.5 GU node."""
+    """Convert a scene point to GU and snap to the nearest 0.25 GU node."""
     x, y = scene_to_gu(pt)
     return (snap_gu(x), snap_gu(y))
 

@@ -313,7 +313,7 @@ _NPN = ComponentDef(
     display_name="NPN BJT",
     category="Tripoles",
     # Anchor = base pin.  Measured from re-exported SVG with grid-aligned leads
-    # (tools/export_circuitikz_svgs.sh TRIPOLE_LEADS[npn]):
+    # (the npn lead routing in tools/export_circuitikz_svgs.py):
     #   base (0,0), collector (1.013,-1.0)→(1.0,-1.0), emitter (1.013,1.0)→(1.0,1.0)
     # x-error 0.013 GU ≈ 0.8 px — sub-pixel, no scale correction applied.
     bbox=(0.0, -1.1, 1.1, 1.1),

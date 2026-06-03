@@ -8,7 +8,7 @@ Responsibilities:
   * Translating key presses into scene mode changes / commands:
         W        → wire mode
         Escape   → cancel / select mode
-        arrows   → nudge selection by 0.5 GU
+        arrows   → nudge selection by 0.25 GU (one minor-grid cell)
         Del/Bksp → delete selection
         Ctrl+Z / Ctrl+Shift+Z → undo / redo
   * Reporting the live zoom level via the ``zoom_changed`` signal.
@@ -23,6 +23,7 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QGraphicsView
 
+from app.canvas.geometry import NUDGE_GU
 from app.canvas.items import LabelTextItem
 from app.canvas.scene import Mode, SchematicScene
 
@@ -226,12 +227,13 @@ class SchematicView(QGraphicsView):
             event.accept()
             return
 
-        # Arrow-key nudge by 0.5 GU.
+        # Arrow-key nudge by one minor-grid cell (NUDGE_GU = 0.25) in any
+        # direction; connected wires follow and stay grid-valid (spec §3.1).
         nudges = {
-            Qt.Key_Left: (-0.5, 0.0),
-            Qt.Key_Right: (0.5, 0.0),
-            Qt.Key_Up: (0.0, -0.5),
-            Qt.Key_Down: (0.0, 0.5),
+            Qt.Key_Left: (-NUDGE_GU, 0.0),
+            Qt.Key_Right: (NUDGE_GU, 0.0),
+            Qt.Key_Up: (0.0, -NUDGE_GU),
+            Qt.Key_Down: (0.0, NUDGE_GU),
         }
         if key in nudges and self._scene.selected_component_ids():
             dx, dy = nudges[key]

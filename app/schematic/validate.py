@@ -16,9 +16,9 @@ from app.schematic.model import Schematic
 _VALID_ROTATIONS = {0, 90, 180, 270}
 
 
-def _is_on_half_grid(value: float) -> bool:
-    """Return True if value is a multiple of 0.5."""
-    return (value * 2) == int(value * 2)
+def _is_on_grid(value: float) -> bool:
+    """Return True if value is a multiple of the 0.25 GU grid (spec §3.1)."""
+    return (value * 4) == int(value * 4)
 
 
 def validate(schematic: Schematic) -> list[str]:
@@ -49,13 +49,15 @@ def validate(schematic: Schematic) -> list[str]:
             )
 
     # ------------------------------------------------------------------
-    # Invariant 3: all Wire.points vertices lie on 0.5 GU boundaries
+    # Invariant 3: all Wire.points vertices lie on 0.25 GU boundaries.
+    # Every pin offset is a multiple of 0.25 and components snap to the 0.25
+    # grid, so a wire endpoint that follows a moved pin stays on grid (spec §3.1).
     # ------------------------------------------------------------------
     for wire in schematic.wires:
         for i, (x, y) in enumerate(wire.points):
-            if not _is_on_half_grid(x) or not _is_on_half_grid(y):
+            if not _is_on_grid(x) or not _is_on_grid(y):
                 errors.append(
-                    f"Wire '{wire.id}': point[{i}] ({x}, {y}) is not on a 0.5 GU boundary"
+                    f"Wire '{wire.id}': point[{i}] ({x}, {y}) is not on a 0.25 GU boundary"
                 )
 
     # ------------------------------------------------------------------

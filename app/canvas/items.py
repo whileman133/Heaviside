@@ -52,6 +52,7 @@ from app.canvas.style import (
     GRID_PX,
     LINE_W,
     LINE_W_THICK,
+    OPEN_ANNOTATION_OPACITY,
     PIN_R,
 )
 from app.canvas.svgsym import is_thick, symbol_paths
@@ -102,6 +103,14 @@ _LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
 # Current annotations (`i=`) hug the wire (lead axis) instead of clearing the
 # whole body, matching where CircuiTikZ draws the current label.
 _CURRENT_GAP = 3.0
+# Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
+# annotation line does not appear to run into the text.
+_LABEL_BG_PAD = 3.0
+# Voltage sources whose default (unsuffixed) `v=` label sits on the opposite
+# side from passives — CircuiTikZ's source voltage convention (see
+# ComponentItem._slot_direction).  Current sources (I/cI/isourcesin) follow the
+# passive default and are NOT listed.
+_VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
 
 # Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
 # uses the first installed face, so at least one matches on any platform.
@@ -366,6 +375,7 @@ class _SlotLabel(QGraphicsItem):
         self._base_dist = 0.0                 # clearance from centre along _dir
         self._step = 0.0                      # stacking offset along _dir
         self._inv = QTransform()              # screen-rel -> parent-local
+        self._centered = False                # centre on the axis vs. beside it
 
     def configure(
         self,
@@ -375,13 +385,20 @@ class _SlotLabel(QGraphicsItem):
         base_dist: float,
         step: float,
         inv: QTransform,
+        centered: bool = False,
     ) -> None:
-        """Set this slot's text and screen-space offset direction/placement."""
+        """Set this slot's text and screen-space offset direction/placement.
+
+        When ``centered`` is set the label centre is pinned to ``center_rel``
+        (offset only by ``step`` for stacking), so it sits *over* the axis
+        rather than clearing it by half the label's extent.
+        """
         self._dir = direction
         self._center_rel = center_rel
         self._base_dist = base_dist
         self._step = step
         self._inv = inv
+        self._centered = centered
         if fragment != (self._fragment or ""):
             self._fragment = fragment or None
             if not fragment:
@@ -411,7 +428,9 @@ class _SlotLabel(QGraphicsItem):
         u = self._dir
         # The upright label's half-extent along the offset direction.
         label_half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
-        dist = self._base_dist + label_half + self._step
+        # Centred labels sit on the axis (no half-extent clearance); otherwise
+        # clear the body/centre by the label's half-extent plus the base gap.
+        dist = self._step if self._centered else self._base_dist + label_half + self._step
         # Label centre, screen-relative to the item origin.
         cx = self._center_rel.x() + u.x() * dist
         cy = self._center_rel.y() + u.y() * dist
@@ -419,14 +438,17 @@ class _SlotLabel(QGraphicsItem):
         anchor = QPointF(cx - w / 2.0, cy - r.center().y() * s)
         self.setPos(self._inv.map(anchor))
 
+    def _scaled_rect(self) -> QRectF:
+        """The rendered glyph bounds in item-local px (path bounds × scale)."""
+        r = self._path.boundingRect()
+        s = _VEC_SCALE
+        return QRectF(r.left() * s, r.top() * s, r.width() * s, r.height() * s)
+
     def boundingRect(self) -> QRectF:  # noqa: N802
         if self._path is None:
             return QRectF()
-        r = self._path.boundingRect()
-        s = _VEC_SCALE
-        return QRectF(
-            r.left() * s, r.top() * s, r.width() * s, r.height() * s
-        ).adjusted(-1.0, -1.0, 1.0, 1.0)
+        pad = _LABEL_BG_PAD if self._centered else 1.0
+        return self._scaled_rect().adjusted(-pad, -pad, pad, pad)
 
     def hoverEnterEvent(self, event) -> None:  # noqa: N802
         parent = self.parentItem()
@@ -446,6 +468,16 @@ class _SlotLabel(QGraphicsItem):
         parent = self.parentItem()
         color = parent._label_color() if hasattr(parent, "_label_color") else QColor(COLOR_NORMAL)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        # Axis-centred labels (e.g. the voltage annotation) sit on top of the
+        # line, so give them an opaque backdrop with a little padding to keep
+        # the line from appearing to run into the text.
+        if self._centered:
+            painter.fillRect(
+                self._scaled_rect().adjusted(
+                    -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
+                ),
+                QColor("#FFFFFFFF"),
+            )
         painter.save()
         painter.scale(_VEC_SCALE, _VEC_SCALE)
         painter.fillPath(self._path, QBrush(color))
@@ -564,6 +596,15 @@ class ComponentItem(QGraphicsItem):
         self._options_item.setVisible(False)
         self._layout_slots()
 
+    def _labels_centered_on_axis(self) -> bool:
+        """Whether annotation labels sit *over* the lead axis instead of beside it.
+
+        Default: labels clear the body on their conventional side.  Resizable
+        annotation lines (open) override this so the label is centred on the
+        middle of the line, matching where CircuiTikZ places the arrow label.
+        """
+        return False
+
     def _layout_slots(self) -> None:
         """Render each annotation slot on its conventional side of the body.
 
@@ -578,6 +619,7 @@ class ComponentItem(QGraphicsItem):
 
         geom = self._slot_geometry()
         counter = self._label_counter_transform()
+        centered = self._labels_centered_on_axis()
         counts: dict[tuple[float, float], int] = {}
         for idx, item in enumerate(self._slot_items):
             if idx < len(slots):
@@ -588,15 +630,17 @@ class ComponentItem(QGraphicsItem):
                 i = counts.get(dk, 0)
                 counts[dk] = i + 1
                 # Currents hug the wire (lead axis through the centre); other
-                # slots clear the body's perpendicular thickness.
-                base = (
+                # slots clear the body's perpendicular thickness.  When labels
+                # are centred on the axis, there is no clearance — the first
+                # slot sits on the line and any siblings stack off it.
+                base = 0.0 if centered else (
                     _CURRENT_GAP if key.startswith("i")
                     else geom["perp_thickness"] + _LABEL_GAP
                 )
                 item.setTransform(counter)
                 item.configure(
                     latex, direction, geom["center_rel"],
-                    base, _LABEL_LINE_H * i, geom["inv"],
+                    base, _LABEL_LINE_H * i, geom["inv"], centered,
                 )
                 item.setVisible(True)
             else:
@@ -608,22 +652,27 @@ class ComponentItem(QGraphicsItem):
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
 
-        Labels/currents (`l`/`i`/`a`) are placed on the *traversal-relative* side
-        — left of the lead direction for the plain/`^` form, right for the `_`
-        form — matching CircuiTikZ under any rotation. Voltage (`v`) uses the
-        screen-positive perpendicular (down, else right), which reproduces
-        CircuiTikZ's default voltage-label side for both horizontal and vertical
-        elements; `v^` flips it.
+        Every family (`l`/`v`/`i`/`a`) is placed on its *traversal-relative*
+        side: the ``^`` (and default-`l`) form sits left of the lead direction,
+        the ``_`` (and default-`v`) form sits right.  Because the preview's
+        Y-flip makes the rendered PDF a faithful visual match of the canvas, the
+        on-screen left/right side equals the side CircuiTikZ draws the
+        annotation on — for both horizontal and rotated elements alike.
+        :func:`slot_side` encodes the per-family default (`l` above, `v` below)
+        and the ``^``/``_`` overrides.
+
+        Exception: a **voltage source** places its *default* (unsuffixed) ``v``
+        label on the opposite side from passives — CircuiTikZ's source voltage
+        convention (the ``+`` terminal leads).  The explicit ``v^``/``v_`` forms
+        are component-independent, so only the bare ``v`` is flipped.
         """
         from app.preview.mathrender import slot_side
 
         left, right = geom["left"], geom["right"]
-        fam = key[0] if key else "l"
-        suffix = key[-1] if key and key[-1] in "^_" else ""
-        if fam == "v":
-            pos = left if (left.y(), left.x()) >= (right.y(), right.x()) else right
-            return QPointF(-pos.x(), -pos.y()) if suffix == "^" else pos
-        return left if slot_side(key) == "above" else right
+        side = slot_side(key)
+        if key == "v" and self._component.kind in _VOLTAGE_SOURCE_KINDS:
+            side = "above"
+        return left if side == "above" else right
 
     def _lead_terminals_local(self) -> tuple[QPointF, QPointF]:
         """The component's two lead terminals in local px (origin + endpoint).
@@ -903,7 +952,7 @@ class OpAmpItem(ComponentItem):
 
     The op-amp SVG is exported with grid-aligned terminal leads (input +/-,
     output, and vs+/vs- power rails all routed to half-grid points — see
-    ``tools/export_circuitikz_svgs.sh``), so the base ``paint`` renders every
+    ``tools/export_circuitikz_svgs.py``), so the base ``paint`` renders every
     terminal directly onto its registry pin.  No bridging required.
     """
 
@@ -1071,12 +1120,24 @@ class _ResizableTwoTerminalItem(ComponentItem):
 
 
 class OpenItem(_ResizableTwoTerminalItem):
-    """Voltage annotation — dashed line between two resizable endpoints."""
+    """Voltage annotation — translucent line between two resizable endpoints.
+
+    Drawn as a mostly-opaque (translucent) solid line rather than dashed so it
+    is not confused with a dashed wire; the annotation label is centred over
+    the middle of the line (see :meth:`_labels_centered_on_axis`) to mirror the
+    LaTeX output, where the voltage/current arrow sits across the element.
+    """
 
     def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
-        painter.setPen(_pen(color, LINE_W, Qt.DashLine))
+        painter.save()
+        painter.setOpacity(OPEN_ANNOTATION_OPACITY)
+        painter.setPen(_pen(color, LINE_W))
         painter.setBrush(Qt.NoBrush)
         painter.drawLine(QPointF(0.0, 0.0), ep)
+        painter.restore()
+
+    def _labels_centered_on_axis(self) -> bool:
+        return True
 
 
 class ShortItem(_ResizableTwoTerminalItem):
