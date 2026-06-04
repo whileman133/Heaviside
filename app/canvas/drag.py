@@ -36,6 +36,7 @@ from app.canvas.commands import (
     MacroCommand,
     MoveCommand,
     ResizeCommand,
+    reshape_junction_wire,
     reshape_wire_points,
 )
 from app.canvas.geometry import (
@@ -46,12 +47,14 @@ from app.canvas.geometry import (
     world_delta_to_local,
 )
 from app.canvas.items import (
+    JunctionDragItem,
     JunctionItem,
     OpenCircleItem,
     _ResizableTwoTerminalItem,
 )
 from app.schematic.model import (
     NON_CONNECTING_KINDS,
+    component_connection_points,
     component_pin_positions,
     route,
     simplify_points,
@@ -79,9 +82,17 @@ class DragPreviewController:
 
         # Wire-vertex drag: (wire_id, index, original_point_gu) or None.
         self.vertex_drag: tuple[str, int, tuple[float, float]] | None = None
+        # All wire vertices coincident with the grabbed one (a junction), as
+        # [(wire_id, index), ...] — every one moves together so a junction drags
+        # with all its connected wires. A lone vertex is a 1-element group.
+        self.vertex_drag_group: list[tuple[str, int]] = []
         # Snapped cursor position where the vertex grab began, to tell a click
         # (no grid movement → select) from a real drag (→ move the vertex).
         self.vertex_press_gu: tuple[float, float] | None = None
+        # While dragging a junction (group > 1): a highlighted, enlarged dot that
+        # follows the cursor, plus the static junction dot we hid at its origin.
+        self.junction_preview: JunctionDragItem | None = None
+        self._hidden_junction: JunctionItem | None = None
 
         # Endpoint drag for resizable components: (comp_id, handle_index, old_span).
         # handle_index: 0 = origin handle (moves component), 1 = terminal handle.
@@ -128,7 +139,7 @@ class DragPreviewController:
             for comp in self._scene._schematic.components
             if comp.id not in dragged
             and not (connecting_only and comp.kind in NON_CONNECTING_KINDS)
-            for p in component_pin_positions(comp)
+            for p in component_connection_points(comp)
         }
 
     def _endpoint_local_delta(
@@ -182,6 +193,13 @@ class DragPreviewController:
         if abs(dx) < 0.5 and abs(dy) < 0.5:
             return
 
+        # A rect/circle resizes as an anchored scale about its fixed corner, so
+        # its connected wires follow via the same mapping ResizeCommand uses.
+        if comp.kind in ("rect", "circle"):
+            item.set_preview_span((dx, dy))
+            self._preview_box_resize_wires(comp, old_span, (dx, dy))
+            return
+
         # Compute old terminal world position (before preview span is applied).
         ox, oy = comp.position
         old_rx, old_ry = local_span_to_world(old_span, comp.rotation, comp.mirror)
@@ -208,6 +226,57 @@ class DragPreviewController:
                 pts, start_hit=start_hit, end_hit=end_hit,
                 dx=pin_dx, dy=pin_dy,
             )
+            wire_item = self._scene._wire_items.get(wire.id)
+            if wire_item is not None and len(new_pts) >= 2:
+                wire_item.set_preview_points(new_pts)
+
+    def _preview_box_resize_wires(
+        self,
+        comp,  # noqa: ANN001
+        old_span: tuple[float, float],
+        new_span: tuple[float, float],
+    ) -> None:
+        """Live preview of connected wires while a rect/circle is resized.
+
+        Mirrors ``ResizeCommand._reshape_wires_scaled`` but only sets preview
+        points on the wire items; the model is untouched until commit.  Uses the
+        kind's own connection points (rect perimeter / circle cardinal points).
+        """
+        x0, y0 = comp.position
+        odx, ody = old_span
+        ndx, ndy = new_span
+        old_perim = component_connection_points(replace(comp, span_override=old_span))
+
+        def _snap(v: float) -> float:
+            return round(v / 0.25) * 0.25
+
+        def _map(p: tuple[float, float]) -> tuple[float, float]:
+            px, py = p
+            fx = (px - x0) / odx if odx else 0.0
+            fy = (py - y0) / ody if ody else 0.0
+            return (_snap(x0 + fx * ndx), _snap(y0 + fy * ndy))
+
+        for wire in self._scene._schematic.wires:
+            pts = wire.points
+            if len(pts) < 2:
+                continue
+            start_hit = pts[0] in old_perim
+            end_hit = pts[-1] in old_perim
+            if not start_hit and not end_hit:
+                continue
+            new_pts = list(pts)
+            if start_hit:
+                t = _map(new_pts[0])
+                new_pts = reshape_wire_points(
+                    new_pts, start_hit=True, end_hit=False,
+                    dx=t[0] - new_pts[0][0], dy=t[1] - new_pts[0][1],
+                )
+            if end_hit:
+                t = _map(new_pts[-1])
+                new_pts = reshape_wire_points(
+                    new_pts, start_hit=False, end_hit=True,
+                    dx=t[0] - new_pts[-1][0], dy=t[1] - new_pts[-1][1],
+                )
             wire_item = self._scene._wire_items.get(wire.id)
             if wire_item is not None and len(new_pts) >= 2:
                 wire_item.set_preview_points(new_pts)
@@ -243,35 +312,73 @@ class DragPreviewController:
     def preview_vertex_drag(self, gu: tuple[float, float]) -> None:
         """Live visual feedback while dragging a wire vertex (model untouched).
 
-        Repaints the affected wire item with the dragged vertex moved to *gu*,
-        inserting elbows on adjacent segments so the preview stays Manhattan —
-        matching the behaviour of MoveWireVertexCommand. The model is only
-        updated on release.
+        Repaints every wire in the junction group (a lone vertex is a group of
+        one) with its coincident vertex moved to *gu*, inserting elbows on
+        adjacent segments so each preview stays Manhattan — matching
+        MoveWireVertexCommand. The model is only updated on release.
         """
-        wire_id, idx, _orig = self.vertex_drag
-        item = self._scene._wire_items.get(wire_id)
-        if item is None:
-            return
-        pts = list(item.wire.points)
-        if not (0 <= idx < len(pts)):
-            return
-        pts[idx] = gu
-        # Re-route the two segments that touch the moved vertex through the
-        # shared horizontal-first primitive so the preview stays Manhattan
-        # (mirrors MoveWireVertexCommand.do — identical corner convention).
-        rebuilt: list[tuple[float, float]] = []
-        for j, p in enumerate(pts):
-            if j == 0:
-                rebuilt.append(p)
+        group = self.vertex_drag_group or (
+            [(self.vertex_drag[0], self.vertex_drag[1])] if self.vertex_drag else []
+        )
+        is_junction = len(group) > 1
+        previews: dict[str, list[tuple[float, float]]] = {}
+        for wire_id, idx in group:
+            item = self._scene._wire_items.get(wire_id)
+            if item is None:
                 continue
-            prev = pts[j - 1]
-            if j == idx or j - 1 == idx:
-                rebuilt.extend(route(prev, p, vfirst=False)[1:-1])
-            rebuilt.append(p)
-        simplified = simplify_points(rebuilt)
-        item.set_preview_points(simplified)
-        self.update_ocirc_preview({wire_id: simplified})
-        self.update_pin_circle_preview({wire_id: simplified})
+            pts = list(item.wire.points)
+            if not (0 <= idx < len(pts)):
+                continue
+            if is_junction:
+                # Junction drag: keep each wire's orientation into the junction
+                # (mirrors MoveJunctionCommand / reshape_junction_wire).
+                simplified = reshape_junction_wire(pts, idx, gu)
+            else:
+                # Single vertex: plain horizontal-first elbow (mirrors
+                # MoveWireVertexCommand.do).
+                pts[idx] = gu
+                rebuilt: list[tuple[float, float]] = []
+                for j, p in enumerate(pts):
+                    if j == 0:
+                        rebuilt.append(p)
+                        continue
+                    prev = pts[j - 1]
+                    if j == idx or j - 1 == idx:
+                        rebuilt.extend(route(prev, p, vfirst=False)[1:-1])
+                    rebuilt.append(p)
+                simplified = simplify_points(rebuilt)
+            item.set_preview_points(simplified)
+            previews[wire_id] = simplified
+        self.update_ocirc_preview(previews)
+        self.update_pin_circle_preview(previews)
+        # Junction feedback: a highlighted, enlarged dot follows the cursor (and
+        # the resting dot at the junction's origin is hidden) so it's clear the
+        # whole junction — not just one wire end — is being dragged.
+        if is_junction:
+            self._show_junction_preview(gu)
+
+    def _show_junction_preview(self, gu: tuple[float, float]) -> None:
+        scene = self._scene
+        if self.junction_preview is None:
+            self.junction_preview = JunctionDragItem()
+            scene.addItem(self.junction_preview)
+        self.junction_preview.setPos(scene.gu_to_scene(*gu))
+        # Hide the resting junction dot at the drag's origin (if any) so we don't
+        # show a stale dot left behind at the old position.
+        if self._hidden_junction is None and self.vertex_drag is not None:
+            orig = self.vertex_drag[2]
+            dot = scene._junction_items.get(orig)
+            if dot is not None:
+                dot.setVisible(False)
+                self._hidden_junction = dot
+
+    def clear_junction_preview(self) -> None:
+        if self.junction_preview is not None:
+            self._scene.removeItem(self.junction_preview)
+            self.junction_preview = None
+        if self._hidden_junction is not None:
+            self._hidden_junction.setVisible(True)
+            self._hidden_junction = None
 
     # ------------------------------------------------------------------
     # Component drag
@@ -305,7 +412,7 @@ class DragPreviewController:
             )
             if comp is not None:
                 at_start = replace(comp, position=start)
-                for p in component_pin_positions(at_start):
+                for p in component_connection_points(at_start):
                     start_pins.add(_round_pt(p))
 
         if not deltas:
@@ -369,7 +476,7 @@ class DragPreviewController:
                 ddx = cur[0] - start[0]
                 ddy = cur[1] - start[1]
                 at_cur = replace(comp, position=(comp.position[0] + ddx, comp.position[1] + ddy))
-                for p in component_pin_positions(at_cur):
+                for p in component_connection_points(at_cur):
                     dragged_pins.add(_round_pt(p))
 
         self.update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)

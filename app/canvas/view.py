@@ -19,7 +19,7 @@ schematic coordinates; only the view transform changes (spec §3.4).
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QCursor, QPainter
 from PySide6.QtWidgets import QGraphicsView
 
@@ -126,7 +126,14 @@ class SchematicView(QGraphicsView):
             self.reset_zoom()
             self.centerOn(0, 0)
             return
-        rect = self._scene.itemsBoundingRect()
+        # Union only the *drawable* items' scene bounds. Using the scene's
+        # itemsBoundingRect() would include invisible/empty helper items pinned
+        # at the scene origin (hidden label editors, empty wire-label items),
+        # which inflates the rect from the origin to the schematic and makes the
+        # fit zoom way out (regression).
+        rect = QRectF()
+        for it in drawable:
+            rect = rect.united(it.sceneBoundingRect())
         rect = rect.adjusted(-_FIT_MARGIN_PX, -_FIT_MARGIN_PX, _FIT_MARGIN_PX, _FIT_MARGIN_PX)
         self.fitInView(rect, Qt.KeepAspectRatio)
         # Recover the absolute zoom from the resulting transform.

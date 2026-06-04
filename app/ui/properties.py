@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 from app.canvas.scene import SchematicScene
 from app.components.model import (
     BipoleComponent,
+    CircleComponent,
     DiodeComponent,
     DrawingComponent,
     FontedComponent,
@@ -90,6 +91,17 @@ _WIRE_MARKER_OPTIONS: list[tuple[str, str]] = [
 _LABEL_TO_MARKER = {label: kind for label, kind in _WIRE_MARKER_OPTIONS}
 _MARKER_TO_LABEL = {kind: label for label, kind in _WIRE_MARKER_OPTIONS}
 
+# Endpoint-label placement: UI label ↔ Wire.*_label_placement value. The two
+# side options sit beside the wire (perpendicular), tucked at the endpoint: for a
+# horizontal wire that reads as above/below; for a vertical wire as left/right.
+_WIRE_LABEL_PLACEMENT_OPTIONS: list[tuple[str, str]] = [
+    ("Off end",      ""),
+    ("Above / left", "above"),
+    ("Below / right", "below"),
+]
+_LABEL_TO_PLACEMENT = {label: val for label, val in _WIRE_LABEL_PLACEMENT_OPTIONS}
+_PLACEMENT_TO_LABEL = {val: label for label, val in _WIRE_LABEL_PLACEMENT_OPTIONS}
+
 # ── Fill color ──────────────────────────────────────────────────────────────
 _FILL_OPTIONS: list[tuple[str, str]] = [
     ("None",       ""),
@@ -106,6 +118,37 @@ _TIKZ_FILL_TO_LABEL: dict[str, str] = {tikz: label for label, tikz in _FILL_OPTI
 _ROT_BTN_WIDTH = 52
 _Z_ORDER_TOOLTIP = "Negative = behind circuit elements; 0 = default; positive = in front"
 _DEBOUNCE_MS = 300
+
+# Wire hop_mode ↔ tri-state checkbox: dash (partial) = default, empty = never,
+# checked = always.
+_HOP_STATE_TO_MODE = {
+    Qt.PartiallyChecked: "",
+    Qt.Unchecked: "never",
+    Qt.Checked: "always",
+}
+_HOP_MODE_TO_STATE = {mode: state for state, mode in _HOP_STATE_TO_MODE.items()}
+
+
+class _HopModeCheckBox(QCheckBox):
+    """Tri-state checkbox whose click cycles default → never → always.
+
+    Maps `Wire.hop_mode`: partially-checked (dash) = "" (follow the global
+    line-hops preference and z-order), unchecked = "never", checked = "always".
+    The cycle order on click matches that listing (default → no hops → hops).
+    """
+
+    _ORDER = (Qt.PartiallyChecked, Qt.Unchecked, Qt.Checked)
+
+    def __init__(self, text: str, parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setTristate(True)
+
+    def nextCheckState(self) -> None:  # noqa: N802
+        try:
+            i = self._ORDER.index(self.checkState())
+        except ValueError:
+            i = 0
+        self.setCheckState(self._ORDER[(i + 1) % len(self._ORDER)])
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +226,27 @@ def _make_line_edit_row(
         field.textChanged.connect(on_change)
     row.addWidget(field, 1)
     return row, field
+
+
+def _make_line_edit_combo_row(
+    label: str, placeholder: str, items: list[str]
+) -> tuple[QHBoxLayout, QLineEdit, QComboBox]:
+    """Build a ``label: [line edit] [combo]`` row (text + selector side-by-side).
+
+    The caller connects the field's ``editingFinished`` and the combo's
+    ``currentIndexChanged`` itself. The field gets the larger stretch.
+    """
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel(label))
+    field = QLineEdit()
+    field.setPlaceholderText(placeholder)
+    row.addWidget(field, 2)
+    combo = QComboBox()
+    for it in items:
+        combo.addItem(it)
+    row.addWidget(combo, 1)
+    return row, field, combo
 
 
 def _make_double_spin_row(
@@ -434,7 +498,7 @@ class OptionsSection(InspectorSection):
 
 
 class TextContentSection(InspectorSection):
-    """Text content (stored in ``options``) for text_node."""
+    """Text content (stored in ``options``) for text_node and rect."""
 
     title = "Text content"
 
@@ -450,7 +514,7 @@ class TextContentSection(InspectorSection):
         self._timer.timeout.connect(self._commit)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, TextNodeComponent)
+        return isinstance(comp, (TextNodeComponent, RectComponent, CircleComponent))
 
     def _load(self, comp: Component) -> None:
         self._field.blockSignals(True)
@@ -637,26 +701,96 @@ class FillBorderSection(InspectorSection):
 
 
 class WireStyleSection(InspectorSection):
-    """Line style + width for a selected wire.
+    """All properties of a selected wire, grouped into labelled blocks.
 
     Wires are not Components, so this section binds to a wire id explicitly via
-    :meth:`bind_wire` (managed by the panel) rather than the component loop.
+    :meth:`bind_wire` (managed by the panel) rather than the component loop. The
+    panel header already reads "Wire", so this section has no separate title and
+    organises its controls under sub-headers: Line, Endpoint arrows, Endpoint
+    labels, Connection dots.
     """
 
-    title = "Wire style"
+    title = None  # panel header already says "Wire"; use sub-headers below
+
+    _PLACEMENT_TOOLTIP = (
+        "Where the label sits: Off end (beyond the endpoint along the wire), or "
+        "tucked beside the wire at the endpoint — above/below a horizontal wire, "
+        "left/right of a vertical wire."
+    )
 
     def _build(self) -> None:
-        self._ls_row, self._line_style = _make_combo_row(
-            "Line style", [lbl for lbl, _ in _LINE_STYLE_OPTIONS],
+        marker_labels = [lbl for lbl, _ in _WIRE_MARKER_OPTIONS]
+        placement_labels = [lbl for lbl, _ in _WIRE_LABEL_PLACEMENT_OPTIONS]
+
+        # The line-style combo and width spinbox debounce; labels commit on
+        # editingFinished (Enter / focus-out), and combos/checkboxes immediately.
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+        # — Line —
+        self.body.addWidget(_make_section_label("Line"))
+        ls_row, self._line_style = _make_combo_row(
+            "Style", [lbl for lbl, _ in _LINE_STYLE_OPTIONS],
             lambda _i: self._timer.start(),
         )
-        self.body.addLayout(self._ls_row)
-
+        self.body.addLayout(ls_row)
         lw_row, self._width = _make_double_spin_row(
-            "Line width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
+            "Width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
         )
         self.body.addLayout(lw_row)
 
+        # — Endpoint arrows —
+        self.body.addWidget(_make_section_label("Endpoint arrows"))
+        start_row, self._start_marker = _make_combo_row(
+            "Start", marker_labels, lambda _i: self._on_start_marker()
+        )
+        self.body.addLayout(start_row)
+        end_row, self._end_marker = _make_combo_row(
+            "End", marker_labels, lambda _i: self._on_end_marker()
+        )
+        self.body.addLayout(end_row)
+        for combo in (self._start_marker, self._end_marker):
+            combo.setToolTip(
+                "Arrowhead/terminal at this wire end — independent of the "
+                "automatic junction/termination dots. Use Arrow for block "
+                "diagrams. Tab on the canvas cycles it (incl. ends on a rect/"
+                "circle)."
+            )
+
+        # — Endpoint labels — (text + position selector side-by-side)
+        self.body.addWidget(_make_section_label("Endpoint labels (text / $math$)"))
+        srow, self._start_label, self._start_label_pos = _make_line_edit_combo_row(
+            "Start", "e.g. $x(t)$", placement_labels
+        )
+        self._start_label.editingFinished.connect(self._on_start_label)
+        self._start_label_pos.currentIndexChanged.connect(
+            lambda _i: self._on_start_label_placement()
+        )
+        self._start_label_pos.setToolTip(self._PLACEMENT_TOOLTIP)
+        self.body.addLayout(srow)
+
+        erow, self._end_label, self._end_label_pos = _make_line_edit_combo_row(
+            "End", "e.g. $y(t)$", placement_labels
+        )
+        self._end_label.editingFinished.connect(self._on_end_label)
+        self._end_label_pos.currentIndexChanged.connect(
+            lambda _i: self._on_end_label_placement()
+        )
+        self._end_label_pos.setToolTip(self._PLACEMENT_TOOLTIP)
+        self.body.addLayout(erow)
+
+        mid_row, self._mid_label = _make_line_edit_row("Middle", "e.g. $V_{bus}$")
+        self._mid_label.setToolTip(
+            "Label drawn over the wire with a solid background; drag it along the "
+            "wire on the canvas to reposition (or double-click the wire to edit)."
+        )
+        self._mid_label.editingFinished.connect(self._on_mid_label)
+        self.body.addLayout(mid_row)
+
+        # — Connection dots —
+        self.body.addWidget(_make_section_label("Connection dots"))
         self._no_dots = QCheckBox("No junction dots")
         self._no_dots.setToolTip(
             "Don't draw connection dots where this wire meets others — use for "
@@ -672,47 +806,43 @@ class WireStyleSection(InspectorSection):
         self._no_term.stateChanged.connect(self._on_no_term)
         self.body.addWidget(self._no_term)
 
-        marker_labels = [lbl for lbl, _ in _WIRE_MARKER_OPTIONS]
-        start_row, self._start_marker = _make_combo_row(
-            "Start endpoint", marker_labels, lambda _i: self._on_start_marker()
-        )
-        self.body.addLayout(start_row)
-        self._start_marker.setToolTip(
-            "Custom decoration at the wire's first point — independent of the "
-            "automatic junction/termination dots. Use Arrow for block diagrams."
-        )
+        # — Layer —
+        self.body.addWidget(_make_section_label("Layer"))
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        self._front_btn = QPushButton("Move to front")
+        self._front_btn.clicked.connect(lambda: self._move(to_front=True))
+        self._back_btn = QPushButton("Move to back")
+        self._back_btn.clicked.connect(lambda: self._move(to_front=False))
+        btn_row.addWidget(self._front_btn)
+        btn_row.addWidget(self._back_btn)
+        self.body.addLayout(btn_row)
 
-        end_row, self._end_marker = _make_combo_row(
-            "End endpoint", marker_labels, lambda _i: self._on_end_marker()
+        z_row = QHBoxLayout()
+        z_row.setSpacing(6)
+        z_row.addWidget(QLabel("Z-order"))
+        self._z_spin = QSpinBox()
+        self._z_spin.setRange(-99, 99)
+        self._z_spin.setToolTip(
+            _Z_ORDER_TOOLTIP
+            + ". Also decides which wire hops at a crossing: the higher z-order "
+            "wire arcs over the other."
         )
-        self.body.addLayout(end_row)
-        self._end_marker.setToolTip(
-            "Custom decoration at the wire's last point — independent of the "
-            "automatic junction/termination dots. Use Arrow for block diagrams."
-        )
+        self._z_spin.valueChanged.connect(self._on_z_changed)
+        z_row.addWidget(self._z_spin)
+        z_row.addStretch(1)
+        self.body.addLayout(z_row)
 
-        self._timer = QTimer(self)
-        self._timer.setSingleShot(True)
-        self._timer.setInterval(_DEBOUNCE_MS)
-        self._timer.timeout.connect(self._commit)
-
-        # Labels commit on editingFinished (Enter / focus-out), NOT on every
-        # keystroke: a live commit re-binds the panel mid-edit, which calls
-        # setText and jerks the cursor to the end of the field.
-        self.body.addWidget(_make_section_label("Endpoint labels (text / $math$)"))
-        start_lbl_row, self._start_label = _make_line_edit_row("Start", "e.g. $x(t)$")
-        self._start_label.editingFinished.connect(self._on_start_label)
-        self.body.addLayout(start_lbl_row)
-        end_lbl_row, self._end_label = _make_line_edit_row("End", "e.g. $y(t)$")
-        self._end_label.editingFinished.connect(self._on_end_label)
-        self.body.addLayout(end_lbl_row)
-        mid_lbl_row, self._mid_label = _make_line_edit_row("Middle", "e.g. $V_{bus}$")
-        self._mid_label.setToolTip(
-            "Label drawn over the wire with a solid background; drag it along the "
-            "wire on the canvas to reposition."
+        self._hop_mode = _HopModeCheckBox("Line hops")
+        self._hop_mode.setToolTip(
+            "Per-wire line-hops (click to cycle):\n"
+            "• Dash — follow the global Line-hops preference and z-order (default)\n"
+            "• Unchecked — never hop (a crossing wire may still hop over this one)\n"
+            "• Checked — always hop over crossing wires (ignores the global "
+            "preference and z-order)"
         )
-        self._mid_label.editingFinished.connect(self._on_mid_label)
-        self.body.addLayout(mid_lbl_row)
+        self._hop_mode.stateChanged.connect(self._on_hop_mode)
+        self.body.addWidget(self._hop_mode)
 
         self._wire_id: str | None = None
 
@@ -735,6 +865,14 @@ class WireStyleSection(InspectorSection):
         self._no_term.blockSignals(True)
         self._no_term.setChecked(wire.no_termination_dots)
         self._no_term.blockSignals(False)
+        self._z_spin.blockSignals(True)
+        self._z_spin.setValue(wire.z_order)
+        self._z_spin.blockSignals(False)
+        self._hop_mode.blockSignals(True)
+        self._hop_mode.setCheckState(
+            _HOP_MODE_TO_STATE.get(wire.hop_mode, Qt.PartiallyChecked)
+        )
+        self._hop_mode.blockSignals(False)
         _set_combo(self._start_marker, _MARKER_TO_LABEL.get(wire.start_marker, "None"))
         _set_combo(self._end_marker, _MARKER_TO_LABEL.get(wire.end_marker, "None"))
         # Don't clobber a label field the user is actively editing — re-setting
@@ -746,6 +884,14 @@ class WireStyleSection(InspectorSection):
             self._end_label.setText(wire.end_label)
         if not self._mid_label.hasFocus():
             self._mid_label.setText(wire.mid_label)
+        _set_combo(
+            self._start_label_pos,
+            _PLACEMENT_TO_LABEL.get(wire.start_label_placement, "Off end"),
+        )
+        _set_combo(
+            self._end_label_pos,
+            _PLACEMENT_TO_LABEL.get(wire.end_label_placement, "Off end"),
+        )
         self.set_top_separator_visible(False)
         self.show()
 
@@ -769,6 +915,27 @@ class WireStyleSection(InspectorSection):
     def _on_no_term(self, state: int) -> None:
         if self._scene is not None and self._wire_id is not None:
             self._scene.set_wire_no_termination_dots(self._wire_id, bool(state))
+
+    def _on_z_changed(self, value: int) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            self._scene.set_wire_z_order(self._wire_id, value)
+
+    def _move(self, *, to_front: bool) -> None:
+        if self._scene is None or self._wire_id is None:
+            return
+        new_z = (
+            self._scene.bring_to_front(self._wire_id)
+            if to_front
+            else self._scene.send_to_back(self._wire_id)
+        )
+        self._z_spin.blockSignals(True)
+        self._z_spin.setValue(new_z)
+        self._z_spin.blockSignals(False)
+
+    def _on_hop_mode(self, _state: int) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            mode = _HOP_STATE_TO_MODE.get(self._hop_mode.checkState(), "")
+            self._scene.set_wire_hop_mode(self._wire_id, mode)
 
     def _on_start_marker(self) -> None:
         # Combo selection is a discrete action — commit immediately (no debounce).
@@ -795,6 +962,17 @@ class WireStyleSection(InspectorSection):
         if self._scene is not None and self._wire_id is not None:
             self._scene.set_wire_mid_label(self._wire_id, self._mid_label.text())
 
+    def _on_start_label_placement(self) -> None:
+        # Combo selection is discrete — commit immediately (no debounce).
+        if self._scene is not None and self._wire_id is not None:
+            val = _LABEL_TO_PLACEMENT.get(self._start_label_pos.currentText(), "")
+            self._scene.set_wire_start_label_placement(self._wire_id, val)
+
+    def _on_end_label_placement(self) -> None:
+        if self._scene is not None and self._wire_id is not None:
+            val = _LABEL_TO_PLACEMENT.get(self._end_label_pos.currentText(), "")
+            self._scene.set_wire_end_label_placement(self._wire_id, val)
+
 
 class TransformSection(InspectorSection):
     """Rotation buttons + mirror checkbox.
@@ -815,7 +993,8 @@ class TransformSection(InspectorSection):
         self.body.addWidget(self._mirror_cb)
 
     def applies_to(self, comp: Component) -> bool:
-        return not isinstance(comp, RectComponent)
+        # rect and circle are axis-aligned boxes — rotation is a codegen no-op.
+        return not isinstance(comp, (RectComponent, CircleComponent))
 
     @staticmethod
     def _mirror_applies(comp: Component) -> bool:
@@ -891,12 +1070,7 @@ class LayerSection(InspectorSection):
         if not t:
             return
         scene, cid = t
-        z_orders = [c.z_order for c in scene.schematic.components if c.id != cid]
-        if to_front:
-            new_z = (max(z_orders) + 1) if z_orders else 1
-        else:
-            new_z = (min(z_orders) - 1) if z_orders else -1
-        scene.set_component_z_order(cid, new_z)
+        new_z = scene.bring_to_front(cid) if to_front else scene.send_to_back(cid)
         self._z_spin.blockSignals(True)
         self._z_spin.setValue(new_z)
         self._z_spin.blockSignals(False)

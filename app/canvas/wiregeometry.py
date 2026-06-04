@@ -31,6 +31,7 @@ from app.canvas.geometry import (
 from app.schematic.model import (
     Schematic,
     Wire,
+    component_connection_points,
     component_pin_positions,
 )
 
@@ -48,12 +49,37 @@ class WireGeometry:
     # -- pin / vertex / segment proximity --------------------------------
 
     def nearest_pin(self, gu: tuple[float, float]) -> tuple[float, float] | None:
-        """Return the nearest pin within PIN_SNAP_GU of *gu*, else None."""
+        """Return the nearest named pin within PIN_SNAP_GU of *gu*, else None.
+
+        Named-pins-only (no rect-perimeter connection points), so SELECT-mode
+        wire auto-start (:meth:`unconnected_pin_at`) is not triggered by clicking
+        a rect's edge — that should select/drag the rect, not start a wire.
+        """
         gx, gy = gu
         best: tuple[float, float] | None = None
         best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
         for comp in self._schematic.components:
             for px, py in component_pin_positions(comp):
+                d2 = (px - gx) ** 2 + (py - gy) ** 2
+                if d2 <= best_d2:
+                    best_d2 = d2
+                    best = (px, py)
+        return best
+
+    def nearest_connection_point(
+        self, gu: tuple[float, float]
+    ) -> tuple[float, float] | None:
+        """Nearest wire-connection point within PIN_SNAP_GU of *gu*, else None.
+
+        Includes named pins *and* rect-perimeter connection points, so a wire
+        being drawn snaps to (and reports connectable at) any grid point on a
+        block-diagram rectangle's edge.
+        """
+        gx, gy = gu
+        best: tuple[float, float] | None = None
+        best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
+        for comp in self._schematic.components:
+            for px, py in component_connection_points(comp):
                 d2 = (px - gx) ** 2 + (py - gy) ** 2
                 if d2 <= best_d2:
                     best_d2 = d2
@@ -126,7 +152,7 @@ class WireGeometry:
         *exclude_wire_id* omits one wire from the wire-vertex / wire-segment
         snap — used while dragging a vertex so it does not snap to its own wire.
         """
-        pin = self.nearest_pin(gu)
+        pin = self.nearest_connection_point(gu)
         if pin is not None:
             return pin, True
         vtx = self.nearest_wire_vertex(gu, exclude_wire_id)
@@ -163,31 +189,38 @@ class WireGeometry:
         return out
 
     def all_pin_positions(self) -> set[tuple[float, float]]:
+        """All wire-connection coordinates (named pins + rect-edge points).
+
+        Used to lock wire endpoints that are owned by component-follow (so a
+        rect-edge endpoint is not independently draggable) and to flag
+        connectable targets.
+        """
         pins: set[tuple[float, float]] = set()
         for comp in self._schematic.components:
-            for p in component_pin_positions(comp):
+            for p in component_connection_points(comp):
                 pins.add(p)
         return pins
 
     def unconnected_pin_at(self, scene_pt: QPointF) -> tuple[float, float] | None:
-        """Return the pin under *scene_pt* only if a wire may be auto-started.
+        """Return the connection point under *scene_pt* only if a wire may be auto-started.
 
-        Used to auto-start a wire when the user clicks a free pin in SELECT
-        mode. Returns None (so the click falls through to normal selection /
-        component drag) when:
+        Used to auto-start a wire when the user clicks a free pin **or a free
+        rect-edge / circle-cardinal connection point** in SELECT mode. Returns
+        None (so the click falls through to normal selection / component drag)
+        when:
 
-        * the cursor is not tightly on a pin (within ``PIN_GRAB_GU``);
-        * the nearest pin already has a wire endpoint on it.
+        * the cursor is not tightly on a connection point (within ``PIN_GRAB_GU``);
+        * the nearest connection point already has a wire endpoint on it.
 
         The tight grab radius (smaller than the body half-extent) is what keeps
-        component dragging intact: a press near the *centre* of a component is
-        not on a pin and falls through to selection/drag, while a press right at
-        a free pin/lead end starts a wire.
+        component / shape dragging intact: a press near the *centre* of a part is
+        not on a connection point and falls through to selection/drag, while a
+        press right on a free pin/lead-end or perimeter dot starts a wire.
         """
         gu = snap_point_gu(scene_pt)
-        # Use the raw (unsnapped) distance to the pin so the grab is tight.
+        # Use the raw (unsnapped) distance so the grab is tight.
         rx, ry = scene_to_gu(scene_pt)
-        pin = self.nearest_pin(gu)
+        pin = self.nearest_connection_point(gu)
         if pin is None:
             return None
         if (pin[0] - rx) ** 2 + (pin[1] - ry) ** 2 > PIN_GRAB_GU * PIN_GRAB_GU:
@@ -201,21 +234,18 @@ class WireGeometry:
     def vertex_is_draggable(
         self, wire: Wire, index: int, pins: set[tuple[float, float]] | None = None
     ) -> bool:
-        """A vertex is draggable unless it is an endpoint sitting on a pin.
+        """Every in-range vertex is draggable — including connected endpoints.
 
-        Endpoints that coincide with a component pin are owned by wire-following
-        (they move with the component), so they are locked here. Intermediate
-        vertices and free (non-pin) endpoints are draggable.
+        An endpoint that coincides with a component pin or a drawing-element
+        connection point (rect edge / circle cardinal point) is draggable too:
+        dragging it **disconnects** it from the pin/edge. Component-follow still
+        moves a connected endpoint when the component itself moves (that is
+        handled by ``MoveCommand``); draggability only governs *direct*
+        manipulation of the vertex. *pins* is accepted for backward
+        compatibility but no longer consulted.
         """
         pts = wire.points
-        if not (0 <= index < len(pts)):
-            return False
-        is_endpoint = index == 0 or index == len(pts) - 1
-        if not is_endpoint:
-            return True
-        if pins is None:
-            pins = self.all_pin_positions()
-        return pts[index] not in pins
+        return 0 <= index < len(pts)
 
     def wire_vertex_at(self, scene_pt: QPointF) -> tuple[str, int] | None:
         """Return the (wire_id, index) of a draggable vertex under *scene_pt*.

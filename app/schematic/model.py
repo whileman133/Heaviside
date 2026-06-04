@@ -69,6 +69,19 @@ class Wire:
     own unconnected endpoints — useful for annotation leads that should simply
     stop without a visible terminal. Does not affect other wires' endpoints."""
 
+    hop_mode: str = ""
+    """Per-wire line-hop override (see :func:`wire_crossings`). One of:
+
+    * ``""`` (**default**) — follow the global line-hops preference and the
+      ``z_order`` priority: this wire hops over a crossing wire only when hops
+      are globally enabled and it outranks the other wire.
+    * ``"never"`` — this wire **never** draws a hop bump, but a crossing wire may
+      still hop *over* it (it stays a valid thing to be hopped over).
+    * ``"always"`` — this wire **always** hops at its crossings, regardless of the
+      global preference and of ``z_order`` (it outranks default-mode wires).
+
+    Independent of the dot-suppression flags. See :data:`WIRE_HOP_MODES`."""
+
     start_marker: str = ""
     """Custom endpoint decoration drawn at the wire's first point (``points[0]``).
 
@@ -118,6 +131,37 @@ class Wire:
     ``0.0`` = the first point, ``1.0`` = the last point, ``0.5`` (default) = the
     midpoint by path length. Clamped to ``[0, 1]``."""
 
+    start_label_placement: str = ""
+    """Where :attr:`start_label` sits relative to the wire's first point:
+
+    ``""`` (default) = *off the end*, beyond the point along the terminal segment
+    (so an arrow reads as terminating into the text). ``"above"`` / ``"below"``
+    instead tuck the label **beside the wire at the endpoint**, extending *inward*
+    (back along the terminal segment) so it never crosses the endpoint into a
+    connected rect/circle, offset to one side so it never overlaps the wire. The
+    side depends on the terminal segment's orientation: for a **horizontal**
+    segment ``"above"``/``"below"`` are literal (above/below the wire); for a
+    **vertical** segment they read as **left**/**right** of the wire
+    (``"above"`` → left, ``"below"`` → right). Useful for labelling wires that
+    meet a block-diagram shape, where the off-end direction points into the
+    shape."""
+
+    end_label_placement: str = ""
+    """Where :attr:`end_label` sits relative to the wire's last point; same values
+    and semantics as :attr:`start_label_placement`."""
+
+    z_order: int = 0
+    """Canvas/code-generation layer, and hop priority at a crossing.
+
+    Same layering semantics as :attr:`DrawingComponent.z_order`: positive draws
+    in front, negative behind, 0 the default. On the canvas it maps to the wire
+    item's ``setZValue``; in the LaTeX output a wire with ``z_order < 0`` is
+    emitted before the main ``\\draw`` block and ``z_order > 0`` after it.
+
+    It also decides **which wire hops** where two wires cross without connecting
+    (see :func:`wire_crossings`): the wire with the higher ``z_order`` arcs over
+    the other (ties broken by position in the schematic's wire list)."""
+
 
 #: Endpoint marker kinds in cycle order (``""`` = none first). Each non-empty
 #: kind maps to a TikZ ``arrows.meta`` tip in code generation and to a canvas
@@ -133,6 +177,39 @@ WIRE_MARKER_KINDS: frozenset[str] = frozenset(WIRE_MARKER_CYCLE)
 #: Wire ``line_style`` tokens in cycle order (``""`` = solid first), as raw TikZ
 #: tokens. The order is the Tab-cycle order over a wire body (§6.4).
 WIRE_LINE_STYLE_CYCLE: tuple[str, ...] = ("", "dashed", "dotted", "dash dot")
+
+#: Valid values for the endpoint-label placement fields
+#: (:attr:`Wire.start_label_placement` / :attr:`Wire.end_label_placement`):
+#: ``""`` = off the end (along the terminal segment), ``"above"``, ``"below"``.
+WIRE_LABEL_PLACEMENTS: tuple[str, ...] = ("", "above", "below")
+
+#: Radius (in grid units) of the semicircular bump drawn where one wire hops
+#: over another (see :func:`wire_crossings`). Single source of truth shared by
+#: the canvas (``HOP_RADIUS_GU * GRID_PX`` pixels) and the LaTeX generator (GU
+#: directly), so the rendered arc matches the exported one exactly.
+HOP_RADIUS_GU: float = 0.08
+
+#: Valid values for :attr:`Wire.hop_mode` — the per-wire line-hop override, also
+#: the tri-state cycle order shown in the inspector (default → never → always).
+WIRE_HOP_MODES: tuple[str, ...] = ("", "never", "always")
+
+
+@dataclass(frozen=True)
+class WireHop:
+    """One line-hop: where the *hopping* wire arcs over a crossing wire.
+
+    A pure-geometry, derived decoration (never stored) produced by
+    :func:`wire_crossings`. ``point`` is the crossing coordinate (GU);
+    ``wire_id`` is the wire that hops (arcs over); ``orientation`` is that
+    wire's crossed-segment direction (``"h"`` or ``"v"``) and ``seg_index`` the
+    index of that segment's start vertex in the wire's ``points`` list. The bump
+    bulges perpendicular to ``orientation``.
+    """
+
+    point: tuple[float, float]
+    wire_id: str
+    orientation: str
+    seg_index: int
 
 
 @dataclass
@@ -359,6 +436,100 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     return out
 
 
+# Spacing of connection points along a rectangle's edges, in GU.  Matches the
+# minor grid (SNAP_GU = 0.25 in app/canvas/geometry.py); duplicated here to keep
+# the schematic layer free of a dependency on the canvas layer.
+_RECT_EDGE_SPACING: float = 0.25
+
+
+def rect_perimeter_points(component: "Component") -> set[tuple[float, float]]:
+    """All 0.25-GU grid points along the edges of a ``rect`` component, in GU.
+
+    A block-diagram rectangle accepts a wire connection at *any* grid point on
+    its perimeter; this enumerates those points (corners included) so the
+    coincident-coordinate connectivity machinery can treat them as connection
+    targets.  Returns an empty set for non-rect kinds.  The box is taken to be
+    axis-aligned (rects are not rotatable), spanning ``position`` to
+    ``position + (span_override or default_span)``.
+    """
+    if component.kind != "rect":
+        return set()
+    from app.components.registry import REGISTRY
+
+    defn = REGISTRY.get(component.kind)
+    if defn is None:
+        return set()
+
+    x0, y0 = component.position
+    dx, dy = component.span_override or defn.default_span
+    xmin, xmax = (x0, x0 + dx) if dx >= 0 else (x0 + dx, x0)
+    ymin, ymax = (y0, y0 + dy) if dy >= 0 else (y0 + dy, y0)
+
+    step = _RECT_EDGE_SPACING
+    nx = max(1, round((xmax - xmin) / step))
+    ny = max(1, round((ymax - ymin) / step))
+    xs = [xmin + i * step for i in range(nx + 1)]
+    ys = [ymin + j * step for j in range(ny + 1)]
+
+    pts: set[tuple[float, float]] = set()
+    for x in xs:
+        pts.add((x, ymin))
+        pts.add((x, ymax))
+    for y in ys:
+        pts.add((xmin, y))
+        pts.add((xmax, y))
+    return pts
+
+
+def circle_connection_points(component: "Component") -> set[tuple[float, float]]:
+    """The four cardinal connection points (N/S/E/W) of a ``circle`` component.
+
+    These are the midpoints of the bounding-box edges — the axis endpoints of the
+    circle/ellipse inscribed in the box defined by ``position`` and
+    ``span_override or default_span``.  Returns an empty set for other kinds.
+    Each point lies on the 0.25 GU grid (span commits on the 0.5 grid, so half-
+    spans are 0.25-aligned).
+    """
+    if component.kind != "circle":
+        return set()
+    from app.components.registry import REGISTRY
+
+    defn = REGISTRY.get(component.kind)
+    if defn is None:
+        return set()
+
+    x0, y0 = component.position
+    dx, dy = component.span_override or defn.default_span
+    xmin, xmax = (x0, x0 + dx) if dx >= 0 else (x0 + dx, x0)
+    ymin, ymax = (y0, y0 + dy) if dy >= 0 else (y0 + dy, y0)
+    cx, cy = (xmin + xmax) / 2.0, (ymin + ymax) / 2.0
+    return {
+        (cx, ymin),  # N
+        (cx, ymax),  # S
+        (xmax, cy),  # E
+        (xmin, cy),  # W
+    }
+
+
+def component_connection_points(component: "Component") -> set[tuple[float, float]]:
+    """Coordinates where a wire endpoint connects to *component* (and follows it).
+
+    For a ``rect`` this is every grid point on its perimeter
+    (:func:`rect_perimeter_points`); for a ``circle`` it is the four cardinal
+    points (:func:`circle_connection_points`); for every other kind it is the set
+    of named pin coordinates (:func:`component_pin_positions`).  This is the
+    single source of truth for connectivity and component-follow behaviour —
+    distinct from :func:`component_pin_positions`, which stays named-pins-only for
+    the resize terminal pin, junction detection, unconnected-pin detection, and
+    pin dots.
+    """
+    if component.kind == "rect":
+        return rect_perimeter_points(component)
+    if component.kind == "circle":
+        return circle_connection_points(component)
+    return set(component_pin_positions(component))
+
+
 def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
     """Coordinates that need a solid connection dot.
 
@@ -439,7 +610,7 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
     for comp in schematic.components:
         if comp.kind in NON_CONNECTING_KINDS:
             continue
-        for p in component_pin_positions(comp):
+        for p in component_connection_points(comp):
             pin_positions.add((round(p[0], 6), round(p[1], 6)))
 
     # Collect all wire vertex positions (every point on every wire).
@@ -589,3 +760,116 @@ def wire_corner_splits_at(
                 out.append((wire.id, i))
                 break   # at most one interior match per wire
     return out
+
+
+def _axis_segments(
+    wire: "Wire",
+) -> list[tuple[int, str, tuple[float, float], tuple[float, float]]]:
+    """Return ``(seg_index, orientation, start, end)`` for each axis-aligned
+    segment of *wire*. ``orientation`` is ``"h"`` or ``"v"``; zero-length or
+    (illegal) diagonal segments are skipped."""
+    out: list[tuple[int, str, tuple[float, float], tuple[float, float]]] = []
+    pts = wire.points
+    for i in range(len(pts) - 1):
+        a, b = tuple(pts[i]), tuple(pts[i + 1])
+        if a[0] == b[0] and a[1] != b[1]:
+            out.append((i, "v", a, b))
+        elif a[1] == b[1] and a[0] != b[0]:
+            out.append((i, "h", a, b))
+    return out
+
+
+def wire_crossings(
+    schematic: "Schematic", default_on: bool = True
+) -> list["WireHop"]:
+    """Line-hops for wires that cross without connecting (spec §6.4).
+
+    A hop belongs at a point where a horizontal segment of one wire and a
+    vertical segment of another cross **strictly interior to both** segments,
+    with **no vertex** of either wire at the point — which in this model means
+    the wires are genuinely not connected there (connections always share a
+    vertex, because the editor splits a wire when another's endpoint lands
+    mid-segment). The point is additionally required not to be a junction or a
+    component connection point, as a defensive guard.
+
+    *default_on* is the global line-hops preference (§10.8). It governs only
+    **default-mode** wires (``hop_mode == ""``); per-wire overrides win over it.
+
+    Which wire hops (arcs over the other) at a crossing is decided in order:
+
+    1. A wire whose ``hop_mode == "never"`` cannot be the hopper (but may still
+       be hopped *over*); ``"always"`` can always hop; ``""`` (default) can hop
+       only when *default_on*.
+    2. Among the wires that *can* hop there, the one with the higher **tier**
+       wins (``"always"`` outranks default), then higher ``z_order``, then later
+       position in ``schematic.wires``. If neither can hop, no bump is drawn.
+
+    ``no_junction_dots`` wires (annotation leads) are excluded from hops entirely
+    (in either role), paralleling their exclusion from junction dots.
+
+    Pure function; returns a list of :class:`WireHop` (decoration, never stored).
+    """
+    eligible = [
+        (i, w)
+        for i, w in enumerate(schematic.wires)
+        if not w.no_junction_dots and len(w.points) >= 2
+    ]
+
+    junctions = junction_points(schematic)
+    pins: set[tuple[float, float]] = set()
+    for comp in schematic.components:
+        for p in component_connection_points(comp):
+            pins.add((round(p[0], 6), round(p[1], 6)))
+
+    def _can_hop(w: "Wire") -> bool:
+        if w.hop_mode == "never":
+            return False
+        if w.hop_mode == "always":
+            return True
+        return default_on
+
+    def _rank(w: "Wire", idx: int) -> tuple[int, int, int]:
+        # Higher is preferred: "always" tier beats default, then z_order, then
+        # later position in the wire list.
+        return (1 if w.hop_mode == "always" else 0, w.z_order, idx)
+
+    hops: list[WireHop] = []
+    seen: set[tuple[str, tuple[float, float]]] = set()
+
+    for ai in range(len(eligible)):
+        idx_a, wa = eligible[ai]
+        va = {tuple(p) for p in wa.points}
+        segs_a = _axis_segments(wa)
+        for bi in range(ai + 1, len(eligible)):
+            idx_b, wb = eligible[bi]
+            a_ok, b_ok = _can_hop(wa), _can_hop(wb)
+            if not a_ok and not b_ok:                  # neither wire may hop here
+                continue
+            vb = {tuple(p) for p in wb.points}
+            segs_b = _axis_segments(wb)
+            for ia, oa, a0, a1 in segs_a:
+                for ib, ob, b0, b1 in segs_b:
+                    if oa == ob:                       # need one H and one V
+                        continue
+                    hseg, vseg = ((a0, a1), (b0, b1)) if oa == "h" else ((b0, b1), (a0, a1))
+                    p = (vseg[0][0], hseg[0][1])       # (vertical.x, horizontal.y)
+                    if not _point_strictly_on_segment(p, a0, a1):
+                        continue
+                    if not _point_strictly_on_segment(p, b0, b1):
+                        continue
+                    if p in va or p in vb:             # a vertex here = a connection
+                        continue
+                    pr = (round(p[0], 6), round(p[1], 6))
+                    if pr in junctions or pr in pins:  # defensive: real connection
+                        continue
+                    # Pick the hopper among the wires allowed to hop here.
+                    if a_ok and (not b_ok or _rank(wa, idx_a) >= _rank(wb, idx_b)):
+                        hop_id, orient, seg_index = wa.id, oa, ia
+                    else:
+                        hop_id, orient, seg_index = wb.id, ob, ib
+                    key = (hop_id, pr)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    hops.append(WireHop(p, hop_id, orient, seg_index))
+    return hops

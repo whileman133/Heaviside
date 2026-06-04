@@ -1,5 +1,5 @@
 {
-  "version": "0.1",
+  "version": "0.2",
   "name": "untitled",
   "components": [
     {
@@ -117,28 +117,6 @@
       ]
     },
     {
-      "id": "21c33283-ef19-43af-a192-bd61649a736c",
-      "kind": "text_node",
-      "position": [
-        74.5,
-        80.0
-      ],
-      "rotation": 0,
-      "mirror": false,
-      "options": "$\\Phi_\\mathrm{s}$"
-    },
-    {
-      "id": "a27eab94-c9fb-4eec-92ca-9bc909ca0813",
-      "kind": "text_node",
-      "position": [
-        85.5,
-        80.0
-      ],
-      "rotation": 0,
-      "mirror": false,
-      "options": "$\\Phi_\\mathrm{e}$"
-    },
-    {
       "id": "d7fea002-9956-471e-b790-b51b47104395",
       "kind": "short",
       "position": [
@@ -156,17 +134,6 @@
         1.0,
         0.0
       ]
-    },
-    {
-      "id": "8fcf2f10-181c-49d5-91cf-cc09b93d28f0",
-      "kind": "text_node",
-      "position": [
-        81.5,
-        80.0
-      ],
-      "rotation": 0,
-      "mirror": false,
-      "options": "$\\Phi_\\mathrm{sf}$"
     },
     {
       "id": "917cff49-ecdf-485d-b493-aa1a2a6dfd3f",
@@ -262,7 +229,8 @@
           75.0,
           80.0
         ]
-      ]
+      ],
+      "end_label": "$\\Phi_\\mathrm{s}$"
     },
     {
       "id": "eb7bad83-7d06-4278-8e06-6fc9ddc96410",
@@ -279,7 +247,9 @@
           82.0,
           80.0
         ]
-      ]
+      ],
+      "end_label": "$\\Phi_\\mathrm{sf}$",
+      "end_label_placement": "above"
     },
     {
       "id": "89ae7091-7ef9-41a2-863d-ea9740b2ba43",
@@ -312,6 +282,20 @@
       "line_style": "dotted",
       "line_width": 0.6,
       "no_junction_dots": true
+    },
+    {
+      "id": "c0e224c5-7f10-4567-9066-3558fc8826e4",
+      "points": [
+        [
+          85.25,
+          80.0
+        ],
+        [
+          85.0,
+          80.0
+        ]
+      ],
+      "start_label": "$\\Phi_\\mathrm{e}$"
     }
   ],
   "metadata": {}

@@ -64,6 +64,15 @@ def test_mark_unconnected_pins_default_and_roundtrip(prefs: Preferences) -> None
     assert prefs.mark_unconnected_pins is True
 
 
+def test_line_hops_default_on_and_roundtrip(prefs: Preferences) -> None:
+    """Line-hops default ON (drawing convention) and round-trip."""
+    assert prefs.line_hops is True
+    prefs.line_hops = False
+    assert prefs.line_hops is False
+    prefs.line_hops = True
+    assert prefs.line_hops is True
+
+
 def test_to_bool_coerces_strings() -> None:
     """QSettings may return booleans as strings; _to_bool normalizes them."""
     assert _to_bool("true") is True
@@ -79,10 +88,12 @@ def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     dlg._chk_pdf.setChecked(True)
     dlg._chk_eps.setChecked(True)
     dlg._chk_open_pins.setChecked(True)
+    dlg._chk_line_hops.setChecked(False)
     dlg._on_accept()
     assert prefs.auto_export_pdf is True
     assert prefs.auto_export_eps is True
     assert prefs.mark_unconnected_pins is True
+    assert prefs.line_hops is False
 
 
 def test_dialog_cancel_discards(prefs: Preferences) -> None:

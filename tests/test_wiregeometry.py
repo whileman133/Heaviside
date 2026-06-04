@@ -73,12 +73,14 @@ def test_wire_snap_target_excludes_own_wire():
     assert connectable is False  # its own wire is ignored -> grid fallback
 
 
-def test_vertex_is_draggable_endpoint_on_pin_locked():
+def test_vertex_is_draggable_endpoint_on_pin_still_draggable():
     w = Wire(id="w1", points=[(0.0, 0.0), (0.0, 4.0)])
     wg = _wg(_r("r1", (0.0, 0.0)), wires=[w])
-    # Endpoint 0 sits on a pin -> locked; endpoint 1 is free -> draggable.
-    assert wg.vertex_is_draggable(w, 0) is False
+    # Both endpoints are draggable now — dragging a connected endpoint (index 0,
+    # on r1's pin) disconnects it. Only out-of-range indices are non-draggable.
+    assert wg.vertex_is_draggable(w, 0) is True
     assert wg.vertex_is_draggable(w, 1) is True
+    assert wg.vertex_is_draggable(w, 5) is False  # out of range
 
 
 def test_vertex_is_draggable_intermediate_always():
@@ -93,12 +95,12 @@ def test_wire_vertex_at_finds_draggable_corner():
     assert wg.wire_vertex_at(_scene_pt(2.0, 0.0)) == ("w1", 1)
 
 
-def test_wire_vertex_at_skips_pin_endpoint():
+def test_wire_vertex_at_returns_connected_endpoint():
     w = Wire(id="w1", points=[(0.0, 0.0), (0.0, 4.0)])
     wg = _wg(_r("r1", (0.0, 0.0)), wires=[w])
-    # The (0,0) endpoint is on a pin -> not returned; the free end is.
-    assert wg.wire_vertex_at(_scene_pt(0.0, 0.0)) == ("w1", 1) or \
-        wg.wire_vertex_at(_scene_pt(0.0, 0.0)) is None
+    # The (0,0) endpoint sits on a pin but is now draggable (drag to disconnect),
+    # so wire_vertex_at returns it.
+    assert wg.wire_vertex_at(_scene_pt(0.0, 0.0)) == ("w1", 0)
 
 
 def test_unconnected_pin_at_detects_and_skips_connected():

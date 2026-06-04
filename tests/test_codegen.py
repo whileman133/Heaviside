@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
-from app.components.model import DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
+from app.components.model import CircleComponent, DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -584,6 +584,56 @@ def test_wire_label_vertical_anchor_under_yflip() -> None:
     assert r"\node[anchor=north, inner sep=0] at (0,-3.10) {bottom};" in src   # below the bottom end
 
 
+def test_wire_end_label_placement_above_horizontal() -> None:
+    """On a horizontal wire, 'above' tucks the label above the wire, inward of the
+    endpoint (right edge at the endpoint, not past it)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             end_label="$y(t)$", end_label_placement="above")
+    src = generate(_schematic(wires=[w]))
+    # south east: box extends up-left from (endpoint - gap, +gap) → above, inward.
+    assert r"\node[anchor=south east, inner sep=0] at (3.90,0.10) {$y(t)$};" in src
+
+
+def test_wire_end_label_placement_below_horizontal() -> None:
+    """On a horizontal wire, 'below' tucks the label below the wire, inward."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             end_label="$y(t)$", end_label_placement="below")
+    src = generate(_schematic(wires=[w]))
+    assert r"\node[anchor=north east, inner sep=0] at (3.90,-0.10) {$y(t)$};" in src
+
+
+def test_wire_start_label_placement_tucks_inward_at_start() -> None:
+    """A start label tucks inward from the start endpoint (extends right, not left)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
+             start_label="in", start_label_placement="above")
+    src = generate(_schematic(wires=[w]))
+    # south west: box extends up-right from (start + gap, +gap).
+    assert r"\node[anchor=south west, inner sep=0] at (0.10,0.10) {in};" in src
+
+
+def test_wire_label_placement_vertical_left_and_right() -> None:
+    """On a VERTICAL wire, 'above' = left of the wire, 'below' = right (not over it)."""
+    left = Wire(id=_uid(), points=[(0.0, 0.0), (0.0, 4.0)],
+                end_label="L", end_label_placement="above")
+    right = Wire(id=_uid(), points=[(0.0, 0.0), (0.0, 4.0)],
+                 end_label="R", end_label_placement="below")
+    src_l = generate(_schematic(wires=[left]))
+    src_r = generate(_schematic(wires=[right]))
+    # Bottom endpoint (0,4); inward is up. Left → right edge left of wire (x<0).
+    assert r"\node[anchor=north east, inner sep=0] at (-0.10,3.90) {L};" in src_l
+    # Right → left edge right of wire (x>0).
+    assert r"\node[anchor=north west, inner sep=0] at (0.10,3.90) {R};" in src_r
+
+
+def test_wire_label_placement_above_under_yflip() -> None:
+    """Under the preview Y-flip, 'above' still sits visually above a horizontal wire."""
+    w = Wire(id=_uid(), points=[(0.0, 1.0), (4.0, 1.0)],
+             end_label="$y$", end_label_placement="above")
+    src = generate(_schematic(wires=[w]), y_flip=True)
+    # Emitted +Y is up; the y-flipped endpoint y is -1, gap added upward → -0.9.
+    assert r"\node[anchor=south east, inner sep=0] at (3.90,-0.90) {$y$};" in src
+
+
 def test_wire_label_empty_emits_no_node() -> None:
     """A wire with no labels emits no label node."""
     w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
@@ -825,13 +875,94 @@ def test_rect_dashed() -> None:
 
 
 def test_rect_uses_default_span_when_none() -> None:
-    """rect with span_override=None falls back to the registry default_span (2,2)."""
+    """rect with span_override=None falls back to the registry default_span (1,1)."""
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, options="", mirror=False,
     )
     src = generate(_schematic(comp))
-    assert "rectangle (2,2)" in src
+    assert "rectangle (1,1)" in src
+
+
+def test_rect_no_text_emits_only_rectangle() -> None:
+    """A text-free rect emits only its \\draw rectangle line — no text \\node."""
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False, span_override=(2.0, 2.0),
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw (0,0) rectangle (2,2);" in src
+    # No \node at all: a lone rect has no wires (so no circ/ocirc) and no text.
+    assert r"\node" not in src
+
+
+def test_rect_with_text_emits_centred_node() -> None:
+    r"""A rect with text emits the rectangle plus a centred \node{text} at its centre."""
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, options="$H(s)$", mirror=False, span_override=(4.0, 2.0),
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw (0,0) rectangle (4,2);" in src
+    # Centred at the rect centre (2,1); default font → no [font=...] bracket.
+    assert r"\node at (2,1) {$H(s)$};" in src
+
+
+def test_rect_text_font_options() -> None:
+    r"""Bold + sans + size on a rect's text are encoded into the node's font= option."""
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, options="Block", mirror=False, span_override=(2.0, 2.0),
+        font_size=10.0, font_bold=True, font_family="sans",
+    )
+    src = generate(_schematic(comp))
+    assert r"\fontsize{10}" in src
+    assert r"\bfseries" in src
+    assert r"\sffamily" in src
+    assert "at (1,1) {Block};" in src
+
+
+def test_circle_square_emits_circle() -> None:
+    r"""A square circle emits \draw[style] (cx,cy) circle (r); centred on the box."""
+    comp = CircleComponent(
+        id=_uid(), kind="circle", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False, span_override=(2.0, 2.0),
+        fill_color="gray!15",
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw[fill=gray!15] (1,1) circle (1);" in src
+
+
+def test_circle_nonsquare_emits_ellipse() -> None:
+    r"""A non-square circle emits \draw (cx,cy) ellipse (rx and ry);."""
+    comp = CircleComponent(
+        id=_uid(), kind="circle", position=(1.0, 1.0),
+        rotation=0, options="", mirror=False, span_override=(4.0, 2.0),
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw (3,2) ellipse (2 and 1);" in src
+
+
+def test_circle_no_text_emits_only_shape() -> None:
+    """A text-free circle emits only its outline — no \\node."""
+    comp = CircleComponent(
+        id=_uid(), kind="circle", position=(0.0, 0.0),
+        rotation=0, options="", mirror=False, span_override=(2.0, 2.0),
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw (1,1) circle (1);" in src
+    assert r"\node" not in src
+
+
+def test_circle_with_text_emits_centred_node() -> None:
+    r"""A circle with text emits the shape plus a centred \node{text}."""
+    comp = CircleComponent(
+        id=_uid(), kind="circle", position=(0.0, 0.0),
+        rotation=0, options="$\\Sigma$", mirror=False, span_override=(2.0, 2.0),
+    )
+    src = generate(_schematic(comp))
+    assert r"\draw (1,1) circle (1);" in src
+    assert r"\node at (1,1) {$\Sigma$};" in src
 
 
 def test_drawing_kinds_not_in_draw_block() -> None:
@@ -1197,3 +1328,103 @@ def test_ensure_tool_dirs_noop_off_darwin(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("PATH", "/usr/bin")
     latex._ensure_tool_dirs_on_path()
     assert os.environ["PATH"] == "/usr/bin"
+
+
+# ---------------------------------------------------------------------------
+# Line-hops and wire z-layering
+# ---------------------------------------------------------------------------
+
+def _crossing() -> Schematic:
+    """Horizontal wire (z=1, hops) crossing a vertical wire (z=0) at (2,1)."""
+    h = Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], z_order=1)
+    v = Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)], z_order=0)
+    return _schematic(wires=(h, v))
+
+
+def test_line_hops_disabled_by_default() -> None:
+    """generate() emits no bump unless mark_line_hops is requested."""
+    src = generate(_crossing())
+    assert "controls" not in src
+    assert "(0,1) -- (4,1)" in src   # plain straight wire
+
+
+def test_always_hop_mode_emits_even_when_disabled() -> None:
+    """A wire with hop_mode='always' emits a bump even with mark_line_hops off."""
+    h = Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], hop_mode="always")
+    v = Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)])
+    src = generate(_schematic(wires=(h, v)))     # mark_line_hops defaults False
+    assert "controls" in src
+
+
+def test_line_hops_emits_bezier_bump() -> None:
+    """With mark_line_hops, the hopping wire gets a cubic-Bezier bump at (2,1)."""
+    src = generate(_crossing(), mark_line_hops=True)
+    assert "controls" in src
+    # The bump approaches (2-r,1) and resumes at (2+r,1) on the y=1 wire.
+    assert "(1.92,1)" in src and "(2.08,1)" in src
+
+
+def test_line_hop_bump_bulges_up_without_yflip() -> None:
+    """A horizontal hopper bulges to smaller y (canvas up): control y = 1-(4/3)*0.08."""
+    src = generate(_crossing(), mark_line_hops=True)
+    # _fmt rounds to 2 dp: 0.8933… → 0.89.
+    assert "controls (1.92,0.89) and (2.08,0.89)" in src
+
+
+def test_line_hop_bump_flips_with_yflip() -> None:
+    """Under y_flip the whole bump negates, so the control y becomes -0.89."""
+    src = generate(_crossing(), mark_line_hops=True, y_flip=True)
+    assert "controls (1.92,-0.89) and (2.08,-0.89)" in src
+
+
+def test_zero_z_wire_keeps_shared_draw_path() -> None:
+    """A default-layer (z=0) wire stays in the shared \\draw path (no churn)."""
+    w = Wire(id="w", points=[(0.0, 0.0), (4.0, 0.0)])
+    src = generate(_schematic(wires=(w,)))
+    assert "(0,0) -- (4,0)" in src
+
+
+def test_negative_z_wire_emitted_before_draw_block() -> None:
+    """A z<0 wire is emitted in the background, before the \\draw block."""
+    w = Wire(id="bg", points=[(0.0, 0.0), (4.0, 0.0)], z_order=-5)
+    src = generate(_schematic(wires=(w,)))
+    bg_idx = src.index(r"\draw (0,0) -- (4,0);")
+    draw_idx = src.index("\\draw\n")
+    assert bg_idx < draw_idx     # background wire precedes the main \draw
+
+
+def test_positive_z_wire_emitted_after_draw_block() -> None:
+    """A z>0 wire is emitted in the foreground, after the main \\draw path closes."""
+    w = Wire(id="fg", points=[(0.0, 0.0), (4.0, 0.0)], z_order=5)
+    src = generate(_schematic(wires=(w,)))
+    fg_idx = src.index(r"\draw (0,0) -- (4,0);")
+    semi_idx = src.index("\n  ;")        # end of the shared \draw path
+    assert fg_idx > semi_idx
+
+
+def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
+    """A background (z<0) wire on a MOSFET pin must use absolute coordinates, not
+    a named node anchor — the node is defined later in the main \\draw, so a
+    forward reference like (node_x.gate) would be a LaTeX compile error."""
+    fet = MosfetComponent(
+        id=_uid(), kind="nigfete", position=(5.0, 5.0),
+        rotation=0, options="", mirror=False,
+    )
+    # gate pin is at the component position (offset 0,0); wire from it, sent back.
+    w = Wire(id="g", points=[(5.0, 5.0), (3.0, 5.0)], z_order=-1)
+    src = generate(_schematic(fet, wires=(w,)))
+    bg = src.split("\n  \\draw\n", 1)[0]      # everything before the main \draw
+    assert "node_" not in bg                  # no forward anchor reference
+    assert "(5,5) -- (3,5)" in bg             # the bg wire, with absolute coords
+
+
+def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
+    """A foreground (z>0) wire is emitted after the node, so it keeps the named
+    anchor reference (which resolves fine)."""
+    fet = MosfetComponent(
+        id=_uid(), kind="nigfete", position=(5.0, 5.0),
+        rotation=0, options="", mirror=False,
+    )
+    w = Wire(id="g", points=[(5.0, 5.0), (3.0, 5.0)], z_order=1)
+    src = generate(_schematic(fet, wires=(w,)))
+    assert ".gate)" in src                    # references the MOSFET gate anchor

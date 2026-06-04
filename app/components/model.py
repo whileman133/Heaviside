@@ -138,12 +138,27 @@ class TextNodeComponent(FontedComponent, DrawingComponent):
 
 
 @dataclass
-class RectComponent(StyledComponent, DrawingComponent):
-    """Rectangle drawing element.
+class RectComponent(FontedComponent, StyledComponent, DrawingComponent):
+    """Rectangle drawing element (also used for block-diagram boxes).
 
     Fill, border width, and line style are carried as StyledComponent fields;
-    ``span_override`` holds the (width, height) in GU.  (``options`` is unused
-    for rects — legacy files that stored the style there are migrated on load.)
+    ``span_override`` holds the (width, height) in GU.  Font fields come from
+    FontedComponent and style the centred text label.  ``options`` holds the
+    raw LaTeX text fragment drawn centred inside the box (empty = no text);
+    legacy files that stored the style string there are migrated on load.
+    """
+
+
+@dataclass
+class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):
+    """Circle/ellipse drawing element (block-diagram node).
+
+    Behaves exactly like :class:`RectComponent` — same fill/border/line-style,
+    centred text in ``options``, and ``span_override`` = (width, height) of the
+    bounding box (a circle when width == height, otherwise an ellipse) — except
+    its only wire-connection points are the four cardinal points (N/S/E/W = the
+    bounding-box edge midpoints).  A *sibling* of ``RectComponent`` (not a
+    subclass) so code generation and canvas painting can distinguish the shapes.
     """
 
 

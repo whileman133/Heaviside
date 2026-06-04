@@ -41,6 +41,7 @@ from app.canvas.commands import (
     PlaceCommand,
     ResizeCommand,
     SetWireEndLabelCommand,
+    SetWireEndLabelPlacementCommand,
     SetWireEndMarkerCommand,
     SetWireLineStyleCommand,
     SetWireLineWidthCommand,
@@ -49,6 +50,7 @@ from app.canvas.commands import (
     SetWireNoJunctionDotsCommand,
     SetWireNoTerminationDotsCommand,
     SetWireStartLabelCommand,
+    SetWireStartLabelPlacementCommand,
     SetWireStartMarkerCommand,
     SplitWireCommand,
     UndoStack,
@@ -1271,6 +1273,24 @@ def test_set_wire_end_label_do_undo():
     assert stack.schematic.wires[0].end_label == ""
 
 
+def test_set_wire_start_label_placement_do_undo_redo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireStartLabelPlacementCommand(wid, "above", ""))
+    assert stack.schematic.wires[0].start_label_placement == "above"
+    stack.undo()
+    assert stack.schematic.wires[0].start_label_placement == ""
+    stack.redo()
+    assert stack.schematic.wires[0].start_label_placement == "above"
+
+
+def test_set_wire_end_label_placement_do_undo():
+    stack, wid = _wire_stack()
+    stack.push(SetWireEndLabelPlacementCommand(wid, "below", ""))
+    assert stack.schematic.wires[0].end_label_placement == "below"
+    stack.undo()
+    assert stack.schematic.wires[0].end_label_placement == ""
+
+
 def test_set_wire_mid_label_do_undo_redo():
     stack, wid = _wire_stack()
     stack.push(SetWireMidLabelCommand(wid, "$V_{bus}$", ""))
@@ -1287,3 +1307,196 @@ def test_set_wire_mid_label_pos_do_undo():
     assert stack.schematic.wires[0].mid_label_pos == 0.25
     stack.undo()
     assert stack.schematic.wires[0].mid_label_pos == 0.5
+
+
+# ---------------------------------------------------------------------------
+# Rect block-diagram edge connections — wires follow on move and resize
+# ---------------------------------------------------------------------------
+
+def _rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0)) -> Component:
+    from app.components.model import RectComponent
+    return RectComponent(
+        id=comp_id, kind="rect", position=position, rotation=0,
+        options="", span_override=span,
+    )
+
+
+def test_move_drags_wire_connected_to_rect_edge():
+    """A wire starting on a rect's edge follows when the rect is moved.
+
+    A second (unmoved) component keeps ``all_dragged`` false so only the
+    edge-connected endpoint follows, not the whole wire.
+    """
+    s = Schematic(
+        version="0.1", name="t",
+        components=[
+            _rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0)),
+            _resistor(comp_id="x", position=(10.0, 10.0)),
+        ],
+        # Wire from the right-edge midpoint (2,1) down to a free end (2,4).
+        wires=[Wire(id="w", points=[(2.0, 1.0), (2.0, 4.0)])],
+    )
+    MoveCommand(["r"], (3.0, 0.0)).do(s)
+    # The edge endpoint follows the rect by the same delta; free end unchanged.
+    assert s.wires[0].points[0] == (5.0, 1.0)
+    assert s.wires[0].points[-1] == (2.0, 4.0)
+    assert validate(s) == []
+
+
+def test_move_rect_edge_wire_undo_restores():
+    s = Schematic(
+        version="0.1", name="t",
+        components=[
+            _rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0)),
+            _resistor(comp_id="x", position=(10.0, 10.0)),
+        ],
+        wires=[Wire(id="w", points=[(2.0, 1.0), (2.0, 4.0)])],
+    )
+    original = [tuple(p) for p in s.wires[0].points]
+    cmd = MoveCommand(["r"], (3.0, 0.0))
+    cmd.do(s)
+    assert s.wires[0].points != original
+    cmd.undo(s)
+    assert s.wires[0].points == original
+
+
+def test_resize_rect_far_edge_wire_follows_scaled():
+    """Growing a rect scales connected edge points about the fixed corner."""
+    s = Schematic(
+        version="0.1", name="t",
+        components=[_rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0))],
+        wires=[
+            # Right edge midpoint (2,1) — a "far" edge that moves on resize.
+            Wire(id="far", points=[(2.0, 1.0), (5.0, 1.0)]),
+            # Left edge midpoint (0,1) — through the fixed corner; stays put.
+            Wire(id="near", points=[(-3.0, 1.0), (0.0, 1.0)]),
+        ],
+    )
+    ResizeCommand("r", new_span=(4.0, 2.0), old_span=(2.0, 2.0)).do(s)
+    far = next(w for w in s.wires if w.id == "far")
+    near = next(w for w in s.wires if w.id == "near")
+    # (2,1) maps to (0 + 1*4, 0 + 0.5*2) = (4,1).
+    assert far.points[0] == (4.0, 1.0)
+    # Left-edge point is on the anchored corner's edge — unchanged.
+    assert near.points[-1] == (0.0, 1.0)
+    assert validate(s) == []
+
+
+def test_resize_rect_edge_wire_undo_restores():
+    s = Schematic(
+        version="0.1", name="t",
+        components=[_rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0))],
+        wires=[Wire(id="far", points=[(2.0, 1.0), (5.0, 1.0)])],
+    )
+    original = [tuple(p) for p in s.wires[0].points]
+    cmd = ResizeCommand("r", new_span=(4.0, 2.0), old_span=(2.0, 2.0))
+    cmd.do(s)
+    assert s.wires[0].points != original
+    cmd.undo(s)
+    assert s.wires[0].points == original
+
+
+# ---------------------------------------------------------------------------
+# Circle block-diagram cardinal connections — wires follow on move and resize
+# ---------------------------------------------------------------------------
+
+def _circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0)) -> Component:
+    from app.components.model import CircleComponent
+    return CircleComponent(
+        id=comp_id, kind="circle", position=position, rotation=0,
+        options="", span_override=span,
+    )
+
+
+def test_move_drags_wire_connected_to_circle_cardinal():
+    """A wire on a circle's east cardinal point follows when the circle moves."""
+    s = Schematic(
+        version="0.2", name="t",
+        components=[
+            _circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0)),
+            _resistor(comp_id="x", position=(10.0, 10.0)),
+        ],
+        # East cardinal point of the circle is (2,1); free end at (2,4).
+        wires=[Wire(id="w", points=[(2.0, 1.0), (2.0, 4.0)])],
+    )
+    MoveCommand(["o"], (3.0, 0.0)).do(s)
+    assert s.wires[0].points[0] == (5.0, 1.0)
+    assert s.wires[0].points[-1] == (2.0, 4.0)
+    assert validate(s) == []
+
+
+def test_resize_circle_cardinal_wire_follows_scaled():
+    """Growing a circle scales its cardinal connections about the fixed corner."""
+    s = Schematic(
+        version="0.2", name="t",
+        components=[_circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0))],
+        wires=[
+            Wire(id="east", points=[(2.0, 1.0), (5.0, 1.0)]),   # E cardinal (moves)
+            Wire(id="west", points=[(-3.0, 1.0), (0.0, 1.0)]),  # W cardinal (fixed edge)
+        ],
+    )
+    ResizeCommand("o", new_span=(4.0, 2.0), old_span=(2.0, 2.0)).do(s)
+    east = next(w for w in s.wires if w.id == "east")
+    west = next(w for w in s.wires if w.id == "west")
+    # E (2,1) maps about (0,0) to (0 + 1*4, 0 + 0.5*2) = (4,1).
+    assert east.points[0] == (4.0, 1.0)
+    # W (0,1) is on the anchored corner's edge — unchanged.
+    assert west.points[-1] == (0.0, 1.0)
+    assert validate(s) == []
+
+
+def test_resize_circle_cardinal_wire_undo_restores():
+    s = Schematic(
+        version="0.2", name="t",
+        components=[_circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0))],
+        wires=[Wire(id="east", points=[(2.0, 1.0), (5.0, 1.0)])],
+    )
+    original = [tuple(p) for p in s.wires[0].points]
+    cmd = ResizeCommand("o", new_span=(4.0, 2.0), old_span=(2.0, 2.0))
+    cmd.do(s)
+    assert s.wires[0].points != original
+    cmd.undo(s)
+    assert s.wires[0].points == original
+
+
+# ---------------------------------------------------------------------------
+# Junction move — orientation preserved into the junction
+# ---------------------------------------------------------------------------
+
+def test_reshape_junction_wire_preserves_vertical_via_corner():
+    """A wire that enters the junction vertically (with an interior corner)
+    keeps its vertical approach — the corner relocates with the junction."""
+    from app.canvas.commands import reshape_junction_wire
+    pts = [(2.0, 2.0), (2.0, 0.0), (5.0, 0.0)]      # junction (idx0) ↑ then →
+    out = reshape_junction_wire(pts, 0, (4.0, 2.0))  # drag junction right
+    assert out == [(4.0, 2.0), (4.0, 0.0), (5.0, 0.0)]   # vertical preserved
+
+
+def test_reshape_junction_wire_preserves_horizontal_far_endpoint():
+    """A 2-point wire entering horizontally keeps a horizontal segment at the
+    junction (an elbow is inserted toward the fixed far endpoint)."""
+    from app.canvas.commands import reshape_junction_wire
+    pts = [(0.0, 0.0), (2.0, 0.0)]                   # junction at idx1, horizontal
+    out = reshape_junction_wire(pts, 1, (2.0, 2.0))  # drag junction down
+    assert out[-1] == (2.0, 2.0)
+    assert out[-2][1] == 2.0                          # segment into junction is horizontal
+
+
+def test_move_junction_command_orientation_and_undo():
+    from app.canvas.commands import MoveJunctionCommand
+    s = Schematic(
+        version="0.1", name="t",
+        wires=[
+            Wire(id="stub", points=[(2.0, 2.0), (2.0, 0.0), (5.0, 0.0)]),
+            Wire(id="left", points=[(0.0, 2.0), (2.0, 2.0)]),
+        ],
+    )
+    cmd = MoveJunctionCommand([("stub", 0), ("left", 1)], (4.0, 2.0))
+    cmd.do(s)
+    stub = next(w for w in s.wires if w.id == "stub")
+    left = next(w for w in s.wires if w.id == "left")
+    assert stub.points == [(4.0, 2.0), (4.0, 0.0), (5.0, 0.0)]   # vertical kept
+    assert left.points == [(0.0, 2.0), (4.0, 2.0)]               # horizontal kept
+    cmd.undo(s)
+    assert next(w for w in s.wires if w.id == "stub").points == [(2.0, 2.0), (2.0, 0.0), (5.0, 0.0)]
+    assert next(w for w in s.wires if w.id == "left").points == [(0.0, 2.0), (2.0, 2.0)]

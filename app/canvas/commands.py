@@ -42,6 +42,7 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    component_connection_points as _component_connection_points,
     component_pin_positions as _component_pin_positions,
     route,
     simplify_points,
@@ -289,7 +290,7 @@ class DeleteCommand(Command):
         connected_positions: set[tuple[float, float]] = set()
         for comp in schematic.components:
             if comp.id in target_ids:
-                for pos in _component_pin_positions(comp):
+                for pos in _component_connection_points(comp):
                     connected_positions.add(pos)
 
         # Snapshot removed components (preserving original index for undo).
@@ -390,7 +391,7 @@ class MoveCommand(Command):
         pins: set[tuple[float, float]] = set()
         for comp in schematic.components:
             if comp.id in ids:
-                for p in _component_pin_positions(comp):
+                for p in _component_connection_points(comp):
                     pins.add(p)
         return pins
 
@@ -548,9 +549,87 @@ class ResizeCommand(Command):
             self._removed_wire_ids.update(to_remove)
             schematic.wires[:] = [w for w in schematic.wires if w.id not in to_remove]
 
-    def do(self, schematic: Schematic) -> None:
-        old_pin = self._terminal_pin_pos(schematic, use_old=True)
+    def _reshape_wires_scaled(
+        self,
+        schematic: Schematic,
+        old_span: tuple[float, float],
+        new_span: tuple[float, float],
+    ) -> None:
+        """Reshape edge-connected wires as a box annotation (rect/circle) resizes.
+
+        The resize is an anchored scale about the box's fixed corner
+        (``position``): a connection point P maps to
+        ``position + (P - position) * (new_span / old_span)``, snapped to the
+        0.25 GU grid, so each connection point stays on its corresponding new
+        edge.  Points on the two edges through the anchored corner map to
+        themselves; the opposite edges translate; mid-edge points scale
+        proportionally.  The connection-point set is the kind's own
+        (`component_connection_points`): a rect's full perimeter, a circle's
+        four cardinal points.
+        """
         comp = _find_component(schematic, self._component_id)
+        x0, y0 = comp.position
+        odx, ody = old_span
+        ndx, ndy = new_span
+
+        # Connection points under the OLD span (comp.span_override is already new).
+        orig_so = comp.span_override
+        comp.span_override = old_span
+        old_perim = _component_connection_points(comp)
+        comp.span_override = orig_so
+
+        def _snap(v: float) -> float:
+            return round(v / 0.25) * 0.25
+
+        def _map(p: tuple[float, float]) -> tuple[float, float]:
+            px, py = p
+            fx = (px - x0) / odx if odx else 0.0
+            fy = (py - y0) / ody if ody else 0.0
+            return (_snap(x0 + fx * ndx), _snap(y0 + fy * ndy))
+
+        to_remove: list[str] = []
+        for wire in schematic.wires:
+            pts = wire.points
+            if len(pts) < 2:
+                continue
+            start_hit = pts[0] in old_perim
+            end_hit = pts[-1] in old_perim
+            start_tgt = _map(pts[0]) if start_hit else None
+            end_tgt = _map(pts[-1]) if end_hit else None
+            start_moves = start_tgt is not None and start_tgt != pts[0]
+            end_moves = end_tgt is not None and end_tgt != pts[-1]
+            if not start_moves and not end_moves:
+                continue
+            if wire.id not in self._orig_wire_points:
+                self._orig_wire_points[wire.id] = list(pts)
+            new_pts = list(pts)
+            if start_moves:
+                new_pts = reshape_wire_points(
+                    new_pts, start_hit=True, end_hit=False,
+                    dx=start_tgt[0] - new_pts[0][0],
+                    dy=start_tgt[1] - new_pts[0][1],
+                )
+            if end_moves:
+                new_pts = reshape_wire_points(
+                    new_pts, start_hit=False, end_hit=True,
+                    dx=end_tgt[0] - new_pts[-1][0],
+                    dy=end_tgt[1] - new_pts[-1][1],
+                )
+            if len(new_pts) < 2:
+                to_remove.append(wire.id)
+            else:
+                wire.points = new_pts
+        if to_remove:
+            self._removed_wire_ids.update(to_remove)
+            schematic.wires[:] = [w for w in schematic.wires if w.id not in to_remove]
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if comp.kind in ("rect", "circle"):
+            comp.span_override = self._new_span
+            self._reshape_wires_scaled(schematic, self._old_span, self._new_span)
+            return
+        old_pin = self._terminal_pin_pos(schematic, use_old=True)
         comp.span_override = self._new_span
         new_pin = self._terminal_pin_pos(schematic, use_old=False)
         dx = new_pin[0] - old_pin[0]
@@ -574,8 +653,12 @@ class ResizeCommand(Command):
                 schematic.wires.append(Wire(id=wid, points=list(orig)))
 
     def redo(self, schematic: Schematic) -> None:
-        old_pin = self._terminal_pin_pos(schematic, use_old=True)
         comp = _find_component(schematic, self._component_id)
+        if comp.kind in ("rect", "circle"):
+            comp.span_override = self._new_span
+            self._reshape_wires_scaled(schematic, self._old_span, self._new_span)
+            return
+        old_pin = self._terminal_pin_pos(schematic, use_old=True)
         comp.span_override = self._new_span
         new_pin = self._terminal_pin_pos(schematic, use_old=False)
         dx = new_pin[0] - old_pin[0]
@@ -826,6 +909,82 @@ class MergeWireCommand(Command):
         self.do(schematic)
 
 
+def _move_vertex_points(
+    points: list[tuple[float, float]],
+    idx: int,
+    new_point: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Move vertex *idx* to *new_point*, inserting horizontal-first elbows on any
+    adjacent segment that turned diagonal; returns the simplified point list
+    (may be < 2 points if the wire collapsed)."""
+    pts = list(points)
+    if not (0 <= idx < len(pts)):
+        return pts
+    pts[idx] = new_point
+    rebuilt: list[tuple[float, float]] = []
+    for j, p in enumerate(pts):
+        if j == 0:
+            rebuilt.append(p)
+            continue
+        prev = pts[j - 1]
+        if j == idx or j - 1 == idx:
+            mid = route(prev, p, vfirst=False)[1:-1]
+            if mid:
+                rebuilt.append(mid[0])
+        rebuilt.append(p)
+    return simplify_points(rebuilt)
+
+
+def reshape_junction_wire(
+    points: list[tuple[float, float]],
+    idx: int,
+    new_point: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Move a junction vertex (*idx*) to *new_point*, **preserving the orientation
+    of the segment that enters the junction** so a wire arriving vertically keeps
+    arriving vertically (and horizontally likewise).
+
+    Only endpoint junctions (``idx`` is 0 or the last index) are orientation-
+    preserved; an interior junction vertex falls back to a plain vertex move. The
+    terminal segment runs from the junction vertex to its neighbour:
+
+    * neighbour is an **interior corner** → relocate it along the terminal axis
+      (move its parallel coordinate to the new junction position), which keeps
+      both the terminal segment and the corner's other (perpendicular) segment
+      valid without inserting anything;
+    * neighbour is the **far endpoint** (2-point wire, can't be moved) → insert
+      an elbow whose first leg out of the junction keeps the original orientation.
+    """
+    pts = list(points)
+    n = len(pts)
+    if n < 2 or not (0 <= idx < n):
+        return pts
+    if idx not in (0, n - 1):
+        return _move_vertex_points(pts, idx, new_point)
+
+    nb = 1 if idx == 0 else n - 2
+    old = pts[idx]
+    nbp = pts[nb]
+    vertical = abs(nbp[0] - old[0]) < 1e-9    # terminal segment is vertical
+    pts[idx] = new_point
+
+    if 1 <= nb <= n - 2:
+        # Interior corner: slide it along the terminal axis to follow the move.
+        if vertical:
+            pts[nb] = (new_point[0], nbp[1])
+        else:
+            pts[nb] = (nbp[0], new_point[1])
+    else:
+        # Far endpoint: insert an orientation-preserving elbow.
+        if vertical:
+            corner = (new_point[0], nbp[1])
+        else:
+            corner = (nbp[0], new_point[1])
+        if corner != new_point and corner != nbp:
+            pts.insert(1 if idx == 0 else n - 1, corner)
+    return simplify_points(pts)
+
+
 class MoveWireVertexCommand(Command):
     """Move a single vertex of a wire to a new position.
 
@@ -861,20 +1020,6 @@ class MoveWireVertexCommand(Command):
                 return w
         return None
 
-    @staticmethod
-    def _seg_elbow(
-        a: tuple[float, float], b: tuple[float, float]
-    ) -> tuple[float, float] | None:
-        """Elbow vertex making a–b Manhattan, or None if already axis-aligned.
-
-        Thin wrapper over the shared :func:`route` primitive (spec §6.4): the
-        horizontal-first corner ``(b.x, a.y)`` — horizontal from *a*, then
-        vertical into *b*. ``route`` yields no corner when a–b are already
-        axis-aligned, so the sliced middle is empty → None.
-        """
-        mid = route(a, b, vfirst=False)[1:-1]
-        return mid[0] if mid else None
-
     def do(self, schematic: Schematic) -> None:
         wire = self._find_wire(schematic)
         if wire is None:
@@ -882,29 +1027,9 @@ class MoveWireVertexCommand(Command):
         if self._orig_points is None:
             self._orig_points = list(wire.points)
 
-        pts = list(self._orig_points)
-        i = self._index
-        if not (0 <= i < len(pts)):
+        if not (0 <= self._index < len(self._orig_points)):
             return
-        pts[i] = self._new_point
-
-        # Rebuild around the moved vertex, inserting elbows where a neighbouring
-        # segment turned diagonal. Build left→right so indices stay coherent.
-        rebuilt: list[tuple[float, float]] = []
-        for j, p in enumerate(pts):
-            if j == 0:
-                rebuilt.append(p)
-                continue
-            prev = pts[j - 1]
-            # If either endpoint of this segment is the moved vertex, the
-            # segment may need an elbow.
-            if j == i or j - 1 == i:
-                elbow = self._seg_elbow(prev, p)
-                if elbow is not None:
-                    rebuilt.append(elbow)
-            rebuilt.append(p)
-
-        new_pts = simplify_points(rebuilt)
+        new_pts = _move_vertex_points(self._orig_points, self._index, self._new_point)
         if len(new_pts) < 2:
             # The drag collapsed the wire to a single point — it has no segment
             # and would be a stray degenerate wire. Remove it (restored on undo),
@@ -929,6 +1054,57 @@ class MoveWireVertexCommand(Command):
         wire = self._find_wire(schematic)
         if wire is not None:
             wire.points = list(self._orig_points)
+
+    def redo(self, schematic: Schematic) -> None:
+        self.do(schematic)
+
+
+class MoveJunctionCommand(Command):
+    """Move a junction — every wire vertex in *targets* — to one point, keeping
+    each wire's orientation into the junction (`reshape_junction_wire`).
+
+    *targets* is ``[(wire_id, index), ...]`` (the coincident vertices). A wire
+    that collapses to a single point is removed and restored on undo, mirroring
+    :class:`MoveWireVertexCommand`.
+
+    Inverse: restore every affected wire's exact original point list.
+    """
+
+    label = "Move junction"
+
+    def __init__(
+        self, targets: list[tuple[str, int]], new_point: tuple[float, float]
+    ) -> None:
+        self._targets = list(targets)
+        self._new_point = new_point
+        self._orig: dict[str, list[tuple[float, float]]] = {}
+        self._removed: set[str] = set()
+
+    def do(self, schematic: Schematic) -> None:
+        for wire_id, idx in self._targets:
+            wire = _find_wire(schematic, wire_id)
+            if wire is None and wire_id not in self._orig:
+                continue
+            if wire_id not in self._orig:
+                self._orig[wire_id] = list(wire.points)
+            new_pts = reshape_junction_wire(self._orig[wire_id], idx, self._new_point)
+            if len(new_pts) < 2:
+                self._removed.add(wire_id)
+                schematic.wires[:] = [w for w in schematic.wires if w.id != wire_id]
+            elif wire is not None:
+                wire.points = new_pts
+
+    def undo(self, schematic: Schematic) -> None:
+        existing = {w.id for w in schematic.wires}
+        for wire_id, orig in self._orig.items():
+            if wire_id in self._removed:
+                if wire_id not in existing:
+                    schematic.wires.append(Wire(id=wire_id, points=list(orig)))
+            else:
+                w = _find_wire(schematic, wire_id)
+                if w is not None:
+                    w.points = list(orig)
+        self._removed.clear()
 
     def redo(self, schematic: Schematic) -> None:
         self.do(schematic)
@@ -1218,6 +1394,40 @@ class SetWireNoTerminationDotsCommand(Command):
         _find_wire(schematic, self._wire_id).no_termination_dots = self._old_value
 
 
+class SetWireHopModeCommand(Command):
+    """Set hop_mode on a Wire (per-wire line-hop override: ''/never/always)."""
+
+    label = "Set Wire Line Hops"
+
+    def __init__(self, wire_id: str, new_value: str, old_value: str) -> None:
+        self._wire_id = wire_id
+        self._new_value = new_value
+        self._old_value = old_value
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).hop_mode = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).hop_mode = self._old_value
+
+
+class SetWireZOrderCommand(Command):
+    """Set z_order (layer + hop priority) on a Wire."""
+
+    label = "Set Wire Z-Order"
+
+    def __init__(self, wire_id: str, new_value: int, old_value: int) -> None:
+        self._wire_id = wire_id
+        self._new_value = new_value
+        self._old_value = old_value
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).z_order = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).z_order = self._old_value
+
+
 class SetWireStartMarkerCommand(Command):
     """Set the custom endpoint marker on a Wire's first point."""
 
@@ -1318,6 +1528,40 @@ class SetWireMidLabelPosCommand(Command):
 
     def undo(self, schematic: Schematic) -> None:
         _find_wire(schematic, self._wire_id).mid_label_pos = self._old_pos
+
+
+class SetWireStartLabelPlacementCommand(Command):
+    """Set the placement of a Wire's start label ("" / "above" / "below")."""
+
+    label = "Set Wire Start Label Placement"
+
+    def __init__(self, wire_id: str, new_placement: str, old_placement: str) -> None:
+        self._wire_id = wire_id
+        self._new_placement = new_placement
+        self._old_placement = old_placement
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_label_placement = self._new_placement
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).start_label_placement = self._old_placement
+
+
+class SetWireEndLabelPlacementCommand(Command):
+    """Set the placement of a Wire's end label ("" / "above" / "below")."""
+
+    label = "Set Wire End Label Placement"
+
+    def __init__(self, wire_id: str, new_placement: str, old_placement: str) -> None:
+        self._wire_id = wire_id
+        self._new_placement = new_placement
+        self._old_placement = old_placement
+
+    def do(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_label_placement = self._new_placement
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_wire(schematic, self._wire_id).end_label_placement = self._old_placement
 
 
 class GroupRotateCommand(Command):

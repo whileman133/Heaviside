@@ -59,6 +59,7 @@ from app.canvas.style import (
 )
 from app.canvas.svgsym import is_thick, symbol_paths
 from app.components.registry import REGISTRY
+from app.schematic.model import HOP_RADIUS_GU
 
 if TYPE_CHECKING:
     from app.components.model import BipoleComponent, Component, DrawingComponent, TextNodeComponent
@@ -75,6 +76,88 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
     p.setCapStyle(Qt.RoundCap)
     p.setJoinStyle(Qt.RoundJoin)
     return p
+
+
+#: Line-hop bump radius in pixels (shared GU source with the LaTeX generator).
+HOP_R: float = HOP_RADIUS_GU * GRID_PX
+#: Cubic-Bezier control-point offset that makes one cubic approximate a 180°
+#: bump whose apex reaches exactly the radius (3/4 · 4/3 = 1).
+_HOP_KAPPA: float = 4.0 / 3.0
+
+
+def _manhattan(a: QPointF, b: QPointF) -> float:
+    return abs(a.x() - b.x()) + abs(a.y() - b.y())
+
+
+def _append_hop_bump(
+    path: QPainterPath,
+    center: QPointF,
+    along: QPointF,
+    bulge: QPointF,
+    r: float,
+) -> None:
+    """Append a semicircular bump to *path*, centred at *center*.
+
+    *along* is the unit travel direction along the segment; *bulge* the unit
+    perpendicular the bump arcs toward. The path's current point must already be
+    at ``center - r·along``; on return it is at ``center + r·along``. The bump is
+    one cubic Bézier whose apex reaches exactly *r* on the *bulge* side, so no
+    Qt arc-angle bookkeeping (and its y-down sign traps) is involved.
+    """
+    p0 = QPointF(center.x() - r * along.x(), center.y() - r * along.y())
+    p3 = QPointF(center.x() + r * along.x(), center.y() + r * along.y())
+    c1 = QPointF(p0.x() + _HOP_KAPPA * r * bulge.x(), p0.y() + _HOP_KAPPA * r * bulge.y())
+    c2 = QPointF(p3.x() + _HOP_KAPPA * r * bulge.x(), p3.y() + _HOP_KAPPA * r * bulge.y())
+    path.lineTo(p0)
+    path.cubicTo(c1, c2, p3)
+
+
+def _polyline_with_hops(pts: list[QPointF], hops: list) -> QPainterPath:
+    """A polyline through *pts* (px) with a semicircular bump at each hop.
+
+    *hops* is a list of objects carrying a ``.point`` (GU). Each is matched to
+    the segment it lies on by coordinate (orientation derived from the segment),
+    so hops that don't fall on the polyline are ignored — letting callers feed
+    committed *or* live-preview geometry with the same hop list. Bumps bulge up
+    over a horizontal segment and right over a vertical one. Shared by
+    :class:`WireItem` and :class:`WirePreviewItem`.
+    """
+    path = QPainterPath()
+    if not pts:
+        return path
+    path.moveTo(pts[0])
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        horizontal = abs(a.y() - b.y()) < 1e-6
+        seg = []
+        for hop in hops:
+            hx, hy = hop.point[0] * GRID_PX, hop.point[1] * GRID_PX
+            if horizontal:
+                if abs(hy - a.y()) < 1e-6 and min(a.x(), b.x()) < hx < max(a.x(), b.x()):
+                    seg.append(QPointF(hx, hy))
+            else:
+                if abs(hx - a.x()) < 1e-6 and min(a.y(), b.y()) < hy < max(a.y(), b.y()):
+                    seg.append(QPointF(hx, hy))
+        if not seg:
+            path.lineTo(b)
+            continue
+        if horizontal:
+            along = QPointF(1.0 if b.x() >= a.x() else -1.0, 0.0)
+            bulge = QPointF(0.0, -1.0)                     # bump upward
+            seg.sort(key=lambda p: p.x() * along.x())
+        else:
+            along = QPointF(0.0, 1.0 if b.y() >= a.y() else -1.0)
+            bulge = QPointF(1.0, 0.0)                      # bump to the right
+            seg.sort(key=lambda p: p.y() * along.y())
+        # Clamp each bump's radius so it never overruns a neighbour/endpoint.
+        stops = [a] + seg + [b]
+        for k, c in enumerate(seg):
+            prev, nxt = stops[k], stops[k + 2]
+            gap = min(_manhattan(prev, c), _manhattan(c, nxt))
+            r = min(HOP_R, 0.45 * gap)
+            _append_hop_bump(path, c, along, bulge, r)
+        path.lineTo(b)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -1239,11 +1322,19 @@ class _WireEndLabel(QGraphicsItem):
         self._fragment: str | None = None
         self._center = QPointF(0.0, 0.0)   # endpoint, parent-local px
         self._out = QPointF(1.0, 0.0)      # unit outward direction (canvas)
+        self._placement = ""               # "" = off-end, "above", "below"
 
-    def configure(self, fragment: str, center: QPointF, out: QPointF) -> None:
-        """Set the label text, its endpoint, and the outward direction."""
+    def configure(
+        self, fragment: str, center: QPointF, out: QPointF, placement: str = ""
+    ) -> None:
+        """Set the label text, its endpoint, the outward direction, and placement.
+
+        *placement* is ``""`` (off the end, along *out*), ``"above"``, or
+        ``"below"`` — the latter two centre the label over/under the endpoint.
+        """
         self._center = center
         self._out = out
+        self._placement = placement or ""
         if fragment != (self._fragment or ""):
             self._fragment = fragment or None
             if not fragment:
@@ -1270,13 +1361,34 @@ class _WireEndLabel(QGraphicsItem):
         r = self._path.boundingRect()
         s = _VEC_SCALE
         w, h = r.width() * s, r.height() * s
-        u = self._out
-        # Half-extent of the label along the outward direction (it is axis-
-        # aligned, so only one of |u.x|, |u.y| is 1).
-        half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
-        dist = _WIRE_LABEL_GAP_PX + half
-        cx = self._center.x() + u.x() * dist
-        cy = self._center.y() + u.y() * dist
+        if self._placement in ("above", "below"):
+            # Tuck the label beside the wire at the endpoint, extending inward
+            # (back along the terminal segment), so it never crosses the endpoint
+            # into a connected rect/circle. Mirrors codegen; canvas Y is down.
+            out = self._out
+            gap = _WIRE_LABEL_GAP_PX
+            if abs(out.x()) >= abs(out.y()):
+                # Horizontal segment: inward along x; side is up/down.
+                box_x = -1.0 if out.x() >= 0 else 1.0
+                box_y = -1.0 if self._placement == "above" else 1.0  # up = -Y
+            else:
+                # Vertical segment: inward along y; side left/right
+                # (above → left, below → right).
+                box_x = -1.0 if self._placement == "above" else 1.0
+                box_y = -1.0 if out.y() >= 0 else 1.0
+            # Anchor the box corner at the endpoint+gap, ink centre half a box away.
+            px = self._center.x() + box_x * gap
+            py = self._center.y() + box_y * gap
+            cx = px + box_x * w / 2.0
+            cy = py + box_y * h / 2.0
+        else:
+            u = self._out
+            # Half-extent of the label along the outward direction (it is axis-
+            # aligned, so only one of |u.x|, |u.y| is 1).
+            half = abs(u.x()) * w / 2.0 + abs(u.y()) * h / 2.0
+            dist = _WIRE_LABEL_GAP_PX + half
+            cx = self._center.x() + u.x() * dist
+            cy = self._center.y() + u.y() * dist
         # Position so the path's ink centre maps to (cx, cy) after painter.scale.
         self.setPos(QPointF(cx - r.center().x() * s, cy - r.center().y() * s))
 
@@ -1404,10 +1516,15 @@ class WireItem(QGraphicsItem):
         self.wire = wire
         self.setFlag(QGraphicsItem.ItemIsSelectable, True)
         self.setAcceptHoverEvents(True)
+        self.setZValue(wire.z_order)             # layer per z_order (spec §6.4)
         self._hovered = False
         # Indices of vertices that are NOT draggable (endpoints on a pin). The
         # scene updates this on rebuild so the handles match the live model.
         self.locked_indices: set[int] = set()
+        # Line-hops this wire owns (bumps where it arcs over a crossing wire).
+        # The scene recomputes and assigns this on every rebuild, like
+        # locked_indices; empty when line-hops are disabled or none apply.
+        self.hops: list = []
         # Live drag preview: when set, painted instead of self.wire.points.
         self._preview_points: list[tuple[float, float]] | None = None
         # Text/math labels at each end (children); configured by refresh_labels.
@@ -1484,11 +1601,13 @@ class WireItem(QGraphicsItem):
             start_text,
             QPointF(pts[0][0] * GRID_PX, pts[0][1] * GRID_PX),
             self._outward(pts[0], start_nb),
+            getattr(self.wire, "start_label_placement", ""),
         )
         self._end_label_item.configure(
             end_text,
             QPointF(pts[-1][0] * GRID_PX, pts[-1][1] * GRID_PX),
             self._outward(pts[-1], end_nb),
+            getattr(self.wire, "end_label_placement", ""),
         )
         self._mid_label_item.configure(mid_text, self._mid_center_px(pts))
 
@@ -1687,13 +1806,26 @@ class WireItem(QGraphicsItem):
             return QRectF()
         xs = [p[0] * GRID_PX for p in pts]
         ys = [p[1] * GRID_PX for p in pts]
-        margin = max(LINE_W, self._line_width_px()) + max(PIN_R, self.ARROW_LEN) + 3
+        # +HOP_R so a hop bump (which bulges perpendicular to the wire) is never
+        # clipped from the repaint region.
+        margin = max(LINE_W, self._line_width_px()) + max(PIN_R, self.ARROW_LEN) + 3 + HOP_R
         return QRectF(
             min(xs) - margin,
             min(ys) - margin,
             max(xs) - min(xs) + 2 * margin,
             max(ys) - min(ys) + 2 * margin,
         )
+
+    def _build_wire_path(self, pts: list[QPointF]) -> QPainterPath:
+        """Polyline through *pts* (px), with a semicircular bump at each hop.
+
+        Shared by paint() and shape() so the clickable band follows the bumps.
+        Hops are applied to whatever geometry is being drawn (committed *or*
+        live preview): each hop is matched to its segment by coordinate, so a
+        stale hop that no longer lies on the polyline is simply skipped — the
+        scene keeps ``self.hops`` in sync with the preview during a drag.
+        """
+        return _polyline_with_hops(pts, self.hops)
 
     #: Half-width (px) of the clickable band around each wire segment.
     HIT_TOL: float = 6.0
@@ -1711,10 +1843,7 @@ class WireItem(QGraphicsItem):
         if len(pts_gu) < 2:
             return QPainterPath()
         pts = [QPointF(x * GRID_PX, y * GRID_PX) for x, y in pts_gu]
-        line = QPainterPath()
-        line.moveTo(pts[0])
-        for pt in pts[1:]:
-            line.lineTo(pt)
+        line = self._build_wire_path(pts)
 
         stroker = QPainterPathStroker()
         stroker.setWidth(self.HIT_TOL * 2.0)
@@ -1744,11 +1873,7 @@ class WireItem(QGraphicsItem):
         painter.setPen(_pen(color, self._line_width_px(), self._line_pen_style()))
         painter.setBrush(Qt.NoBrush)
         pts = [QPointF(x * GRID_PX, y * GRID_PX) for x, y in pts_gu]
-        path = QPainterPath()
-        path.moveTo(pts[0])
-        for pt in pts[1:]:
-            path.lineTo(pt)
-        painter.drawPath(path)
+        painter.drawPath(self._build_wire_path(pts))
 
         # Custom endpoint markers (e.g. arrowheads for block diagrams).
         self._draw_markers(painter, pts, color)
@@ -1789,6 +1914,10 @@ class WirePreviewItem(QGraphicsItem):
         self.points: list[tuple[float, float]] = []   # committed vertices (GU)
         self.cursor: tuple[float, float] | None = None  # pending endpoint (GU)
         self.cursor_is_pin: bool = False
+        # Live line-hops where the in-progress wire crosses existing wires; the
+        # scene recomputes these as the cursor moves (set before set_path so the
+        # geometry-change covers the bumps).
+        self.hops: list = []
         self.setZValue(1000)               # above components, like the place ghost
         self.setAcceptedMouseButtons(Qt.NoButton)  # never steal clicks
 
@@ -1820,7 +1949,7 @@ class WirePreviewItem(QGraphicsItem):
             return QRectF()
         xs = [p.x() for p in pts]
         ys = [p.y() for p in pts]
-        margin = LINE_W + PIN_R + 4
+        margin = LINE_W + PIN_R + 4 + HOP_R          # +HOP_R so a bump isn't clipped
         return QRectF(
             min(xs) - margin,
             min(ys) - margin,
@@ -1837,11 +1966,7 @@ class WirePreviewItem(QGraphicsItem):
             pen = _pen(COLOR_GHOST, LINE_W, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
-            path = QPainterPath()
-            path.moveTo(pts[0])
-            for pt in pts[1:]:
-                path.lineTo(pt)
-            painter.drawPath(path)
+            painter.drawPath(_polyline_with_hops(pts, self.hops))
 
         # --- committed vertex anchors (small ghost dots) ------------------
         if self.points:
@@ -1878,10 +2003,50 @@ class JunctionItem(QGraphicsItem):
     """
 
     R: float = PIN_R + 1.0   # slightly larger than a pin dot, for visibility
+    HOVER_GROW: float = 2.5  # extra radius when hovered (matches JunctionDragItem)
 
     def __init__(self, parent: QGraphicsItem | None = None):
         super().__init__(parent)
         self.setZValue(50)                       # above wires, below ghosts
+        self.setAcceptedMouseButtons(Qt.NoButton)
+        # Hover feedback: the dot grows + highlights to signal it's draggable.
+        self.setAcceptHoverEvents(True)
+        self._hover = False
+
+    def _radius(self) -> float:
+        return self.R + (self.HOVER_GROW if self._hover else 0.0)
+
+    def hoverEnterEvent(self, event) -> None:  # noqa: ANN001, N802
+        self._hover = True
+        self.prepareGeometryChange()
+        self.update()
+
+    def hoverLeaveEvent(self, event) -> None:  # noqa: ANN001, N802
+        self._hover = False
+        self.prepareGeometryChange()
+        self.update()
+
+    def boundingRect(self) -> QRectF:
+        m = self.R + self.HOVER_GROW + 1.0
+        return QRectF(-m, -m, 2 * m, 2 * m)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = COLOR_SELECTED if self._hover else COLOR_NORMAL
+        painter.setPen(_pen(color, 1.0))
+        painter.setBrush(QBrush(QColor(color)))
+        painter.drawEllipse(QPointF(0.0, 0.0), self._radius(), self._radius())
+
+
+class JunctionDragItem(QGraphicsItem):
+    """A highlighted, enlarged junction dot shown while a junction is being
+    dragged — makes it clear the junction (with all its wires) is moving."""
+
+    R: float = JunctionItem.R + 2.5   # noticeably bigger than a resting dot
+
+    def __init__(self, parent: QGraphicsItem | None = None):
+        super().__init__(parent)
+        self.setZValue(1100)                     # above wires, ghosts, dots
         self.setAcceptedMouseButtons(Qt.NoButton)
 
     def boundingRect(self) -> QRectF:
@@ -1890,8 +2055,8 @@ class JunctionItem(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(_pen(COLOR_NORMAL, 1.0))
-        painter.setBrush(QBrush(QColor(COLOR_NORMAL)))
+        painter.setPen(_pen(COLOR_SELECTED, 1.0))
+        painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
         painter.drawEllipse(QPointF(0.0, 0.0), self.R, self.R)
 
 
@@ -2114,6 +2279,12 @@ def _resolve_tikz_color(tikz: str) -> QColor:
     return c if c.isValid() else QColor(Qt.white)
 
 
+# Connection-point dots drawn around rect/circle perimeters: smaller and more
+# muted than a component pin (PIN_R), to read as a subtle "connection rail".
+_CONN_DOT_R = PIN_R * 0.55
+_CONN_DOT_COLOR = QColor(200, 60, 60, 120)   # translucent red
+
+
 class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
     """Rectangle drawing element.
 
@@ -2124,7 +2295,49 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
     """
 
     def _sync_options_item(self) -> None:
-        self._options_item.setVisible(False)
+        # The centred text label (component.options) is drawn inline in
+        # _draw_body(); hide the floating editor child unless it is active.
+        if not self._options_item.is_editing:
+            self._options_item.setVisible(False)
+        if not self._ghost:
+            self._request_vector(self._component.options)
+
+    # Rect text is free text, not key=value options — edit it verbatim
+    # (no comma<->newline conversion), like TextNodeItem.
+    def _options_to_editable(self, options: str) -> str:
+        return options
+
+    def _options_from_editable(self, text: str) -> str:
+        return text
+
+    def begin_options_edit(self) -> None:
+        """Activate inline editing of the centred text, centred in the box."""
+        if self._options_item.is_editing:
+            return
+        self._options_item.setFont(_fonted_qfont(self._component))
+        self._options_item.setTransform(QTransform())
+        self._options_item.setPlainText(self._component.options)
+        ep = self._endpoint_px()
+        cx = (min(0.0, ep.x()) + max(0.0, ep.x())) / 2
+        cy = (min(0.0, ep.y()) + max(0.0, ep.y())) / 2
+        er = self._options_item.boundingRect()
+        self._options_item.setPos(cx - er.width() / 2, cy - er.height() / 2)
+        self._options_item.setVisible(True)
+        self._options_item.begin_edit()
+
+    def boundingRect(self) -> QRectF:
+        base = super().boundingRect()
+        if self._vec_path is not None and not self._options_item.is_editing:
+            ep = self._endpoint_px()
+            cx = (min(0.0, ep.x()) + max(0.0, ep.x())) / 2
+            cy = (min(0.0, ep.y()) + max(0.0, ep.y())) / 2
+            scale = self._vec_scale()
+            r = self._vec_path.boundingRect()
+            w, h = r.width() * scale, r.height() * scale
+            m = 2.0
+            text_rect = QRectF(cx - w / 2 - m, cy - h / 2 - m, w + 2 * m, h + 2 * m)
+            return base.united(text_rect)
+        return base
 
     def _parse_options(self) -> tuple[Qt.PenStyle, float, str]:
         """Return (pen_style, line_width_px, fill_color_name) from the style fields."""
@@ -2168,28 +2381,88 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         )
         return path.united(handle)
 
-    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+    def _draw_shape(self, painter: QPainter, color: str, rect: QRectF) -> None:
+        """Stroke/fill the outline shape. Overridden by CircleItem (ellipse)."""
         pen_style, line_width_px, fill = self._parse_options()
         painter.setPen(_pen(color, line_width_px, pen_style))
-
-        x0 = min(0.0, ep.x())
-        y0 = min(0.0, ep.y())
-        x1 = max(0.0, ep.x())
-        y1 = max(0.0, ep.y())
-        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
-
         if fill and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(fill)))
         else:
             painter.setBrush(Qt.NoBrush)
         painter.drawRect(rect)
 
+    def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
+        x0 = min(0.0, ep.x())
+        y0 = min(0.0, ep.y())
+        x1 = max(0.0, ep.x())
+        y1 = max(0.0, ep.y())
+        rect = QRectF(x0, y0, x1 - x0, y1 - y0)
+
+        self._draw_shape(painter, color, rect)
+
+        # Centred text label (component.options); typeset math when rendered,
+        # raw text otherwise.  Suppressed while the inline editor is active.
+        text = self._component.options
+        if text and not self._ghost and not self._options_item.is_editing:
+            if self._vec_path is not None:
+                scale = self._vec_scale()
+                pr = self._vec_path.boundingRect()
+                painter.save()
+                painter.translate(rect.center().x(), rect.center().y())
+                painter.scale(scale, scale)
+                painter.translate(-pr.center().x(), -pr.center().y())
+                painter.fillPath(self._vec_path, QBrush(QColor(color)))
+                painter.restore()
+            else:
+                painter.setFont(_fonted_qfont(self._component))
+                painter.setPen(_pen(color, LINE_W))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawText(rect, Qt.AlignCenter, text)
+
+    def _connection_dots_local(self) -> list[QPointF]:
+        """Local-px connection points to mark with dots — the full perimeter at
+        0.25 GU (overridden by :class:`CircleItem` to the four cardinal points)."""
+        ep = self._endpoint_px()
+        x0, y0 = min(0.0, ep.x()), min(0.0, ep.y())
+        x1, y1 = max(0.0, ep.x()), max(0.0, ep.y())
+        step = 0.25 * GRID_PX
+        nx = max(1, round((x1 - x0) / step))
+        ny = max(1, round((y1 - y0) / step))
+        seen: set[tuple[float, float]] = set()
+        out: list[QPointF] = []
+
+        def add(x: float, y: float) -> None:
+            k = (round(x, 3), round(y, 3))
+            if k not in seen:
+                seen.add(k)
+                out.append(QPointF(x, y))
+
+        for i in range(nx + 1):
+            x = x0 + i * step
+            add(x, y0)
+            add(x, y1)
+        for j in range(ny + 1):
+            y = y0 + j * step
+            add(x0, y)
+            add(x1, y)
+        return out
+
+    def _draw_connection_dots(self, painter: QPainter) -> None:
+        if self._ghost:
+            return
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QBrush(_CONN_DOT_COLOR))
+        for p in self._connection_dots_local():
+            painter.drawEllipse(p, _CONN_DOT_R, _CONN_DOT_R)
+
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
         color = self._body_color()
         ep = self._endpoint_px()
         self._draw_body(painter, color, ep)
-        # Resize handle at the far corner when selected (no circuit pin dots).
+        # Muted connection-point dots around the perimeter (where wires attach).
+        self._draw_connection_dots(painter)
+        # Resize handle at the far corner when selected.
         if self.isSelected() and not self._ghost:
             painter.setPen(_pen(COLOR_SELECTED, 1.0))
             painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
@@ -2197,6 +2470,56 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
                 ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
                 _HANDLE_HALF * 2, _HANDLE_HALF * 2,
             )
+
+
+class CircleItem(RectItem):
+    """Circle/ellipse drawing element — a :class:`RectItem` that draws an ellipse
+    inscribed in the (width, height) bounding box (a circle when square).
+
+    Everything else — centred text, inline editing, fill/border, resize handle,
+    boundingRect — is inherited from :class:`RectItem`.  Only the painted outline
+    and the selection hit region differ.  Wire connections are restricted to the
+    four cardinal points (N/S/E/W) by the model (`circle_connection_points`),
+    not by this item.
+    """
+
+    def _draw_shape(self, painter: QPainter, color: str, rect: QRectF) -> None:
+        pen_style, line_width_px, fill = self._parse_options()
+        painter.setPen(_pen(color, line_width_px, pen_style))
+        if fill and not self._ghost:
+            painter.setBrush(QBrush(_resolve_tikz_color(fill)))
+        else:
+            painter.setBrush(Qt.NoBrush)
+        painter.drawEllipse(rect)
+
+    def shape(self) -> QPainterPath:
+        """Ellipse interior + resize handle as the hit region."""
+        ep = self._endpoint_px()
+        x0 = min(0.0, ep.x())
+        y0 = min(0.0, ep.y())
+        x1 = max(0.0, ep.x())
+        y1 = max(0.0, ep.y())
+        path = QPainterPath()
+        path.addEllipse(QRectF(x0, y0, x1 - x0, y1 - y0))
+        handle = QPainterPath()
+        handle.addRect(
+            ep.x() - _HANDLE_HALF - 2, ep.y() - _HANDLE_HALF - 2,
+            (_HANDLE_HALF + 2) * 2, (_HANDLE_HALF + 2) * 2,
+        )
+        return path.united(handle)
+
+    def _connection_dots_local(self) -> list[QPointF]:
+        """Only the four cardinal points (N/S/E/W) — the circle's connections."""
+        ep = self._endpoint_px()
+        x0, y0 = min(0.0, ep.x()), min(0.0, ep.y())
+        x1, y1 = max(0.0, ep.x()), max(0.0, ep.y())
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        return [
+            QPointF(cx, y0),   # N
+            QPointF(cx, y1),   # S
+            QPointF(x1, cy),   # E
+            QPointF(x0, cy),   # W
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -2368,6 +2691,7 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "short":      ShortItem,
     "text_node":  TextNodeItem,
     "rect":       RectItem,
+    "circle":     CircleItem,
     "bipole":     BipoleItem,
     "ground":     GroundItem,
     "rground":  RgroundItem,

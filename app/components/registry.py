@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from app.components.model import (
     BipoleComponent,
+    CircleComponent,
     ComponentDef,
     DiodeComponent,
     MosfetComponent,
@@ -529,13 +530,27 @@ _RECT = ComponentDef(
     display_name="Rectangle",
     category="Drawing",
     # Placeholder bbox matching default span; RectItem overrides boundingRect().
-    bbox=(0.0, 0.0, 2.0, 2.0),
+    bbox=(0.0, 0.0, 1.0, 1.0),
     pins=[],
     label_slots=[],
     tikz_keyword="rectangle",
-    default_span=(2.0, 2.0),
+    default_span=(1.0, 1.0),
     resizable=True,
     component_class=RectComponent,
+)
+
+_CIRCLE = ComponentDef(
+    kind="circle",
+    display_name="Circle",
+    category="Drawing",
+    # Placeholder bbox matching default span; CircleItem overrides boundingRect().
+    bbox=(0.0, 0.0, 0.5, 0.5),
+    pins=[],
+    label_slots=[],
+    tikz_keyword="circle",
+    default_span=(0.5, 0.5),
+    resizable=True,
+    component_class=CircleComponent,
 )
 
 _BIPOLE = ComponentDef(
@@ -601,6 +616,7 @@ REGISTRY: dict[str, ComponentDef] = {
         _VSS,
         _TEXT_NODE,
         _RECT,
+        _CIRCLE,
     ]
 }
 

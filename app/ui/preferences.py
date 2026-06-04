@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 _KEY_AUTO_PDF = "export/auto_pdf_on_save"
 _KEY_AUTO_EPS = "export/auto_eps_on_save"
 _KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
+_KEY_LINE_HOPS = "display/line_hops"
 
 
 def _to_bool(value: object, default: bool = False) -> bool:
@@ -77,6 +78,16 @@ class Preferences:
     @mark_unconnected_pins.setter
     def mark_unconnected_pins(self, value: bool) -> None:
         self._settings.setValue(_KEY_MARK_OPEN_PINS, bool(value))
+
+    @property
+    def line_hops(self) -> bool:
+        # Defaults on: drawing a hop at a non-connecting crossing is the
+        # schematic-drawing convention (spec §6.4).
+        return _to_bool(self._settings.value(_KEY_LINE_HOPS), default=True)
+
+    @line_hops.setter
+    def line_hops(self, value: bool) -> None:
+        self._settings.setValue(_KEY_LINE_HOPS, bool(value))
 
 
 class PreferencesDialog(QDialog):
@@ -135,6 +146,19 @@ class PreferencesDialog(QDialog):
         pins_hint.setStyleSheet("color: #666; font-size: 11px;")
         display_layout.addWidget(pins_hint)
 
+        self._chk_line_hops = QCheckBox("Draw line-hops where wires cross without connecting")
+        self._chk_line_hops.setChecked(prefs.line_hops)
+        display_layout.addWidget(self._chk_line_hops)
+
+        hops_hint = QLabel(
+            "Draws a small semicircular bump on one wire where two wires cross "
+            "but do not connect, so the crossing reads unambiguously. The wire "
+            "with the higher z-order hops over the other."
+        )
+        hops_hint.setWordWrap(True)
+        hops_hint.setStyleSheet("color: #666; font-size: 11px;")
+        display_layout.addWidget(hops_hint)
+
         layout.addWidget(display_group)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -147,4 +171,5 @@ class PreferencesDialog(QDialog):
         self._prefs.auto_export_pdf = self._chk_pdf.isChecked()
         self._prefs.auto_export_eps = self._chk_eps.isChecked()
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
+        self._prefs.line_hops = self._chk_line_hops.isChecked()
         self.accept()

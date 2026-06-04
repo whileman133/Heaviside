@@ -27,11 +27,22 @@ from app.components.model import (
 )
 from app.components.registry import REGISTRY
 from app.components.style import parse_style_options
-from app.schematic.model import Schematic, Wire
+from app.schematic.model import WIRE_HOP_MODES, Schematic, Wire
 from app.schematic.validate import validate
 
-# Spec versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1"}
+# File-format version written by the current code.  Distinct from the spec
+# version.  Bumped to "0.2" when `rect` began storing centred text in its
+# ``options`` field: under "0.1", a rect's non-empty ``options`` was always a
+# legacy style string (migrated into the StyledComponent fields on load), so the
+# version is what disambiguates legacy-style from new-text on load.
+_FORMAT_VERSION: str = "0.2"
+
+# File-format versions this loader accepts. Extend when new versions are defined.
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2"}
+
+# Versions whose `rect` components stored the draw style in ``options`` (rather
+# than the dedicated StyledComponent fields).  Such options are migrated on load.
+_RECT_STYLE_IN_OPTIONS_VERSIONS: set[str] = {"0.1"}
 
 
 class SchematicLoadError(Exception):
@@ -105,7 +116,10 @@ def load(path: str | Path) -> Schematic:
 
 def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
     return {
-        "version": s.version,
+        # Always written as the current format version so that, e.g., a rect's
+        # text in ``options`` is never re-interpreted as a legacy style string
+        # when an older file is loaded, edited, and saved.
+        "version": _FORMAT_VERSION,
         "name": s.name,
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
@@ -168,6 +182,8 @@ def _wire_to_dict(w: Wire) -> dict[str, Any]:
         d["no_junction_dots"] = True
     if w.no_termination_dots:
         d["no_termination_dots"] = True
+    if w.hop_mode:
+        d["hop_mode"] = w.hop_mode
     if w.start_marker:
         d["start_marker"] = w.start_marker
     if w.end_marker:
@@ -180,6 +196,12 @@ def _wire_to_dict(w: Wire) -> dict[str, Any]:
         d["mid_label"] = w.mid_label
     if w.mid_label_pos != 0.5:
         d["mid_label_pos"] = w.mid_label_pos
+    if w.start_label_placement:
+        d["start_label_placement"] = w.start_label_placement
+    if w.end_label_placement:
+        d["end_label_placement"] = w.end_label_placement
+    if w.z_order:
+        d["z_order"] = w.z_order
     return d
 
 
@@ -211,7 +233,9 @@ def _dict_to_schematic(data: dict) -> Schematic:
     raw_components = _require(data, "components", "schematic")
     if not isinstance(raw_components, list):
         raise SchematicLoadError("Field 'components' must be an array")
-    components = [_dict_to_component(c, i) for i, c in enumerate(raw_components)]
+    components = [
+        _dict_to_component(c, i, version) for i, c in enumerate(raw_components)
+    ]
 
     raw_wires = _require(data, "wires", "schematic")
     if not isinstance(raw_wires, list):
@@ -231,7 +255,7 @@ def _dict_to_schematic(data: dict) -> Schematic:
     )
 
 
-def _dict_to_component(data: Any, index: int) -> Component:
+def _dict_to_component(data: Any, index: int, version: str = _FORMAT_VERSION) -> Component:
     ctx = f"components[{index}]"
     if not isinstance(data, dict):
         raise SchematicLoadError(f"{ctx} must be an object")
@@ -326,10 +350,16 @@ def _dict_to_component(data: Any, index: int) -> Component:
         has_style_fields = any(
             k in data for k in ("fill_color", "border_width", "line_style")
         )
-        if issubclass(cls, RectComponent) and not has_style_fields and options:
-            # Migrate legacy rect files that stored the style in the options
-            # string; promote it into the StyledComponent fields and clear
-            # options (which is unused for rects in the field-based format).
+        if (
+            issubclass(cls, RectComponent)
+            and not has_style_fields
+            and options
+            and version in _RECT_STYLE_IN_OPTIONS_VERSIONS
+        ):
+            # Migrate legacy rect files (format < 0.2) that stored the style in
+            # the options string; promote it into the StyledComponent fields and
+            # clear options.  In 0.2+, a rect's options holds centred text and is
+            # kept verbatim.
             fill, bw, ls = parse_style_options(options)
             kwargs["fill_color"] = fill
             kwargs["border_width"] = bw
@@ -403,6 +433,12 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
     if not isinstance(no_termination_dots, bool):
         raise SchematicLoadError(f"{ctx}.no_termination_dots must be a boolean")
 
+    hop_mode = data.get("hop_mode", "")
+    if not isinstance(hop_mode, str) or hop_mode not in WIRE_HOP_MODES:
+        raise SchematicLoadError(
+            f"{ctx}.hop_mode must be one of {WIRE_HOP_MODES!r}"
+        )
+
     start_marker = data.get("start_marker", "")
     if not isinstance(start_marker, str):
         raise SchematicLoadError(f"{ctx}.start_marker must be a string")
@@ -430,10 +466,26 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
         raise SchematicLoadError(f"{ctx}.mid_label_pos must be a number") from exc
     mid_label_pos = max(0.0, min(1.0, mid_label_pos))
 
+    start_label_placement = data.get("start_label_placement", "")
+    if not isinstance(start_label_placement, str):
+        raise SchematicLoadError(f"{ctx}.start_label_placement must be a string")
+
+    end_label_placement = data.get("end_label_placement", "")
+    if not isinstance(end_label_placement, str):
+        raise SchematicLoadError(f"{ctx}.end_label_placement must be a string")
+
+    z_order = data.get("z_order", 0)
+    if not isinstance(z_order, int) or isinstance(z_order, bool):
+        raise SchematicLoadError(f"{ctx}.z_order must be an integer")
+
     return Wire(
         id=wire_id, points=points, line_style=line_style, line_width=line_width,
         no_junction_dots=no_junction_dots, no_termination_dots=no_termination_dots,
+        hop_mode=hop_mode,
         start_marker=start_marker, end_marker=end_marker,
         start_label=start_label, end_label=end_label,
         mid_label=mid_label, mid_label_pos=mid_label_pos,
+        start_label_placement=start_label_placement,
+        end_label_placement=end_label_placement,
+        z_order=z_order,
     )

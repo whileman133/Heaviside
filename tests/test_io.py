@@ -86,13 +86,20 @@ def _schematic_with_options() -> Schematic:
 # ---------------------------------------------------------------------------
 
 def test_roundtrip_empty(tmp_path: Path) -> None:
-    """Save and reload an empty schematic — loaded schematic equals original."""
+    """Save and reload an empty schematic — loaded schematic equals original.
+
+    ``save`` normalises the file-format version to the current one (so an older
+    file edited and re-saved can't have its rect text mistaken for a legacy
+    style string), so the version is expected to be upgraded, not preserved.
+    """
+    from app.schematic.io import _FORMAT_VERSION
+
     original = _empty_schematic()
     p = tmp_path / "empty.hv"
     save(original, p)
     loaded = load(p)
 
-    assert loaded.version == original.version
+    assert loaded.version == _FORMAT_VERSION
     assert loaded.name == original.name
     assert loaded.components == original.components
     assert loaded.wires == original.wires
@@ -491,6 +498,57 @@ def test_rect_legacy_options_migrated_to_fields(tmp_path: Path) -> None:
     assert loaded.options == ""
 
 
+def test_rect_text_roundtrip(tmp_path: Path) -> None:
+    """A rect's centred text (options) and font fields survive save/load."""
+    from app.components.model import RectComponent
+    comp = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0),
+        rotation=0, mirror=False, options="$H(s)$",
+        span_override=(4.0, 2.0),
+        font_size=10.0, font_bold=True, font_family="sans",
+    )
+    s = Schematic(version="0.1", name="rect-text", components=[comp])
+    p = tmp_path / "rect_text.hv"
+    save(s, p)
+    loaded = load(p).components[0]
+    assert isinstance(loaded, RectComponent)
+    # Text preserved verbatim (NOT migrated/stripped as a style string).
+    assert loaded.options == "$H(s)$"
+    assert abs(loaded.font_size - 10.0) < 1e-6
+    assert loaded.font_bold is True
+    assert loaded.font_family == "sans"
+
+
+def test_rect_text_with_no_style_fields_not_migrated(tmp_path: Path) -> None:
+    """A 0.2 rect with text and no style fields keeps its text (no legacy migration)."""
+    data = {
+        "version": "0.2",
+        "name": "rect-text",
+        "components": [
+            {
+                "id": _uid(),
+                "kind": "rect",
+                "position": [0.0, 0.0],
+                "rotation": 0,
+                "mirror": False,
+                "options": "Processor",
+                "span_override": [3.0, 1.0],
+            }
+        ],
+        "wires": [],
+        "metadata": {},
+    }
+    p = tmp_path / "rect_text_02.hv"
+    p.write_text(json.dumps(data), encoding="utf-8")
+
+    from app.components.model import RectComponent
+    loaded = load(p).components[0]
+    assert isinstance(loaded, RectComponent)
+    assert loaded.options == "Processor"   # kept, not parsed as style
+    assert loaded.fill_color == ""
+    assert loaded.line_style == ""
+
+
 def test_bipole_line_style_roundtrip(tmp_path: Path) -> None:
     """BipoleComponent.line_style survives a save/load cycle (dashed border support)."""
     from app.components.model import BipoleComponent
@@ -705,6 +763,37 @@ def test_wire_labels_default_omitted(tmp_path: Path) -> None:
     assert "end_label" not in raw["wires"][0]
 
 
+def test_roundtrip_wire_label_placement(tmp_path: Path) -> None:
+    """A wire's start/end label placement survives a save+load cycle."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
+             start_label="in", start_label_placement="above",
+             end_label="$y$", end_label_placement="below")
+    save(Schematic(version="0.1", name="lp", wires=[w]), tmp_path / "lp.hv")
+    loaded = load(tmp_path / "lp.hv").wires[0]
+    assert loaded.start_label_placement == "above"
+    assert loaded.end_label_placement == "below"
+
+
+def test_wire_label_placement_default_omitted(tmp_path: Path) -> None:
+    """Default ('' = off-end) placement is omitted from the JSON (back-compat)."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], end_label="$y$")
+    save(Schematic(version="0.1", name="lp", wires=[w]), tmp_path / "lp.hv")
+    raw = json.loads((tmp_path / "lp.hv").read_text())
+    assert "start_label_placement" not in raw["wires"][0]
+    assert "end_label_placement" not in raw["wires"][0]
+
+
+def test_wire_label_placement_bad_type_raises(tmp_path: Path) -> None:
+    doc = {
+        "version": "0.1", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "end_label_placement": 3}],
+    }
+    (tmp_path / "bad.hv").write_text(json.dumps(doc))
+    with pytest.raises(SchematicLoadError, match="end_label_placement"):
+        load(tmp_path / "bad.hv")
+
+
 def test_wire_label_bad_type_raises(tmp_path: Path) -> None:
     doc = {
         "version": "0.1", "name": "bad", "components": [],
@@ -754,3 +843,67 @@ def test_wire_mid_label_pos_bad_type_raises(tmp_path: Path) -> None:
     (tmp_path / "bad.hv").write_text(json.dumps(doc))
     with pytest.raises(SchematicLoadError, match="mid_label_pos"):
         load(tmp_path / "bad.hv")
+
+
+# ---------------------------------------------------------------------------
+# Wire z_order round-trip (line-hop layering)
+# ---------------------------------------------------------------------------
+
+def test_roundtrip_wire_z_order(tmp_path: Path) -> None:
+    """A wire's non-zero z_order survives a save/load cycle; default stays absent."""
+    plain = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    layered = Wire(id=_uid(), points=[(0.0, 1.0), (2.0, 1.0)], z_order=-3)
+    original = Schematic(version="0.1", name="z", wires=[plain, layered])
+    p = tmp_path / "z.hv"
+    save(original, p)
+
+    # Default z_order is not persisted (keeps plain wires' JSON minimal).
+    raw = json.loads(p.read_text())
+    assert "z_order" not in raw["wires"][0]
+    assert raw["wires"][1]["z_order"] == -3
+
+    loaded = load(p)
+    assert loaded.wires[0].z_order == 0
+    assert loaded.wires[1].z_order == -3
+
+
+def test_wire_z_order_wrong_type_raises(tmp_path: Path) -> None:
+    """A non-integer wire z_order raises SchematicLoadError."""
+    data = {
+        "version": "0.2",
+        "name": "bad",
+        "components": [],
+        "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "z_order": "high"}],
+        "metadata": {},
+    }
+    p = tmp_path / "bad.hv"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="z_order"):
+        load(p)
+
+
+def test_roundtrip_wire_hop_mode(tmp_path: Path) -> None:
+    """A wire's hop_mode round-trips; the default "" is omitted from JSON."""
+    plain = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
+    never = Wire(id=_uid(), points=[(0.0, 1.0), (2.0, 1.0)], hop_mode="never")
+    always = Wire(id=_uid(), points=[(0.0, 2.0), (2.0, 2.0)], hop_mode="always")
+    p = tmp_path / "hm.hv"
+    save(Schematic(version="0.1", name="hm", wires=[plain, never, always]), p)
+    raw = json.loads(p.read_text())
+    assert "hop_mode" not in raw["wires"][0]
+    assert raw["wires"][1]["hop_mode"] == "never"
+    assert raw["wires"][2]["hop_mode"] == "always"
+    loaded = load(p)
+    assert [w.hop_mode for w in loaded.wires] == ["", "never", "always"]
+
+
+def test_wire_hop_mode_invalid_raises(tmp_path: Path) -> None:
+    data = {
+        "version": "0.2", "name": "bad", "components": [],
+        "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "hop_mode": "sometimes"}],
+        "metadata": {},
+    }
+    p = tmp_path / "bad.hv"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="hop_mode"):
+        load(p)

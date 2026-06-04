@@ -111,6 +111,7 @@ import re
 
 from app.components.model import (
     BipoleComponent,
+    CircleComponent,
     DiodeComponent,
     DrawingComponent,
     MosfetComponent,
@@ -125,13 +126,16 @@ from app.components.style import (
 )
 from app.schematic.model import (
     Component,
+    HOP_RADIUS_GU,
     Schematic,
     Wire,
+    WireHop,
     component_pin_positions,
     junction_points,
     open_endpoints,
     unconnected_pins,
     simplify_points,
+    wire_crossings,
     wire_point_at_fraction,
 )
 from app.schematic.validate import validate
@@ -182,6 +186,7 @@ def generate(
     schematic: Schematic,
     y_flip: bool = False,
     mark_unconnected_pins: bool = False,
+    mark_line_hops: bool = False,
 ) -> str:
     """
     Return a CircuiTikZ environment string for *schematic*.
@@ -200,6 +205,11 @@ def generate(
         component pin that nothing connects to (see ``unconnected_pins``).  This
         is a display preference; it defaults to False so output is unchanged
         unless explicitly requested.
+    mark_line_hops:
+        When True, a small semicircular bump is drawn on the higher-``z_order``
+        wire wherever two wires cross without connecting (see ``wire_crossings``).
+        A display preference; defaults to False so output is unchanged unless
+        requested (the app passes the user's preference, which defaults on).
 
     Raises ValueError if the schematic violates any invariant.
     """
@@ -225,62 +235,80 @@ def generate(
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
         lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
 
-    # Background drawing annotations (z_order < 0) — emitted before \draw so
-    # they appear behind circuit elements in the rendered PDF.
-    # Sorted ascending: lower z_order is drawn first (further back).
-    bg = sorted(
-        (c for c in schematic.components if isinstance(c, DrawingComponent) and c.z_order < 0),
-        key=lambda c: c.z_order,
-    )
-    for comp in bg:
-        if isinstance(comp, TextNodeComponent):
-            lines.append("  " + _text_node_line(comp, _y))
-        elif isinstance(comp, RectComponent):
-            lines.append("  " + _rect_line(comp, _y))
-        elif isinstance(comp, BipoleComponent):
-            lines.append("  " + _bipole_node_line(comp, _y))
+    # Line-hops (decoration where wires cross without connecting, §6.4), grouped
+    # per hopping wire. Default-mode wires hop only when mark_line_hops is on;
+    # per-wire hop_mode overrides ("always"/"never") apply either way.
+    hops_by_wire: dict[str, list[WireHop]] = {}
+    for hop in wire_crossings(schematic, default_on=mark_line_hops):
+        hops_by_wire.setdefault(hop.wire_id, []).append(hop)
 
-    lines.append(r"  \draw")
-
-    draw_lines: list[str] = []
-
-    # Build coordinate → node-terminal reference for multi-terminal components.
-    # e.g. (78.5, 79.5) → "(node_abc123.+)"
-    # Used so wire endpoints referencing component pins use named anchors.
-    # Keys use pre-flip coordinates (canvas space) for lookup; the flip is
-    # applied when the reference is emitted, not when the key is stored.
+    # Coordinate → node-terminal reference for multi-terminal component pins,
+    # e.g. (78.5, 79.5) → "(node_abc123.+)", plus all pin refs per coordinate.
+    # Built up front (before the z-layer blocks) so background/foreground wires
+    # can use named anchors too. Keys use pre-flip (canvas) coordinates.
     pin_coord_to_ref: dict[tuple[float, float], str] = {}
-    # Single pass over components: build pin_coord_to_ref, all_pin_refs,
-    # and emit draw lines — avoids iterating schematic.components three times.
     all_pin_refs: dict[tuple[float, float], list[str]] = {}
     for comp in schematic.components:
         defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
         anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
-
-        # Populate pin_coord_to_ref and all_pin_refs in the same loop.
         for i, pin in enumerate(defn.pins):
             if i >= len(pin_positions):
                 continue
             px, py = pin_positions[i]
             coord = (round(px, 6), round(py, 6))
             if anchor_map and pin.name in anchor_map:
-                ctikz_anchor = anchor_map[pin.name]
-                ref = f"({node_id}.{ctikz_anchor})"
+                ref = f"({node_id}.{anchor_map[pin.name]})"
                 pin_coord_to_ref[coord] = ref
             else:
                 ref = f"({_fmt(px)},{_fmt(_y(py))})"
             all_pin_refs.setdefault(coord, []).append(ref)
 
+    def _wire_layer_line(wire: Wire, *, use_refs: bool) -> str:
+        # Background-layer wires are emitted *before* the main \draw block where
+        # multi-terminal component nodes (op amp, MOSFET, BJT) are defined, so a
+        # named-anchor reference like (node_abc.gate) would point at a node that
+        # does not exist yet → a LaTeX compile error. Such wires fall back to
+        # absolute coordinates (use_refs=False); the registry pin coords already
+        # connect exactly via the leads/xscale (see module docstring), so there
+        # is no geometric loss. Foreground wires come after and keep named refs.
+        refs = pin_coord_to_ref if use_refs else None
+        return _wire_draw_statement(wire, hops_by_wire.get(wire.id, []), refs, _y)
+
+    # Background layer (z_order < 0): drawing annotations *and* wires, emitted
+    # before \draw so they sit behind the main circuit. Sorted ascending by
+    # (z_order, document order) so lower/earlier items render furthest back.
+    bg_items: list[tuple[int, int, str, object]] = []
+    for i, comp in enumerate(schematic.components):
+        if isinstance(comp, DrawingComponent) and comp.z_order < 0:
+            bg_items.append((comp.z_order, i, "c", comp))
+    for i, wire in enumerate(schematic.wires):
+        if wire.z_order < 0 and len(wire.points) >= 2:
+            bg_items.append((wire.z_order, i, "w", wire))
+    bg_items.sort(key=lambda t: (t[0], t[1]))
+    for _z, _i, _kind, obj in bg_items:
+        if _kind == "c":
+            lines.extend(_drawing_component_lines(obj, _y))
+        else:
+            # Absolute coords: the multi-terminal nodes aren't defined yet.
+            lines.append("  " + _wire_layer_line(obj, use_refs=False))
+
+    lines.append(r"  \draw")
+
+    draw_lines: list[str] = []
+    for comp in schematic.components:
         draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
 
+    # Wires at the default layer (z_order == 0) share the main \draw path;
+    # non-zero-z wires are emitted in the background/foreground layers instead.
     styled_wire_lines: list[str] = []
     for wire in schematic.wires:
         # Skip degenerate wires (fewer than two points): they have no segment to
         # draw and would emit a stray lone coordinate in the \draw path.
-        if len(wire.points) < 2:
+        if len(wire.points) < 2 or wire.z_order != 0:
             continue
+        hops = hops_by_wire.get(wire.id, [])
         style = compose_style_options(
             line_style=wire.line_style, border_width=wire.line_width
         )
@@ -293,10 +321,10 @@ def generate(
             # \draw[...] statement so the options apply only to that wire, not
             # the whole shared path.
             styled_wire_lines.append(
-                rf"\draw[{opts}] {_wire_line(wire, pin_coord_to_ref, _y)};"
+                rf"\draw[{opts}] {_wire_path(wire, hops, pin_coord_to_ref, _y)};"
             )
         else:
-            draw_lines.append(_wire_line(wire, pin_coord_to_ref, _y))
+            draw_lines.append(_wire_path(wire, hops, pin_coord_to_ref, _y))
 
     wired_coords: set[tuple[float, float]] = set()
     for wire in schematic.wires:
@@ -339,20 +367,23 @@ def generate(
         for node in _wire_label_nodes(wire, _y):
             lines.append(f"  {node}")
 
-    # Foreground drawing annotations (z_order >= 0) — emitted after the draw
-    # block so they appear in front of circuit elements.
-    # Sorted ascending: lower z_order is drawn first (further back).
-    fg = sorted(
-        (c for c in schematic.components if isinstance(c, DrawingComponent) and c.z_order >= 0),
-        key=lambda c: c.z_order,
-    )
-    for comp in fg:
-        if isinstance(comp, TextNodeComponent):
-            lines.append("  " + _text_node_line(comp, _y))
-        elif isinstance(comp, RectComponent):
-            lines.append("  " + _rect_line(comp, _y))
-        elif isinstance(comp, BipoleComponent):
-            lines.append("  " + _bipole_node_line(comp, _y))
+    # Foreground layer: drawing annotations (z_order >= 0) *and* wires
+    # (z_order > 0), emitted after the draw block so they appear in front of the
+    # circuit. Sorted ascending by (z_order, document order).
+    fg_items: list[tuple[int, int, str, object]] = []
+    for i, comp in enumerate(schematic.components):
+        if isinstance(comp, DrawingComponent) and comp.z_order >= 0:
+            fg_items.append((comp.z_order, i, "c", comp))
+    for i, wire in enumerate(schematic.wires):
+        if wire.z_order > 0 and len(wire.points) >= 2:
+            fg_items.append((wire.z_order, i, "w", wire))
+    fg_items.sort(key=lambda t: (t[0], t[1]))
+    for _z, _i, _kind, obj in fg_items:
+        if _kind == "c":
+            lines.extend(_drawing_component_lines(obj, _y))
+        else:
+            # Foreground wires come after the \draw block — named anchors resolve.
+            lines.append("  " + _wire_layer_line(obj, use_refs=True))
 
     lines.append(r"\end{circuitikz}")
 
@@ -646,6 +677,127 @@ def _wire_line(
     return " -- ".join(refs)
 
 
+#: Cubic-Bezier control offset that makes one cubic a 180° bump (matches the
+#: canvas ``_HOP_KAPPA`` so the exported arc and the on-screen arc agree).
+_HOP_KAPPA: float = 4.0 / 3.0
+
+
+def _hop_on_segment(
+    p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]
+) -> bool:
+    """True if *p* lies strictly inside the axis-aligned segment a–b."""
+    if a[1] == b[1]:                                   # horizontal
+        return p[1] == a[1] and min(a[0], b[0]) < p[0] < max(a[0], b[0])
+    if a[0] == b[0]:                                   # vertical
+        return p[0] == a[0] and min(a[1], b[1]) < p[1] < max(a[1], b[1])
+    return False
+
+
+def _wire_line_with_hops(
+    wire: Wire,
+    hops: list[WireHop],
+    pin_coord_to_ref: dict[tuple[float, float], str] | None,
+    y_fn=lambda y: y,
+) -> str:
+    r"""Like :func:`_wire_line`, but a semicircular bump arcs over each hop.
+
+    Each bump is emitted as a single cubic Bézier (``.. controls (c1) and (c2)
+    ..``) with the same geometry the canvas paints (:data:`HOP_RADIUS_GU`,
+    :data:`_HOP_KAPPA`). All coordinates pass through *y_fn*, so the bump flips
+    together with the whole figure — no arc-angle/Y-flip sign juggling. The bump
+    bulges off the wire: upward for a horizontal segment, rightward for a
+    vertical one (matching the canvas convention).
+    """
+    pts = simplify_points(wire.points)
+
+    def ref_for(i: int, x: float, y: float) -> str:
+        if pin_coord_to_ref and (i == 0 or i == len(pts) - 1):
+            r = pin_coord_to_ref.get((round(x, 6), round(y, 6)))
+            if r:
+                return r
+        return f"({_fmt(x)},{_fmt(y_fn(y))})"
+
+    out = ref_for(0, pts[0][0], pts[0][1])
+    for i in range(len(pts) - 1):
+        ax, ay = pts[i]
+        bx, by = pts[i + 1]
+        horizontal = ay == by
+        seg = [h for h in hops if _hop_on_segment(h.point, (ax, ay), (bx, by))]
+        if horizontal:
+            seg.sort(key=lambda h: (h.point[0] - ax) * (1 if bx >= ax else -1))
+            ux, uy, bxr, byr = (1.0 if bx >= ax else -1.0), 0.0, 0.0, -1.0
+        else:
+            seg.sort(key=lambda h: (h.point[1] - ay) * (1 if by >= ay else -1))
+            ux, uy, bxr, byr = 0.0, (1.0 if by >= ay else -1.0), 1.0, 0.0
+        stops = [(ax, ay)] + [h.point for h in seg] + [(bx, by)]
+        for k, h in enumerate(seg):
+            cx, cy = h.point
+            prev, nxt = stops[k], stops[k + 2]
+            gap = min(
+                abs(cx - prev[0]) + abs(cy - prev[1]),
+                abs(cx - nxt[0]) + abs(cy - nxt[1]),
+            )
+            r = min(HOP_RADIUS_GU, 0.45 * gap)
+            p0 = (cx - r * ux, cy - r * uy)
+            p3 = (cx + r * ux, cy + r * uy)
+            c1 = (p0[0] + _HOP_KAPPA * r * bxr, p0[1] + _HOP_KAPPA * r * byr)
+            c2 = (p3[0] + _HOP_KAPPA * r * bxr, p3[1] + _HOP_KAPPA * r * byr)
+            out += f" -- ({_fmt(p0[0])},{_fmt(y_fn(p0[1]))})"
+            out += (
+                f" .. controls ({_fmt(c1[0])},{_fmt(y_fn(c1[1]))})"
+                f" and ({_fmt(c2[0])},{_fmt(y_fn(c2[1]))})"
+                f" .. ({_fmt(p3[0])},{_fmt(y_fn(p3[1]))})"
+            )
+        out += " -- " + ref_for(i + 1, bx, by)
+    return out
+
+
+def _wire_path(
+    wire: Wire,
+    hops: list[WireHop],
+    pin_coord_to_ref: dict[tuple[float, float], str] | None,
+    y_fn=lambda y: y,
+) -> str:
+    """Wire path string, with hop bumps when *hops* is non-empty."""
+    if hops:
+        return _wire_line_with_hops(wire, hops, pin_coord_to_ref, y_fn)
+    return _wire_line(wire, pin_coord_to_ref, y_fn)
+
+
+def _wire_draw_statement(
+    wire: Wire,
+    hops: list[WireHop],
+    pin_coord_to_ref: dict[tuple[float, float], str] | None,
+    y_fn=lambda y: y,
+) -> str:
+    r"""A standalone ``\draw[...] <path>;`` for one wire (used for z-layered wires)."""
+    style = compose_style_options(line_style=wire.line_style, border_width=wire.line_width)
+    arrow = _wire_arrow_spec(wire)
+    opts = ", ".join(p for p in (arrow, style) if p)
+    path = _wire_path(wire, hops, pin_coord_to_ref, y_fn)
+    return rf"\draw[{opts}] {path};" if opts else rf"\draw {path};"
+
+
+def _drawing_component_lines(comp: Component, y_fn) -> list[str]:
+    """The indented LaTeX line(s) for one DrawingComponent (z-layer block)."""
+    out: list[str] = []
+    if isinstance(comp, TextNodeComponent):
+        out.append("  " + _text_node_line(comp, y_fn))
+    elif isinstance(comp, RectComponent):
+        out.append("  " + _rect_line(comp, y_fn))
+        tl = _centered_text_line(comp, y_fn)
+        if tl:
+            out.append("  " + tl)
+    elif isinstance(comp, CircleComponent):
+        out.append("  " + _circle_line(comp, y_fn))
+        tl = _centered_text_line(comp, y_fn)
+        if tl:
+            out.append("  " + tl)
+    elif isinstance(comp, BipoleComponent):
+        out.append("  " + _bipole_node_line(comp, y_fn))
+    return out
+
+
 # Map a custom endpoint marker kind to its TikZ ``arrows.meta`` tip name. These
 # require ``\usetikzlibrary{arrows.meta}`` (loaded by the standalone template and
 # documented in the snippet preamble — see app/preview/latex.py). ``""`` (no
@@ -721,30 +873,56 @@ def _wire_label_nodes(wire: Wire, y_fn=lambda y: y) -> list[str]:
         return []
     lines: list[str] = []
     ends = (
-        (wire.start_label, pts[0], _first_distinct(pts, from_end=False)),
-        (wire.end_label, pts[-1], _first_distinct(pts, from_end=True)),
+        (wire.start_label, pts[0], _first_distinct(pts, from_end=False),
+         wire.start_label_placement),
+        (wire.end_label, pts[-1], _first_distinct(pts, from_end=True),
+         wire.end_label_placement),
     )
-    for text, tip, neighbour in ends:
+    for text, tip, neighbour, placement in ends:
         if not text:
             continue
         ex, ey = tip
         nx, ny = neighbour
         dx = ex - nx
         dy = y_fn(ey) - y_fn(ny)  # outward Y in emitted (post-flip) space
-        if abs(dx) >= abs(dy):
-            # Horizontal terminal segment: label left/right of the endpoint.
-            if dx >= 0:
-                anchor, ox, oy = "west", _WIRE_LABEL_GAP, 0.0
+        if placement in ("above", "below"):
+            # Tuck the label beside the wire at the endpoint, extending *inward*
+            # (back along the terminal segment) so it never crosses the endpoint
+            # into a connected rect/circle. box_x / box_y are the ±1 directions
+            # the text box extends from the endpoint; the anchor is the opposite
+            # corner so a one-gap offset clears the wire and the endpoint.
+            if abs(dx) >= abs(dy):
+                # Horizontal segment: along-x inward; side is up/down.
+                box_x = -1.0 if dx >= 0 else 1.0
+                box_y = 1.0 if placement == "above" else -1.0  # emitted +Y = up
             else:
-                anchor, ox, oy = "east", -_WIRE_LABEL_GAP, 0.0
+                # Vertical segment: along-y inward; side is left/right
+                # (above → left, below → right).
+                box_x = -1.0 if placement == "above" else 1.0
+                box_y = -1.0 if dy >= 0 else 1.0
+            anchor = (
+                ("south" if box_y > 0 else "north")
+                + " "
+                + ("west" if box_x > 0 else "east")
+            )
+            px = ex + box_x * _WIRE_LABEL_GAP
+            py = y_fn(ey) + box_y * _WIRE_LABEL_GAP
         else:
-            # Vertical terminal segment: label above/below (emitted +Y = up).
-            if dy >= 0:
-                anchor, ox, oy = "south", 0.0, _WIRE_LABEL_GAP
+            # Off the end: along the terminal segment's outward direction.
+            if abs(dx) >= abs(dy):
+                # Horizontal terminal segment: label left/right of the endpoint.
+                if dx >= 0:
+                    anchor, ox, oy = "west", _WIRE_LABEL_GAP, 0.0
+                else:
+                    anchor, ox, oy = "east", -_WIRE_LABEL_GAP, 0.0
             else:
-                anchor, ox, oy = "north", 0.0, -_WIRE_LABEL_GAP
-        px = ex + ox
-        py = y_fn(ey) + oy
+                # Vertical terminal segment: label above/below (emitted +Y = up).
+                if dy >= 0:
+                    anchor, ox, oy = "south", 0.0, _WIRE_LABEL_GAP
+                else:
+                    anchor, ox, oy = "north", 0.0, -_WIRE_LABEL_GAP
+            px = ex + ox
+            py = y_fn(ey) + oy
         lines.append(
             rf"\node[anchor={anchor}, inner sep=0] at ({_fmt(px)},{_fmt(py)}) {{{text}}};"
         )
@@ -771,6 +949,36 @@ _FONT_FAMILY_CMD: dict[str, str] = {
 }
 
 
+def _font_opts_bracket(comp) -> str:  # noqa: ANN001
+    r"""Return the font node option as ``[font=...]``, or ``""`` when all-default.
+
+    Shared by :func:`_text_node_line` and :func:`_rect_text_line` (a FontedComponent
+    is assumed; default size is 12 pt).
+    """
+    has_size  = comp.font_size != 12.0
+    has_style = comp.font_bold or comp.font_italic or bool(comp.font_family)
+    if not (has_size or has_style):
+        return ""
+    parts: list[str] = []
+    if has_size:
+        fs = comp.font_size
+        leading = round(fs * 1.2, 2)
+        leading_str = (
+            str(int(leading)) if leading == int(leading)
+            else f"{leading:.1f}" if (leading * 10 == int(leading * 10))
+            else f"{leading:.2f}"
+        )
+        parts.append(rf"\fontsize{{{_fmt(fs)}}}{{{leading_str}}}\selectfont")
+    if comp.font_bold:
+        parts.append(r"\bfseries")
+    if comp.font_italic:
+        parts.append(r"\itshape")
+    family_cmd = _FONT_FAMILY_CMD.get(comp.font_family, "")
+    if family_cmd:
+        parts.append(family_cmd)
+    return r"[font=" + "".join(parts) + "]"
+
+
 def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
     r"""Render a text annotation as \node[...] at (x,y) {text};
 
@@ -781,30 +989,7 @@ def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
     x, y = comp.position
     text = comp.options
 
-    has_size   = comp.font_size != 12.0
-    has_style  = comp.font_bold or comp.font_italic or bool(comp.font_family)
-
-    if has_size or has_style:
-        parts: list[str] = []
-        if has_size:
-            fs = comp.font_size
-            leading = round(fs * 1.2, 2)
-            leading_str = (
-                str(int(leading)) if leading == int(leading)
-                else f"{leading:.1f}" if (leading * 10 == int(leading * 10))
-                else f"{leading:.2f}"
-            )
-            parts.append(rf"\fontsize{{{_fmt(fs)}}}{{{leading_str}}}\selectfont")
-        if comp.font_bold:
-            parts.append(r"\bfseries")
-        if comp.font_italic:
-            parts.append(r"\itshape")
-        family_cmd = _FONT_FAMILY_CMD.get(comp.font_family, "")
-        if family_cmd:
-            parts.append(family_cmd)
-        opts = r"[font=" + "".join(parts) + "]"
-    else:
-        opts = ""
+    opts = _font_opts_bracket(comp)
 
     # Negate rotation: stored rotation follows CW-visually convention (matching
     # circuit components on canvas), but TikZ rotate= is CCW (standard math).
@@ -843,6 +1028,55 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
         rf"\draw{style_arg} ({_fmt(x1)},{_fmt(y_fn(y1))}) "
         rf"rectangle ({_fmt(x2)},{_fmt(y_fn(y2))});"
     )
+
+
+def _centered_text_line(comp: Component, y_fn=lambda y: y) -> str | None:
+    r"""Render a box annotation's centred text as \node[font=...] at (cx,cy) {text};
+
+    Shared by ``rect`` and ``circle``.  Returns ``None`` when the box has no text
+    (``comp.options`` empty) so it emits only its outline (and a text-free rect
+    stays byte-identical to the pre-text-feature output).  The node is centred on
+    the bounding box (rects/circles are not rotated).
+    """
+    text = comp.options
+    if not text:
+        return None
+    defn = REGISTRY[comp.kind]
+    x1, y1 = comp.position
+    so = comp.span_override if comp.span_override is not None else defn.default_span
+    dx, dy = so
+    cx, cy = x1 + dx / 2.0, y1 + dy / 2.0
+    opts = _font_opts_bracket(comp)
+    return rf"\node{opts} at ({_fmt(cx)},{_fmt(y_fn(cy))}) {{{text}}};"
+
+
+def _circle_line(comp: Component, y_fn=lambda y: y) -> str:
+    r"""Render a circle/ellipse annotation centred on its bounding box.
+
+    Emits ``\draw[style] (cx,cy) circle (r);`` when the box is square, otherwise
+    ``\draw[style] (cx,cy) ellipse (rx and ry);``.  Style (line style, width,
+    fill) comes from the StyledComponent fields; the box is ``position`` →
+    ``position + (span_override or default_span)``.
+    """
+    defn = REGISTRY[comp.kind]
+    x0, y0 = comp.position
+    so = comp.span_override if comp.span_override is not None else defn.default_span
+    dx, dy = so
+    cx, cy = x0 + dx / 2.0, y0 + dy / 2.0
+    rx, ry = abs(dx) / 2.0, abs(dy) / 2.0
+
+    style = compose_style_options(
+        fill_color=comp.fill_color,
+        border_width=comp.border_width,
+        line_style=comp.line_style,
+    )
+    style_arg = f"[{style}]" if style else ""
+
+    if rx == ry:
+        shape = rf"circle ({_fmt(rx)})"
+    else:
+        shape = rf"ellipse ({_fmt(rx)} and {_fmt(ry)})"
+    return rf"\draw{style_arg} ({_fmt(cx)},{_fmt(y_fn(cy))}) {shape};"
 
 
 _BIPOLE_HALF_H_GU = 0.25  # must match canvas/items.py _BIPOLE_HALF_H

@@ -13,14 +13,20 @@ import pytest
 
 from app.schematic.model import (
     Component,
+    HOP_RADIUS_GU,
     Schematic,
     Wire,
+    WireHop,
+    circle_connection_points,
+    component_connection_points,
     component_pin_positions,
     junction_points,
     open_endpoints,
+    rect_perimeter_points,
     unconnected_pins,
     route,
     simplify_points,
+    wire_crossings,
     wire_fraction_at_point,
     wire_point_at_fraction,
 )
@@ -88,11 +94,102 @@ def test_component_mixin_composition() -> None:
 
     rect = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
     assert isinstance(rect, StyledComponent)
-    assert not isinstance(rect, FontedComponent)
+    # rect gained FontedComponent for its centred block-diagram text label.
+    assert isinstance(rect, FontedComponent)
+    assert rect.font_size == 12.0  # FontedComponent default (no override)
 
     text = TextNodeComponent(id=_uid(), kind="text_node", position=(0.0, 0.0), rotation=0, options="Hi")
     assert isinstance(text, FontedComponent)
     assert not isinstance(text, StyledComponent)
+
+
+# ---------------------------------------------------------------------------
+# Rect edge connection points (block-diagram wiring)
+# ---------------------------------------------------------------------------
+
+def _rect(**kwargs) -> Component:
+    from app.components.model import RectComponent
+    defaults = dict(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    defaults.update(kwargs)
+    return RectComponent(**defaults)
+
+
+def test_rect_perimeter_points_unit_box() -> None:
+    """A 1x1 rect at the origin has 0.25-GU points all around its perimeter."""
+    pts = rect_perimeter_points(_rect(span_override=(1.0, 1.0)))
+    # Corners present.
+    assert {(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)} <= pts
+    # Edge midpoints (on 0.25 grid) present.
+    assert (0.5, 0.0) in pts and (1.0, 0.5) in pts and (0.5, 1.0) in pts and (0.0, 0.75) in pts
+    # An interior point is NOT a perimeter point.
+    assert (0.5, 0.5) not in pts
+    # Perimeter of a 1x1 box at 0.25 spacing: 4 edges * 4 segments = 16 distinct points.
+    assert len(pts) == 16
+
+
+def test_rect_perimeter_points_offset_and_default_span() -> None:
+    """Perimeter is computed from position + (span_override or default_span)."""
+    pts = rect_perimeter_points(_rect(position=(2.0, 1.0), span_override=None))
+    # default_span is (1,1): corners at (2,1) and (3,2).
+    assert {(2.0, 1.0), (3.0, 1.0), (2.0, 2.0), (3.0, 2.0)} <= pts
+    assert (2.5, 1.0) in pts  # top edge midpoint
+
+
+def test_component_connection_points_rect_vs_named() -> None:
+    """connection points = perimeter for rect, named pins for everything else."""
+    rect = _rect(span_override=(1.0, 1.0))
+    assert component_connection_points(rect) == rect_perimeter_points(rect)
+    res = _resistor(position=(0.0, 0.0))
+    assert component_connection_points(res) == set(component_pin_positions(res))
+
+
+def test_open_endpoint_on_rect_edge_is_connected() -> None:
+    """A wire ending on a rect edge is connected (no open-circle terminal)."""
+    rect = _rect(position=(0.0, 0.0), span_override=(2.0, 2.0))
+    # Wire from open space into the left edge midpoint (0, 1).
+    w = _wire([(-2.0, 1.0), (0.0, 1.0)])
+    result = open_endpoints(_make_schematic(rect, wires=(w,)))
+    assert (0.0, 1.0) not in result   # touches the rect edge → connected
+    assert (-2.0, 1.0) in result      # free end stays open
+
+
+# ---------------------------------------------------------------------------
+# Circle cardinal connection points (block-diagram node)
+# ---------------------------------------------------------------------------
+
+def _circle(**kwargs) -> Component:
+    from app.components.model import CircleComponent
+    defaults = dict(id=_uid(), kind="circle", position=(0.0, 0.0), rotation=0, options="")
+    defaults.update(kwargs)
+    return CircleComponent(**defaults)
+
+
+def test_circle_connection_points_are_only_cardinal() -> None:
+    """A circle exposes exactly the four N/S/E/W bounding-box edge midpoints."""
+    pts = circle_connection_points(_circle(span_override=(2.0, 2.0)))
+    assert pts == {(1.0, 0.0), (1.0, 2.0), (2.0, 1.0), (0.0, 1.0)}  # N, S, E, W
+
+
+def test_circle_connection_points_ellipse() -> None:
+    """For a non-square (ellipse) box the cardinal points are the axis ends."""
+    pts = circle_connection_points(_circle(position=(1.0, 1.0), span_override=(4.0, 2.0)))
+    # centre (3,2); N=(3,1) S=(3,3) E=(5,2) W=(1,2)
+    assert pts == {(3.0, 1.0), (3.0, 3.0), (5.0, 2.0), (1.0, 2.0)}
+
+
+def test_component_connection_points_circle() -> None:
+    circ = _circle(span_override=(2.0, 2.0))
+    assert component_connection_points(circ) == circle_connection_points(circ)
+
+
+def test_open_endpoint_on_circle_cardinal_is_connected_but_not_corner() -> None:
+    """Only the cardinal points connect; a wire ending elsewhere on the box stays open."""
+    circ = _circle(position=(0.0, 0.0), span_override=(2.0, 2.0))
+    cardinal = _wire([(-2.0, 1.0), (0.0, 1.0)])   # ends on W point (0,1)
+    corner = _wire([(-2.0, 0.0), (0.0, 0.0)])     # ends on box corner (0,0) — NOT a cardinal point
+    result = open_endpoints(_make_schematic(circ, wires=(cardinal, corner)))
+    assert (0.0, 1.0) not in result   # cardinal → connected
+    assert (0.0, 0.0) in result       # corner is not a circle connection point → open
 
 
 # ---------------------------------------------------------------------------
@@ -752,3 +849,137 @@ def test_fraction_round_trips_with_point() -> None:
     for frac in (0.1, 0.5, 0.83):
         pt = wire_point_at_fraction(pts, frac)
         assert abs(wire_fraction_at_point(pts, pt) - frac) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Line-hop detection (wire_crossings)
+# ---------------------------------------------------------------------------
+
+def test_wire_default_z_order_is_zero() -> None:
+    assert _wire([(0.0, 0.0), (2.0, 0.0)]).z_order == 0
+
+
+def test_crossing_emits_single_hop_on_higher_z_order_wire() -> None:
+    """An H×V crossing with no shared vertex yields one hop on the higher-z wire."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", z_order=1)   # horizontal at y=1
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v", z_order=0)   # vertical at x=2
+    hops = wire_crossings(_make_schematic(wires=(h, v)))
+    assert len(hops) == 1
+    hop = hops[0]
+    assert hop.point == (2.0, 1.0)
+    assert hop.wire_id == "h"          # higher z_order hops
+    assert hop.orientation == "h"      # the hopper's crossed segment is horizontal
+    assert hop.seg_index == 0
+
+
+def test_crossing_tie_breaks_on_later_wire() -> None:
+    """Equal z_order → the wire later in the list hops."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", z_order=0)
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v", z_order=0)
+    hops = wire_crossings(_make_schematic(wires=(h, v)))
+    assert len(hops) == 1 and hops[0].wire_id == "v"   # v is later in the list
+
+
+def test_shared_vertex_crossing_is_no_hop() -> None:
+    """A 4-way cross at a shared vertex is a connection (degree 4 → dot), not a hop."""
+    # (2,2) is an explicit shared vertex of both wires.
+    a = _wire([(0.0, 2.0), (2.0, 2.0), (4.0, 2.0)], id="a")
+    b = _wire([(2.0, 0.0), (2.0, 2.0), (2.0, 4.0)], id="b")
+    assert wire_crossings(_make_schematic(wires=(a, b))) == []
+
+
+def test_t_connection_is_no_hop() -> None:
+    """A T (one wire's endpoint on another's segment interior) is a connection."""
+    through = _wire([(0.0, 1.0), (4.0, 1.0)], id="t")
+    stub = _wire([(2.0, 1.0), (2.0, 3.0)], id="s")    # endpoint (2,1) on the through-segment
+    assert wire_crossings(_make_schematic(wires=(through, stub))) == []
+
+
+def test_corner_touch_is_no_hop() -> None:
+    """A wire whose corner vertex lies on another's segment is connected, not hopped."""
+    through = _wire([(0.0, 1.0), (4.0, 1.0)], id="t")
+    elbow = _wire([(2.0, 1.0), (2.0, 3.0), (5.0, 3.0)], id="e")  # corner at (2,1)
+    assert wire_crossings(_make_schematic(wires=(through, elbow))) == []
+
+
+def test_crossing_at_component_pin_is_no_hop() -> None:
+    """A crossing exactly on a component pin is a real connection, no hop."""
+    res = _resistor(position=(2.0, 1.0))               # pins at (2,1) and (4,1)
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h")        # along the pins' row
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v")        # crosses at (2,1) = a pin
+    assert wire_crossings(_make_schematic(res, wires=(h, v))) == []
+
+
+def test_annotation_wire_suppresses_hop() -> None:
+    """A wire flagged no_junction_dots is an annotation lead → excluded from hops."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", no_junction_dots=True)
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v")
+    assert wire_crossings(_make_schematic(wires=(h, v))) == []
+
+
+def test_hop_mode_default_empty() -> None:
+    assert _wire([(0.0, 0.0), (2.0, 0.0)]).hop_mode == ""
+
+
+def test_hop_mode_never_yields_to_crosser() -> None:
+    """A 'never' wire doesn't hop, but a crossing wire still hops over it."""
+    # h would normally hop (higher z), but it's 'never' → v hops over it instead.
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", z_order=5, hop_mode="never")
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v")
+    hops = wire_crossings(_make_schematic(wires=(h, v)))
+    assert len(hops) == 1 and hops[0].wire_id == "v"
+
+
+def test_hop_mode_both_never_no_hop() -> None:
+    """Two 'never' wires crossing draw no bump at all."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", hop_mode="never")
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v", hop_mode="never")
+    assert wire_crossings(_make_schematic(wires=(h, v))) == []
+
+
+def test_hop_mode_always_overrides_z_order() -> None:
+    """An 'always' wire hops even with the lower z_order."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", z_order=0, hop_mode="always")
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v", z_order=9)
+    hops = wire_crossings(_make_schematic(wires=(h, v)))
+    assert len(hops) == 1 and hops[0].wire_id == "h"
+
+
+def test_hop_mode_always_hops_when_global_off() -> None:
+    """'always' hops even when the global default is off; a default wire doesn't."""
+    h = _wire([(0.0, 1.0), (4.0, 1.0)], id="h", hop_mode="always")
+    v = _wire([(2.0, 0.0), (2.0, 3.0)], id="v")
+    forced = wire_crossings(_make_schematic(wires=(h, v)), default_on=False)
+    assert len(forced) == 1 and forced[0].wire_id == "h"
+    d1 = _wire([(0.0, 1.0), (4.0, 1.0)], id="d1")
+    d2 = _wire([(2.0, 0.0), (2.0, 3.0)], id="d2")
+    assert wire_crossings(_make_schematic(wires=(d1, d2)), default_on=False) == []
+
+
+def test_multiple_crossings_on_one_segment() -> None:
+    """A horizontal wire crossing two verticals gets two hops (one per crossing)."""
+    h = _wire([(0.0, 1.0), (6.0, 1.0)], id="h", z_order=1)
+    v1 = _wire([(2.0, 0.0), (2.0, 3.0)], id="v1")
+    v2 = _wire([(4.0, 0.0), (4.0, 3.0)], id="v2")
+    hops = wire_crossings(_make_schematic(wires=(h, v1, v2)))
+    pts = sorted(hop.point for hop in hops)
+    assert pts == [(2.0, 1.0), (4.0, 1.0)]
+    assert all(hop.wire_id == "h" for hop in hops)
+
+
+def test_collinear_overlap_is_no_hop() -> None:
+    """Two parallel (collinear) wires never cross → no hop."""
+    a = _wire([(0.0, 1.0), (4.0, 1.0)], id="a")
+    b = _wire([(1.0, 1.0), (5.0, 1.0)], id="b")
+    assert wire_crossings(_make_schematic(wires=(a, b))) == []
+
+
+def test_self_crossing_ignored() -> None:
+    """A single wire that crosses itself produces no hop (pairs are distinct wires)."""
+    # An L that doubles back over its own row is still one wire; no cross-wire hop.
+    w = _wire([(0.0, 0.0), (4.0, 0.0), (4.0, 2.0), (2.0, 2.0), (2.0, -1.0)], id="w")
+    assert wire_crossings(_make_schematic(wires=(w,))) == []
+
+
+def test_hop_radius_constant_positive() -> None:
+    assert HOP_RADIUS_GU > 0

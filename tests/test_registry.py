@@ -104,6 +104,17 @@ def test_default_span_matches_terminal_pin() -> None:
     reason="app/canvas/items.py not yet implemented (phase 5)",
     strict=False,
 )
+def test_circle_registered_like_rect() -> None:
+    """The circle drawing kind mirrors rect: Drawing, no pins, resizable, (0.5,0.5)."""
+    from app.components.model import CircleComponent
+    circ = REGISTRY["circle"]
+    assert circ.category == "Drawing"
+    assert circ.pins == []
+    assert circ.resizable is True
+    assert circ.default_span == (0.5, 0.5)
+    assert circ.component_class is CircleComponent
+
+
 def test_all_kinds_have_item_class() -> None:
     """Every kind in REGISTRY has a corresponding entry in ITEM_CLASSES."""
     try:

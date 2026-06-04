@@ -26,22 +26,28 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor, QFont, QImage, QKeySequence,
+    QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QKeySequence,
     QPainter, QPalette, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QSizePolicy,
     QSplitter,
     QStatusBar,
+    QTableWidget,
+    QTableWidgetItem,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -68,6 +74,8 @@ from app.ui.properties import PropertiesPanel
 from app.ui.sourcepanel import SourcePanel
 
 _WINDOW_TITLE = "Heaviside — CircuiTikZ Editor"
+#: GitHub issues page — opened by Help ▸ Report a Bug and the toolbar bug button.
+_ISSUES_URL = "https://github.com/whileman133/Heaviside/issues"
 
 
 class MainWindow(QMainWindow):
@@ -94,6 +102,7 @@ class MainWindow(QMainWindow):
         self._modified = False
         self._prefs = Preferences()
         self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
+        self._scene.set_line_hops(self._prefs.line_hops)
 
         # -- Build UI -------------------------------------------------------
         self._build_menu()
@@ -243,8 +252,18 @@ class MainWindow(QMainWindow):
         act_compile.triggered.connect(self._on_compile_now)
         view_menu.addAction(act_compile)
 
-        # Help menu (placeholder).
+        # Help menu.
         help_menu = mb.addMenu("&Help")
+        self._act_help = QAction("&Keyboard Shortcuts && Gestures", self)
+        self._act_help.setShortcut(QKeySequence.HelpContents)   # F1 on most platforms
+        self._act_help.triggered.connect(self._on_help_shortcuts)
+        help_menu.addAction(self._act_help)
+        help_menu.addSeparator()
+        self._act_report_bug = QAction("&Report a Bug…", self)
+        self._act_report_bug.setToolTip("Open the GitHub issues page to report a bug")
+        self._act_report_bug.triggered.connect(self._on_report_bug)
+        help_menu.addAction(self._act_report_bug)
+        help_menu.addSeparator()
         act_about = QAction("&About Heaviside", self)
         act_about.triggered.connect(self._on_about)
         help_menu.addAction(act_about)
@@ -284,8 +303,21 @@ class MainWindow(QMainWindow):
         compile_btn.triggered.connect(self._on_compile_now)
         tb.addAction(compile_btn)
 
+        # Right-aligned help button: a spacer pushes it to the far right.
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tb.addWidget(spacer)
+        self._act_help.setIcon(qta.icon("fa5s.question-circle"))
+        self._act_help.setToolTip("Keyboard shortcuts & gestures (F1)")
+        tb.addAction(self._act_help)
+
+        self._act_report_bug.setIcon(qta.icon("fa5s.bug"))
+        self._act_report_bug.setToolTip("Report a bug (opens GitHub issues)")
+        tb.addAction(self._act_report_bug)
+
         for action in (self._act_new, self._act_open, self._act_save,
-                       self._act_undo, self._act_redo, compile_btn):
+                       self._act_undo, self._act_redo, compile_btn,
+                       self._act_help, self._act_report_bug):
             btn = tb.widgetForAction(action)
             if btn:
                 btn.setCursor(Qt.PointingHandCursor)
@@ -529,7 +561,8 @@ class MainWindow(QMainWindow):
             return
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                            mark_line_hops=self._prefs.line_hops)
         except Exception:
             return
         self._preview_worker.request_compile(source)
@@ -537,7 +570,8 @@ class MainWindow(QMainWindow):
     def _on_compile_now(self) -> None:
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                            mark_line_hops=self._prefs.line_hops)
         except Exception as exc:
             self._status_compile.setText(f"Error: {exc}")
             return
@@ -709,6 +743,7 @@ class MainWindow(QMainWindow):
         """
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
             self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
+            self._scene.set_line_hops(self._prefs.line_hops)
             self._source_panel.refresh()
             self._on_auto_compile()
 
@@ -720,7 +755,8 @@ class MainWindow(QMainWindow):
         """
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                            mark_line_hops=self._prefs.line_hops)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
             return
@@ -750,7 +786,8 @@ class MainWindow(QMainWindow):
         """
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins)
+                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                            mark_line_hops=self._prefs.line_hops)
         except Exception as exc:
             if not quiet:
                 QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
@@ -838,6 +875,13 @@ class MainWindow(QMainWindow):
     def _on_about(self) -> None:
         _AboutDialog(self).exec()
 
+    def _on_help_shortcuts(self) -> None:
+        _HelpDialog(self).exec()
+
+    def _on_report_bug(self) -> None:
+        """Open the project's GitHub issues page in the default browser."""
+        QDesktopServices.openUrl(QUrl(_ISSUES_URL))
+
     # ------------------------------------------------------------------
     # Dependency check
     # ------------------------------------------------------------------
@@ -865,32 +909,86 @@ class MainWindow(QMainWindow):
 
 
 # ---------------------------------------------------------------------------
-# Welcome overlay
+# Help: keyboard-shortcut & gesture reference (shown in the Help dialog)
 # ---------------------------------------------------------------------------
 
-_ROW_H = 18.0   # height of one reference-table row
-
-# Keyboard-shortcut reference: (keys, action).
-# Left column: canvas tools and editing; right column: file / view commands.
-_SHORTCUTS_LEFT = [
-    ("S",       "Select tool"),
-    ("W",       "Wire tool"),
-    ("P",       "Pan / Space-drag"),
-    ("R",       "Rotate 90° CW"),
-    ("Del",     "Delete selection"),
-    ("Arrows",  "Nudge 0.5 units"),
-    ("Ctrl+A",  "Select all"),
-    ("Esc",     "Cancel / deselect"),
+# Each group is (title, [(keys/gesture, detailed description), ...]).
+_HELP_SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("File", [
+        ("Ctrl+N",        "Start a new, empty schematic."),
+        ("Ctrl+O",        "Open a saved .hv schematic file."),
+        ("Ctrl+S",        "Save the current schematic."),
+        ("Ctrl+Shift+S",  "Save the schematic to a new file."),
+        ("Ctrl+E",        "Export the generated CircuiTikZ to a .tex file."),
+        ("Ctrl+Q",        "Quit the application."),
+    ]),
+    ("Edit", [
+        ("Ctrl+Z",            "Undo the last change."),
+        ("Ctrl+Shift+Z",      "Redo the last undone change."),
+        ("Ctrl+C",            "Copy the selected components and wires."),
+        ("Ctrl+V",            "Paste the copied items."),
+        ("Ctrl+A",            "Select every component and wire."),
+        ("Del / Backspace",   "Delete the selection (and wires on its pins)."),
+        ("Ctrl+,",            "Open the Preferences dialog."),
+    ]),
+    ("View", [
+        ("Ctrl+Return",     "Compile the LaTeX preview now."),
+        ("Ctrl+0",          "Zoom and pan to fit the whole schematic."),
+        ("Ctrl++ / Ctrl+-", "Zoom in / zoom out."),
+    ]),
+    ("Tools & canvas", [
+        ("S",            "Select tool — pick, move, and edit items."),
+        ("W",            "Wire tool — click to route an orthogonal wire."),
+        ("P",            "Pan mode — left-drag the canvas to pan (persistent)."),
+        ("Space + drag", "Pan the canvas without leaving the current tool."),
+        ("R",            "Rotate the selection 90° clockwise."),
+        ("Arrows",       "Nudge the selection 0.25 units (one minor-grid cell)."),
+        ("Esc",          "Cancel placing/wiring and return to the Select tool."),
+    ]),
+    ("Tab — cycle the item under the cursor", [
+        ("Tab (over a label)",
+            "Cycle the endpoint label's position: off-end → above/left → below/right."),
+        ("Tab (over an endpoint)",
+            "Cycle the endpoint's arrowhead: none → arrow → stealth → open → bar."),
+        ("Tab (over a wire)",
+            "Cycle the wire's line style: solid → dashed → dotted → dash-dot."),
+        ("Shift+Tab",
+            "Step any of the above cycles backward."),
+    ]),
 ]
-_SHORTCUTS_RIGHT = [
-    ("Ctrl+N",        "New schematic"),
-    ("Ctrl+O",        "Open"),
-    ("Ctrl+S",        "Save"),
-    ("Ctrl+E",        "Export to TeX"),
-    ("Ctrl+Z",        "Undo"),
-    ("Ctrl+Shift+Z",  "Redo"),
-    ("Ctrl+0",        "Fit to view"),
-    ("Ctrl+Return",   "Compile preview"),
+
+_HELP_GESTURE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Selecting", [
+        ("Click an item",        "Select a component or wire."),
+        ("Drag on empty canvas", "Rubber-band select everything inside the box."),
+        ("Click empty canvas",   "Clear the current selection."),
+    ]),
+    ("Moving & resizing", [
+        ("Drag a component body", "Move it; connected wires follow."),
+        ("Drag a corner handle",  "Resize a rectangle, circle, or bipole."),
+        ("Drag a wire vertex",    "Reshape the wire (stays orthogonal)."),
+        ("Drag a junction",       "Move it; every wire meeting there follows."),
+        ("Drag a wire endpoint",  "Move it; drag off a pin/edge to disconnect."),
+        ("Drag a mid-wire label", "Slide the label along the wire."),
+    ]),
+    ("Wiring", [
+        ("Double-click a wire",            "Split it and start a new wire there."),
+        ("Double-click empty canvas",      "Start a new wire from that grid point."),
+        ("Click a free pin or edge dot",   "Start a wire from that connection point."),
+        ("Click while wiring",             "Drop a vertex / corner."),
+        ("Double-click while wiring",      "Finish the wire (or click a pin)."),
+    ]),
+    ("Editing text", [
+        ("Double-click a component",        "Edit its label / options in place."),
+        ("Double-click a wire endpoint",    "Edit that endpoint's label."),
+        ("Alt + double-click a wire",       "Edit the wire's middle label."),
+        ("Double-click any rendered label", "Edit the label text in place."),
+    ]),
+    ("Navigating", [
+        ("Scroll wheel / pinch", "Zoom the canvas in and out."),
+        ("Middle-button drag",   "Pan the canvas."),
+        ("Space + left-drag",    "Pan the canvas."),
+    ]),
 ]
 
 # Colours for the welcome screen
@@ -898,15 +996,16 @@ _C_BG    = QColor(245, 247, 250)        # solid background
 _C_STEP  = QColor( 80, 120, 175, 200)   # step-function line
 _C_AXIS  = QColor(160, 175, 190, 180)   # axis lines
 _C_LABEL = QColor(100, 130, 170, 210)   # H(t) / 1 / t annotations
-_C_TITLE = QColor( 60,  80, 110, 220)   # section headers
-_C_HINT  = QColor(120, 140, 165, 200)   # hint lines
+_C_HINT  = QColor(120, 140, 165, 200)   # hint line
 
 
 class _WelcomeScreen(QWidget):
     """
     Solid welcome screen shown in the canvas slot before any document is
-    active.  Draws the Heaviside unit step function H(t) as a centred diagram,
-    followed by a keyboard-shortcut list.
+    active.  Draws only the Heaviside unit step function H(t) as a centred
+    diagram, with a faint hint pointing to the Help dialog (the full keyboard-
+    shortcut and gesture reference lives in **Help ▸ Keyboard Shortcuts &
+    Gestures**, see :class:`_HelpDialog`).
 
     Replaced by the live SchematicView (via QStackedWidget) as soon as the
     user creates/opens a document or begins component placement.
@@ -919,20 +1018,11 @@ class _WelcomeScreen(QWidget):
         w, h = float(self.width()), float(self.height())
         painter.fillRect(self.rect(), _C_BG)
 
-        # ---- layout constants ------------------------------------------
-        step_w  = min(w * 0.38, 230.0)
-        step_h  = min(h * 0.20, 110.0)
-        n1 = max(len(_SHORTCUTS_LEFT), len(_SHORTCUTS_RIGHT))
-        # A reference block is: header (16) + sep gap (10) + n rows.
-        diagram_h    = step_h * 1.6
-        section_gap  = 22.0
-        block1_h     = 26.0 + n1 * _ROW_H
-        block_h = diagram_h + section_gap + block1_h
-        top     = max(12.0, (h - block_h) / 2.0)
+        # ---- step function (centred) -----------------------------------
+        step_w  = min(w * 0.40, 260.0)
+        step_h  = min(h * 0.26, 150.0)
         cx   = w / 2.0
-
-        # ---- step function ---------------------------------------------
-        step_cy  = top + step_h * 0.8
+        step_cy  = h / 2.0
         zero_y   = step_cy + step_h / 2
         one_y    = step_cy - step_h / 2
         left_x   = cx - step_w / 2
@@ -956,86 +1046,27 @@ class _WelcomeScreen(QWidget):
         _filled_dot(painter, _C_STEP, QPointF(origin_x, one_y),  r=4.5)
 
         ann_font = QFont()
-        ann_font.setPointSizeF(11.5)
+        ann_font.setPointSizeF(12.5)
         ann_font.setItalic(True)
         painter.setFont(ann_font)
         painter.setPen(QPen(_C_LABEL))
         painter.drawText(QPointF(right_x + 8, one_y + 5), "H(t)")
         ann_font.setItalic(False)
-        ann_font.setPointSizeF(10.5)
+        ann_font.setPointSizeF(11.0)
         painter.setFont(ann_font)
-        painter.drawText(QPointF(origin_x - 15, one_y + 5),  "1")
+        painter.drawText(QPointF(origin_x - 16, one_y + 5),  "1")
         painter.drawText(QPointF(right_x + 22,  zero_y + 5), "t")
 
-        # ---- reference blocks ------------------------------------------
-        y = top + diagram_h
-        self._draw_ref_block(
-            painter, "KEYBOARD SHORTCUTS",
-            _SHORTCUTS_LEFT, _SHORTCUTS_RIGHT, y + section_gap, w, cx,
-            code_frac=0.42,
+        # ---- hint pointing to the Help dialog --------------------------
+        hint_font = QFont()
+        hint_font.setPointSizeF(10.0)
+        painter.setFont(hint_font)
+        painter.setPen(QPen(_C_HINT))
+        painter.drawText(
+            QRectF(0, zero_y + 40, w, 20),
+            Qt.AlignHCenter | Qt.AlignTop,
+            "Help ▸ Keyboard Shortcuts & Gestures  (F1)",
         )
-
-    def _draw_ref_block(
-        self,
-        painter: QPainter,
-        title: str,
-        left: list,
-        right: list,
-        y: float,
-        w: float,
-        cx: float,
-        code_frac: float = 0.5,
-    ) -> float:
-        """Draw a titled two-column reference table starting at *y*.
-
-        Returns the y coordinate just below the last row, so the caller can
-        stack the next block beneath it.
-        """
-        # Section header (centred).
-        hdr_font = QFont()
-        hdr_font.setPointSizeF(8.5)
-        hdr_font.setWeight(QFont.DemiBold)
-        hdr_font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
-        painter.setFont(hdr_font)
-        painter.setPen(QPen(_C_TITLE))
-        painter.drawText(QRectF(0, y, w, 14), Qt.AlignHCenter | Qt.AlignTop, title)
-
-        # Thin separator.
-        sep_y = y + 16
-        margin = max(20.0, (w - 520) / 2)
-        painter.setPen(QPen(QColor(180, 195, 210, 140), 0.75))
-        painter.drawLine(QPointF(margin, sep_y), QPointF(w - margin, sep_y))
-
-        # Two-column rows: monospaced code on the left of each column, plain
-        # description on the right.
-        code_font = QFont("Menlo")
-        code_font.setStyleHint(QFont.TypeWriter)
-        code_font.setPointSizeF(8.5)
-        desc_font = QFont()
-        desc_font.setPointSizeF(8.5)
-
-        col_w = min(250.0, (w - 2 * margin) / 2)
-        lx = cx - col_w               # left column x start
-        rx = cx + 4                   # right column x start
-        desc_x = code_frac + 0.02     # description starts just after the code
-        row_y = sep_y + 10
-        n_rows = max(len(left), len(right))
-
-        for i in range(n_rows):
-            for col_data, x0 in ((left, lx), (right, rx)):
-                if i >= len(col_data):
-                    continue
-                code, desc = col_data[i]
-                painter.setFont(code_font)
-                painter.setPen(QPen(_C_STEP))
-                painter.drawText(QRectF(x0, row_y, col_w * code_frac, _ROW_H),
-                                 Qt.AlignLeft | Qt.AlignVCenter, code)
-                painter.setFont(desc_font)
-                painter.setPen(QPen(_C_HINT))
-                painter.drawText(QRectF(x0 + col_w * desc_x, row_y, col_w * (1 - desc_x), _ROW_H),
-                                 Qt.AlignLeft | Qt.AlignVCenter, desc)
-            row_y += _ROW_H
-        return row_y
 
 
 # ---------------------------------------------------------------------------
@@ -1082,6 +1113,138 @@ _HEAVISIDE_QUOTE = (
     "“The best result of mathematics is to be able to do without it.”"
     "\n— Oliver Heaviside"
 )
+
+
+class _RefTable(QTableWidget):
+    """Read-only two-column reference table (keys/gesture | description).
+
+    The description column **wraps** onto multiple lines and the whole table
+    auto-sizes its height to its content (its own scrollbars are off — the
+    enclosing :class:`_HelpDialog` ``QScrollArea`` scrolls everything). Groups
+    are rendered as full-width bold header rows. Row heights and the table's
+    fixed height are recomputed on every resize so wrapping stays correct.
+    """
+
+    def __init__(
+        self, groups: list, mono: bool, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(0, 2, parent)
+        self.setWordWrap(True)
+        self.setShowGrid(False)
+        self.horizontalHeader().setVisible(False)
+        self.verticalHeader().setVisible(False)
+        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setFrameShape(QFrame.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.setStyleSheet("QTableWidget { background: transparent; }")
+        self.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+
+        key_font = QFont("Menlo" if mono else "")
+        if mono:
+            key_font.setStyleHint(QFont.TypeWriter)
+        else:
+            key_font.setWeight(QFont.DemiBold)
+        key_color = QColor("#4a6f9c")
+        desc_color = QColor("#333333")
+        hdr_color = QColor("#7b8aa0")
+        hdr_bg = QColor(235, 240, 246)
+        hdr_font = QFont()
+        hdr_font.setPointSizeF(hdr_font.pointSizeF() - 1)
+        hdr_font.setWeight(QFont.DemiBold)
+
+        for title, rows in groups:
+            r = self.rowCount()
+            self.insertRow(r)
+            head = QTableWidgetItem(title.upper())
+            head.setFont(hdr_font)
+            head.setForeground(hdr_color)
+            head.setBackground(hdr_bg)
+            head.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            self.setItem(r, 0, head)
+            self.setSpan(r, 0, 1, 2)
+            blank = QTableWidgetItem("")
+            blank.setBackground(hdr_bg)
+            self.setItem(r, 1, blank)   # keeps the header band full-width
+            for keys, desc in rows:
+                r = self.rowCount()
+                self.insertRow(r)
+                ki = QTableWidgetItem(keys)
+                ki.setFont(key_font)
+                ki.setForeground(key_color)
+                ki.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+                di = QTableWidgetItem(desc)
+                di.setForeground(desc_color)
+                di.setTextAlignment(Qt.AlignLeft | Qt.AlignTop)
+                self.setItem(r, 0, ki)
+                self.setItem(r, 1, di)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802
+        super().resizeEvent(event)
+        # Column 1's width is now known → re-wrap and re-measure row heights,
+        # then pin the table to its content height for the outer scroll area.
+        self.resizeRowsToContents()
+        total = sum(self.rowHeight(i) for i in range(self.rowCount()))
+        self.setFixedHeight(total + 2)
+
+
+class _HelpDialog(QDialog):
+    """Scrollable reference of every keyboard shortcut and mouse gesture.
+
+    Opened from **Help ▸ Keyboard Shortcuts & Gestures** (F1) or the toolbar
+    help button. Two :class:`_RefTable` tables (keys | wrapping description)
+    are stacked in a `QScrollArea` so the dialog stays usable when the lists
+    exceed the window height; descriptions wrap rather than being clipped.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Keyboard Shortcuts & Gestures")
+        self.resize(600, 640)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
+        content = QWidget()
+        v = QVBoxLayout(content)
+        v.setContentsMargins(20, 16, 20, 16)
+        v.setSpacing(4)
+
+        self._add_section_title(v, "Keyboard Shortcuts")
+        v.addWidget(_RefTable(_HELP_SHORTCUT_GROUPS, mono=True))
+        v.addSpacing(10)
+        self._add_section_title(v, "Mouse & Gestures")
+        v.addWidget(_RefTable(_HELP_GESTURE_GROUPS, mono=False))
+        v.addStretch(1)
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(16, 8, 16, 12)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        btn_row.addStretch(1)
+        btn_row.addWidget(buttons)
+        outer.addLayout(btn_row)
+
+    @staticmethod
+    def _add_section_title(layout: QVBoxLayout, text: str) -> None:
+        lbl = QLabel(text)
+        lbl.setStyleSheet(
+            "font-size: 15px; font-weight: bold; color: #2c3e57;"
+            " margin-top: 6px; margin-bottom: 2px;"
+        )
+        layout.addWidget(lbl)
 
 
 class _AboutDialog(QDialog):

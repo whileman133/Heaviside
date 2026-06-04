@@ -238,6 +238,25 @@ def test_view_fit_empty(scene: SchematicScene):
     assert view.zoom > 0
 
 
+def test_view_fit_ignores_origin_helper_items(scene: SchematicScene):
+    """Regression: fit-to-schematic bounds only the *visible* schematic, not the
+    hidden helper items (label editors / empty wire-label items) pinned at the
+    scene origin. Those previously inflated the rect from (0,0) to a schematic
+    placed far from the origin, making the fit zoom way out (~9%)."""
+    view = SchematicView(scene)
+    view.resize(800, 500)
+    view.show()
+    # A small cluster placed far from the origin, plus a wire (whose hidden
+    # label editor sits at scene (0,0)).
+    scene.place_component("R", (60.0, 60.0))
+    scene.place_component("C", (64.0, 60.0))
+    scene.add_wire([(62.0, 60.0), (64.0, 60.0)])
+    view.fit_to_schematic()
+    # The tight cluster fills the viewport at a healthy zoom; the origin-inflated
+    # bug collapsed it to ~0.1.
+    assert view.zoom > 0.5
+
+
 def test_view_arrow_nudge_step(scene: SchematicScene):
     """Arrow keys nudge by one 0.25 GU minor-grid cell (§3.1)."""
     from PySide6.QtCore import Qt
@@ -672,10 +691,11 @@ def test_vertex_hit_test_finds_draggable_corner(scene: SchematicScene):
     assert hit == (w.id, 1)
 
 
-def test_vertex_hit_test_skips_pin_endpoint(scene: SchematicScene):
-    _wire_with_pin_endpoint(scene)
-    # (2,0) is the wire endpoint sitting on the resistor's pin → not draggable.
-    assert scene.wire_vertex_at(scene.gu_to_scene(2.0, 0.0)) is None
+def test_vertex_hit_test_returns_pin_endpoint(scene: SchematicScene):
+    w = _wire_with_pin_endpoint(scene)
+    # (2,0) is the wire endpoint sitting on the resistor's pin — now draggable
+    # (drag to disconnect), so it is returned.
+    assert scene.wire_vertex_at(scene.gu_to_scene(2.0, 0.0)) == (w.id, 0)
 
 
 def test_vertex_hit_test_free_endpoint_draggable(scene: SchematicScene):
@@ -684,11 +704,12 @@ def test_vertex_hit_test_free_endpoint_draggable(scene: SchematicScene):
     assert hit == (w.id, 2)
 
 
-def test_locked_indices_marked_on_item(scene: SchematicScene):
+def test_no_locked_indices_all_vertices_draggable(scene: SchematicScene):
     w = _wire_with_pin_endpoint(scene)
     item = scene._wire_items[w.id]
-    # Only the pin endpoint (index 0) is locked.
-    assert item.locked_indices == {0}
+    # Every vertex is draggable now (connected endpoints can be dragged to
+    # disconnect), so no vertex is locked / handle-less.
+    assert item.locked_indices == set()
 
 
 def test_drag_corner_reshapes_wire(scene: SchematicScene):
@@ -798,10 +819,27 @@ def test_drag_vertex_is_undoable(scene: SchematicScene):
     assert scene.schematic.wires[0].points == original
 
 
-def test_press_on_pin_endpoint_does_not_start_drag(scene: SchematicScene):
-    _wire_with_pin_endpoint(scene)
+def test_press_on_pin_endpoint_starts_drag_to_disconnect(scene: SchematicScene):
+    w = _wire_with_pin_endpoint(scene)
     _sel_press(scene, (2.0, 0.0))            # the pin endpoint
-    assert scene._vertex_drag is None
+    # Connected endpoints are draggable now (drag to disconnect), so a press
+    # there starts a vertex drag of that endpoint.
+    assert scene._vertex_drag == (w.id, 0, (2.0, 0.0))
+
+
+def test_drag_connected_endpoint_disconnects_it(scene: SchematicScene):
+    """Dragging a wire endpoint off a component pin disconnects it: the endpoint
+    moves to the new spot and is no longer coincident with the pin."""
+    scene.place_component("R", (0.0, 0.0))          # pin at (2,0)
+    w = scene.add_wire([(2.0, 0.0), (5.0, 0.0)])    # start on the pin; end free
+    _sel_press(scene, (2.0, 0.0))                   # grab the connected endpoint
+    assert scene._vertex_drag is not None
+    _sel_move(scene, (2.0, 3.0))
+    _sel_release(scene, (2.0, 3.0))                 # commit the disconnect
+
+    pts = scene.schematic.wires[0].points
+    assert pts[0] == (2.0, 3.0)                      # endpoint moved off the pin
+    assert (2.0, 0.0) not in (pts[0], pts[-1])       # no longer on the pin
 
 
 def test_drag_release_at_same_spot_is_noop(scene: SchematicScene):
@@ -1199,7 +1237,8 @@ def test_full_pin_to_pin_roundtrip_via_select(scene: SchematicScene):
     assert w.points[-1] == (6.0, 2.0)
 
 
-def test_double_click_empty_space_stays_wire(scene: SchematicScene):
+def test_double_click_empty_space_exits_wire(scene: SchematicScene):
+    """Double-clicking to end a wire in empty space commits it and exits WIRE mode."""
     scene.place_component("R", (0.0, 0.0))   # free pin (2,0)
     _sel_press(scene, (2.0, 0.0))            # auto-enter wire
     assert scene.mode == Mode.WIRE
@@ -1207,7 +1246,7 @@ def test_double_click_empty_space_stays_wire(scene: SchematicScene):
     dbl.setButton(Qt.LeftButton)
     dbl.setScenePos(scene.gu_to_scene(4.0, 3.0))   # empty space
     scene.mouseDoubleClickEvent(dbl)
-    assert scene.mode == Mode.WIRE           # keep routing
+    assert scene.mode == Mode.SELECT         # double-click ends the wire and exits
     assert len(scene.schematic.wires) == 1
 
 
@@ -1223,20 +1262,21 @@ def test_double_click_on_pin_returns_to_select(scene: SchematicScene):
     assert len(scene.schematic.wires) == 1
 
 
-def _dbl_click(scene: SchematicScene, gu):
+def _dbl_click(scene: SchematicScene, gu, modifiers=Qt.NoModifier):
     e = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseDoubleClick)
     e.setButton(Qt.LeftButton)
+    e.setModifiers(modifiers)
     e.setScenePos(scene.gu_to_scene(*gu))
     scene.mouseDoubleClickEvent(e)
 
 
 def test_double_click_wire_body_enters_wire_mode(scene: SchematicScene):
-    """Double-clicking on a wire segment in SELECT mode starts a new wire."""
+    """Plain double-click on a wire body starts a new wire from that point
+    (enters WIRE mode); the target wire splits when the new wire commits."""
     scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
     assert scene.mode == Mode.SELECT
 
-    # Double-click at a grid point on the wire body.
-    _dbl_click(scene, (2.0, 0.0))
+    _dbl_click(scene, (2.0, 0.0))   # on the wire body
 
     assert scene.mode == Mode.WIRE
     assert scene._wire_pts == [(2.0, 0.0)]
@@ -1244,28 +1284,32 @@ def test_double_click_wire_body_enters_wire_mode(scene: SchematicScene):
 
 
 def test_double_click_wire_commits_splits_on_add(scene: SchematicScene):
-    """A wire started via double-click on a wire body splits the target on commit.
-
-    Double-clicking a wire body enters WIRE mode; routing away and finalizing
-    (via a second double-click to a free endpoint) splits the original wire.
-    """
+    """A wire started by double-clicking a wire body splits the target on commit."""
     scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
-
-    _dbl_click(scene, (2.0, 0.0))   # enter WIRE mode from (2,0) on the wire
+    _dbl_click(scene, (2.0, 0.0))           # enter WIRE mode at (2,0) on the wire
     assert scene.mode == Mode.WIRE
-
-    # Double-click in WIRE mode commits to a free endpoint.
-    _dbl_click(scene, (2.0, 3.0))   # finalize wire (2,0)→(2,3)
-    # Mode stays WIRE (free-endpoint finalization).
-
-    # The target wire is now split + the new stub = 3 wires; junction at (2,0).
+    _dbl_click(scene, (2.0, 3.0))           # finalize the new wire (2,0)→(2,3)
+    # Target wire split into two halves + the new stub = 3 wires; junction at (2,0).
     assert len(scene.schematic.wires) == 3
     assert (2.0, 0.0) in scene._junction_items
 
 
+def test_alt_double_click_wire_body_opens_mid_label_editor(scene: SchematicScene):
+    """Alt+double-click on a wire body opens its mid-label inline editor."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    item = scene._wire_items[wire.id]
+
+    _dbl_click(scene, (2.0, 0.0), modifiers=Qt.AltModifier)
+
+    assert scene.mode == Mode.SELECT          # NOT wire mode
+    assert item._label_editor.is_editing
+    assert item._editing_end == "mid"
+    item._label_editor.end_edit(commit=False)
+
+
 def test_double_click_wire_vertex_enters_wire_mode(scene: SchematicScene):
-    """Double-clicking exactly on an existing wire vertex also enters WIRE mode."""
-    scene.add_wire([(0.0, 0.0), (0.0, 2.0), (4.0, 2.0)])  # L-wire; corner at (0,2)
+    """Double-clicking an interior wire vertex starts a new wire from it."""
+    scene.add_wire([(0.0, 0.0), (0.0, 2.0), (4.0, 2.0)])  # corner at (0,2)
 
     _dbl_click(scene, (0.0, 2.0))
 
@@ -1289,15 +1333,18 @@ def test_double_click_free_endpoint_opens_label_editor(scene: SchematicScene):
     assert item._editing_end == "start"
 
 
-def test_double_click_connected_endpoint_enters_wire_mode(scene: SchematicScene):
-    """A wire endpoint on a component pin is not a label target — it falls
-    through to WIRE-mode routing (pin-locked endpoints aren't draggable)."""
+def test_double_click_connected_endpoint_opens_endpoint_label_editor(scene: SchematicScene):
+    """A wire endpoint on a component pin is now a per-end label target: a
+    double-click there opens *that endpoint's* label editor (not the mid-label)."""
     scene.place_component("R", (0.0, 0.0))      # pins at (0,0) and (2,0)
-    scene.add_wire([(2.0, 0.0), (5.0, 0.0)])    # (2,0) on the pin; (5,0) free
+    wire = scene.add_wire([(2.0, 0.0), (5.0, 0.0)])  # (2,0) on the pin; (5,0) free
+    item = scene._wire_items[wire.id]
 
-    _dbl_click(scene, (2.0, 0.0))               # connected endpoint
-    assert scene.mode == Mode.WIRE
-    assert scene._wire_pts == [(2.0, 0.0)]
+    _dbl_click(scene, (2.0, 0.0))               # connected START endpoint
+    assert scene.mode == Mode.SELECT
+    assert item._label_editor.is_editing
+    assert item._editing_end == "start"
+    item._label_editor.end_edit(commit=False)
 
 
 def test_double_click_empty_space_enters_wire_mode(scene: SchematicScene):
@@ -1309,12 +1356,12 @@ def test_double_click_empty_space_enters_wire_mode(scene: SchematicScene):
     assert scene._wire_preview is not None
 
 
-def test_double_click_wire_near_component_enters_wire_mode(scene: SchematicScene):
+def test_double_click_wire_near_component_reaches_wire(scene: SchematicScene):
     """A wire inside a component's bounding box is reachable by double-click.
 
     Regression: the component double-click check ran first and swallowed the
-    event, preventing wire mode from being entered on wires that overlap with
-    a component's bounding rect (e.g. the side wires of a series R-L loop).
+    event, preventing the wire gesture (now entering WIRE mode) on wires that
+    overlap a component's bounding rect (e.g. side wires of a series R-L loop).
     """
     # Resistor with pins at (0,0) and (2,0); its bbox spans that area.
     scene.place_component("R", (0.0, 0.0))
@@ -1324,7 +1371,7 @@ def test_double_click_wire_near_component_enters_wire_mode(scene: SchematicScene
     # Double-click on the wire body at (0, 1.0) — inside the component bbox.
     _dbl_click(scene, (0.0, 1.0))
 
-    assert scene.mode == Mode.WIRE
+    assert scene.mode == Mode.WIRE                 # reached the wire, not the part
     assert scene._wire_pts == [(0.0, 1.0)]
 
 
@@ -1867,6 +1914,74 @@ def test_tab_cycle_empty_space_is_noop(scene: SchematicScene):
     assert changed is False
 
 
+def test_tab_cycle_marker_on_rect_connected_endpoint(scene: SchematicScene):
+    """A wire endpoint on a rect edge is pin-locked, but Tab still cycles its
+    arrow marker (not the line style)."""
+    scene.place_component("rect", (0.0, 0.0))     # 2x2 box; right edge x=2
+    # Wire from open space into the right-edge midpoint (2,1).
+    wire = scene.add_wire([(5.0, 1.0), (2.0, 1.0)])
+
+    changed = scene.cycle_at(scene.gu_to_scene(2.0, 1.0))   # endpoint on the edge
+    assert changed is True
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.end_marker == "arrow"          # marker cycled
+    assert w.line_style == ""               # line style untouched
+
+
+def test_tab_cycle_marker_on_circle_cardinal_endpoint(scene: SchematicScene):
+    """A wire endpoint on a circle cardinal point is also a Tab arrow target."""
+    scene.place_component("circle", (0.0, 0.0))   # 2x2; east cardinal (2,1)
+    wire = scene.add_wire([(5.0, 1.0), (2.0, 1.0)])
+
+    scene.cycle_at(scene.gu_to_scene(2.0, 1.0))
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.end_marker == "arrow"
+
+
+def test_cycle_wire_label_placement_steps_and_is_independent(scene: SchematicScene):
+    """`_cycle_wire_label_placement` steps a label's position through
+    WIRE_LABEL_PLACEMENTS (wraps; `backward` reverses) for the chosen end only."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_end_label(wire.id, "y")
+
+    def end_place():
+        return next(w for w in scene.schematic.wires if w.id == wire.id).end_label_placement
+
+    for want in ["above", "below", ""]:        # "" → above → below → "" (wraps)
+        scene._cycle_wire_label_placement(wire.id, "end", False)
+        assert end_place() == want
+    scene._cycle_wire_label_placement(wire.id, "end", True)   # backward from ""
+    assert end_place() == "below"
+
+    # The start end is independent of the end.
+    scene._cycle_wire_label_placement(wire.id, "start", False)
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.start_label_placement == "above"
+    assert w.end_label_placement == "below"
+
+
+def test_tab_over_endpoint_label_cycles_placement(scene: SchematicScene):
+    """`cycle_at` over a rendered endpoint label cycles its placement (priority
+    over the endpoint-marker cycle)."""
+    from PySide6.QtGui import QPainterPath
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_end_label(wire.id, "y")
+    item = scene._wire_items[wire.id]
+    lbl = item._end_label_item
+    # Force a rendered path so the label is hit-testable in a headless test.
+    path = QPainterPath()
+    path.addRect(0.0, 0.0, 10.0, 5.0)
+    lbl._path = path
+    lbl._reposition()
+
+    pt = lbl.mapToScene(lbl.boundingRect().center())
+    changed = scene.cycle_at(pt)
+    assert changed is True
+    w = next(x for x in scene.schematic.wires if x.id == wire.id)
+    assert w.end_label_placement == "above"   # cycled from "" (not the marker)
+    assert w.end_marker == ""                 # marker untouched
+
+
 def test_set_wire_mid_label_and_pos(scene: SchematicScene):
     """Mid-label text and position setters are undoable; position clamps to [0,1]."""
     wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
@@ -2370,3 +2485,304 @@ def test_bipole_line_style_changes_canvas_rendering(scene: SchematicScene):
     dashed = _render_scene(scene)
 
     assert solid != dashed, "dashed bipole border should render differently from solid"
+
+
+# ---------------------------------------------------------------------------
+# Junction drag, sticky wire style, perimeter connection points
+# ---------------------------------------------------------------------------
+
+def test_coincident_vertices_finds_junction(scene: SchematicScene):
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])      # through wire
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])      # stub T-ing in → splits through
+    assert len(scene.schematic.wires) == 3        # two halves + stub
+    targets = scene._coincident_vertices((2.0, 0.0))
+    assert len(targets) == 3                       # all three meet at the junction
+
+
+def test_move_junction_drags_all_connected_wires(scene: SchematicScene):
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])
+    targets = scene._coincident_vertices((2.0, 0.0))
+    scene.move_junction(targets, (2.0, 1.0))
+    # All three wires now meet at the moved junction; none remain at (2,0) as an
+    # endpoint/junction (only a pass-through corner may remain).
+    from app.schematic.validate import validate
+    moved = scene._coincident_vertices((2.0, 1.0))
+    assert len(moved) == 3
+    assert validate(scene.schematic) == []
+    # Undo restores the original geometry.
+    scene.undo_stack.undo()
+    assert len(scene._coincident_vertices((2.0, 0.0))) == 3
+    assert len(scene._coincident_vertices((2.0, 1.0))) == 0
+
+
+def test_new_wire_inherits_selected_wire_style(scene: SchematicScene):
+    """Selecting a wire makes its style the template for newly drawn wires."""
+    w1 = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    scene.set_wire_line_style(w1.id, "dashed")
+    scene.set_wire_end_marker(w1.id, "arrow")
+    scene.clearSelection()
+    scene._wire_items[w1.id].setSelected(True)     # capture style for new wires
+    w2 = scene.add_wire([(0.0, 2.0), (3.0, 2.0)])
+    got = scene._wire_by_id(w2.id)
+    assert got.line_style == "dashed"
+    assert got.end_marker == "arrow"
+
+
+def test_unconnected_perimeter_point_autostarts_wire(scene: SchematicScene):
+    """Clicking a free rect-edge / circle-cardinal point starts a wire there."""
+    scene.place_component("rect", (0.0, 0.0))        # 1x1; top-edge midpoint (0.5,0)
+    assert scene.unconnected_pin_at(scene.gu_to_scene(0.5, 0.0)) == (0.5, 0.0)
+    scene.place_component("circle", (10.0, 0.0))     # 0.5x0.5; east cardinal (10.5,0.25)
+    assert scene.unconnected_pin_at(scene.gu_to_scene(10.5, 0.25)) == (10.5, 0.25)
+
+
+def test_perimeter_connection_dots(scene: SchematicScene):
+    """RectItem marks every 0.25-GU perimeter point; CircleItem only the four
+    cardinal points."""
+    r = scene.place_component("rect", (0.0, 0.0))    # 1x1 → 16 perimeter points
+    assert len(scene._comp_items[r.id]._connection_dots_local()) == 16
+    c = scene.place_component("circle", (10.0, 0.0))
+    assert len(scene._comp_items[c.id]._connection_dots_local()) == 4
+
+
+def test_new_wire_inherits_style_from_tab_cycle(scene: SchematicScene):
+    """Tab-cycling a wire's endpoint marker makes it sticky for new wires."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.cycle_at(scene.gu_to_scene(4.0, 0.0))    # cycle END marker → arrow
+    assert scene._new_wire_style["end_marker"] == "arrow"
+    w2 = scene.add_wire([(0.0, 2.0), (3.0, 2.0)])
+    assert scene._wire_by_id(w2.id).end_marker == "arrow"
+
+
+def test_new_wire_inherits_style_from_inspector_setter(scene: SchematicScene):
+    """Changing a wire's style via the inspector setter makes it sticky too."""
+    w = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.set_wire_line_style(w.id, "dotted")      # what the inspector calls
+    assert scene._new_wire_style["line_style"] == "dotted"
+    w2 = scene.add_wire([(0.0, 2.0), (3.0, 2.0)])
+    assert scene._wire_by_id(w2.id).line_style == "dotted"
+
+
+def test_junction_drag_shows_highlight_and_clears(scene: SchematicScene):
+    """Dragging a junction shows a highlighted dot, hides the resting dot at the
+    origin, and clears the highlight on release."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])       # T-junction at (2,0)
+    assert (2.0, 0.0) in scene._junction_items
+
+    _sel_press(scene, (2.0, 0.0))
+    _sel_move(scene, (2.0, 1.0))
+    assert scene._drag.junction_preview is not None          # highlighted dot
+    assert not scene._junction_items[(2.0, 0.0)].isVisible()  # resting dot hidden
+    _sel_release(scene, (2.0, 1.0))
+    assert scene._drag.junction_preview is None              # cleared on release
+
+
+def test_junction_item_hover_grows_and_highlights(scene: SchematicScene):
+    """Hovering a junction dot grows it (and switches to the highlight colour)
+    to signal it's draggable."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])       # junction at (2,0)
+    ji = scene._junction_items[(2.0, 0.0)]
+    base = ji._radius()
+    ji.hoverEnterEvent(None)
+    assert ji._radius() > base
+    ji.hoverLeaveEvent(None)
+    assert ji._radius() == base
+
+
+def test_move_junction_preserves_orientation_via_scene(scene: SchematicScene):
+    """End-to-end: dragging a junction keeps each wire's orientation into it —
+    a wire arriving vertically still arrives vertically."""
+    scene.add_wire([(0.0, 2.0), (4.0, 2.0)])           # horizontal through wire
+    stub = scene.add_wire([(2.0, 2.0), (2.0, 0.0), (5.0, 0.0)])  # vertical into junction
+    targets = scene._coincident_vertices((2.0, 2.0))
+    assert len(targets) == 3                            # two halves + stub
+    scene.move_junction(targets, (3.0, 2.0))           # drag the junction right
+    s = next(w for w in scene.schematic.wires if w.id == stub.id)
+    assert s.points[0] == (3.0, 2.0)
+    assert s.points[1] == (3.0, 0.0)                    # vertical segment followed
+
+
+# ---------------------------------------------------------------------------
+# Line-hops (decoration at non-connecting wire crossings)
+# ---------------------------------------------------------------------------
+
+def test_line_hops_populate_hopping_wire_item(scene: SchematicScene):
+    """A non-connecting crossing puts a hop on the (later, tie-broken) wire."""
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])   # horizontal, index 0
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])   # vertical, index 1 → hops on tie
+    h_id = scene.schematic.wires[0].id
+    v_id = scene.schematic.wires[1].id
+    assert scene._wire_items[v_id].hops
+    assert scene._wire_items[v_id].hops[0].point == (2.0, 1.0)
+    assert scene._wire_items[h_id].hops == []
+
+
+def test_set_line_hops_toggles_bumps(scene: SchematicScene):
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])
+    v_id = scene.schematic.wires[1].id
+    assert scene._wire_items[v_id].hops
+    scene.set_line_hops(False)
+    assert scene._wire_items[v_id].hops == []
+    scene.set_line_hops(True)
+    assert scene._wire_items[v_id].hops
+
+
+def test_set_wire_z_order_flips_hopper_and_is_undoable(scene: SchematicScene):
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])   # h, index 0
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])   # v, index 1
+    h_id = scene.schematic.wires[0].id
+    v_id = scene.schematic.wires[1].id
+    assert scene._wire_items[v_id].hops and not scene._wire_items[h_id].hops
+    scene.set_wire_z_order(h_id, 1)            # raise h above v → h now hops
+    assert scene._wire_items[h_id].hops and not scene._wire_items[v_id].hops
+    assert scene._wire_items[h_id].zValue() == 1
+    scene.undo()
+    assert scene._wire_by_id(h_id).z_order == 0
+    assert scene._wire_items[v_id].hops and not scene._wire_items[h_id].hops
+
+
+def test_set_wire_hop_mode_never_yields_to_crosser_undoable(scene: SchematicScene):
+    """Setting a wire to 'never' moves the bump onto the crossing wire; undoable."""
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])     # h, index 0
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])     # v, index 1 → v hops by tie
+    h_id = scene.schematic.wires[0].id
+    v_id = scene.schematic.wires[1].id
+    assert scene._wire_items[v_id].hops
+    scene.set_wire_hop_mode(v_id, "never")       # v no longer hops...
+    assert scene._wire_items[v_id].hops == []
+    assert scene._wire_items[h_id].hops and scene._wire_items[h_id].hops[0].point == (2.0, 1.0)
+    scene.undo()
+    assert scene._wire_by_id(v_id).hop_mode == ""
+    assert scene._wire_items[v_id].hops
+
+
+def test_always_hop_mode_shows_even_when_global_off(scene: SchematicScene):
+    """An 'always' wire shows its bump even with the global line-hops preference off."""
+    scene.set_line_hops(False)                   # global default off
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])     # h
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])     # v
+    h_id = scene.schematic.wires[0].id
+    assert scene._wire_items[h_id].hops == []    # nothing hops while off + default
+    scene.set_wire_hop_mode(h_id, "always")
+    assert scene._wire_items[h_id].hops and scene._wire_items[h_id].hops[0].point == (2.0, 1.0)
+
+
+def test_hop_bump_bulges_off_the_line(scene: SchematicScene):
+    """The bump arcs perpendicular to (above) a horizontal hopping wire."""
+    scene.add_wire([(0.0, 1.0), (4.0, 1.0)])   # horizontal at y=1
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])   # vertical
+    h_id = scene.schematic.wires[0].id
+    scene.set_wire_z_order(h_id, 1)            # make the horizontal wire hop
+    item = scene._wire_items[h_id]
+    pts = [scene.gu_to_scene(*p) for p in item.wire.points]
+    path = item._build_wire_path(pts)
+    line_y = scene.gu_to_scene(0.0, 1.0).y()
+    assert path.boundingRect().top() < line_y - 1.0   # bump extends above the line
+
+
+# ---------------------------------------------------------------------------
+# Live line-hops during gestures (drawing / dragging)
+# ---------------------------------------------------------------------------
+
+def test_wire_draw_preview_shows_live_hops(scene: SchematicScene):
+    """While drawing a wire across an existing one, the ghost shows a live bump."""
+    scene.add_wire([(2.0, 0.0), (2.0, 3.0)])     # existing vertical at x=2
+    scene.enter_wire_mode()
+    _wire_press(scene, (0.0, 1.0))               # anchor the new wire at (0,1)
+    _wire_move(scene, (4.0, 1.0))                # drag across the vertical wire
+    pv = scene._wire_preview
+    assert pv is not None
+    assert pv.hops and pv.hops[0].point == (2.0, 1.0)   # the new wire hops (later → tie)
+
+
+def test_wire_draw_preview_updates_existing_wire_then_clears(scene: SchematicScene):
+    """A higher-z existing wire shows the bump as the new wire is drawn across it,
+    and the bump clears when the in-progress wire is discarded."""
+    a = scene.add_wire([(2.0, 0.0), (2.0, 3.0)])
+    scene.set_wire_z_order(a.id, 1)              # A outranks the new wire → A hops
+    scene.enter_wire_mode()
+    _wire_press(scene, (0.0, 1.0))
+    _wire_move(scene, (4.0, 1.0))                # preview crosses A at (2,1)
+    assert scene._wire_items[a.id].hops and scene._wire_items[a.id].hops[0].point == (2.0, 1.0)
+    assert scene._wire_preview.hops == []        # the lower-z preview wire does not hop
+    scene.cancel_current()                       # discard the in-progress wire
+    assert scene._wire_items[a.id].hops == []    # the live bump clears
+
+
+def test_vertex_drag_preview_shows_live_hops(scene: SchematicScene):
+    """Dragging a wire endpoint across another wire shows a live bump on the dragged wire."""
+    scene.add_wire([(2.0, 0.0), (2.0, 4.0)])     # A: vertical at x=2 (index 0)
+    b = scene.add_wire([(0.0, 1.0), (1.0, 1.0)]) # B: short horizontal (index 1)
+    _sel_press(scene, (1.0, 1.0))                # grab B's free endpoint
+    _sel_move(scene, (4.0, 1.0))                 # extend B across A at (2,1)
+    item_b = scene._wire_items[b.id]
+    assert item_b.preview_points is not None
+    assert item_b.hops and item_b.hops[0].point == (2.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
+# Bring-to-front / send-to-back (shared wire + drawing-component z-stack)
+# ---------------------------------------------------------------------------
+
+def test_bring_wire_to_front_above_components_and_wires(scene: SchematicScene):
+    """A wire brought to front lands above every other z-ordered object."""
+    a = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    b = scene.add_wire([(0.0, 1.0), (2.0, 1.0)])
+    r = scene.place_component("rect", (5.0, 5.0))   # a DrawingComponent
+    scene.set_wire_z_order(b.id, 3)
+    scene.set_component_z_order(r.id, 7)
+    new_z = scene.bring_to_front(a.id)
+    assert new_z == 8                                # max(3, 7, 0) + 1
+    assert scene._wire_by_id(a.id).z_order == 8
+    assert scene._wire_items[a.id].zValue() == 8
+
+
+def test_send_wire_to_back_below_all(scene: SchematicScene):
+    a = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    b = scene.add_wire([(0.0, 1.0), (2.0, 1.0)])
+    scene.set_wire_z_order(b.id, -2)
+    new_z = scene.send_to_back(a.id)
+    assert new_z == -3                               # min(-2, 0) - 1
+    assert scene._wire_by_id(a.id).z_order == -3
+
+
+def test_bring_component_to_front_above_wire(scene: SchematicScene):
+    """Drawing components and wires share one stack: a rect can front over a wire."""
+    r = scene.place_component("rect", (0.0, 0.0))
+    w = scene.add_wire([(5.0, 5.0), (7.0, 5.0)])
+    scene.set_wire_z_order(w.id, 4)
+    new_z = scene.bring_to_front(r.id)
+    assert new_z == 5                                # max(4, 0) + 1
+    assert scene._component_by_id(r.id).z_order == 5
+
+
+def test_front_back_baseline_and_undoable(scene: SchematicScene):
+    """With no other z-ordered objects, front = 1 / back = -1 (around the z=0
+    circuit baseline); both are undoable."""
+    a = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    assert scene.bring_to_front(a.id) == 1
+    assert scene._wire_by_id(a.id).z_order == 1
+    scene.undo()
+    assert scene._wire_by_id(a.id).z_order == 0
+    assert scene.send_to_back(a.id) == -1
+    scene.undo()
+    assert scene._wire_by_id(a.id).z_order == 0
+
+
+def test_wire_inspector_move_buttons_call_through(scene: SchematicScene):
+    """WireStyleSection's Move-to-front/back drive the scene front/back methods."""
+    from app.ui.properties import WireStyleSection
+    a = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    b = scene.add_wire([(0.0, 1.0), (2.0, 1.0)])
+    scene.set_wire_z_order(b.id, 5)
+    section = WireStyleSection()
+    section.bind_wire(scene._wire_by_id(a.id), scene)
+    section._move(to_front=True)
+    assert scene._wire_by_id(a.id).z_order == 6      # max(5, 0) + 1
+    assert section._z_spin.value() == 6
+    section._move(to_front=False)
+    assert scene._wire_by_id(a.id).z_order == -1     # min(5, 0) - 1
