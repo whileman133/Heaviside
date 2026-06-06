@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/icon.png" alt="Heaviside logo" width="120">
+</p>
+
 # Heaviside
 
 [![CI](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml/badge.svg)](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml)
@@ -11,28 +15,19 @@ It is designed for researchers, engineers, and educators who author schematics w
 
 ## Features
 
-**Schematic entry**
-
-- Grid-disciplined, fixed-component-size canvas with quarter-grid snapping
-- A library of two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal parts (op amps, MOSFETs, BJTs), grounds, and supply rails
-- Block-diagram primitives — labelled boxes, circles, and free text — with wires connecting anywhere on a shape's perimeter
+- Inline LaTeX label editing, rendered as typeset math directly on the canvas (WYSIWYM)
+- Automatic junction dots where wires and pins connect
+- Open-terminal dots at unconnected wire ends and pins (configurable)
+- Line hops at crossings where wires do not connect (configurable)
+- Manhattan-routed wires with per-wire line styles, widths, and endpoint markers/arrowheads
+- A component library of two-terminal parts (R, C, L, diodes, sources), multi-terminal parts (op amps, MOSFETs, BJTs), grounds, and supply rails
+- Block-diagram primitives: labeled boxes, circles, and free text, with wires connecting anywhere on a shape's perimeter
 - 90° rotation, mirroring, resizing, copy/paste, and full undo/redo
-
-**Typeset math, WYSIWYM**
-
-- Component and wire labels are written as LaTeX fragments and shown **typeset directly on the canvas**, on their conventional sides — what you see is what the figure means
-- Wire endpoint, mid-wire, and component annotations (labels, voltages, currents)
-
-**Wiring**
-
-- Manhattan-routed wires with automatic junction dots derived from connectivity
-- Line hops at non-connecting crossings; per-wire line styles, widths, and endpoint markers/arrowheads
-
-**Output**
-
-- Clean, human-readable CircuiTikZ source as the primary output, plus PDF and EPS export
+- Grid-disciplined canvas with quarter-grid CircuiTikZ snapping
+- Clean, human-readable CircuiTikZ source as the primary output
+- Parallel PDF and EPS export for inclusion in LaTeX or LyX documents
 - Live, rendered PDF preview of the current schematic
-- Lossless save/load via a JSON `.hv` file format
+- Save/load via a JSON `.hv` file format
 
 Component and wire labels are written as LaTeX and rendered as typeset math on the
 canvas, so equations read the way they will in the final figure:
