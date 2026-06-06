@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Linux (x64) build: the release workflow now produces a
   `Heaviside-linux-x64.tar.gz` alongside the macOS and Windows binaries.
+- Design spec for a **Component Editor** (`spec/component-editor.md`) and a new
+  `spec/` directory for focused per-feature specifications (indexed by
+  `spec/README.md`, linked from `PROJECT_SPEC.md`). The Component Editor is a
+  planned developer-first tool that imports a CircuiTikZ symbol from its
+  generating command, automates grid alignment, and emits one declarative
+  Component Definition as the single source of truth — replacing the
+  five-hand-maintained-files procedure documented in `PROJECT_SPEC.md` §5.5.
+  Design only; not yet implemented.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

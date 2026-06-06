@@ -236,7 +236,7 @@ _NIGFETE = ComponentDef(
     display_name="NMOS",
     category="Tripoles",
     # Pin offsets match CircuiTikZ's actual anchor geometry when placed with
-    # anchor=gate, snapped to the nearest 0.5 GU boundary.
+    # anchor=gate, snapped to the nearest 0.25 GU boundary.
     # Measured from compiled output (pt/28.348):
     #   gate (0,0), drain (0.984,-1.043)→(1.0,-1.0), source (0.984,0.502)→(1.0,0.5)
     bbox=(-0.05, -1.1, 1.05, 0.55),

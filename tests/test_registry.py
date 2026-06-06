@@ -61,19 +61,24 @@ def test_no_duplicate_kinds() -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_all_pins_on_half_grid
+# test_all_pins_on_quarter_grid
 # ---------------------------------------------------------------------------
 
-def test_all_pins_on_half_grid() -> None:
-    """Every PinDef offset in every ComponentDef lies on a 0.5 GU boundary."""
+def test_all_pins_on_quarter_grid() -> None:
+    """Every PinDef offset in every ComponentDef lies on a 0.25 GU boundary.
+
+    0.25 GU is the canvas minor grid (SNAP_GU, spec §3.1); pin offsets must be
+    multiples of it so a placed component's pins land on the grid. Existing pins
+    happen to be on the coarser 0.5 grid, which is a subset of 0.25.
+    """
     for kind, defn in REGISTRY.items():
         for pin in defn.pins:
             dx, dy = pin.offset
-            assert (dx * 2) == int(dx * 2), (
-                f"{kind}/{pin.name}: dx={dx} is not on a 0.5 GU boundary"
+            assert (dx * 4) == int(dx * 4), (
+                f"{kind}/{pin.name}: dx={dx} is not on a 0.25 GU boundary"
             )
-            assert (dy * 2) == int(dy * 2), (
-                f"{kind}/{pin.name}: dy={dy} is not on a 0.5 GU boundary"
+            assert (dy * 4) == int(dy * 4), (
+                f"{kind}/{pin.name}: dy={dy} is not on a 0.25 GU boundary"
             )
 
 

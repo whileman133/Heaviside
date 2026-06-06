@@ -194,7 +194,8 @@ class PinDef:
 
     offset: tuple[float, float]
     """(dx, dy) from the component origin in grid units (GU).
-    Both values must be multiples of 0.5."""
+    Both values must be multiples of 0.25 (the canvas minor grid; see
+    PROJECT_SPEC §3.1)."""
 
 
 @dataclass(frozen=True)

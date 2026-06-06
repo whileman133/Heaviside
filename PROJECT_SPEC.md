@@ -4,6 +4,11 @@
 **Status:** Draft (alpha — interfaces, file format, and architecture may change)  
 **Author:** Wes H.
 
+**Related specifications:** focused per-feature specs live in [`spec/`](spec/)
+and are indexed in [`spec/README.md`](spec/README.md). This document remains the
+master; the feature specs expand on sections referenced inline (e.g. §5.5 →
+[`spec/component-editor.md`](spec/component-editor.md)).
+
 ---
 
 ## Contents
@@ -605,8 +610,16 @@ The palette category display order is: **Bipoles → Tripoles → Nodes → Anno
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
+> **Planned replacement.** This manual procedure — and the five hand-maintained
+> files it spans (export tables, registry, `svgsym` placements, codegen tables,
+> item subclasses) — is slated to be superseded by a visual **Component Editor**
+> that imports a symbol from its generating command, automates the measurement
+> below, and emits one declarative *Component Definition* as the single source of
+> truth. See [`spec/component-editor.md`](spec/component-editor.md). Until that is
+> built, the procedure here remains authoritative.
+
 CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
-fall on the 0.5-GU canvas grid. This section documents the procedure for
+fall on the 0.25-GU canvas grid. This section documents the procedure for
 aligning them when adding a new component.
 
 #### Background: two independent lead/correction mechanisms
@@ -644,11 +657,11 @@ CircuiTikZ's Y-up space; negate Y to get Qt Y-down offsets.
 Alternatively, read the terminal endpoint coordinates directly from the
 re-exported `manifest.json` after adding TRIPOLE_LEADS (Step 4).
 
-#### Step 2 — Choose registry pin positions (0.5-GU snap)
+#### Step 2 — Choose registry pin positions (0.25-GU snap)
 
-Round each measured pin position to the nearest 0.5 GU. These become the
-`PinDef.offset` values in `REGISTRY`. The registry pins define where wires
-connect on the canvas, so they must be on-grid.
+Round each measured pin position to the nearest 0.25 GU (the canvas minor grid,
+§3.1). These become the `PinDef.offset` values in `REGISTRY`. The registry pins
+define where wires connect on the canvas, so they must be on-grid.
 
 #### Step 3 — Choose an alignment strategy
 
@@ -1186,7 +1199,7 @@ the node center:
 Where `(pin_x, pin_y)` is the absolute coordinate of the registry pin
 corresponding to `ANCHOR`, and `NODEID` is `node_<first8charsofUUID>`.
 
-Because CircuiTikZ's internal pin geometry does not align with the 0.5-GU
+Because CircuiTikZ's internal pin geometry does not align with the 0.25-GU
 canvas grid, two strategies are used to make wire connections exact:
 
 **op amp** — placed by center (`comp.position`). Short lead wires are drawn
@@ -2056,9 +2069,10 @@ no `.tmp` file behind.
 #### Registry (`test_registry.py`)
 
 Cross-checks registry integrity: every `kind` has an `ITEM_CLASSES` entry, every
-`PinDef.offset` lies on the 0.5 GU grid, two-terminal `default_span` equals the
-terminal pin offset, no duplicate kinds, and that `circle` is registered like
-`rect` (Drawing category, no pins, resizable, `CircleComponent`).
+`PinDef.offset` lies on the 0.25 GU grid (`test_all_pins_on_quarter_grid`),
+two-terminal `default_span` equals the terminal pin offset, no duplicate kinds,
+and that `circle` is registered like `rect` (Drawing category, no pins,
+resizable, `CircleComponent`).
 
 #### Geometry Helpers (`test_model.py`)
 

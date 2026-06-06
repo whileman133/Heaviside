@@ -38,7 +38,7 @@ MULTI-TERMINAL COMPONENT PLACEMENT — DESIGN NOTES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 CircuiTikZ multi-terminal nodes (op amp, nigfete) have internal pin geometry
-that does not align with our 0.5-GU grid. The canvas uses SVG lead stubs
+that does not align with our 0.25-GU grid. The canvas uses SVG lead stubs
 (from tools/export_circuitikz_svgs.py) to extend the symbol to grid-aligned
 endpoints. The codegen must bridge the same gap in the LaTeX output.
 
@@ -81,7 +81,7 @@ Registry pins (Qt Y-down, from gate pin = comp.position):
   source (1.0,  +0.5)
 
 The registry pins were chosen to match the CTikZ anchor positions snapped to
-the nearest 0.5 GU, after placement with anchor=gate. The lead stubs in the
+the nearest 0.25 GU, after placement with anchor=gate. The lead stubs in the
 SVG export (the nigfete lead routing in tools/export_circuitikz_svgs.py) draw
 to these same coordinates so the canvas symbol matches.
 

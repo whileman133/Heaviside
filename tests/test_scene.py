@@ -1080,7 +1080,7 @@ def test_ghost_matches_committed_geometry(scene: SchematicScene):
 
 
 def test_component_drag_snaps_to_grid_mid_drag(scene: SchematicScene):
-    """Component item position snaps to 0.5 GU during drag, not only on release.
+    """Component item position snaps to 0.25 GU during drag, not only on release.
 
     Regression: before the fix, Qt moved items at sub-grid pixel positions until
     release, so the visual position was unsnapped mid-drag.
@@ -1092,7 +1092,7 @@ def test_component_drag_snaps_to_grid_mid_drag(scene: SchematicScene):
 
     # Move the item to a fractional (off-grid) pixel position and fire mouseMoveEvent.
     item = scene._comp_items[a.id]
-    off_grid_x = item.pos().x() + 0.3 * GRID_PX   # 0.3 GU off — not a 0.5 GU boundary
+    off_grid_x = item.pos().x() + 0.3 * GRID_PX   # 0.3 GU off — not a 0.25 GU boundary
     off_grid_y = item.pos().y() + 0.7 * GRID_PX
     item.setPos(off_grid_x, off_grid_y)
     mv = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseMove)
@@ -1100,7 +1100,7 @@ def test_component_drag_snaps_to_grid_mid_drag(scene: SchematicScene):
     mv.setButtons(Qt.LeftButton)
     scene.mouseMoveEvent(mv)
 
-    # After the event, item.pos() must sit exactly on a 0.5 GU grid point.
+    # After the event, item.pos() must sit exactly on a 0.25 GU grid point.
     snapped = scene.snap_point_gu(item.pos())
     actual = scene.scene_to_gu(item.pos())
     assert actual == snapped, (

@@ -312,7 +312,7 @@ def test_nmos_node() -> None:
     """nigfete is placed as node[nigfete] with its geometry correction (spec §7.2).
 
     The symbol is anchored at the gate pin and stretched horizontally by
-    xscale=1.0167 to align the drain/source pins to the 0.5-GU grid.
+    xscale=1.0167 to align the drain/source pins to the 0.25-GU grid.
     """
     comp = _comp("nigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
