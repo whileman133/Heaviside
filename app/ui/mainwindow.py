@@ -54,6 +54,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.resources import resource_path
+from app.version import __version__
 from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
 from app.canvas.view import SchematicView
 from app.codegen.circuitikz import generate
@@ -1106,7 +1107,7 @@ def _filled_dot(painter: QPainter, color: QColor, centre: QPointF, r: float) -> 
 # About dialog
 # ---------------------------------------------------------------------------
 
-_APP_VERSION = "0.1.0"
+_APP_VERSION = __version__
 _ASSETS_DIR = resource_path("assets")
 
 _HEAVISIDE_QUOTE = (

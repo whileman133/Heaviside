@@ -18,10 +18,32 @@ Bundling a full TeX distribution is impractical, so these stay external. Pure
 editing, source generation, and .tex export work without them.
 """
 
+import re
 import sys
 from glob import glob
+from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_data_files
+
+
+def _project_version() -> str:
+    """Read the single source-of-truth version from pyproject.toml.
+
+    ``pyproject.toml`` is the one place the project version is declared; this
+    keeps the bundle metadata (CFBundle*/version below) in sync automatically so
+    a release only ever bumps the number in one file. Uses stdlib ``tomllib``
+    (Python 3.11+); falls back to a regex so the build never fails on parsing.
+    """
+    text = Path("pyproject.toml").read_text(encoding="utf-8")
+    try:
+        import tomllib
+        return tomllib.loads(text)["project"]["version"]
+    except Exception:
+        m = re.search(r'^\s*version\s*=\s*["\']([^"\']+)["\']', text, re.MULTILINE)
+        return m.group(1) if m else "0.0.0"
+
+
+_VERSION = _project_version()
 
 # Runtime resources, paths relative to the project root, mirroring the layout
 # app/resources.py expects.
@@ -120,12 +142,12 @@ if sys.platform == "darwin":
         name="Heaviside.app",
         icon="assets/icon.icns",
         bundle_identifier="com.heaviside.editor",
-        version="0.4.0",
+        version=_VERSION,
         info_plist={
             "CFBundleName": "Heaviside",
             "CFBundleDisplayName": "Heaviside",
-            "CFBundleShortVersionString": "0.4.0",
-            "CFBundleVersion": "0.4.0",
+            "CFBundleShortVersionString": _VERSION,
+            "CFBundleVersion": _VERSION,
             "NSHighResolutionCapable": True,
             "NSHumanReadableCopyright": "Wesley Hileman",
             # Associate the .hv schematic document type with this app.

@@ -144,8 +144,7 @@ class RectComponent(FontedComponent, StyledComponent, DrawingComponent):
     Fill, border width, and line style are carried as StyledComponent fields;
     ``span_override`` holds the (width, height) in GU.  Font fields come from
     FontedComponent and style the centred text label.  ``options`` holds the
-    raw LaTeX text fragment drawn centred inside the box (empty = no text);
-    legacy files that stored the style string there are migrated on load.
+    raw LaTeX text fragment drawn centred inside the box (empty = no text).
     """
 
 

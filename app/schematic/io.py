@@ -21,28 +21,20 @@ from app.components.model import (
     DrawingComponent,
     FontedComponent,
     MosfetComponent,
-    RectComponent,
     StyledComponent,
-    TextNodeComponent,
 )
 from app.components.registry import REGISTRY
-from app.components.style import parse_style_options
 from app.schematic.model import WIRE_HOP_MODES, Schematic, Wire
 from app.schematic.validate import validate
 
 # File-format version written by the current code.  Distinct from the spec
-# version.  Bumped to "0.2" when `rect` began storing centred text in its
-# ``options`` field: under "0.1", a rect's non-empty ``options`` was always a
-# legacy style string (migrated into the StyledComponent fields on load), so the
-# version is what disambiguates legacy-style from new-text on load.
-_FORMAT_VERSION: str = "0.2"
+# version.  "0.1" is the initial (pre-1.0) format: the on-disk shape is not yet
+# stable and may change between early releases without migration support. There
+# are no earlier formats to migrate from.
+_FORMAT_VERSION: str = "0.1"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2"}
-
-# Versions whose `rect` components stored the draw style in ``options`` (rather
-# than the dedicated StyledComponent fields).  Such options are migrated on load.
-_RECT_STYLE_IN_OPTIONS_VERSIONS: set[str] = {"0.1"}
+_KNOWN_VERSIONS: set[str] = {"0.1"}
 
 
 class SchematicLoadError(Exception):
@@ -116,9 +108,7 @@ def load(path: str | Path) -> Schematic:
 
 def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
     return {
-        # Always written as the current format version so that, e.g., a rect's
-        # text in ``options`` is never re-interpreted as a legacy style string
-        # when an older file is loaded, edited, and saved.
+        # Always written as the current format version.
         "version": _FORMAT_VERSION,
         "name": s.name,
         "components": [_component_to_dict(c) for c in s.components],
@@ -222,8 +212,10 @@ def _dict_to_schematic(data: dict) -> Schematic:
         raise SchematicLoadError("Field 'version' must be a string")
     if version not in _KNOWN_VERSIONS:
         raise SchematicLoadError(
-            f"Unknown schematic version '{version}'. "
-            f"Supported versions: {sorted(_KNOWN_VERSIONS)}"
+            f"This file uses .hv format version '{version}', which this version "
+            f"of Heaviside does not support (it reads "
+            f"{sorted(_KNOWN_VERSIONS)}). It was likely saved by a newer "
+            f"release — please update Heaviside to open it."
         )
 
     name = _require(data, "name", "schematic")
@@ -234,7 +226,7 @@ def _dict_to_schematic(data: dict) -> Schematic:
     if not isinstance(raw_components, list):
         raise SchematicLoadError("Field 'components' must be an array")
     components = [
-        _dict_to_component(c, i, version) for i, c in enumerate(raw_components)
+        _dict_to_component(c, i) for i, c in enumerate(raw_components)
     ]
 
     raw_wires = _require(data, "wires", "schematic")
@@ -255,7 +247,7 @@ def _dict_to_schematic(data: dict) -> Schematic:
     )
 
 
-def _dict_to_component(data: Any, index: int, version: str = _FORMAT_VERSION) -> Component:
+def _dict_to_component(data: Any, index: int) -> Component:
     ctx = f"components[{index}]"
     if not isinstance(data, dict):
         raise SchematicLoadError(f"{ctx} must be an object")
@@ -285,14 +277,6 @@ def _dict_to_component(data: Any, index: int, version: str = _FORMAT_VERSION) ->
         options = data["options"]
         if not isinstance(options, str):
             raise SchematicLoadError(f"{ctx}.options must be a string")
-    elif "labels" in data:
-        # Migrate v0.1 files that stored a labels dict instead of an options string.
-        old_labels = data["labels"]
-        if not isinstance(old_labels, dict):
-            raise SchematicLoadError(f"{ctx}.labels must be an object")
-        options = ", ".join(
-            f"{k}={v}" for k, v in old_labels.items() if isinstance(v, str) and v
-        )
     else:
         options = ""
 
@@ -347,32 +331,13 @@ def _dict_to_component(data: Any, index: int, version: str = _FORMAT_VERSION) ->
         kwargs["body_diode"] = bool(data.get("body_diode", False))
 
     if issubclass(cls, StyledComponent):
-        has_style_fields = any(
-            k in data for k in ("fill_color", "border_width", "line_style")
-        )
-        if (
-            issubclass(cls, RectComponent)
-            and not has_style_fields
-            and options
-            and version in _RECT_STYLE_IN_OPTIONS_VERSIONS
-        ):
-            # Migrate legacy rect files (format < 0.2) that stored the style in
-            # the options string; promote it into the StyledComponent fields and
-            # clear options.  In 0.2+, a rect's options holds centred text and is
-            # kept verbatim.
-            fill, bw, ls = parse_style_options(options)
-            kwargs["fill_color"] = fill
-            kwargs["border_width"] = bw
-            kwargs["line_style"] = ls
-            kwargs["options"] = ""
-        else:
-            kwargs["fill_color"] = str(data.get("fill_color", ""))
-            raw_bw = data.get("border_width", 0.4)
-            try:
-                kwargs["border_width"] = float(raw_bw)
-            except (TypeError, ValueError) as exc:
-                raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
-            kwargs["line_style"] = str(data.get("line_style", ""))
+        kwargs["fill_color"] = str(data.get("fill_color", ""))
+        raw_bw = data.get("border_width", 0.4)
+        try:
+            kwargs["border_width"] = float(raw_bw)
+        except (TypeError, ValueError) as exc:
+            raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
+        kwargs["line_style"] = str(data.get("line_style", ""))
 
     if issubclass(cls, FontedComponent):
         raw_ff = data.get("font_family", "")
@@ -383,10 +348,6 @@ def _dict_to_component(data: Any, index: int, version: str = _FORMAT_VERSION) ->
         kwargs["font_family"] = raw_ff
         if "font_size" in data:
             kwargs["font_size"] = float(data["font_size"])
-        elif issubclass(cls, TextNodeComponent) and span_override is not None:
-            # Migrate: very old text_node files stored font_size in span_override[0].
-            kwargs["font_size"] = span_override[0]
-            kwargs["span_override"] = None
 
     return cls(**kwargs)
 

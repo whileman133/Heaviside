@@ -5,21 +5,22 @@ runs the test suite on every push and PR; the release workflow
 (`.github/workflows/release.yml`) builds and attaches the standalone binaries
 when a version tag is pushed.
 
-## Version numbers — keep these in sync
+## Version numbers
 
-The project version appears in **four** places. A release bumps all of them to
-the same value (and the git tag matches, prefixed with `v`):
+The project version has a **single source of truth**: the `version` field in
+`pyproject.toml`. `heaviside.spec` reads it at build time (so the macOS bundle's
+`CFBundleShortVersionString` / `CFBundleVersion` stay in sync automatically — no
+manual edit there). A release therefore bumps the version in **one** place:
 
-| File | Field |
-|------|-------|
-| `pyproject.toml` | `version = "X.Y.Z"` |
-| `heaviside.spec` | `version=`, `CFBundleShortVersionString`, `CFBundleVersion` (macOS bundle) |
-| `PROJECT_SPEC.md` | `**Version:**` header field |
-| `CHANGELOG.md` | the `## [X.Y.Z]` release heading |
+1. `pyproject.toml` → `version = "X.Y.Z"`
 
-If these drift, the built `.app` reports the wrong version in Finder's *Get Info*
-and *About* dialogs. Grep for the old number before tagging to be sure:
-`grep -rn "0\.4\.0" pyproject.toml heaviside.spec PROJECT_SPEC.md CHANGELOG.md`.
+Then record the release in `CHANGELOG.md` (move `[Unreleased]` into a new
+`## [X.Y.Z]` heading) and tag with `vX.Y.Z`.
+
+Two other "versions" are intentionally **separate** and not bumped with the app
+version: the spec document's own `**Version:**` header in `PROJECT_SPEC.md`
+(tracks the specification, not the app), and the `.hv` **file-format** version
+(`_FORMAT_VERSION` in `app/schematic/io.py`, currently `0.1`).
 
 ## Release steps
 
@@ -27,7 +28,8 @@ and *About* dialogs. Grep for the old number before tagging to be sure:
    `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section, and update the
    link reference at the bottom of the file.
 
-2. **Bump the version** in all four files above to `X.Y.Z`.
+2. **Bump the version** in `pyproject.toml` to `X.Y.Z` (the single source of
+   truth; `heaviside.spec` picks it up automatically).
 
 3. **Verify locally.** Run the suite headless:
    `QT_QPA_PLATFORM=offscreen uv run pytest`. It must be green.
@@ -42,6 +44,11 @@ and *About* dialogs. Grep for the old number before tagging to be sure:
    This triggers `release.yml`, which builds the Apple-Silicon `.app` and the
    Windows bundle, attaches them with `.sha256` checksums, and opens a **draft**
    GitHub Release.
+
+   While the project is in its **alpha** phase (pre-1.0, unstable file format),
+   use a pre-release tag such as `vX.Y.Z-alpha` (or `-alpha.N`) and mark the
+   GitHub Release as a **pre-release** when publishing, so downloaders see the
+   "not yet stable" signal.
 
 6. **Publish the draft.** On GitHub → *Releases*, open the draft for `vX.Y.Z`:
    - Confirm the macOS `.zip`, Windows `.zip`, and their `.sha256` files are attached.

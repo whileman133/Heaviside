@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- The application version now has a single source of truth (`pyproject.toml`),
+  surfaced at runtime via `app/version.py`. The About dialog and the macOS bundle
+  metadata read from it instead of hardcoding a version string.
+- The "unknown `.hv` version" load error now explains that the file was likely
+  saved by a newer release and prompts the user to update Heaviside. (The
+  file-format version remains independent of the app version — it changes only
+  when the on-disk format changes.)
 
-## [0.4.0] - 2026-06-06
+## [0.1.0] - 2026-06-06
 
-First public, open-source release. The editor, code generator, preview
-pipeline, and file format are stable; the test suite (660+ tests) passes
-headless and runs in CI.
+First public, open-source **alpha** release. The editor, code generator, and
+preview pipeline are functional and the test suite (660+ tests) passes headless
+and runs in CI — but the architecture, UI, and `.hv` file format are not yet
+stable and may change before `1.0`.
 
 ### Added
 - MIT `LICENSE`.
@@ -33,5 +41,14 @@ headless and runs in CI.
   `tests/test_latex_security.py`.
 - Slimmed `PROJECT_SPEC.md` to focus on behavior: the AI-Assisted Implementation
   Guide (former §14) moved to `docs/ai-development.md`.
+- The `.hv` file format uses a single pre-1.0 version, **`0.1`**, which is **not
+  yet stable** and may change between alpha releases without migration support.
+  The loader performs no backward-compatibility migration and rejects
+  unrecognised versions.
 
-[0.4.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.4.0
+### Removed
+- Legacy `.hv` load-time migrations: the `labels`-dict → options-string
+  conversion, the `rect` style-in-`options` → `StyledComponent` fields
+  conversion, and the old `text_node` `span_override` → `font_size` conversion.
+
+[0.1.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.1.0

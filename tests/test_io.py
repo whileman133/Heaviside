@@ -88,9 +88,8 @@ def _schematic_with_options() -> Schematic:
 def test_roundtrip_empty(tmp_path: Path) -> None:
     """Save and reload an empty schematic — loaded schematic equals original.
 
-    ``save`` normalises the file-format version to the current one (so an older
-    file edited and re-saved can't have its rect text mistaken for a legacy
-    style string), so the version is expected to be upgraded, not preserved.
+    ``save`` always writes the current file-format version, so the version is
+    expected to be normalised, not preserved verbatim.
     """
     from app.schematic.io import _FORMAT_VERSION
 
@@ -156,32 +155,6 @@ def test_roundtrip_options(tmp_path: Path) -> None:
     loaded = load(p)
 
     assert loaded.components[0].options == original.components[0].options
-
-
-def test_roundtrip_legacy_labels_migration(tmp_path: Path) -> None:
-    """Old files with a 'labels' dict are loaded and migrated to an options string."""
-    data = {
-        "version": "0.1",
-        "name": "legacy",
-        "components": [
-            {
-                "id": "abc",
-                "kind": "R",
-                "position": [0.0, 0.0],
-                "rotation": 0,
-                "mirror": False,
-                "labels": {"l": "$R_1$", "v": "$V$"},
-            }
-        ],
-        "wires": [],
-        "metadata": {},
-    }
-    p = tmp_path / "legacy.hv"
-    p.write_text(json.dumps(data), encoding="utf-8")
-    loaded = load(p)
-    # Both slot=value pairs must appear in the migrated string.
-    assert "l=$R_1$" in loaded.components[0].options
-    assert "v=$V$" in loaded.components[0].options
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +417,7 @@ def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# StyledComponent fill / border / line_style round-trip + rect legacy migration
+# StyledComponent fill / border / line_style round-trip + rect text handling
 # ---------------------------------------------------------------------------
 
 def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
@@ -467,37 +440,6 @@ def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
     assert loaded.options == ""
 
 
-def test_rect_legacy_options_migrated_to_fields(tmp_path: Path) -> None:
-    """A legacy rect that stored its style in the options string is migrated to fields on load."""
-    legacy = {
-        "version": "0.1",
-        "name": "legacy-rect",
-        "components": [
-            {
-                "id": _uid(),
-                "kind": "rect",
-                "position": [0.0, 0.0],
-                "rotation": 0,
-                "mirror": False,
-                "options": "dashed, line width=1.5pt, fill=yellow!20",
-                "span_override": [2.0, 2.0],
-            }
-        ],
-        "wires": [],
-        "metadata": {},
-    }
-    p = tmp_path / "legacy_rect.hv"
-    p.write_text(json.dumps(legacy), encoding="utf-8")
-
-    from app.components.model import RectComponent
-    loaded = load(p).components[0]
-    assert isinstance(loaded, RectComponent)
-    assert loaded.fill_color == "yellow!20"
-    assert abs(loaded.border_width - 1.5) < 1e-6
-    assert loaded.line_style == "dashed"
-    assert loaded.options == ""
-
-
 def test_rect_text_roundtrip(tmp_path: Path) -> None:
     """A rect's centred text (options) and font fields survive save/load."""
     from app.components.model import RectComponent
@@ -512,17 +454,17 @@ def test_rect_text_roundtrip(tmp_path: Path) -> None:
     save(s, p)
     loaded = load(p).components[0]
     assert isinstance(loaded, RectComponent)
-    # Text preserved verbatim (NOT migrated/stripped as a style string).
+    # Text preserved verbatim (NOT parsed/stripped as a style string).
     assert loaded.options == "$H(s)$"
     assert abs(loaded.font_size - 10.0) < 1e-6
     assert loaded.font_bold is True
     assert loaded.font_family == "sans"
 
 
-def test_rect_text_with_no_style_fields_not_migrated(tmp_path: Path) -> None:
-    """A 0.2 rect with text and no style fields keeps its text (no legacy migration)."""
+def test_rect_text_kept_verbatim_not_parsed_as_style(tmp_path: Path) -> None:
+    """A rect's options text is loaded verbatim, never parsed as a draw-style string."""
     data = {
-        "version": "0.2",
+        "version": "0.1",
         "name": "rect-text",
         "components": [
             {
@@ -870,7 +812,7 @@ def test_roundtrip_wire_z_order(tmp_path: Path) -> None:
 def test_wire_z_order_wrong_type_raises(tmp_path: Path) -> None:
     """A non-integer wire z_order raises SchematicLoadError."""
     data = {
-        "version": "0.2",
+        "version": "0.1",
         "name": "bad",
         "components": [],
         "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "z_order": "high"}],
@@ -899,7 +841,7 @@ def test_roundtrip_wire_hop_mode(tmp_path: Path) -> None:
 
 def test_wire_hop_mode_invalid_raises(tmp_path: Path) -> None:
     data = {
-        "version": "0.2", "name": "bad", "components": [],
+        "version": "0.1", "name": "bad", "components": [],
         "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "hop_mode": "sometimes"}],
         "metadata": {},
     }

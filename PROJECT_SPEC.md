@@ -1,7 +1,7 @@
 # Heaviside — Specification
 
 **Version:** 0.4  
-**Status:** Stable  
+**Status:** Draft (alpha — interfaces, file format, and architecture may change)  
 **Author:** Wes H.
 
 ---
@@ -276,7 +276,7 @@ The root document object.
 ```python
 @dataclass
 class Schematic:
-    version: str                     # File-format version (§9.4), e.g. "0.2"; normalised on save
+    version: str                     # File-format version (§9.4), e.g. "0.1"; normalised on save
     name: str                        # User-visible schematic name
     components: list[Component]
     wires: list[Wire]
@@ -566,7 +566,7 @@ The canvas item draws the text centered at the position using a QFont with match
 
 **Centred text (block-diagram label).** `RectComponent.options` holds a raw LaTeX text fragment (same convention as a `text_node`: `$…$` typesets as math, plain text renders verbatim) drawn **centred** (horizontally and vertically) inside the box. Appearance is controlled by the `FontedComponent` fields (`font_size` default 12 pt, `font_bold`, `font_italic`, `font_family`). On the canvas the fragment is typeset via the shared async `render_async` path (`RectItem._request_vector` → centred `_vec_path`, raw-text fallback until it renders), mirroring `TextNodeItem`/`BipoleItem`. **Double-clicking** a rect activates an in-place editor (the shared `LabelTextItem`) centred in the box, pre-filled with `options`; **Enter** or focus-loss commits via `edit_component_options` (`EditCommand`), **Escape** cancels — the painted text is suppressed while editing. The text is edited verbatim (no comma↔newline conversion). The **Text content** inspector field edits the same `options`.
 
-**Edge wire connections.** Every 0.25 GU grid point on the rectangle's perimeter (`rect_perimeter_points`) is a wire-connection point — exposed through `component_connection_points` (which returns the perimeter for a rect, named pins otherwise). A wire endpoint landing on an edge is **connected** (no open-circle terminal; see §6.4) and **follows the rectangle** when it is moved (uniform translation) or **resized** (an anchored scale about the fixed corner: a connection point P maps to `position + (P − position)·(new_span/old_span)`, snapped to 0.25 GU, so each edge point stays on its corresponding edge). Move-follow reuses the shared `reshape_wire_points`; resize-follow is handled by `ResizeCommand._reshape_wires_rect` (with a matching live preview in `drag.py`). Rect edge points do **not** trigger junction dots, but **are** offered as wire-drawing snap targets (`nearest_connection_point`) and as **SELECT-mode wire auto-start** targets: clicking an *unconnected* edge point (tightly, within `PIN_GRAB_GU`) starts a new wire there, exactly like clicking a free component pin (`unconnected_pin_at` uses `nearest_connection_point`). The connection points are drawn as small **muted-red dots** around the perimeter (`RectItem._connection_dots_local`, `_CONN_DOT_COLOR`/`_CONN_DOT_R` — smaller and more translucent than a component pin) so the connection rail is visible without being obtrusive; clicking the rect *interior* (not on a dot) still selects/drags it. `RectComponent.options` formerly stored the style string; legacy files (format version < 0.2) that did so are migrated into the `StyledComponent` fields on load (and `options` cleared) by `schematic/io.py` — gated on the file version so a 0.2+ rect's text is never re-interpreted as a style string (see §9.4).
+**Edge wire connections.** Every 0.25 GU grid point on the rectangle's perimeter (`rect_perimeter_points`) is a wire-connection point — exposed through `component_connection_points` (which returns the perimeter for a rect, named pins otherwise). A wire endpoint landing on an edge is **connected** (no open-circle terminal; see §6.4) and **follows the rectangle** when it is moved (uniform translation) or **resized** (an anchored scale about the fixed corner: a connection point P maps to `position + (P − position)·(new_span/old_span)`, snapped to 0.25 GU, so each edge point stays on its corresponding edge). Move-follow reuses the shared `reshape_wire_points`; resize-follow is handled by `ResizeCommand._reshape_wires_rect` (with a matching live preview in `drag.py`). Rect edge points do **not** trigger junction dots, but **are** offered as wire-drawing snap targets (`nearest_connection_point`) and as **SELECT-mode wire auto-start** targets: clicking an *unconnected* edge point (tightly, within `PIN_GRAB_GU`) starts a new wire there, exactly like clicking a free component pin (`unconnected_pin_at` uses `nearest_connection_point`). The connection points are drawn as small **muted-red dots** around the perimeter (`RectItem._connection_dots_local`, `_CONN_DOT_COLOR`/`_CONN_DOT_R` — smaller and more translucent than a component pin) so the connection rail is visible without being obtrusive; clicking the rect *interior* (not on a dot) still selects/drags it. `RectComponent.options` holds the rect's centred text, loaded verbatim; its draw style lives in the dedicated `StyledComponent` fields (see §9.4).
 
 New rects default to `z_order = -10` (behind circuit elements). TikZ color strings in `fill=` (e.g. `yellow!20`, `gray!15`) are resolved to Qt colors using the `color!percent` mixing formula (percent% of the named color blended with white) before rendering on the Qt canvas. The hit region for selection is the full rectangle interior (not just a band along the diagonal), so clicking anywhere inside the rect selects it.
 
@@ -1513,7 +1513,7 @@ Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.t
 
 ```json
 {
-  "version": "0.2",
+  "version": "0.1",
   "name": "My Schematic",
   "components": [
     {
@@ -1546,12 +1546,11 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked separately from the spec version. The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2"}`); `save` always writes the **current** format version, normalising older files on re-save. Future format versions must document migration rules for loading older files.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1"}`); `save` always writes the **current** format version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
-- **0.1** — original. A `rect` stored its draw style as a string in `options`.
-- **0.2** — a `rect` stores **centred text** in `options`; the style lives in the dedicated `StyledComponent` fields. The `circle` drawing kind is also added (a new kind; it has no legacy form, so it needs no migration). On load, the legacy rect style-in-`options` migration runs **only** for files whose version is in `_RECT_STYLE_IN_OPTIONS_VERSIONS` (`{"0.1"}`), so a 0.2+ rect's text is never re-parsed as a style string. Because `save` writes 0.2, a 0.1 file that is loaded, given rect text, and re-saved is correctly stored as 0.2 (the text survives the next load).
+- **0.1** — the initial (pre-1.0) format. The on-disk shape is **not yet stable**: while the project is in its early (alpha) phase it may change between releases without migration support, so a `.hv` file is not guaranteed to load in a later version. There are no earlier formats, so the loader performs no migration; it validates the file against the current schema and rejects anything it does not recognise. Once the format stabilises it will be promoted to `1.0` and later changes will document migration rules.
 
 ### 9.5 Bundled Examples
 
@@ -1909,7 +1908,7 @@ This creates `.venv/` in the project root, resolves all dependencies from `pypro
 ```toml
 [project]
 name = "heaviside"
-version = "0.4.0"
+version = "0.1.0"
 description = "Graphical editor for CircuiTikZ circuit diagrams"
 requires-python = ">=3.11"
 dependencies = [
@@ -2032,14 +2031,13 @@ node styling, and the `build_tex`/`build_snippet`/`pdf_to_eps` helpers
 #### File I/O (`test_io.py`)
 
 Covers `save`/`load` round-trips for every component and wire field, the
-"defaults are omitted from the JSON" rule (which keeps plain documents
-backward-compatible and compact), and load-time validation: every typed field
-rejects the wrong type with a `SchematicLoadError`, unknown versions and
-malformed/invalid JSON raise descriptive errors, and invariant violations are
-caught on load. Also covers the legacy-format migrations (v0.1 `labels` dict →
-options string; pre-0.2 `rect` style-in-`options` → `StyledComponent` fields,
-version-gated so 0.2+ rect text is kept verbatim), `mid_label_pos` clamping, and
-that `save` is atomic UTF-8 with no BOM and leaves no `.tmp` file behind.
+"defaults are omitted from the JSON" rule (which keeps plain documents compact),
+and load-time validation: every typed field rejects the wrong type with a
+`SchematicLoadError`, unknown versions and malformed/invalid JSON raise
+descriptive errors, and invariant violations are caught on load. Also covers that
+a `rect`'s `options` text is loaded verbatim (never parsed as a style string),
+`mid_label_pos` clamping, and that `save` is atomic UTF-8 with no BOM and leaves
+no `.tmp` file behind.
 
 #### Registry (`test_registry.py`)
 

@@ -11,6 +11,12 @@
 An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.
 It is designed for researchers, engineers, and educators who author schematics with typeset mathematical annotations.
 
+> ⚠️ **Alpha — early release.** Heaviside is usable but young. The architecture,
+> the user interface, and the `.hv` file format may change between releases, and
+> there are **no backward-compatibility guarantees yet** — a schematic saved now
+> is not promised to open in a future version. Please try it, file issues, and
+> share feedback; just don't rely on format stability until a `1.0` release.
+
 ![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
 
 ## Features

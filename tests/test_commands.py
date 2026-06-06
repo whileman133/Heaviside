@@ -1411,7 +1411,7 @@ def _circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0)) -> Component:
 def test_move_drags_wire_connected_to_circle_cardinal():
     """A wire on a circle's east cardinal point follows when the circle moves."""
     s = Schematic(
-        version="0.2", name="t",
+        version="0.1", name="t",
         components=[
             _circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0)),
             _resistor(comp_id="x", position=(10.0, 10.0)),
@@ -1428,7 +1428,7 @@ def test_move_drags_wire_connected_to_circle_cardinal():
 def test_resize_circle_cardinal_wire_follows_scaled():
     """Growing a circle scales its cardinal connections about the fixed corner."""
     s = Schematic(
-        version="0.2", name="t",
+        version="0.1", name="t",
         components=[_circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0))],
         wires=[
             Wire(id="east", points=[(2.0, 1.0), (5.0, 1.0)]),   # E cardinal (moves)
@@ -1447,7 +1447,7 @@ def test_resize_circle_cardinal_wire_follows_scaled():
 
 def test_resize_circle_cardinal_wire_undo_restores():
     s = Schematic(
-        version="0.2", name="t",
+        version="0.1", name="t",
         components=[_circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0))],
         wires=[Wire(id="east", points=[(2.0, 1.0), (5.0, 1.0)])],
     )
