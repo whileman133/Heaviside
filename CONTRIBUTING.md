@@ -32,8 +32,9 @@ objects over the model. Only `app/canvas/scene.py`, `view.py`, `items.py` and
 commands and paints the model. Keep new logic in the pure layers wherever
 possible — that is what keeps the project easy to test and reason about.
 
-`ARCHITECTURE.md` describes the module layout; `PROJECT_SPEC.md` is the
-authoritative, living specification of behavior.
+The [architecture diagram](docs/images/architecture.svg) and the **Architecture**
+section of the [README](README.md) show the module layout; `PROJECT_SPEC.md` is
+the authoritative, living specification of behavior.
 
 ## The one hard rule: keep tests and spec in sync
 

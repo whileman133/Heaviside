@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A graphical [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) in LaTeX.
+A graphical [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.
 It is designed for researchers, engineers, and educators who author schematics with typeset mathematical annotations.
 
 > ⚠️ **Alpha — early release.** Heaviside is usable but young. The architecture,
@@ -35,11 +35,6 @@ It is designed for researchers, engineers, and educators who author schematics w
 - Live, rendered PDF preview of the current schematic
 - Save/load via a JSON `.hv` file format
 
-Component and wire labels are written as LaTeX and rendered as typeset math on the
-canvas, so equations read the way they will in the final figure:
-
-![Close-up of a schematic with typeset math labels and the component property inspector open](docs/images/screenshot-math-labels.png)
-
 > **Built spec-first with AI assistance.** Heaviside was developed from a
 > detailed written specification with substantial help from AI coding assistants.
 > The implementation follows the spec, the test suite (660+ tests) and spec are
@@ -58,75 +53,31 @@ Pre-built apps (always the latest release):
 Or browse all releases (with checksums and release notes) on the
 [Releases page](https://github.com/whileman133/Heaviside/releases).
 
+> **Required: `pdflatex`.** The downloaded app bundles everything **except** a
+> LaTeX installation. You must have `pdflatex` (from [TeX Live](https://tug.org/texlive/)
+> or [MiKTeX](https://miktex.org/)), with the `circuitikz` package, on your
+> `PATH` — it compiles the live preview and the PDF/`.tex`/EPS exports. The app
+> warns at startup if it can't find it. Drawing and CircuiTikZ source generation
+> work without it; the preview and exports do not.
+>
+> **Optional: Poppler (for EPS export only).** Exporting to **EPS** additionally
+> needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/). Everything
+> else — including PDF export — needs only `pdflatex`, so you can skip Poppler
+> unless you specifically export EPS.
+
 > **First launch:** these builds are not code-signed/notarized (Heaviside is a
 > free, open-source alpha), so macOS and Windows will warn on first open — see
-> [Opening the app](#opening-the-app-first-launch) below. On **Linux**, extract
-> the archive (`tar -xzf Heaviside-linux-x64.tar.gz`) and run the `Heaviside`
-> executable inside the folder. All builds need `pdflatex` for the preview and
-> exports (see [Requirements](#requirements)).
+> [Opening the app with macOS](#opening-the-app-with-macos) for more information. On **Linux**,
+> extract the archive (`tar -xzf Heaviside-linux-x64.tar.gz`) and run the
+> `Heaviside` executable inside the folder.
 
-## Requirements
-
-- Python ≥ 3.11
-- [`uv`](https://docs.astral.sh/uv/) for environment and dependency management
-- `pdflatex` on your `PATH`, with the `circuitikz` package installed (TeX Live or
-  MiKTeX) — used for the rendered preview
-- *(optional)* [Poppler](https://poppler.freedesktop.org/) (`pdftocairo`) — only
-  needed for **EPS export**. The preview is rendered by Qt's own PDF engine, so
-  Poppler is not required for normal use.
-
-Python dependencies (PySide6, pydantic, qtawesome) are declared in
-[`pyproject.toml`](pyproject.toml) and installed by `uv`. The PDF preview uses
-the `QtPdf` module that ships with PySide6 — no extra Python packages.
-
-## Running
-
-```sh
-uv run heaviside        # or: uv run python main.py
-```
-
-## Tests
-
-```sh
-uv run pytest                 # full suite with coverage
-uv run pytest --no-cov        # faster, no coverage
-QT_QPA_PLATFORM=offscreen uv run pytest   # headless (CI / no display)
-```
-
-## Packaging a standalone app
-
-Build a self-contained app with [PyInstaller](https://pyinstaller.org) (no
-Python install required to run the result):
-
-```sh
-uv run python scripts/build.py    # or: uv run pyinstaller --noconfirm --clean heaviside.spec
-```
-
-The build script is cross-platform (macOS, Windows, Linux): it regenerates the
-app icons from `assets/icon.png`, ensures the bundled license texts are present,
-and runs PyInstaller.
-
-Output:
-
-- **macOS** → `dist/Heaviside.app` (drag to `/Applications`)
-- **Windows / Linux** → `dist/Heaviside/` (run the `Heaviside` executable inside)
-
-The bundle includes everything the app needs **except** `pdflatex` (TeX Live /
-MiKTeX, with `circuitikz`), which the preview and exports compile with — bundling
-a full TeX distribution is impractical, so it stays a user-installed dependency
-and the app warns at startup if it is missing. (EPS export additionally needs
-Poppler's `pdftocairo`, checked only when you actually export EPS.) Editing,
-source generation, preview, and PDF/`.tex` export need only `pdflatex`. Build
-configuration lives in [`heaviside.spec`](heaviside.spec).
-
-### Opening the app (first launch)
+## Opening the app with macOS
 
 The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
 notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will
 therefore block it on first launch with a message like *“Apple could not verify
 ‘Heaviside.app’ is free of malware that may harm your Mac or compromise your
-privacy.”* This does **not** mean anything is wrong with the app — it is just how
-macOS treats software that hasn’t been notarized through a paid Developer ID.
+privacy.”* This does **not** indicate a problem with the app — it is how macOS treats software that hasn’t been notarized through a paid Developer ID.
 
 To open it the first time, do **one** of the following:
 
@@ -141,17 +92,12 @@ To open it the first time, do **one** of the following:
   open /Applications/Heaviside.app
   ```
 
-Windows builds may likewise show a SmartScreen “unknown publisher” prompt; choose
-**More info → Run anyway**. Linux builds run directly.
+## Architecture
 
-## Documentation
+Heaviside is split into a **View** layer built on Qt and a
+**Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.
 
-- [`PROJECT_SPEC.md`](PROJECT_SPEC.md) — the authoritative, living specification.
-  Any behavioral change must keep this in sync (see its §0).
-- [`ARCHITECTURE.md`](ARCHITECTURE.md) — module layout and design overview.
-- [`CLAUDE.md`](CLAUDE.md) — instructions for AI agents working in this repo.
-
-## Project layout
+![Heaviside architecture: a Qt View layer (UI shell, canvas, undoable commands, preview engine) above a pure-Python Model layer (schematic model, component library, CircuiTikZ generator) that emits LaTeX source and a rendered preview](docs/images/architecture.svg)
 
 ```
 app/
@@ -165,6 +111,37 @@ main.py        # entry point
 tools/         # build-time tooling (CircuiTikZ SVG export + manifest)
 tests/         # pytest suite
 ```
+
+## Building from source
+
+Heaviside uses [`uv`](https://docs.astral.sh/uv/) and targets **Python ≥ 3.11**. Python dependencies (PySide6, pydantic, qtawesome) are declared in
+[`pyproject.toml`](pyproject.toml) and installed by `uv`. (As when running a downloaded build, the preview and exports need `pdflatex` on your `PATH`, and EPS export additionally needs Poppler — see [Download](#download).)
+
+```sh
+uv run heaviside              # run from source
+
+uv run pytest                 # full test suite with coverage
+QT_QPA_PLATFORM=offscreen uv run pytest   # headless (CI / no display)
+```
+
+### Packaging a standalone app
+
+Build a self-contained bundle with [PyInstaller](https://pyinstaller.org):
+
+```sh
+uv run python scripts/build.py    # or: uv run pyinstaller --noconfirm --clean heaviside.spec
+```
+
+`build.py` is cross-platform (macOS, Windows, Linux): it regenerates the app
+icons from `assets/icon.png`, ensures the bundled license texts are present, and
+runs PyInstaller. Output is `dist/Heaviside.app` on macOS and `dist/Heaviside/`
+elsewhere. Build configuration lives in [`heaviside.spec`](heaviside.spec).
+
+## Documentation
+
+- [`PROJECT_SPEC.md`](PROJECT_SPEC.md) — the authoritative, living specification.
+  Any behavioral change must keep this in sync (see its §0).
+- [`CLAUDE.md`](CLAUDE.md) — instructions for AI agents working in this repo.
 
 ## Contributing
 

@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 900 760" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;">
+    <path d="M860,440L860,630C860,635.519 855.519,640 850,640L50,640C44.481,640 40,635.519 40,630L40,440C40,434.481 44.481,430 50,430L850,430C855.519,430 860,434.481 860,440Z" style="fill:rgb(244,250,242);stroke:rgb(214,232,207);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,38.044922,75.18457)">
+        <g transform="matrix(26,0,0,26,343.916016,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:26px;fill:rgb(26,26,26);">Heaviside — Block Diagram</text>
+    </g>
+    <g transform="matrix(1,0,0,1,560,30)">
+        <g transform="matrix(1,0,0,1,-25.550781,29.952637)">
+            <path d="M14,3L14,11C14,12.656 12.656,14 11,14L3,14C1.344,14 0,12.656 0,11L0,3C0,1.344 1.344,0 3,0L11,0C12.656,0 14,1.344 14,3Z" style="fill:rgb(219,233,246);stroke:rgb(91,141,184);stroke-width:1.5px;"/>
+        </g>
+        <g transform="matrix(1,0,0,1,-5.550781,40.952637)">
+            <text x="0px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(68,68,68);">V<tspan x="7.793px 10.459px " y="0px 0px ">ie</tspan>w — Qt / PySide6</text>
+        </g>
+        <g transform="matrix(1,0,0,1,126.449219,7.012207)">
+            <path d="M14,25L14,33C14,34.656 12.656,36 11,36L3,36C1.344,36 0,34.656 0,33L0,25C0,23.344 1.344,22 3,22L11,22C12.656,22 14,23.344 14,25Z" style="fill:rgb(233,243,230);stroke:rgb(111,158,90);stroke-width:1.5px;"/>
+        </g>
+        <g transform="matrix(1,0,0,1,146.449219,40.012207)">
+            <text x="0px" y="0px" style="font-family:'Helvetica';font-size:12px;fill:rgb(68,68,68);">Model — no Qt, fully testable</text>
+        </g>
+    </g>
+    <g transform="matrix(1,0,0,0.99,0,0.92)">
+        <path d="M860,102.101L860,381.899C860,387.474 855.519,392 850,392L50,392C44.481,392 40,387.474 40,381.899L40,102.101C40,96.526 44.481,92 50,92L850,92C855.519,92 860,96.526 860,102.101Z" style="fill:rgb(245,249,253);stroke:rgb(207,224,239);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,58,116)">
+        <g transform="matrix(12,0,0,12,119.667281,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(91,141,184);">V<tspan x="8.119px 11.568px 19.687px 31.129px 34.578px 38.027px 41.476px 44.926px 48.375px 57.824px 61.935px 65.384px 68.834px 72.283px 80.402px 87.191px 95.31px 98.759px 106.204px 112.993px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">IEW  ·  Qt / PySide6</tspan></text>
+    </g>
+    <path d="M570,151C570,163.694 559.694,174 547,174L353,174C340.306,174 330,163.694 330,151C330,138.306 340.306,128 353,128L547,128C559.694,128 570,138.306 570,151Z" style="fill:white;stroke:rgb(153,153,153);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,450,150)">
+        <text x="-87.942px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">User — drawing a circuit</text>
+    </g>
+    <g transform="matrix(1,0,0,1,450,166)">
+        <text x="-88.527px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">place parts · run wires · type labels</text>
+    </g>
+    <path d="M450,174L450,192" style="fill:none;fill-rule:nonzero;stroke:rgb(122,122,122);stroke-width:2px;"/>
+    <path d="M450,198L445,189L455,189L450,198Z" style="fill:rgb(122,122,122);fill-rule:nonzero;"/>
+    <path d="M420,206L420,270C420,274.415 416.415,278 412,278L68,278C63.585,278 60,274.415 60,270L60,206C60,201.585 63.585,198 68,198L412,198C416.415,198 420,201.585 420,206Z" style="fill:rgb(219,233,246);stroke:rgb(91,141,184);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,78,222)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">UI shell</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,241)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Window<tspan x="40.272px 43.468px " y="0px 0px ">, </tspan>palette of parts, property inspector<tspan x="220.544px " y="0px ">,</tspan></text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,257)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">live source panel, preview pane, menus.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,272)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/ui · mainwindow<tspan x="94.562px 97.479px " y="0px 0px ">.p</tspan>y</text>
+    </g>
+    <path d="M840,206L840,270C840,274.415 836.415,278 832,278L488,278C483.585,278 480,274.415 480,270L480,206C480,201.585 483.585,198 488,198L832,198C836.415,198 840,201.585 840,206Z" style="fill:rgb(219,233,246);stroke:rgb(91,141,184);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,498,222)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Canvas — the drawing surface</text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,241)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">T<tspan x="6.604px 12.999px " y="0px 0px ">ur</tspan>ns mouse actions into edits. Draws parts,</text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,257)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">wires &amp; dots. Drag, snap-to-grid, selection.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,272)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/canvas · scene.py<tspan x="103.708px 106.625px " y="0px 0px ">, </tspan>items.py</text>
+    </g>
+    <g transform="matrix(1,0,0,1.108108,0,-32.216216)">
+        <path d="M420,305.22L420,364.78C420,368.765 416.415,372 412,372L68,372C63.585,372 60,368.765 60,364.78L60,305.22C60,301.235 63.585,298 68,298L412,298C416.415,298 420,301.235 420,305.22Z" style="fill:white;stroke:rgb(91,141,184);stroke-width:1.5px;stroke-dasharray:5,4;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,78,320)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Every edit is an undoable command</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,339)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Place, move, wire, delete… each is a reversible</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,355)">
+        <g transform="matrix(11.5,0,0,11.5,148.320801,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">step on the undo/redo stack.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,369)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/canvas/commands.py</text>
+    </g>
+    <g transform="matrix(1,0,0,1.108108,0,-32.216216)">
+        <path d="M840,305.22L840,364.78C840,368.765 836.415,372 832,372L488,372C483.585,372 480,368.765 480,364.78L480,305.22C480,301.235 483.585,298 488,298L832,298C836.415,298 840,301.235 840,305.22Z" style="fill:rgb(219,233,246);stroke:rgb(91,141,184);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,498,320)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Preview engine (background)</text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,339)">
+        <g transform="matrix(11.5,0,0,11.5,161.70752,0)">
+        </g>
+        <g transform="matrix(11.5,0,0,11.5,164.902588,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Compiles the schematic with pdﬂatex of<tspan x="201.778px 204.973px " y="0px 0px ">f </tspan>the</text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,355)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">main thread; renders the PDF to the preview<tspan x="225.648px " y="0px ">.</tspan></text>
+    </g>
+    <g transform="matrix(1,0,0,1,498,369)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/preview</text>
+    </g>
+    <path d="M426,238L474,238" style="fill:none;fill-rule:nonzero;stroke:rgb(91,141,184);stroke-width:2px;"/>
+    <path d="M420,238L429,233L429,243L420,238Z" style="fill:rgb(91,141,184);fill-rule:nonzero;"/>
+    <path d="M480,238L471,233L471,243L480,238Z" style="fill:rgb(91,141,184);fill-rule:nonzero;"/>
+    <path d="M240,278L240,292" style="fill:none;fill-rule:nonzero;stroke:rgb(91,141,184);stroke-width:2px;"/>
+    <path d="M240,298L235,289L245,289L240,298Z" style="fill:rgb(91,141,184);fill-rule:nonzero;"/>
+    <path d="M40,408L860,408" style="fill:none;fill-rule:nonzero;stroke:rgb(176,119,46);stroke-width:2.5px;stroke-linecap:round;stroke-dasharray:2,5;"/>
+    <g transform="matrix(0.642145,0,0,1,158.712891,0)">
+        <path d="M600,408C600,415.727 590.231,422 578.198,422L321.802,422C309.769,422 300,415.727 300,408C300,400.273 309.769,394 321.802,394L578.198,394C590.231,394 600,400.273 600,408Z" style="fill:rgb(251,243,231);stroke:rgb(176,119,46);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,447,411)">
+        <text x="-83.467px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:11px;fill:rgb(154,100,32);">Nothing below knows about the UI</text>
+    </g>
+    <g transform="matrix(1,0,0,0.571429,0,167.428571)">
+        <path d="M240,372L240,442" style="fill:none;fill-rule:nonzero;stroke:rgb(122,122,122);stroke-width:2.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,0,-18)">
+        <path d="M240,448L234.5,438L245.5,438L240,448Z" style="fill:rgb(122,122,122);fill-rule:nonzero;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,58,454)">
+        <g transform="matrix(12,0,0,12,134.208263,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:12px;fill:rgb(111,158,90);">M<tspan x="10.111px 19.56px 28.342px 36.461px 43.695px 47.144px 50.594px 54.043px 57.492px 60.941px 68.386px 71.836px 78.625px 82.074px 89.519px 92.968px 101.087px 107.876px 111.988px 119.433px 126.878px " y="0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px 0px ">ODEL  ·  plain Python</tspan></text>
+    </g>
+    <g transform="matrix(0.94,0,0,1,3.6,0)">
+        <path d="M310,476L310,560C310,564.415 306.187,568 301.489,568L68.511,568C63.813,568 60,564.415 60,560L60,476C60,471.585 63.813,468 68.511,468L301.489,468C306.187,468 310,471.585 310,476Z" style="fill:rgb(233,243,230);stroke:rgb(111,158,90);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,78,492)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Schematic model</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,511)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">The circuit as data: components,</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,527)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">wires, positions. Plus the rules for</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,543)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">junction dots, open ends, line hops.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,560)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/schematic · model.py<tspan x="118.284px 121.201px " y="0px 0px ">, </tspan>io.py</text>
+    </g>
+    <g transform="matrix(0.94,0,0,1,19.5,0)">
+        <path d="M575,476L575,560C575,564.415 571.187,568 566.489,568L333.511,568C328.813,568 325,564.415 325,560L325,476C325,471.585 328.813,468 333.511,468L566.489,468C571.187,468 575,471.585 575,476Z" style="fill:rgb(233,243,230);stroke:rgb(111,158,90);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,343,492)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Component library</text>
+    </g>
+    <g transform="matrix(1,0,0,1,343,511)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Parts —</text>
+    </g>
+    <g transform="matrix(1,0,0,1,343,527)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">R, C, L, diodes, op-amps, MOSFET<tspan x="180.227px 185.977px " y="0px 0px ">s,</tspan></text>
+    </g>
+    <g transform="matrix(1,0,0,1,343,543)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">grounds — with pins and symbols.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,343,560)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/components · registry<tspan x="120.037px 122.955px " y="0px 0px ">.p</tspan>y</text>
+    </g>
+    <g transform="matrix(0.94,0,0,1,35.4,0)">
+        <path d="M840,476L840,560C840,564.415 836.187,568 831.489,568L598.511,568C593.813,568 590,564.415 590,560L590,476C590,471.585 593.813,468 598.511,468L831.489,468C836.187,468 840,471.585 840,476Z" style="fill:rgb(233,243,230);stroke:rgb(111,158,90);stroke-width:1.5px;"/>
+    </g>
+    <g transform="matrix(1,0,0,1,608,492)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">CircuiT<tspan x="51.409px 55.576px " y="0px 0px ">ik</tspan>Z generator</text>
+    </g>
+    <g transform="matrix(1,0,0,1,608,511)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">The heart of the tool: turns the</text>
+    </g>
+    <g transform="matrix(1,0,0,1,608,527)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">model into clean LaT<tspan x="105.482px 111.878px " y="0px 0px ">eX</tspan>. Pure &amp;</text>
+    </g>
+    <g transform="matrix(1,0,0,1,608,543)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">deterministic — same in, same out.</text>
+    </g>
+    <g transform="matrix(1,0,0,1,608,560)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Oblique', 'Helvetica';font-style:italic;font-size:10.5px;fill:rgb(136,136,136);">app/codegen/circuitikz.py</text>
+    </g>
+    <g transform="matrix(2.666667,0,0,1,-531.666667,0)">
+        <path d="M310,518L319,518" style="fill:none;fill-rule:nonzero;stroke:rgb(111,158,90);stroke-width:2px;"/>
+    </g>
+    <g transform="matrix(2.666667,0,0,1,-263.166667,0)">
+        <path d="M310,518L319,518" style="fill:none;fill-rule:nonzero;stroke:rgb(111,158,90);stroke-width:2px;"/>
+    </g>
+    <path d="M325,518L316,513L316,523L325,518Z" style="fill:rgb(111,158,90);fill-rule:nonzero;"/>
+    <path d="M581,518L584,518" style="fill:none;fill-rule:nonzero;stroke:rgb(111,158,90);stroke-width:2px;"/>
+    <g transform="matrix(1,0,0,1,-16,0)">
+        <path d="M575,518L584,513L584,523L575,518Z" style="fill:rgb(111,158,90);fill-rule:nonzero;"/>
+    </g>
+    <path d="M590,518L581,513L581,523L590,518Z" style="fill:rgb(111,158,90);fill-rule:nonzero;"/>
+    <g transform="matrix(1,0,0,1,455,600)">
+        <text x="-73.383px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(85,85,85);">the model feeds the generator</text>
+    </g>
+    <path d="M715,568L715,670" style="fill:none;fill-rule:nonzero;stroke:rgb(122,122,122);stroke-width:2.5px;"/>
+    <path d="M715,676L709.5,666L720.5,666L715,676Z" style="fill:rgb(122,122,122);fill-rule:nonzero;"/>
+    <g transform="matrix(1,0,0,1,727,624)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11px;fill:rgb(85,85,85);">emits</text>
+    </g>
+    <path d="M440,684L440,730C440,734.415 436.415,738 432,738L68,738C63.585,738 60,734.415 60,730L60,684C60,679.585 63.585,676 68,676L432,676C436.415,676 440,679.585 440,684Z" style="fill:white;stroke:rgb(153,153,153);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,78,700)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">CircuiT<tspan x="51.409px 55.576px " y="0px 0px ">ik</tspan>Z source  ·  .tex / PDF / EPS</text>
+    </g>
+    <g transform="matrix(1,0,0,1,78,720)">
+        <g transform="matrix(11.5,0,0,11.5,260.395264,0)">
+        </g>
+        <g transform="matrix(11.5,0,0,11.5,263.590332,0)">
+        </g>
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Paste into a LaT<tspan x="82.471px 88.867px " y="0px 0px ">eX</tspan> or L<tspan x="119.127px 124.877px " y="0px 0px ">yX</tspan> document, or export the ﬁgure.</text>
+    </g>
+    <path d="M840,684L840,730C840,734.415 836.415,738 832,738L468,738C463.585,738 460,734.415 460,730L460,684C460,679.585 463.585,676 468,676L832,676C836.415,676 840,679.585 840,684Z" style="fill:white;stroke:rgb(153,153,153);stroke-width:1.5px;"/>
+    <g transform="matrix(1,0,0,1,478,700)">
+        <text x="0px" y="0px" style="font-family:'Helvetica-Bold', 'Helvetica';font-weight:700;font-size:15px;fill:rgb(26,26,26);">Rendered preview</text>
+    </g>
+    <g transform="matrix(1,0,0,1,478,720)">
+        <text x="0px" y="0px" style="font-family:'Helvetica';font-size:11.5px;fill:rgb(85,85,85);">Live PDF of the schematic, shown beside the canvas.</text>
+    </g>
+</svg>
