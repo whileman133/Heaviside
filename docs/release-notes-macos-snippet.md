@@ -8,14 +8,15 @@ the README. It mirrors the "Opening the app on macOS" section of the README.
 
 ### ⚠️ Opening the app the first time
 
-**macOS:** This app is open-source and **not notarized by Apple**, so macOS may
-say it is *"damaged"* or *cannot be checked for malicious software* on first
-launch. It is not damaged — that is just how macOS treats un-notarized downloads.
-To open it:
+**macOS:** This app is open-source and **not notarized by Apple**, so on first
+launch macOS shows a warning like *"Apple could not verify 'Heaviside.app' is
+free of malware…"*. Nothing is wrong with the app — that is just how macOS
+treats un-notarized downloads. To open it:
 
-- **Right-click the app → Open**, then confirm. *(If that option is unavailable
-  on your macOS version, use the Terminal command below.)*
-- **Or** run, then open normally:
+- Try to open the app once (dismiss the warning), then go to **System Settings →
+  Privacy & Security**, scroll to the **Security** section, and click **"Open
+  Anyway"**.
+- **Or** clear the quarantine flag from Terminal, then open normally:
   ```sh
   xattr -dr com.apple.quarantine /Applications/Heaviside.app
   ```

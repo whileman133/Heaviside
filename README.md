@@ -100,16 +100,17 @@ configuration lives in [`heaviside.spec`](heaviside.spec).
 
 The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
 notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will
-therefore block it on first launch — typically with *“Heaviside” is damaged and
-can’t be opened* or *cannot be opened because Apple cannot check it for malicious
-software*. **The app is not damaged**; this is just how macOS treats
-downloaded apps without a paid Developer ID signature.
+therefore block it on first launch with a message like *“Apple could not verify
+‘Heaviside.app’ is free of malware that may harm your Mac or compromise your
+privacy.”* This does **not** mean anything is wrong with the app — it is just how
+macOS treats software that hasn’t been notarized through a paid Developer ID.
 
 To open it the first time, do **one** of the following:
 
-- **Right-click (or Control-click) the app → Open**, then confirm in the dialog.
-  After the first time it opens normally. *(On recent macOS this option may be
-  hidden; use the Terminal method below if so.)*
+- **System Settings → Privacy & Security:** try to open the app once (and dismiss
+  the warning), then open **System Settings → Privacy & Security**, scroll to the
+  **Security** section near the bottom, and click **“Open Anyway”** next to the
+  note about Heaviside. Confirm in the dialog. After this, it opens normally.
 - **Or** clear the download quarantine from Terminal, then open it:
 
   ```sh

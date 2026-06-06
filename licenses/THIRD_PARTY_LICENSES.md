@@ -76,8 +76,10 @@ ways:
 
    ```sh
    xattr -dr com.apple.quarantine Heaviside.app
-   open Heaviside.app          # or right-click → Open the first time
+   open Heaviside.app
    ```
+
+   (Or, without Terminal: System Settings → Privacy & Security → **Open Anyway**.)
 
 The bundle is **not** built with hardened-runtime *library validation*, so a
 Qt build signed by you (or signed ad-hoc) is accepted after re-signing — the
