@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions & discussion
+    url: https://github.com/whileman133/Heaviside/discussions
+    about: |
+      For usage questions, ideas you want to talk through, or general feedback,
+      please open a Discussion rather than an issue. (Enable Discussions in the
+      repo Settings if this link 404s.)
+  - name: Installing & first launch (macOS Gatekeeper, pdflatex)
+    url: https://github.com/whileman133/Heaviside#readme
+    about: |
+      Before filing a bug, check the README — it covers the macOS first-launch
+      step and the required pdflatex / TeX setup for the preview and exports.

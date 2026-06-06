@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a new component, output option, or workflow improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion! Heaviside is early and its direction is still
+        open, so feature ideas are welcome. Describing the **problem** you're
+        trying to solve (not just the solution) helps a lot — it often leads to a
+        better design than the one first imagined.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: What are you trying to do that's currently hard, impossible, or annoying?
+      placeholder: I'm trying to draw …, but currently I have to …
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Heaviside to do?
+      description: Describe the feature or change. Sketches, mockups, or example CircuiTikZ output are welcome.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Category
+      options:
+        - New component / symbol
+        - Output or export (CircuiTikZ, PDF, EPS, LyX, …)
+        - Canvas / editing workflow
+        - Labels / typeset math
+        - File format / interoperability
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds
+      description: How do you handle this today (e.g. hand-editing the CircuiTikZ, another tool)? Anything you've already tried?
+    validations:
+      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Links, references to how other tools do it, or how important this is to your workflow.
+    validations:
+      required: false

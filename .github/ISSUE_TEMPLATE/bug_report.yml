@@ -1,0 +1,109 @@
+name: Bug report
+description: Something isn't working as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Heaviside is in **alpha**, so
+        rough edges are expected — your report genuinely helps. Please fill in as
+        much as you can; the environment details below are especially useful.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected to happen instead.
+      placeholder: When I…, Heaviside did…, but I expected…
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact steps that trigger the bug. Numbered steps are ideal.
+      placeholder: |
+        1. Open Heaviside
+        2. Place a resistor and a MOSFET
+        3. Draw a wire from … to …
+        4. Click Compile
+        5. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots, error log, or `.hv` file
+      description: |
+        Drag-and-drop images, paste the preview-panel error text, or attach the
+        `.hv` file that reproduces the problem (rename it to `.txt` if GitHub
+        blocks the upload). If the bug is in the rendered output, the generated
+        CircuiTikZ source (the Source panel) is very helpful too.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows
+        - Linux
+        - Other (note in description)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How are you running Heaviside?
+      options:
+        - Downloaded app bundle (.app / .exe from a release)
+        - From source (uv run / python main.py)
+        - Other (note in description)
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Heaviside version
+      description: From **Help → About Heaviside**, or the release tag you downloaded.
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Which part of the app?
+      description: Roughly where the bug lives, if you can tell.
+      options:
+        - Canvas / drawing (placing, wiring, dragging, selection)
+        - Preview / export (PDF/EPS, the Compile step, pdflatex)
+        - Generated CircuiTikZ source
+        - Save / load (.hv files)
+        - UI (panels, menus, properties inspector)
+        - Not sure
+    validations:
+      required: false
+
+  - type: textarea
+    id: latex-env
+    attributes:
+      label: LaTeX environment (for preview/export bugs)
+      description: |
+        The preview and PDF/EPS export shell out to `pdflatex` (and Poppler's
+        `pdftocairo` for EPS). If your bug involves the preview or an export,
+        please note your TeX distribution and confirm `pdflatex` is on your PATH.
+      placeholder: |
+        TeX Live 2025 / MiKTeX / none installed
+        `pdflatex --version` output (first line):
+        circuitikz package installed: yes / no / not sure
+    validations:
+      required: false

@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.
+A graphical [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) in LaTeX.
 It is designed for researchers, engineers, and educators who author schematics with typeset mathematical annotations.
 
 > ⚠️ **Alpha — early release.** Heaviside is usable but young. The architecture,
