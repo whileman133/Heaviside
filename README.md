@@ -17,22 +17,6 @@ It is designed for researchers, engineers, and educators who author schematics w
 > is not promised to open in a future version. Please try it, file issues, and
 > share feedback; just don't rely on format stability until a `1.0` release.
 
-## Download
-
-Pre-built apps (always the latest release):
-
-- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.zip)
-- **Windows (x64)** → [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
-
-Or browse all releases (with checksums and release notes) on the
-[Releases page](https://github.com/whileman133/Heaviside/releases).
-
-> **First launch:** these builds are not code-signed/notarized (Heaviside is a
-> free, open-source alpha), so your OS will warn on first open — see
-> [Opening the app on macOS](#opening-the-app-on-macos-first-launch) (or the
-> Windows note there). They also need `pdflatex` for the preview and exports
-> (see [Requirements](#requirements)).
-
 ![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
 
 ## Features
@@ -62,6 +46,22 @@ canvas, so equations read the way they will in the final figure:
 > kept in sync, and the full methodology is documented in
 > [`docs/ai-development.md`](docs/ai-development.md). See
 > [`CONTRIBUTING.md`](CONTRIBUTING.md) for more.
+
+## Download
+
+Pre-built apps (always the latest release):
+
+- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.zip)
+- **Windows (x64)** → [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
+
+Or browse all releases (with checksums and release notes) on the
+[Releases page](https://github.com/whileman133/Heaviside/releases).
+
+> **First launch:** these builds are not code-signed/notarized (Heaviside is a
+> free, open-source alpha), so your OS will warn on first open — see
+> [Opening the app on macOS](#opening-the-app-on-macos-first-launch) (or the
+> Windows note there). They also need `pdflatex` for the preview and exports
+> (see [Requirements](#requirements)).
 
 ## Requirements
 
