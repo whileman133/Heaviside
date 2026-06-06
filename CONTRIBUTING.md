@@ -67,7 +67,7 @@ by `tests/test_latex_security.py`.
 Heaviside was developed spec-first with substantial help from AI coding
 assistants (Anthropic's Claude). The full methodology — the model used for each
 layer, where extended thinking was applied, and the spec-driven workflow — is
-documented in **`PROJECT_SPEC.md` §14**. The spec is the source of truth: it was
+documented in [`docs/ai-development.md`](docs/ai-development.md). The spec is the source of truth: it was
 written first and the implementation follows it, which is why the test suite and
 specification are kept rigorously in sync. Contributions are reviewed on their
 merits — correctness, tests, and spec alignment — regardless of how they were

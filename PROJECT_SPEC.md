@@ -1,7 +1,7 @@
 # Heaviside — Specification
 
 **Version:** 0.4  
-**Status:** Draft  
+**Status:** Stable  
 **Author:** Wes H.
 
 ---
@@ -17,7 +17,7 @@ Whenever a feature is **added, changed, or removed** — by a human or an AI age
 - **Removing a feature:** delete its description (do not leave orphaned references) and move it to Section 15 (Out of Scope) if it is deferred rather than abandoned.
 - **Version bump:** increment the spec **Version** field for any substantive behavioral change, and note new behavior under the appropriate section.
 
-AI agents working on this project are explicitly required to follow this rule on every task that touches behavior. If a requested change would make the code and spec disagree, update both in the same change; if that is not possible, flag the discrepancy rather than silently letting them diverge (see Section 14.3).
+AI agents working on this project are explicitly required to follow this rule on every task that touches behavior. If a requested change would make the code and spec disagree, update both in the same change; if that is not possible, flag the discrepancy rather than silently letting them diverge. (Process notes for implementing this project with an AI assistant live in [`docs/ai-development.md`](docs/ai-development.md), separate from this behavior specification.)
 
 ---
 
@@ -1340,6 +1340,10 @@ After junction and open-endpoint nodes, the generator emits standalone commands 
 
 Centre `(cx,cy) = (x0+dx/2, y0+dy/2)`, radii `rx = |dx|/2`, `ry = |dy|/2` (`_circle_line`). `circle (r)` is emitted when `rx == ry`, otherwise `ellipse (rx and ry)`. `STYLE` and the centred text `\node` work exactly as for rect (the latter via the shared `_centered_text_line`).
 
+---
+
+## 8. Preview and Export
+
 ### 8.1 Full Schematic Preview
 
 A rendered PDF preview of the complete schematic is produced by:
@@ -1467,7 +1471,7 @@ conversion failures are reported in a dialog (the `pdflatex` log is included for
 compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
 PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
 
-### 8.4 Dependencies
+### 8.7 Dependencies
 
 - `pdflatex` must be on the system `PATH`. Checked at startup (`check_dependencies`); a warning dialog is shown if not found. It is the only tool required for normal use.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
@@ -2401,78 +2405,7 @@ pytest --cov=app --cov-report=term-missing
 
 ---
 
-## 14. AI-Assisted Implementation Guide
-
-This section records recommended practices for implementing this project with Claude as a coding assistant. It is intended to be provided alongside this spec at the start of each implementation session.
-
-### 14.1 Model Selection
-
-| Task | Recommended Model |
-|------|------------------|
-| Registry entries, dataclass definitions | Claude Sonnet 4.6 |
-| Unit test implementation | Claude Sonnet 4.6 |
-| Code generation layer (`codegen/`) | Claude Sonnet 4.6 |
-| File I/O and validation layer | Claude Sonnet 4.6 |
-| Preview pipeline (`preview/`) | Claude Sonnet 4.6 |
-| UI panels (`app/ui/`) | Claude Sonnet 4.6 |
-| Canvas interaction state machine (`scene.py`, `view.py`) | Claude Opus 4.6 |
-| Undo/redo command stack (`commands.py`) | Claude Opus 4.6 |
-| Coordinate transform and rotation/mirror math | Claude Opus 4.6 |
-| Debugging sessions with non-obvious root causes | Claude Opus 4.6 |
-
-### 14.2 Extended Thinking
-
-Enable extended thinking for:
-- Designing the canvas interaction state machine (Place / Select / Wire / Pan modes and their transitions)
-- Getting the rotation and mirror transform math consistent between `items.py` (canvas painting) and `codegen/circuitikz.py` (coordinate output) before either is implemented
-- The `DeleteCommand` inverse logic (restoring wires connected to a deleted component)
-
-Leave extended thinking off for all other tasks. The spec has already resolved the key design decisions; extended thinking adds latency and cost without benefit for tasks where the path is clear.
-
-### 14.3 Session Setup
-
-At the start of each implementation session, provide:
-1. This spec file in full
-2. The current contents of any files directly relevant to the session's task
-3. A one-line statement of what the session should accomplish (e.g., "implement `app/codegen/circuitikz.py` and its unit tests")
-
-The spec is the authoritative reference. If anything in the generated code contradicts the spec, the spec takes precedence and the discrepancy should be flagged.
-
-**Keep the spec in sync (mandatory).** Per Section 0, every task that adds,
-changes, or removes a feature MUST update this specification in the same change
-set. Before finishing a task, re-read the sections your change touches and
-confirm they describe the new behavior; update Section 13 with corresponding
-test entries and bump the **Version** field for substantive changes. Treat "the
-spec still matches the code" as part of the definition of done.
-
-### 14.4 Recommended Implementation Order
-
-Work bottom-up, layer by layer. Each layer is independently testable before the next begins.
-
-| Phase | Files | Verification |
-|-------|-------|-------------|
-| 1 | `app/components/model.py`, `app/components/registry.py` | `test_registry.py` passes |
-| 2 | `app/schematic/model.py`, `app/schematic/validate.py` | `test_model.py` passes |
-| 3 | `app/schematic/io.py` | `test_io.py` passes |
-| 4 | `app/codegen/circuitikz.py` | `test_codegen.py` passes |
-| 5 | `app/canvas/style.py`, `app/canvas/items.py` | Visual inspection: each component renders correctly |
-| 6 | `app/canvas/commands.py` | Integration undo/redo tests pass |
-| 7 | `app/canvas/scene.py`, `app/canvas/view.py` | Remaining integration tests pass |
-| 8 | `app/preview/latex.py`, `app/preview/worker.py` | Preview compiles and displays for a simple schematic |
-| 9 ✓ | `app/ui/` (all panels), `main.py` | Acceptance criteria AC-1 through AC-9 |
-
-Do not proceed to the next phase until the current phase's verification condition is met. This keeps debugging localized to the layer most recently added.
-
-### 14.5 Cross-Layer Consistency Checks
-
-Two pairs of files must stay in sync with each other. Flag any divergence immediately:
-
-- **`app/components/registry.py` ↔ `app/canvas/items.py`**: Every `kind` in `REGISTRY` must have an entry in `ITEM_CLASSES`, and every `PinDef` offset in the registry must correspond to a pin indicator drawn at the same position in the matching `ComponentItem.paint()`.
-- **`app/canvas/items.py` ↔ `app/codegen/circuitikz.py`**: Rotation and mirror transforms must produce identical coordinate results in both files. A component rotated 90° on the canvas must generate CircuiTikZ coordinates that match what is visually shown.
-
----
-
-## 15. Out of Scope (v1)
+## 14. Out of Scope (v1)
 
 The following are explicitly deferred to future versions:
 

@@ -17,7 +17,7 @@ need schematics with typeset mathematical annotations.
 > detailed written specification with substantial help from AI coding assistants.
 > The implementation follows the spec, the test suite (660+ tests) and spec are
 > kept in sync, and the full methodology is documented in
-> [`PROJECT_SPEC.md`](PROJECT_SPEC.md) §14. See
+> [`docs/ai-development.md`](docs/ai-development.md). See
 > [`CONTRIBUTING.md`](CONTRIBUTING.md) for more.
 
 ## Requirements
