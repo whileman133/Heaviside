@@ -117,9 +117,56 @@ def test_resistor_rotated_90() -> None:
 # ---------------------------------------------------------------------------
 
 def test_capacitor_horizontal() -> None:
-    """Capacitor at (2,0), rotation 0 → (2,0) to[C] (4,0)."""
+    """Capacitor at (2,0) → output is normalised toward the origin: (0,0) to[C] (2,0)."""
     src = generate(_schematic(_comp("C", position=(2.0, 0.0))))
-    assert "(2,0) to[C] (4,0)" in src
+    assert "(0,0) to[C] (2,0)" in src
+
+
+def test_output_normalized_toward_origin() -> None:
+    """A schematic placed far from origin (as the canvas does) emits source whose
+    bounding box starts at (0,0), not at the canvas position."""
+    # A resistor + wire sitting around 75 GU, like a real canvas placement.
+    r = _comp("R", position=(75.0, 78.0), options="l=$R_1$")
+    w = Wire(id="w", points=[(77.0, 78.0), (80.0, 78.0)])
+    src = generate(_schematic(r, wires=(w,)))
+    assert "(0,0) to[R, l=$R_1$] (2,0)" in src
+    assert "(2,0) -- (5,0)" in src
+    # No coordinate in the output should be anywhere near the original ~75 offset.
+    import re
+    coords = re.findall(r"\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)\)", src)
+    assert all(abs(float(x)) < 50 and abs(float(y)) < 50 for x, y in coords)
+
+
+def test_normalization_preserves_relative_geometry() -> None:
+    """Translating toward the origin shifts every coordinate by the same amount,
+    so relative spacing between parts is unchanged."""
+    def _two(p_a, p_b):
+        return Schematic(
+            version="0.1", name="t",
+            components=[
+                Component(id="a", kind="R", position=p_a, rotation=0, options="", mirror=False),
+                Component(id="b", kind="R", position=p_b, rotation=0, options="", mirror=False),
+            ],
+        )
+
+    near = generate(_two((0.0, 0.0), (5.0, 0.0)))
+    far = generate(_two((40.0, 40.0), (45.0, 40.0)))
+    # Same shape regardless of where on the canvas it was drawn.
+    assert near == far
+
+
+def test_normalization_keeps_grid_alignment() -> None:
+    """The shift is a whole number of GU, so a half-grid coordinate stays on the
+    quarter/half grid after normalisation (no fractional drift)."""
+    # Resistor whose origin is on the 0.5 grid, far from origin.
+    src = generate(_schematic(_comp("R", position=(75.5, 80.0))))
+    assert "(0.5,0) to[R] (2.5,0)" in src
+
+
+def test_already_at_origin_is_unchanged() -> None:
+    """A schematic already at the origin is emitted without any shift."""
+    src = generate(_schematic(_comp("R", position=(0.0, 0.0))))
+    assert "(0,0) to[R] (2,0)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +251,9 @@ def test_opamp_node() -> None:
     comp = _comp("op amp", position=(1.0, 2.0))
     src = generate(_schematic(comp))
     assert "node[op amp]" in src
-    assert "(1,2)" in src
+    # Output is normalised toward the origin; the op-amp's pins extend left/below
+    # its origin, so the node lands at (2,1).
+    assert "(2,1)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +265,9 @@ def test_npn_node() -> None:
     comp = _comp("npn", position=(2.0, 3.0))
     src = generate(_schematic(comp))
     assert "node[npn, xscale=1.181, yscale=1.287, anchor=B]" in src
-    assert "(2,3)" in src   # base placed at component position
+    # Normalised toward origin; the BJT's collector/emitter extend right/below, so
+    # the base anchor lands at (0,1).
+    assert "(0,1)" in src
 
 
 def test_pnp_node() -> None:
@@ -630,8 +681,9 @@ def test_wire_label_placement_above_under_yflip() -> None:
     w = Wire(id=_uid(), points=[(0.0, 1.0), (4.0, 1.0)],
              end_label="$y$", end_label_placement="above")
     src = generate(_schematic(wires=[w]), y_flip=True)
-    # Emitted +Y is up; the y-flipped endpoint y is -1, gap added upward → -0.9.
-    assert r"\node[anchor=south east, inner sep=0] at (3.90,-0.90) {$y$};" in src
+    # Coordinates are normalized toward the origin: the wire spans y=1→ floor-shifted
+    # so the y-flipped endpoint y becomes 0, and the upward gap puts the label at 0.10.
+    assert r"\node[anchor=south east, inner sep=0] at (3.90,0.10) {$y$};" in src
 
 
 def test_wire_label_empty_emits_no_node() -> None:
@@ -749,13 +801,16 @@ def test_mark_unconnected_pins_voltage_annotation_not_a_connection() -> None:
 # ---------------------------------------------------------------------------
 
 def test_text_node_basic() -> None:
-    r"""text_node emits \node at (x,y) {text}; outside the \draw block."""
+    r"""text_node emits \node at (x,y) {text}; outside the \draw block.
+
+    Coordinates are normalized toward the origin, so (2,3) emits at (0,0).
+    """
     comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(2.0, 3.0),
         rotation=0, options="Hello", mirror=False,
     )
     src = generate(_schematic(comp))
-    assert r"\node at (2,3) {Hello};" in src
+    assert r"\node at (0,0) {Hello};" in src
 
 
 def test_text_node_with_font_size() -> None:
@@ -821,13 +876,17 @@ def test_text_node_font_all_options() -> None:
 
 
 def test_text_node_y_flip() -> None:
-    r"""text_node with y_flip=True negates the y coordinate."""
+    r"""text_node with y_flip=True negates the y coordinate.
+
+    With normalization toward the origin, the lone node lands at (0,0)
+    both before and after the y-flip.
+    """
     comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(2.0, 3.0),
         rotation=0, options="Flip", mirror=False,
     )
     src = generate(_schematic(comp), y_flip=True)
-    assert r"\node at (2,-3) {Flip};" in src
+    assert r"\node at (0,0) {Flip};" in src
 
 
 def test_text_node_rotation() -> None:
@@ -837,7 +896,8 @@ def test_text_node_rotation() -> None:
         rotation=90, options="Hello", mirror=False,
     )
     src = generate(_schematic(comp))
-    assert r"\node[rotate=270] at (1,2) {Hello};" in src
+    # Coordinates are normalized toward the origin: (1,2) emits at (0,0).
+    assert r"\node[rotate=270] at (0,0) {Hello};" in src
 
 
 def test_text_node_rotation_with_font() -> None:
@@ -853,14 +913,18 @@ def test_text_node_rotation_with_font() -> None:
 
 
 def test_rect_solid() -> None:
-    r"""rect with no style → \draw (x1,y1) rectangle (x2,y2); (no brackets)."""
+    r"""rect with no style → \draw (x1,y1) rectangle (x2,y2); (no brackets).
+
+    Coordinates are normalized toward the origin: the corner at (-0.5,-0.5)
+    is floor-shifted by (-1,-1), so the rect emits at (0.5,0.5)..(5.5,1.5).
+    """
     comp = RectComponent(
         id=_uid(), kind="rect", position=(-0.5, -0.5),
         rotation=0, options="", mirror=False,
         span_override=(5.0, 1.0),
     )
     src = generate(_schematic(comp))
-    assert r"\draw (-0.5,-0.5) rectangle (4.5,0.5);" in src
+    assert r"\draw (0.5,0.5) rectangle (5.5,1.5);" in src
 
 
 def test_rect_dashed() -> None:
@@ -934,13 +998,16 @@ def test_circle_square_emits_circle() -> None:
 
 
 def test_circle_nonsquare_emits_ellipse() -> None:
-    r"""A non-square circle emits \draw (cx,cy) ellipse (rx and ry);."""
+    r"""A non-square circle emits \draw (cx,cy) ellipse (rx and ry);.
+
+    Coordinates are normalized toward the origin, so the centre emits at (2,1).
+    """
     comp = CircleComponent(
         id=_uid(), kind="circle", position=(1.0, 1.0),
         rotation=0, options="", mirror=False, span_override=(4.0, 2.0),
     )
     src = generate(_schematic(comp))
-    assert r"\draw (3,2) ellipse (2 and 1);" in src
+    assert r"\draw (2,1) ellipse (2 and 1);" in src
 
 
 def test_circle_no_text_emits_only_shape() -> None:
@@ -1121,9 +1188,10 @@ def test_bipole_default_span() -> None:
         rotation=0, options="", mirror=False,
     )
     src = generate(_schematic(comp))
-    # default span=1: center = (1+2)/2=1.5, y=2; width=1cm
+    # default span=1: width=1cm. Coordinates are normalized toward the origin,
+    # so the node centre emits at (0.5,0).
     assert "minimum width=1cm" in src
-    assert "at (1.5,2)" in src
+    assert "at (0.5,0)" in src
 
 
 def test_bipole_resizable_span() -> None:
@@ -1405,7 +1473,11 @@ def test_positive_z_wire_emitted_after_draw_block() -> None:
 def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
     """A background (z<0) wire on a MOSFET pin must use absolute coordinates, not
     a named node anchor — the node is defined later in the main \\draw, so a
-    forward reference like (node_x.gate) would be a LaTeX compile error."""
+    forward reference like (node_x.gate) would be a LaTeX compile error.
+
+    Coordinates are normalized toward the origin: the schematic at (5,5)→(3,5)
+    is floor-shifted, so the bg wire emits at the absolute (2,1)→(0,1).
+    """
     fet = MosfetComponent(
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
@@ -1415,7 +1487,7 @@ def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
     src = generate(_schematic(fet, wires=(w,)))
     bg = src.split("\n  \\draw\n", 1)[0]      # everything before the main \draw
     assert "node_" not in bg                  # no forward anchor reference
-    assert "(5,5) -- (3,5)" in bg             # the bg wire, with absolute coords
+    assert "(2,1) -- (0,1)" in bg             # the bg wire, with absolute coords
 
 
 def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:

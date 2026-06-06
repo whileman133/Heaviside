@@ -393,7 +393,7 @@ Each `ComponentItem` subclass:
 
 The on-canvas label system (§5.8) is:
 
-- **Display** — one `_SlotLabel` child per non-empty annotation slot, placed above/below the body and counter-rotated to stay upright. Slot labels are non-interactive (display only).
+- **Display** — one `_SlotLabel` child per non-empty annotation slot, placed above/below the body and counter-rotated to stay upright. Slot labels are non-interactive (display only). Each slot has a preferred clearance from the lead axis — currents (`i`) hug the wire, other slots clear the body's perpendicular thickness — but when several slots share a side (e.g. a label `l` and a current `i`, both defaulting above) they are **stacked outward** so they never overlap: a running outer edge per side pushes each successive slot at least one label-row height beyond the previous one, even when their preferred clearances differ.
 - **Editing** — double-clicking a component (or any of its slot labels) activates a single child `LabelTextItem` (`QGraphicsTextItem`) that edits the options string. The editor is **centred over the component body** (regardless of where the slot labels sit) and shows the options **one slot per line** (`options_to_editable()` splits top-level commas to newlines; `editable_to_options()` joins them back with `, ` on commit). Commas inside `$...$`/`{...}` or escaped as a LaTeX control sequence (e.g. `\,`) are *not* split. **Enter** commits, **Shift+Enter** inserts a newline, **Escape** cancels. While editing, the slot labels are hidden and the editor shows a solid white rounded backdrop with a blue border; the whole component is raised to `_EDIT_Z` so nothing overlaps the editor. `TextNodeItem` edits its free text verbatim (no comma/newline conversion).
 - **No dragging** — labels auto-place on their sides and are not draggable. `set_label_interactive()` is a no-op. (`Component.label_offset` and `MoveOptionsLabelCommand` remain in the model/command layer for file back-compat but no longer affect display.)
 - **`text_node` and `bipole`** label text is rendered inline (centred) by the item's own `paint()` using the same vector renderer, with raw-text fallback.
@@ -1250,6 +1250,7 @@ the wire draw, so the opaque fill paints over the line behind the text.
 
 - Coordinates are output as decimal numbers rounded to 2 decimal places.
 - If all coordinates are integers or half-integers, they are output without trailing zeros (e.g., `2` not `2.00`, `1.5` not `1.50`).
+- **Normalisation toward the origin.** Before emission, `generate()` translates the schematic so its drawn bounding box starts near `(0,0)` (`_translate_to_origin`). The canvas places schematics in the middle of a large scene, so stored coordinates are typically offset by tens of GU; this shift makes the generated source start near the origin and far more readable, with no change to the rendered figure (CircuiTikZ crops to the bounding box). The shift is `floor(min)` over all component pin positions and wire vertices — a **whole number of GU**, so grid alignment is preserved exactly — applied only to *absolute* coordinates (component `position`, wire `points`); *relative* values (`span_override`, `label_offset`, pin offsets) are unchanged. A schematic already at the origin is emitted unchanged. The translation is internal to codegen: the saved `.hv` file and the on-canvas coordinates are untouched.
 
 ### 7.4 Node Labels
 
@@ -1562,6 +1563,14 @@ source checkout and when frozen). Selecting an example loads it as a *template*:
 it is opened and the view is fit to it (§5), but `_current_path` is left unset so
 **Save** prompts for a new location rather than overwriting the read-only bundled
 file. If no examples are present the submenu shows a disabled placeholder.
+
+Because the examples ship inside the app, they must always load under the
+**current** file-format version (§9.4): a version bump that leaves them on an old
+version would ship examples the app's own loader rejects. Whenever
+`_FORMAT_VERSION` changes, every example under `examples/` must be re-saved to the
+new version (load + `io.save`, which normalises the version). `tests/test_examples.py`
+enforces this — it loads every bundled example and asserts each declares
+`_FORMAT_VERSION` and generates without error.
 
 ---
 
@@ -2020,8 +2029,10 @@ family with filled/`*` variants and the picture-scoped `diodes/scale`), the
 `node[…]` syntax and geometry corrections for multi-terminal kinds (op amp, the
 IGFET family's `xscale`/`anchor=gate`, BJTs, body-diode option), single-terminal
 nodes, and wires. It covers the determinism guarantee (`generate()` is pure),
-coordinate formatting (`_fmt`'s integer/half-integer/2-decimal rules), the Y-flip
-convention, junction (`circ`) and open-endpoint (`ocirc`) node emission with all
+coordinate formatting (`_fmt`'s integer/half-integer/2-decimal rules),
+origin normalisation (§7.3 — a far-from-origin schematic emits source near `(0,0)`,
+relative geometry and grid alignment preserved, already-at-origin unchanged), the
+Y-flip convention, junction (`circ`) and open-endpoint (`ocirc`) node emission with all
 their suppression rules (pin-connected, voltage-annotation, degenerate-wire,
 custom-marker, and `no_junction_dots`/`no_termination_dots` cases), wire styling
 and z-layering (shared vs. standalone `\draw`, background/foreground ordering and

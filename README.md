@@ -5,7 +5,7 @@
 # Heaviside
 
 [![CI](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml/badge.svg)](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
+[![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A graphical [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.

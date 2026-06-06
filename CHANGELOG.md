@@ -11,7 +11,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Linux (x64) build: the release workflow now produces a
   `Heaviside-linux-x64.tar.gz` alongside the macOS and Windows binaries.
 
+### Fixed
+- Canvas label overlap: when a component carries both a label and a current
+  annotation that default to the same side (e.g. an inductor with `l=$L$,
+  i=$i_L$`), the two no longer render on top of each other — same-side slots now
+  stack outward by at least one row. (The LaTeX output was already correct; this
+  was a canvas-only placement bug.)
+- The bundled example schematics now load in the current build. They previously
+  declared an older `.hv` format version (`0.2`) that the consolidated loader no
+  longer accepted, so opening them raised a version error. A new test
+  (`tests/test_examples.py`) loads every bundled example so this can't regress on
+  a future format change.
+
 ### Changed
+- Generated CircuiTikZ source is now normalised toward the origin: coordinates
+  start near `(0,0)` instead of wherever the schematic sat on the canvas
+  (previously ~75 GU off). The rendered figure is unchanged — CircuiTikZ crops to
+  its bounding box — but the source is far more readable and easier to hand-edit.
+  The shift is a whole number of GU, so grid alignment is preserved, and the saved
+  `.hv` file and on-canvas coordinates are untouched.
 - The application version now has a single source of truth (`pyproject.toml`),
   surfaced at runtime via `app/version.py`. The About dialog and the macOS bundle
   metadata read from it instead of hardcoding a version string.

@@ -140,6 +140,59 @@ from app.schematic.model import (
 )
 from app.schematic.validate import validate
 
+import copy as _copy
+
+
+def _translate_to_origin(schematic: Schematic) -> Schematic:
+    """Return a copy of *schematic* shifted so its drawn extent starts near (0,0).
+
+    The canvas places schematics in the middle of a large scene, so stored
+    coordinates are typically offset by tens of grid units from the origin. That
+    is invisible in the rendered figure (CircuiTikZ output is cropped to its
+    bounding box), but it makes the generated source needlessly hard to read and
+    hand-edit. This translates every *absolute* coordinate — component
+    ``position`` and wire ``points`` — by a whole-GU amount so the schematic's
+    minimum corner sits at the origin, while leaving *relative* values
+    (``span_override``, ``label_offset``, pin offsets) untouched.
+
+    The shift is computed from component pin positions and wire vertices so a
+    component whose body extends left/down of its origin is not pushed negative.
+    It is an integer number of GU, so grid alignment is preserved exactly. An
+    empty schematic (no coordinates) is returned unchanged.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    for comp in schematic.components:
+        for px, py in component_pin_positions(comp):
+            xs.append(px)
+            ys.append(py)
+        # Components with no named pins (rect/circle/text) still occupy their
+        # origin; include it so they anchor the bounding box too.
+        xs.append(comp.position[0])
+        ys.append(comp.position[1])
+    for wire in schematic.wires:
+        for px, py in wire.points:
+            xs.append(px)
+            ys.append(py)
+
+    if not xs:
+        return schematic
+
+    # Shift by a whole number of GU so the result stays grid-aligned. floor()
+    # guarantees the minimum corner lands at or just above 0 without introducing
+    # a fractional offset.
+    dx = math.floor(min(xs))
+    dy = math.floor(min(ys))
+    if dx == 0 and dy == 0:
+        return schematic
+
+    shifted = _copy.deepcopy(schematic)
+    for comp in shifted.components:
+        comp.position = (comp.position[0] - dx, comp.position[1] - dy)
+    for wire in shifted.wires:
+        wire.points = [(x - dx, y - dy) for (x, y) in wire.points]
+    return shifted
+
 # ---------------------------------------------------------------------------
 # Component classification
 # ---------------------------------------------------------------------------
@@ -216,6 +269,11 @@ def generate(
     errors = validate(schematic)
     if errors:
         raise ValueError(f"Invalid schematic: {errors[0]}")
+
+    # Shift the schematic so its source coordinates start near the origin rather
+    # than wherever it happened to sit on the canvas (the figure is unchanged —
+    # CircuiTikZ crops to the bounding box — but the source is far more readable).
+    schematic = _translate_to_origin(schematic)
 
     # When y_flip=True, negate Y at the point of emission so the output is in
     # CircuiTikZ's Y-up convention.  A simple wrapper handles this uniformly.

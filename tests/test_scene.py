@@ -1575,7 +1575,9 @@ def test_mid_segment_split_codegen_has_circ(scene: SchematicScene):
     scene.add_wire([(0.0, 2.0), (4.0, 2.0)])
     scene.add_wire([(2.0, 2.0), (2.0, 5.0)])
     src = generate(scene.schematic)
-    assert r"\node[circ] at (2,2) {};" in src
+    # codegen normalises coordinates toward the origin (min y = 2 → 0), so the
+    # junction dot lands at (2,0).
+    assert r"\node[circ] at (2,0) {};" in src
 
 
 # ---------------------------------------------------------------------------
@@ -1736,6 +1738,30 @@ def test_voltage_source_default_v_label_flips_side(scene: SchematicScene):
     # The explicit v_ on the voltage source is NOT flipped (stays screen-left).
     scene.edit_component_options(cv.id, "v_=$V$")
     assert vdir(cv).x() < -0.5
+
+
+def test_label_and_current_on_same_side_do_not_overlap(scene: SchematicScene):
+    """A label and a current annotation that default to the same side must stack,
+    not overlap (regression).
+
+    An inductor with `l=$L$, i=$i_L$` puts both the label (`l`, above) and the
+    current (`i`, above) on the same side. They have *different* preferred
+    clearances — the label clears the body, the current hugs the wire — so naive
+    per-slot offsets let them collide. They must end up on the same side with
+    base distances separated by at least one label row height."""
+    from app.canvas.items import _LABEL_LINE_H
+
+    comp = scene.place_component("L", (0.0, 0.0))
+    scene.edit_component_options(comp.id, r"l=$L$, i=$i_L$")
+    item = scene._comp_items[comp.id]
+    visible = [s for s in item._slot_items if s.isVisible()]
+    assert len(visible) == 2
+    # Same side (same offset direction).
+    d0, d1 = visible[0]._dir, visible[1]._dir
+    assert (round(d0.x(), 3), round(d0.y(), 3)) == (round(d1.x(), 3), round(d1.y(), 3))
+    # Separated by at least one row so they don't visually overlap.
+    bases = sorted(s._base_dist for s in visible)
+    assert bases[1] - bases[0] >= _LABEL_LINE_H - 0.01
 
 
 def test_open_annotation_labels_centered_on_axis(scene: SchematicScene):

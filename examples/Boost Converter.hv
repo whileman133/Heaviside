@@ -1,5 +1,5 @@
 {
-  "version": "0.2",
+  "version": "0.1",
   "name": "untitled",
   "components": [
     {
@@ -34,7 +34,7 @@
       ],
       "rotation": 0,
       "mirror": false,
-      "options": "l=$L$"
+      "options": "l=$L$, i=$i_\\mathrm{L}$"
     },
     {
       "id": "a216dd94-bf77-4175-8187-68162c919006",

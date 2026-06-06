@@ -712,27 +712,33 @@ class ComponentItem(QGraphicsItem):
         geom = self._slot_geometry()
         counter = self._label_counter_transform()
         centered = self._labels_centered_on_axis()
-        counts: dict[tuple[float, float], int] = {}
+        # Per-direction running "outer edge" so stacked labels never overlap.
+        # Each slot's own preferred base (currents hug the wire; other slots
+        # clear the body) is honoured, but a slot is always pushed out far enough
+        # to clear any sibling already placed on the same side. This matters when
+        # slots on one side have *different* bases — e.g. a label (`l`, clears the
+        # body) and a current (`i`, hugs the wire) both default to "above": the
+        # current must stack beyond the label, not at its own small base.
+        outer_edge: dict[tuple[float, float], float] = {}
         for idx, item in enumerate(self._slot_items):
             if idx < len(slots):
                 key, latex = slots[idx]
                 direction = self._slot_direction(key, geom)
-                # Stack labels that share a direction outward.
                 dk = (round(direction.x(), 3), round(direction.y(), 3))
-                i = counts.get(dk, 0)
-                counts[dk] = i + 1
-                # Currents hug the wire (lead axis through the centre); other
-                # slots clear the body's perpendicular thickness.  When labels
-                # are centred on the axis, there is no clearance — the first
-                # slot sits on the line and any siblings stack off it.
-                base = 0.0 if centered else (
+                # This slot's preferred distance from the centre line.
+                preferred = 0.0 if centered else (
                     _CURRENT_GAP if key.startswith("i")
                     else geom["perp_thickness"] + _LABEL_GAP
                 )
+                # Sit at the preferred distance, but never inside a sibling
+                # already placed on this side.
+                base = max(preferred, outer_edge.get(dk, 0.0))
+                # Advance the running edge past this label's row height.
+                outer_edge[dk] = base + _LABEL_LINE_H
                 item.setTransform(counter)
                 item.configure(
                     latex, direction, geom["center_rel"],
-                    base, _LABEL_LINE_H * i, geom["inv"], centered,
+                    base, 0.0, geom["inv"], centered,
                 )
                 item.setVisible(True)
             else:

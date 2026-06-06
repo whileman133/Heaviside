@@ -739,8 +739,10 @@ def test_move_extending_line_codegen_minimal():
     MoveCommand(["a"], (-1.0, 0.0)).do(s)
     src = generate(s)
     # The wire path must be a single segment, not three collinear nodes.
-    assert "(1,0) -- (5,0)" in src
-    assert "(2,0) -- (5,0)" not in src
+    # (codegen normalises coordinates toward the origin, so after the move the
+    # min corner shifts back to 0 — the wire is one segment from (2,0) to (6,0).)
+    assert "(2,0) -- (6,0)" in src
+    assert "(2,0) -- (4,0) -- (6,0)" not in src
 
 
 # ---------------------------------------------------------------------------
