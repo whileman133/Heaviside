@@ -53,15 +53,17 @@ Pre-built apps (always the latest release):
 
 - **macOS (Apple Silicon)** → [Heaviside-macos-arm64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.zip)
 - **Windows (x64)** → [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
+- **Linux (x64)** → [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz)
 
 Or browse all releases (with checksums and release notes) on the
 [Releases page](https://github.com/whileman133/Heaviside/releases).
 
 > **First launch:** these builds are not code-signed/notarized (Heaviside is a
-> free, open-source alpha), so your OS will warn on first open — see
-> [Opening the app on macOS](#opening-the-app-on-macos-first-launch) (or the
-> Windows note there). They also need `pdflatex` for the preview and exports
-> (see [Requirements](#requirements)).
+> free, open-source alpha), so macOS and Windows will warn on first open — see
+> [Opening the app](#opening-the-app-first-launch) below. On **Linux**, extract
+> the archive (`tar -xzf Heaviside-linux-x64.tar.gz`) and run the `Heaviside`
+> executable inside the folder. All builds need `pdflatex` for the preview and
+> exports (see [Requirements](#requirements)).
 
 ## Requirements
 
@@ -97,8 +99,12 @@ Build a self-contained app with [PyInstaller](https://pyinstaller.org) (no
 Python install required to run the result):
 
 ```sh
-./scripts/build_app.sh        # or: uv run pyinstaller --noconfirm --clean heaviside.spec
+uv run python scripts/build.py    # or: uv run pyinstaller --noconfirm --clean heaviside.spec
 ```
+
+The build script is cross-platform (macOS, Windows, Linux): it regenerates the
+app icons from `assets/icon.png`, ensures the bundled license texts are present,
+and runs PyInstaller.
 
 Output:
 
@@ -113,7 +119,7 @@ Poppler's `pdftocairo`, checked only when you actually export EPS.) Editing,
 source generation, preview, and PDF/`.tex` export need only `pdflatex`. Build
 configuration lives in [`heaviside.spec`](heaviside.spec).
 
-### Opening the app on macOS (first launch)
+### Opening the app (first launch)
 
 The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
 notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will

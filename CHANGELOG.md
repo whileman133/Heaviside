@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Linux (x64) build: the release workflow now produces a
+  `Heaviside-linux-x64.tar.gz` alongside the macOS and Windows binaries.
+
 ### Changed
 - The application version now has a single source of truth (`pyproject.toml`),
   surfaced at runtime via `app/version.py`. The About dialog and the macOS bundle
@@ -15,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   saved by a newer release and prompts the user to update Heaviside. (The
   file-format version remains independent of the app version — it changes only
   when the on-disk format changes.)
+- Consolidated the build tooling into cross-platform Python scripts:
+  `scripts/build.py` (replaces `build_app.sh`) and `scripts/make_icons.py`
+  (replaces `make_icns.sh` + `make_ico.py`), generating both the Windows `.ico`
+  and macOS `.icns` from `assets/icon.png` with Pillow only — no macOS-specific
+  tooling, so icons can be regenerated on any platform.
+- The Windows `.exe` now carries the Heaviside icon (the build previously passed
+  the macOS `.icns`, which Windows ignored).
 
 ## [0.1.0] - 2026-06-06
 

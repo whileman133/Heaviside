@@ -1774,8 +1774,8 @@ heaviside/
 ├── main.py                        # Entry point; constructs QApplication and MainWindow
 ├── heaviside.spec                 # PyInstaller build spec (see §11.1)
 ├── scripts/
-│   ├── build_app.sh               # Clean PyInstaller build helper
-│   └── make_icns.sh               # Regenerate assets/icon.icns from icon.png
+│   ├── build.py                   # Cross-platform PyInstaller build helper
+│   └── make_icons.py              # Regenerate assets/icon.ico + icon.icns from icon.png
 ├── examples/                      # Bundled example .hv schematics (File → Open Example, §9.5)
 ├── app/
 │   ├── resources.py               # resource_path(): frozen-safe bundled-file resolution
@@ -1837,18 +1837,21 @@ Note: the `assets/components/` directory has been removed. All component renderi
 ### 11.1 Packaging (PyInstaller)
 
 The app ships as a self-contained bundle built with PyInstaller from
-[`heaviside.spec`](heaviside.spec) (`./scripts/build_app.sh`). Output is
-`dist/Heaviside.app` on macOS (a proper `.app` bundle with the `.icns` icon and
-a `.hv` document-type association) and `dist/Heaviside/` elsewhere. `build/` and
-`dist/` are git-ignored.
+[`heaviside.spec`](heaviside.spec) via the cross-platform `scripts/build.py`
+(`uv run python scripts/build.py`). Output is `dist/Heaviside.app` on macOS (a
+proper `.app` bundle with the `.icns` icon and a `.hv` document-type
+association), and `dist/Heaviside/` on Windows/Linux (the Windows `.exe` carries
+the `.ico` icon). `build/` and `dist/` are git-ignored.
 
-**App icon.** The bundle icon is `assets/icon.icns`, regenerated from
-`assets/icon.png` by `./scripts/make_icns.sh`. On macOS `build_app.sh` runs this
-automatically when the `.icns` is missing or older than the PNG, so updating the
-icon is just: replace `icon.png`, rebuild. The source PNG need not be square —
-the script pads it onto a transparent square canvas before rendering the
-iconset, so the icon is never distorted. (After replacing the icon you may need
-to clear the macOS icon cache — e.g. relaunch the Dock — to see the change on an
+**App icon.** The single source is `assets/icon.png`. `scripts/make_icons.py`
+(Pillow only, so it runs on any platform — no macOS `iconutil`/`sips`) generates
+both `assets/icon.ico` (Windows) and `assets/icon.icns` (macOS) from it;
+`heaviside.spec` selects the right format per platform. `build.py` regenerates
+both automatically when either is missing or older than the PNG, so updating the
+icon is just: replace `icon.png`, rebuild. The source PNG need not be square — it
+is padded onto a transparent square canvas first, so the icon is never distorted.
+(After replacing the icon you may need to clear the OS icon cache — relaunch the
+Dock on macOS, or note Windows caches `.exe` icons — to see the change on an
 already-seen bundle.)
 
 **Runtime resources.** Two resources are read at runtime and must be bundled:

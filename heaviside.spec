@@ -45,6 +45,17 @@ def _project_version() -> str:
 
 _VERSION = _project_version()
 
+# Per-platform app icon. PyInstaller wants a .ico on Windows and a .icns on
+# macOS; passing the wrong format is silently ignored and the app falls back to
+# PyInstaller's default icon. Both are generated from assets/icon.png by
+# scripts/make_icons.py (both formats, cross-platform via Pillow).
+if sys.platform == "win32":
+    _ICON = "assets/icon.ico"
+elif sys.platform == "darwin":
+    _ICON = "assets/icon.icns"
+else:
+    _ICON = None  # Linux: PyInstaller takes no icon here; the window icon is set at runtime.
+
 # Runtime resources, paths relative to the project root, mirroring the layout
 # app/resources.py expects.
 datas = [
@@ -121,7 +132,7 @@ exe = EXE(
     target_arch=None,      # build for the host arch; set "universal2" for both
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.icns",
+    icon=_ICON,
 )
 
 coll = COLLECT(
@@ -140,7 +151,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="Heaviside.app",
-        icon="assets/icon.icns",
+        icon=_ICON,
         bundle_identifier="com.heaviside.editor",
         version=_VERSION,
         info_plist={
