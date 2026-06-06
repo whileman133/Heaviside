@@ -1,5 +1,7 @@
 # Heaviside
 
+[![CI](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml/badge.svg)](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml)
+
 A graphical editor for producing publication-quality circuit diagrams that
 output valid [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX markup.
 It targets researchers and engineers who author documents in LaTeX or LyX and
@@ -10,6 +12,13 @@ need schematics with typeset mathematical annotations.
 - Lossless save/load via a JSON `.hv` format
 - Live, rendered PDF preview of the current schematic
 - Wire-to-wire connectivity with automatic junction dots
+
+> **Built spec-first with AI assistance.** Heaviside was developed from a
+> detailed written specification with substantial help from AI coding assistants.
+> The implementation follows the spec, the test suite (660+ tests) and spec are
+> kept in sync, and the full methodology is documented in
+> [`PROJECT_SPEC.md`](PROJECT_SPEC.md) §14. See
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) for more.
 
 ## Requirements
 
@@ -82,3 +91,22 @@ main.py        # entry point
 tools/         # build-time tooling (CircuiTikZ SVG export + manifest)
 tests/         # pytest suite
 ```
+
+## Contributing
+
+Contributions are welcome — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for the
+development setup, the test/spec sync rule, and how this codebase was built.
+
+## License
+
+Heaviside is released under the [MIT License](LICENSE).
+
+Its GUI toolkit, **PySide6 (Qt for Python), is licensed under the LGPL v3**.
+Using PySide6 as an ordinary dependency (the `uv run` workflow above) imposes no
+extra obligations on you. If you **redistribute the bundled standalone app**
+built with PyInstaller, the LGPL's relinking provision applies to the bundled Qt
+libraries: recipients must be able to substitute their own build of Qt/PySide6.
+In practice this means making the PySide6 source (or a written offer for it)
+available alongside the bundle and not statically linking it in a way that
+prevents replacement. The other Python dependencies (`pydantic`, `qtawesome`)
+are MIT-licensed and impose no such requirement.

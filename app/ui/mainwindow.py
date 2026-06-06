@@ -1298,10 +1298,10 @@ class _AboutDialog(QDialog):
 
         layout.addSpacing(6)
 
-        claude_label = QLabel("Built with the assistance of Claude")
-        claude_label.setAlignment(Qt.AlignCenter)
-        claude_label.setStyleSheet("font-size: 11px; color: #888;")
-        layout.addWidget(claude_label)
+        llm_label = QLabel("Built with the assistance of Large Language Models (LLMs),\nincluding Claude Sonnet 4.6 and Claude Opus 4.8.")
+        llm_label.setAlignment(Qt.AlignCenter)
+        llm_label.setStyleSheet("font-size: 11px; color: #888;")
+        layout.addWidget(llm_label)
 
         layout.addSpacing(20)
 

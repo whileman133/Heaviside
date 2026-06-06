@@ -175,6 +175,12 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
                     "pdflatex",
                     "-interaction=nonstopmode",
                     "-halt-on-error",
+                    # Defence in depth: a .hv file may come from an untrusted
+                    # third party, and label/text fields flow verbatim into the
+                    # generated LaTeX. Explicitly disabling shell-escape ensures a
+                    # crafted label can never invoke \write18 / external commands,
+                    # regardless of the local TeX installation's default.
+                    "-no-shell-escape",
                     str(tex_file),
                 ],
                 cwd=tmp,

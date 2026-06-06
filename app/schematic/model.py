@@ -41,7 +41,7 @@ class Wire:
     """Ordered list of vertices forming the path.
 
     Constraints (enforced by validate()):
-    - All vertices lie on 0.5 GU boundaries.
+    - All vertices lie on 0.25 GU boundaries.
     - Every consecutive pair of segments is strictly horizontal or vertical
       (Manhattan constraint — no diagonals).
     - At least two points (a single segment).
@@ -812,6 +812,7 @@ def wire_crossings(
     eligible = [
         (i, w)
         for i, w in enumerate(schematic.wires)
+        # No-junction-dot wires (annotation leads) are excluded from hops.
         if not w.no_junction_dots and len(w.points) >= 2
     ]
 

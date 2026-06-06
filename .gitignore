@@ -19,6 +19,9 @@ htmlcov/
 .vscode/
 .DS_Store
 
+# AI assistant local settings
+.claude/
+
 # LaTeX build artifacts
 *.aux
 *.log

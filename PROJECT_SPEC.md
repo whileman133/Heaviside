@@ -1345,7 +1345,13 @@ Centre `(cx,cy) = (x0+dx/2, y0+dy/2)`, radii `rx = |dx|/2`, `ry = |dy|/2` (`_cir
 A rendered PDF preview of the complete schematic is produced by:
 
 1. Wrapping the generated CircuiTikZ in a minimal `.tex` document.
-2. Running `pdflatex` in a temporary directory via `subprocess`.
+2. Running `pdflatex` in a temporary directory via `subprocess`. The argument
+   vector is always passed as a list (never `shell=True`) and includes
+   `-no-shell-escape`: because a `.hv` file may originate from an untrusted third
+   party and label/text fields are emitted verbatim into the generated LaTeX,
+   disabling shell-escape explicitly guarantees a crafted label can never invoke
+   `\write18` / external commands, independent of the local TeX installation's
+   default. Covered by `tests/test_latex_security.py`.
 3. Rendering the output PDF page to a `QImage` with Qt's own PDF engine
    (`PySide6.QtPdf.QPdfDocument`) — `pdf_to_qimage()` loads the PDF bytes from an
    in-memory `QBuffer` and renders page 0 at the worker's DPI. No external
