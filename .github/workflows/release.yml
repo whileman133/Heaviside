@@ -1,0 +1,103 @@
+name: Release
+
+# Build the standalone app on macOS (Apple Silicon) and Windows whenever a
+# version tag is pushed, then attach the binaries to a GitHub Release.
+#
+#   git tag v0.4.0
+#   git push --tags
+#
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create the Release and upload assets
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-15 runners are native Apple Silicon (arm64), free for public
+          # repos. This produces an Apple-Silicon-native .app.
+          - os: macos-15
+            label: macOS (Apple Silicon)
+            artifact: Heaviside-macos-arm64.zip
+          - os: windows-latest
+            label: Windows (x64)
+            artifact: Heaviside-windows-x64.zip
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Refresh the canonical license texts that the bundle's LGPLv3 notice
+      # references (GPL-3.0.txt is not committed; LGPL-3.0.txt is). The committed
+      # LGPL text is the fallback if the network is unavailable. Mirrors the fetch
+      # in scripts/build_app.sh, which this workflow bypasses by calling
+      # pyinstaller directly.
+      - name: Fetch third-party license texts
+        shell: bash
+        run: |
+          curl -sSL --max-time 20 https://www.gnu.org/licenses/lgpl-3.0.txt -o licenses/LGPL-3.0.txt || true
+          curl -sSL --max-time 20 https://www.gnu.org/licenses/gpl-3.0.txt  -o licenses/GPL-3.0.txt  || true
+          test -s licenses/LGPL-3.0.txt || { echo "::error::licenses/LGPL-3.0.txt missing"; exit 1; }
+
+      - name: Build the app (PyInstaller)
+        run: uv run pyinstaller --noconfirm --clean heaviside.spec
+
+      # macOS: an .app is a directory of many files (including framework symlinks
+      # that a plain zip would mangle), so use ditto, which is the macOS-correct
+      # archiver. Then emit a SHA-256 for download verification.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          ditto -c -k --keepParent "Heaviside.app" "../${{ matrix.artifact }}"
+          cd ..
+          shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+
+      # Windows: zip the onedir folder; emit a SHA-256 alongside.
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/Heaviside/*" -DestinationPath "${{ matrix.artifact }}"
+          (Get-FileHash "${{ matrix.artifact }}" -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.artifact }}" | Out-File -Encoding ascii "${{ matrix.artifact }}.sha256"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create / update the GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: artifacts/**
+          draft: true            # review the assets, then publish manually
+          generate_release_notes: true

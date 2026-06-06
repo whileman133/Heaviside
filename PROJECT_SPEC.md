@@ -6,6 +6,26 @@
 
 ---
 
+## Contents
+
+- [0. Spec Maintenance (Mandatory)](#0-spec-maintenance-mandatory)
+- [1. Purpose and Scope](#1-purpose-and-scope)
+- [2. Glossary](#2-glossary)
+- [3. Grid and Coordinate System](#3-grid-and-coordinate-system)
+- [4. Data Model](#4-data-model)
+- [5. Component Registry and Painting](#5-component-registry-and-painting)
+- [6. Canvas Behavior](#6-canvas-behavior)
+- [7. Code Generation](#7-code-generation)
+- [8. Preview and Export](#8-preview-and-export)
+- [9. File Format](#9-file-format)
+- [10. UI Layout](#10-ui-layout)
+- [11. Project Structure](#11-project-structure)
+- [12. Package Management and Development Environment](#12-package-management-and-development-environment)
+- [13. Test Specification and Acceptance Criteria](#13-test-specification-and-acceptance-criteria)
+- [14. Out of Scope (v1)](#14-out-of-scope-v1)
+
+---
+
 ## 0. Spec Maintenance (Mandatory)
 
 **This specification is a living document and must stay in sync with the implementation at all times.**
@@ -14,7 +34,7 @@ Whenever a feature is **added, changed, or removed** — by a human or an AI age
 
 - **Adding a feature:** document its behavior in the relevant section(s) (data model, canvas behavior, code generation, UI, etc.), add or update any affected invariants, commands, keyboard shortcuts, and acceptance criteria, and add corresponding test entries in Section 13.
 - **Changing a feature:** edit every section that describes the old behavior so no stale description remains. Search the whole document for affected terms.
-- **Removing a feature:** delete its description (do not leave orphaned references) and move it to Section 15 (Out of Scope) if it is deferred rather than abandoned.
+- **Removing a feature:** delete its description (do not leave orphaned references) and move it to Section 14 (Out of Scope) if it is deferred rather than abandoned.
 - **Version bump:** increment the spec **Version** field for any substantive behavioral change, and note new behavior under the appropriate section.
 
 AI agents working on this project are explicitly required to follow this rule on every task that touches behavior. If a requested change would make the code and spec disagree, update both in the same change; if that is not possible, flag the discrepancy rather than silently letting them diverge. (Process notes for implementing this project with an AI assistant live in [`docs/ai-development.md`](docs/ai-development.md), separate from this behavior specification.)
@@ -1973,211 +1993,82 @@ Tests are organized into three tiers: **unit tests** covering pure logic with no
 
 All unit tests live in `tests/` and are run with `pytest`. They must pass with no network access, no display server, and no LaTeX installation.
 
+The individual test functions are the authoritative, self-documenting list of
+unit-level behavior; this section summarises what each test file covers rather
+than enumerating every function (which would duplicate the suite and inevitably
+drift out of date). Read the named file in `tests/` for the exact assertions.
+
 #### Model and Validation (`test_model.py`)
 
-| Test | Description |
-|------|-------------|
-| `test_component_mixin_composition` | `BipoleComponent` is an instance of both `FontedComponent` and `StyledComponent` (and `DrawingComponent`); `rect` is **both** `StyledComponent` and `FontedComponent` (font default 12.0), `text_node` is `FontedComponent`-only; bipole's `font_size` override is 7.0. Guards mixin base-ordering. |
-| `test_rect_perimeter_points_unit_box` | `rect_perimeter_points` for a 1×1 rect returns all 16 0.25 GU perimeter points (corners + edge points), excludes the interior. |
-| `test_rect_perimeter_points_offset_and_default_span` | Perimeter is computed from `position + (span_override or default_span)`. |
-| `test_component_connection_points_rect_vs_named` | `component_connection_points` returns the perimeter for a rect and the named pins for an ordinary component. |
-| `test_open_endpoint_on_rect_edge_is_connected` | A wire ending on a rect edge is not an open endpoint; its free end still is. |
-| `test_circle_connection_points_are_only_cardinal` | `circle_connection_points` returns exactly the four N/S/E/W bounding-box edge midpoints. |
-| `test_circle_connection_points_ellipse` | For a non-square box the cardinal points are the ellipse axis ends. |
-| `test_component_connection_points_circle` | `component_connection_points` returns the cardinal points for a circle. |
-| `test_open_endpoint_on_circle_cardinal_is_connected_but_not_corner` | A wire on a circle cardinal point is connected; a wire on a box corner (not cardinal) stays open. |
-| `test_component_valid` | A `Component` with a known `kind`, valid rotation, and valid position passes `validate()` with no errors. |
-| `test_component_invalid_kind` | A `Component` with a `kind` not in `REGISTRY` produces a validation error. |
-| `test_component_invalid_rotation` | A `Component` with rotation `45` produces a validation error. |
-| `test_wire_valid` | A `Wire` with a valid Manhattan path on 0.25 GU boundaries passes validation. |
-| `test_wire_off_grid` | A `Wire` with a vertex off the 0.25 GU grid (e.g. `(0.3, 0.0)`) produces a validation error. |
-| `test_wire_on_quarter_grid_is_valid` | Vertices on the 0.25 GU grid (e.g. a 0.25-nudged pin at y=0.25) validate (§3.1). |
-| `test_wire_diagonal` | A `Wire` with a diagonal segment produces a validation error. |
-| `test_schematic_duplicate_ids` | A `Schematic` with two components sharing the same `id` produces a validation error. |
-| `test_schematic_empty_valid` | An empty `Schematic` (no components, no wires) passes validation. |
+Covers the data-model dataclasses, the mixin composition that defines which
+components carry font/style/drawing capabilities (guarding the base-ordering that
+dataclass field inheritance is sensitive to), and the `validate()` invariants:
+known `kind`, allowed rotations (90° multiples), positions and wire vertices on
+the 0.25 GU grid, Manhattan-only wire segments, and unique component ids. Also
+covers the block-diagram connection-point helpers — `rect_perimeter_points`,
+`circle_connection_points`, and `component_connection_points` — and how a wire
+ending on a rect edge or circle cardinal point counts as connected.
 
 #### Code Generation (`test_codegen.py`)
 
-| Test | Description |
-|------|-------------|
-| `test_resistor_horizontal` | A single resistor at (0,0), rotation 0, no labels → produces `(0,0) to[R] (2,0)`. |
-| `test_resistor_with_options` | A resistor with `options="l=$R_1$, v=$V$"` → produces `to[R, l=$R_1$, v=$V$]`. |
-| `test_label_value_with_comma_is_brace_protected` / `test_comma_free_label_value_left_unwrapped` | A label value containing a comma is brace-wrapped (`v=$\phi(0,0^+)$` → `v={$\phi(0,0^+)$}`) so pgfkeys does not mis-split the option list; comma-free values are emitted verbatim (regression). |
-| `test_protect_label_commas_unit` | `protect_label_commas()` wraps only comma-bearing values, leaves already-braced groups and comma-free flags untouched, and is a no-op on empty input. |
-| `test_resistor_rotated_90` | A resistor at (0,0), rotation 90 → origin and terminal pins are correctly rotated; output uses correct coordinates. |
-| `test_capacitor_horizontal` | A capacitor at (2,0), rotation 0 → produces `(2,0) to[C] (4,0)`. |
-| `test_inductor_horizontal` | An inductor at (0,0), rotation 0 → produces `(0,0) to[L] (2,0)`. |
-| `test_diode_horizontal` | A diode at (0,0), rotation 0 → produces `(0,0) to[D] (2,0)`. |
-| `test_diode_filled` | A diode with `filled=True` → produces `(0,0) to[D*] (2,0)`. |
-| `test_diode_emits_picture_scoped_scale` / `test_no_diode_scale_without_diodes` | A schematic with a diode emits `\ctikzset{diodes/scale=0.8}` as the first line inside `\begin{circuitikz}`; schematics without any diode omit it. |
-| `test_zener_diode` | A `zD` component → produces `(0,0) to[zD] (2,0)`. |
-| `test_zener_diode_filled` | A `zD` with `filled=True` → produces `(0,0) to[zD*] (2,0)`. |
-| `test_led` | A `leD` component → produces `(0,0) to[leD] (2,0)`. |
-| `test_voltage_source` | A voltage source at (0,0), rotation 0 → produces `(0,0) to[V] (0,2)`. |
-| `test_opamp_node` | An op-amp produces `node[op amp]` syntax with correct anchor coordinates. |
-| `test_nmos_node` | An NMOS (`nigfete`) produces `node[nigfete, xscale=1.0167, anchor=gate]` syntax (with its §7.2 geometry correction). |
-| `test_nmos_depletion_node` | `nigfetd` uses the same `xscale=1.0167, anchor=gate` geometry correction as `nigfete`. |
-| `test_pmos_node` | `pigfete` is placed with `xscale=1.0167, anchor=gate`. |
-| `test_pmos_depletion_node` | `pigfetd` uses the same geometry correction as `pigfete`. |
-| `test_nmos_bodydiode` | `nigfete` with `body_diode=True` emits `node[nigfete, bodydiode, xscale=1.0167, anchor=gate]`. |
-| `test_nmos_no_bodydiode` | `nigfete` with `body_diode=False` omits the `bodydiode` option entirely. |
-| `test_pmos_bodydiode` | `pigfete` with `body_diode=True` emits `node[pigfete, bodydiode, xscale=1.0167, anchor=gate]`. |
-| `test_pmos_pin_offsets` | PMOS source is at Qt (1.0,-0.5) and drain at (1.0,+1.0) relative to gate — the y-mirror of NMOS. |
-| `test_wire_straight` | A two-point wire `[(0,0),(2,0)]` → produces `(0,0) -- (2,0)`. |
-| `test_wire_manhattan` | A three-point wire `[(0,0),(2,0),(2,2)]` → produces `(0,0) -- (2,0) -- (2,2)`. |
-| `test_coordinate_formatting_integer` | Coordinate `2.0` is output as `2`, not `2.0` or `2.00`. |
-| `test_coordinate_formatting_half` | Coordinate `1.5` is output as `1.5`, not `1.50`. |
-| `test_empty_schematic` | An empty schematic produces a valid (empty) `circuitikz` environment. |
-| `test_generate_is_pure` | Calling `generate()` twice on the same `Schematic` produces identical output. |
-| `test_junction_emits_circ_node` / `test_no_junction_no_circ_node` / `test_junction_node_count_matches` | Junction coordinates emit `\node[circ]`; non-junctions do not; count matches the number of junction points. |
-| `test_open_endpoint_emits_ocirc_node` | A wire with both ends free emits two `\node[ocirc]` nodes at those coordinates. |
-| `test_pin_connected_endpoint_no_ocirc` | A wire endpoint coinciding with a component pin does not emit `\node[ocirc]`. |
-| `test_voltage_annotation_endpoint_emits_ocirc` | A wire ending on a voltage annotation (`open`) pin still emits `\node[ocirc]` — the annotation is an open circuit, not a connection. |
-| `test_degenerate_wire_skipped_but_endpoint_open` | A degenerate single-point wire emits no `\draw` coordinate and does not suppress the `\node[ocirc]` at a real wire endpoint sharing its coordinate. |
-| `test_no_open_endpoints_no_ocirc` | A wire whose both ends land on component pins emits no `\node[ocirc]`. |
-| `test_mark_unconnected_pins_off_by_default` / `test_mark_unconnected_pins_marks_dangling_pins` | With `mark_unconnected_pins=False` (default) a lone resistor emits no `ocirc`; with it `True`, both free pins get a `\node[ocirc]` (§7.6). |
-| `test_mark_unconnected_pins_skips_wired_pin` / `test_mark_unconnected_pins_respects_y_flip` | A pin with a wire on it is never marked even when the option is on; marked pins honor the `y_flip` convention. |
-| `test_mark_unconnected_pins_voltage_annotation_not_a_connection` | A voltage annotation (`open`) abutting a pin does not suppress that pin's `ocirc` (it is an open circuit, not a connection). |
-| `test_text_node_basic` | A `text_node` at (2,3) with options "Hello" emits `\node at (2,3) {Hello};` outside the `\draw` block. |
-| `test_text_node_with_font_size` | A `text_node` with `span_override=(14,0)` emits `\node[font=\fontsize{14}…\selectfont] at (…) {…};`. |
-| `test_text_node_y_flip` | A `text_node` at (2,3) with `y_flip=True` emits `\node at (2,-3) {…};`. |
-| `test_text_node_rotation` | A `text_node` with `rotation=90` emits `\node[rotate=270] at (…) {…};` (negated: CW-visual maps to TikZ CCW convention). |
-| `test_text_node_rotation_with_font` | A `text_node` with `rotation=270` and `font_bold=True` emits `rotate=90` and `\bfseries` in the option list. |
-| `test_rect_solid` | A `rect` with no options and `span_override=(5,1)` at (-0.5,-0.5) emits `\draw (-0.5,-0.5) rectangle (4.5,0.5);`. |
-| `test_rect_dashed` | A `rect` with `line_style="dashed"` emits `\draw[dashed] … rectangle …;`. |
-| `test_rect_no_text_emits_only_rectangle` | A text-free rect emits only its `\draw … rectangle` line — no `\node` (output unchanged from pre-text feature). |
-| `test_rect_with_text_emits_centred_node` | A rect with text emits the rectangle plus `\node at (cx,cy) {text};` centred on the box (default font → no bracket). |
-| `test_rect_text_font_options` | Bold + sans + size on a rect's text are encoded into the centred node's `font=` option. |
-| `test_circle_square_emits_circle` | A square circle emits `\draw[style] (cx,cy) circle (r);` centred on the box. |
-| `test_circle_nonsquare_emits_ellipse` | A non-square circle emits `\draw (cx,cy) ellipse (rx and ry);`. |
-| `test_circle_no_text_emits_only_shape` | A text-free circle emits only its outline — no `\node`. |
-| `test_circle_with_text_emits_centred_node` | A circle with text emits the shape plus a centred `\node{text}`. |
-| `test_rect_uses_default_span_when_none` | A `rect` with `span_override=None` falls back to `default_span=(1,1)`. |
-| `test_rect_line_style_and_fill_combined` | A `rect` with `line_style="dotted"` + `fill_color="cyan!15"` emits `\draw[dotted, fill=cyan!15] … rectangle …;`. |
-| `test_drawing_kinds_not_in_draw_block` | `text_node` and `rect` produce nothing inside the main `\draw … ;` block. |
-| `test_plain_wire_in_shared_draw` | A default-styled wire is emitted inside the shared `\draw` path (no per-wire `\draw[…]`). |
-| `test_styled_wire_separate_draw` | A wire with `line_style="dashed"`, `line_width=0.8` emits its own `\draw[dashed, line width=0.8pt] (…) -- (…);`. |
-| `test_styled_wire_line_width_only` | A non-default `line_width` alone triggers a styled `\draw[line width=…pt]` statement. |
-| `test_no_junction_dots_wire_suppresses_circ` | A wire flagged `no_junction_dots` emits no `\node[circ]` at its T-junction (and the same topology unflagged does). |
-| `test_line_hops_disabled_by_default` / `test_line_hops_emits_bezier_bump` / `test_always_hop_mode_emits_even_when_disabled` | `generate()` emits no bump for default-mode wires unless `mark_line_hops=True`; then the hopping wire gets a cubic-Bézier bump. A `hop_mode="always"` wire emits its bump even with `mark_line_hops` off. |
-| `test_line_hop_bump_bulges_up_without_yflip` / `test_line_hop_bump_flips_with_yflip` | The bump bulges off the wire and flips correctly with `y_flip` (control-point Y negates). |
-| `test_zero_z_wire_keeps_shared_draw_path` / `test_negative_z_wire_emitted_before_draw_block` / `test_positive_z_wire_emitted_after_draw_block` | `z_order==0` wires stay in the shared `\draw`; `z<0` emit before it (background), `z>0` after (foreground). |
-| `test_background_wire_to_mosfet_uses_absolute_coords` / `test_foreground_wire_to_mosfet_keeps_named_anchor` | A background wire on a multi-terminal pin emits absolute coords (no forward node-anchor reference → no compile error); a foreground wire keeps the named anchor. |
-| `test_no_termination_dots_wire_suppresses_ocirc` | A wire flagged `no_termination_dots` emits no `\node[ocirc]` at its free ends (and the same wire unflagged does). |
-| `test_wire_end_marker_emits_arrow` / `test_wire_start_marker_emits_reverse_arrow` / `test_wire_both_markers_emit_double_arrow` | An `end_marker`/`start_marker`/both `="arrow"` wire emits `\draw[-{Latex}]` / `\draw[{Latex}-]` / `\draw[{Latex}-{Latex}]`. |
-| `test_wire_marker_styles_map_to_arrows_meta_tips` | `stealth`/`open`/`bar` markers emit `-{Stealth}` / `-{Latex[open]}` / `-{Bar}`. |
-| `test_wire_mixed_markers_emit_distinct_tips` | Different start/end kinds compose independently, e.g. `{Bar}-{Stealth}`. |
-| `test_wire_marker_combines_with_style` | A marked + styled wire emits the arrow spec first: `\draw[-{Latex}, dashed, line width=0.8pt] …`. |
-| `test_wire_marker_suppresses_ocirc_at_that_end` | A marked end emits no `\node[ocirc]`; the unmarked end still does. |
-| `test_build_tex_loads_arrows_meta` / `test_build_snippet_lists_required_preamble` | The standalone template loads `\usetikzlibrary{arrows.meta}`; the snippet preamble documents it. |
-| `test_wire_end_label_horizontal_anchor_west` / `test_wire_start_label_horizontal_anchor_east` | A horizontal-wire end/start label emits `\node[anchor=west/east]` just beyond the tip. |
-| `test_wire_label_vertical_anchor_under_yflip` | Vertical-wire labels anchor by emitted-space (Y-flip-aware) direction: `anchor=south` above the top end, `anchor=north` below the bottom. |
-| `test_wire_end_label_placement_above_horizontal` / `test_wire_end_label_placement_below_horizontal` | On a horizontal wire, `"above"`/`"below"` tuck the label above/below the wire and inward of the endpoint (corner anchor `south east`/`north east`, right edge at the endpoint, not past it). |
-| `test_wire_start_label_placement_tucks_inward_at_start` | A start label tucks inward from the start endpoint (`south west`, extends right not left). |
-| `test_wire_label_placement_vertical_left_and_right` | On a vertical wire, `"above"` = left of the wire, `"below"` = right (corner anchors `north east`/`north west`; never over the line). |
-| `test_wire_label_placement_above_under_yflip` | Under the preview Y-flip, `"above"` still sits visually above a horizontal wire. |
-| `test_wire_label_empty_emits_no_node` / `test_wire_label_degenerate_wire_skipped` | No label node for an unlabelled wire or a degenerate single-point wire. |
-| `test_wire_label_coexists_with_arrow_marker` | An arrow marker and an end label render together (arrow into text). |
-| `test_wire_mid_label_node_with_white_fill` / `test_wire_mid_label_respects_position` / `test_wire_mid_label_empty_emits_no_node` | A `mid_label` emits `\node[fill=white, inner sep=1pt]` at `wire_point_at_fraction(points, mid_label_pos)`; empty emits nothing. |
-| `test_point_at_fraction_*` / `test_fraction_at_point_projects_onto_polyline` / `test_fraction_round_trips_with_point` | `wire_point_at_fraction` / `wire_fraction_at_point` map fractional arc-length ↔ point (straight + L-wire, clamp, degenerate, projection, round-trip). |
-| `test_bipole_fill_color` | A `bipole` with `fill_color="yellow!20"` → emits `fill=yellow!20` in the `\node[…]` options. |
-| `test_bipole_border_width` | A `bipole` with `border_width=1.5` → emits `line width=1.5pt` in the `\node[…]` options. |
-| `test_bipole_default_border_width_omitted` | A `bipole` at default `border_width=0.4` does not emit any `line width` option. |
-| `test_bipole_line_style` | A `bipole` with `line_style="dashed"` → emits `dashed` in the `\node[…]` options. |
-| `test_build_snippet_wraps_environment` | `build_snippet()` keeps the `circuitikz` environment intact and includes the generated source verbatim (§8.5). |
-| `test_build_snippet_lists_required_preamble` | The snippet documents the required `\usepackage[american]{circuitikz}` preamble and the `\input` usage. |
-| `test_build_snippet_has_no_document_wrapper` | The snippet is includable, not standalone: it emits no `\documentclass` or `\begin{document}`. |
-| `test_pdf_to_eps_missing_tool` | `pdf_to_eps()` raises `CompileError` mentioning `pdftocairo` when the tool is absent (§8.6). |
-| `test_pdf_to_eps_roundtrip` | A compiled schematic PDF converts to a valid EPS (`%!PS-Adobe`, `EPSF`, `%%BoundingBox`). Skipped without `pdflatex`+`pdftocairo`. |
+The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end.
+This includes the `to[…]` syntax for every two-terminal kind (R, C, L, the diode
+family with filled/`*` variants and the picture-scoped `diodes/scale`), the
+`node[…]` syntax and geometry corrections for multi-terminal kinds (op amp, the
+IGFET family's `xscale`/`anchor=gate`, BJTs, body-diode option), single-terminal
+nodes, and wires. It covers the determinism guarantee (`generate()` is pure),
+coordinate formatting (`_fmt`'s integer/half-integer/2-decimal rules), the Y-flip
+convention, junction (`circ`) and open-endpoint (`ocirc`) node emission with all
+their suppression rules (pin-connected, voltage-annotation, degenerate-wire,
+custom-marker, and `no_junction_dots`/`no_termination_dots` cases), wire styling
+and z-layering (shared vs. standalone `\draw`, background/foreground ordering and
+the named-anchor-vs-absolute-coordinate rule), endpoint markers (`arrows.meta`
+tips), endpoint/mid labels and their placement and Y-flip-aware anchoring, drawing
+annotations (text nodes, rects, circles with centred text and fonts), bipole
+node styling, and the `build_tex`/`build_snippet`/`pdf_to_eps` helpers
+(`arrows.meta` loading, preamble documentation, EPS conversion).
 
 #### File I/O (`test_io.py`)
 
-| Test | Description |
-|------|-------------|
-| `test_roundtrip_empty` | Save and reload an empty schematic → loaded schematic equals original except the version, which `save` normalises to the current format version (`_FORMAT_VERSION`). |
-| `test_roundtrip_components` | Save and reload a schematic with one of each v1 component type → all fields preserved exactly. |
-| `test_roundtrip_wires` | Save and reload a schematic containing wires → all wire points preserved exactly. |
-| `test_roundtrip_options` | Save and reload a schematic with a LaTeX-containing options string → options preserved exactly. |
-| `test_roundtrip_label_offset` | Save and reload a component with `label_offset=(12.5, -30.0)` → offset preserved exactly. |
-| `test_label_offset_none_not_serialised` | When `label_offset` is `None` the `label_offset` key is absent from the JSON. |
-| `test_label_offset_missing_loads_as_none` | Old files without `label_offset` field deserialise with `label_offset=None`. |
-| `test_label_offset_bad_type_raises` | `label_offset` with wrong type (string instead of two-element array) raises `SchematicLoadError`. |
-| `test_roundtrip_wire_style` | A wire's `line_style`/`line_width` round-trip through save+load. |
-| `test_wire_default_style_not_serialised` | Default wire style fields are omitted from the JSON (back-compat). |
-| `test_wire_missing_style_loads_defaults` | Old files without wire style fields load as solid / 0.4 pt. |
-| `test_wire_bad_style_type_raises` | A non-numeric `line_width` raises `SchematicLoadError`. |
-| `test_roundtrip_wire_no_junction_dots` | A wire's `no_junction_dots` flag round-trips through save+load. |
-| `test_wire_no_junction_dots_default_omitted` | The default (`False`) is omitted from the JSON. |
-| `test_wire_no_junction_dots_bad_type_raises` | A non-boolean `no_junction_dots` raises `SchematicLoadError`. |
-| `test_roundtrip_wire_z_order` / `test_wire_z_order_wrong_type_raises` | A wire's non-default `z_order` round-trips (default omitted from JSON); a non-integer raises `SchematicLoadError`. |
-| `test_roundtrip_wire_hop_mode` / `test_wire_hop_mode_invalid_raises` | A wire's `hop_mode` round-trips (default `""` omitted); an unknown value raises `SchematicLoadError`. |
-| `test_roundtrip_wire_no_termination_dots` | A wire's `no_termination_dots` flag round-trips through save+load. |
-| `test_wire_no_termination_dots_default_omitted` | The default (`False`) is omitted from the JSON. |
-| `test_wire_no_termination_dots_bad_type_raises` | A non-boolean `no_termination_dots` raises `SchematicLoadError`. |
-| `test_roundtrip_wire_markers` | A wire's `start_marker`/`end_marker` round-trip through save+load. |
-| `test_wire_markers_default_omitted` | Empty markers are omitted from the JSON (back-compat). |
-| `test_wire_marker_bad_type_raises` | A non-string `end_marker` raises `SchematicLoadError`. |
-| `test_roundtrip_wire_labels` | A wire's `start_label`/`end_label` round-trip through save+load. |
-| `test_roundtrip_wire_label_placement` | A wire's `start_label_placement`/`end_label_placement` round-trip through save+load. |
-| `test_wire_label_placement_default_omitted` | Default (`""` = off-end) placement is omitted from the saved JSON. |
-| `test_wire_label_placement_bad_type_raises` | A non-string `end_label_placement` raises `SchematicLoadError`. |
-| `test_wire_labels_default_omitted` | Empty labels are omitted from the JSON (back-compat). |
-| `test_wire_label_bad_type_raises` | A non-string `start_label` raises `SchematicLoadError`. |
-| `test_roundtrip_wire_mid_label` / `test_wire_mid_label_defaults_omitted` | A wire's `mid_label`/`mid_label_pos` round-trip; empty label and the default 0.5 position are omitted. |
-| `test_wire_mid_label_pos_clamped_on_load` / `test_wire_mid_label_pos_bad_type_raises` | `mid_label_pos` is clamped to [0,1] on load; a non-numeric value raises `SchematicLoadError`. |
-| `test_roundtrip_legacy_labels_migration` | Load a v0.1 file with a `labels` dict → migrated to an equivalent options string. |
-| `test_load_unknown_version` | Loading a `.hv` file with an unrecognized `version` string raises a descriptive error. |
-| `test_load_invalid_json` | Loading a malformed JSON file raises a descriptive error. |
-| `test_load_missing_field` | Loading a JSON file missing a required field raises a descriptive error. |
-| `test_load_invalid_invariant` | Loading a JSON file that violates an invariant (e.g., diagonal wire) raises a descriptive error. |
-| `test_save_creates_file` | `save()` creates a file at the specified path. |
-| `test_save_is_utf8` | Saved `.hv` files are valid UTF-8 and contain no byte-order marks. |
-| `test_save_is_atomic_overwrite` | `save()` atomically replaces an existing file (latest write wins) and leaves no `.tmp` file behind. |
-| `test_bipole_fill_color_roundtrip` | `BipoleComponent.fill_color` survives a save/load cycle. |
-| `test_bipole_border_width_roundtrip` | `BipoleComponent.border_width` survives a save/load cycle. |
-| `test_bipole_defaults_not_saved` | Default `fill_color=""` and `border_width=0.4` are omitted from the JSON. |
-| `test_bipole_line_style_roundtrip` | `BipoleComponent.line_style="dashed"` survives a save/load cycle. |
-| `test_rect_style_fields_roundtrip` | `RectComponent` `fill_color`/`border_width`/`line_style` survive a save/load cycle with empty `options`. |
-| `test_rect_legacy_options_migrated_to_fields` | A legacy (format < 0.2) `rect` storing its style in `options` is migrated into the `StyledComponent` fields on load (and `options` cleared). |
-| `test_rect_text_roundtrip` | A rect's centred text (`options`) and font fields survive save/load (text kept verbatim, not stripped as a style string). |
-| `test_rect_text_with_no_style_fields_not_migrated` | A 0.2 rect with text and no style fields keeps its text on load (legacy migration is version-gated). |
-| `test_styled_defaults_not_saved` | Default `fill_color`/`border_width`/`line_style` are omitted from the JSON. |
-| `test_mosfet_body_diode_roundtrip` | `MosfetComponent.body_diode=True` survives a save/load cycle. |
-| `test_mosfet_body_diode_false_not_saved` | Default `body_diode=False` is omitted from the JSON. |
+Covers `save`/`load` round-trips for every component and wire field, the
+"defaults are omitted from the JSON" rule (which keeps plain documents
+backward-compatible and compact), and load-time validation: every typed field
+rejects the wrong type with a `SchematicLoadError`, unknown versions and
+malformed/invalid JSON raise descriptive errors, and invariant violations are
+caught on load. Also covers the legacy-format migrations (v0.1 `labels` dict →
+options string; pre-0.2 `rect` style-in-`options` → `StyledComponent` fields,
+version-gated so 0.2+ rect text is kept verbatim), `mid_label_pos` clamping, and
+that `save` is atomic UTF-8 with no BOM and leaves no `.tmp` file behind.
 
 #### Registry (`test_registry.py`)
 
-| Test | Description |
-|------|-------------|
-| `test_all_kinds_have_item_class` | Every `kind` in `REGISTRY` has a corresponding entry in `ITEM_CLASSES`. |
-| `test_circle_registered_like_rect` | The `circle` kind is registered like `rect`: Drawing category, no pins, resizable, default span (0.5,0.5), `CircleComponent` class. |
-| `test_all_pins_on_half_grid` | Every `PinDef.offset` in every `ComponentDef` lies on a 0.5 GU boundary. |
-| `test_default_span_matches_terminal_pin` | For two-terminal components, `default_span` equals the offset of the terminal pin. |
-| `test_no_duplicate_kinds` | No two `ComponentDef` entries share the same `kind`. |
+Cross-checks registry integrity: every `kind` has an `ITEM_CLASSES` entry, every
+`PinDef.offset` lies on the 0.5 GU grid, two-terminal `default_span` equals the
+terminal pin offset, no duplicate kinds, and that `circle` is registered like
+`rect` (Drawing category, no pins, resizable, `CircleComponent`).
 
 #### Geometry Helpers (`test_model.py`)
 
-| Test | Description |
-|------|-------------|
-| `simplify_points` / `test_simplify_u_turn_collapses_to_straight` | Collapses consecutive duplicates and redundant collinear interior vertices; preserves endpoints and genuine elbows; does not mutate its input. A second dedup pass after collinear collapse handles the A–B–A → A case where collapsing B (same-y) would otherwise leave a consecutive duplicate at A. |
-| `test_junction_no_spurious_dot_after_u_turn_drag` | Dragging a wire endpoint so the auto-elbow lands on the adjacent pin coordinate must not produce a junction dot at that pin (regression: the U-turn path left a duplicate interior vertex with degree 2, combining with the pin's degree 1 to falsely reach the dot threshold). |
-| `test_no_junction_dots_wire_excluded` | A wire flagged `no_junction_dots` does not contribute to junction degree (its T-junction gets no dot). |
-| `test_crossing_emits_single_hop_on_higher_z_order_wire` / `test_crossing_tie_breaks_on_later_wire` | `wire_crossings` puts one hop at a non-connecting H×V crossing, on the higher-`z_order` wire (ties → later wire). |
-| `test_shared_vertex_crossing_is_no_hop` / `test_t_connection_is_no_hop` / `test_corner_touch_is_no_hop` / `test_crossing_at_component_pin_is_no_hop` | No hop where the crossing is actually a connection (shared vertex, T, corner, or component pin). |
-| `test_annotation_wire_suppresses_hop` / `test_multiple_crossings_on_one_segment` / `test_collinear_overlap_is_no_hop` / `test_self_crossing_ignored` | `no_junction_dots` wires get no hop; multiple crossings on a segment each get one; collinear overlaps and self-crossings get none. |
-| `test_hop_mode_default_empty` / `test_hop_mode_never_yields_to_crosser` / `test_hop_mode_both_never_no_hop` | `hop_mode` defaults `""`; a `"never"` wire yields the bump to the crossing wire; two `"never"` wires draw none. |
-| `test_hop_mode_always_overrides_z_order` / `test_hop_mode_always_hops_when_global_off` | An `"always"` wire hops despite a lower `z_order`, and even when `default_on=False` (global preference off), where a default wire would not. |
-| `test_no_junction_dots_does_not_remove_others` | A flagged wire does not suppress a dot that other wires/pins independently justify at the same coordinate. |
-| `test_no_termination_dots_suppresses_open_endpoints` | A wire flagged `no_termination_dots` contributes no open endpoints. |
-| `test_no_termination_dots_does_not_affect_other_wires` | A flagged wire still counts as a connection for another wire ending on it (only its own free ends lose terminals). |
-| `test_custom_marker_suppresses_open_endpoint` / `test_custom_marker_start_and_end_suppress_both_endpoints` | An end bearing a `start_marker`/`end_marker` is excluded from `open_endpoints()`; the unmarked end keeps its terminal. |
-| `test_custom_marker_does_not_affect_other_wires` | A marked end still counts as a connection for another wire ending on it. |
-| `junction_points` | Returns a dot coordinate exactly where the degree (wire segment-ends + coincident pin) is ≥ 3: 3-/4-way meetings, T-splits, and pin-on-pass-through; no dot for straight pass-throughs, lone corners, end-to-end meetings, or pin + single wire. |
-| `open_endpoints` (`test_open_endpoints_*`) | Returns the set of wire endpoints (first/last point only) not coinciding with any connecting component pin; interior vertices are excluded; both ends of an unconnected wire are returned; a real-pin-connected end is excluded; a wire ending on a voltage annotation (`open`) pin stays open (annotation does not connect); a degenerate single-point wire connects nothing, so it does not suppress a real endpoint at the same coordinate. |
-| `unconnected_pins` (`test_unconnected_pins_*`) | Returns component pins with no wire vertex on them and no second connecting pin sharing the coordinate: a lone component's pins are all returned; a pin with a wire endpoint or interior-vertex on it is excluded; two abutting pins are excluded; no components → empty set. `NON_CONNECTING_KINDS` pins (voltage annotation `open`) neither suppress a real pin's marker nor get one themselves, while a current annotation `short` does connect; a degenerate single-point wire on a pin does not mark it connected. |
-| `wire_splits_at` | Finds wires whose interior passes through a point (returns `(wire_id, insert_index)`); a point already at a vertex is not returned — use `wire_corner_splits_at` for that case. |
-| `wire_corner_splits_at` | Finds wires that have a point as an intermediate (non-endpoint) vertex (returns `(wire_id, vertex_index)`); used to split L-wires at their elbow when a new wire connects there. |
-| `component_pin_positions` | Returns absolute pin coordinates with the mirror-then-rotate transform applied. |
+Covers the pure geometry and connectivity helpers in `app/schematic/model.py`.
+`simplify_points` collapses duplicate and redundant collinear vertices while
+preserving endpoints and genuine elbows (including the second-pass dedup for the
+A–B–A → A case) without mutating its input. `junction_points` emits a dot exactly
+where the degree (wire segment-ends plus coincident pins) is ≥ 3 — 3-/4-way
+meetings, T-splits, pin-on-pass-through — and not for pass-throughs, corners,
+end-to-end meetings, or a lone pin-plus-wire. `open_endpoints` and
+`unconnected_pins` are the complementary dangling-terminal sets (free wire ends
+vs. wireless pins), with their suppression rules for pin connections, voltage
+annotations (`NON_CONNECTING_KINDS`), degenerate single-point wires, custom
+endpoint markers, and the `no_junction_dots`/`no_termination_dots` flags.
+`wire_crossings` places one line-hop per genuine (non-connecting) H×V crossing on
+the higher-`z_order` wire and respects the `hop_mode` overrides (`never`/`always`)
+and the global preference, drawing no hop where the crossing is actually a
+connection or on annotation/collinear/self-crossing wires. Also covers
+`wire_splits_at` / `wire_corner_splits_at` (mid-segment and elbow split sites) and
+`component_pin_positions` (the mirror-then-rotate transform). Two named
+regressions are pinned here: `test_junction_no_spurious_dot_after_u_turn_drag`
+(an auto-elbow landing on a pin must not fabricate a junction dot) and the
+crossing tie-break ordering.
 
 #### Canvas Geometry (`test_geometry.py`)
 
@@ -2236,78 +2127,9 @@ and in a menu and that triggering it opens `_ISSUES_URL` via
 
 ### 13.3 Integration Tests
 
-Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail.
+Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail. As with §13.2, `test_scene.py` is the authoritative list; this is a summary of coverage.
 
-| Test | Description |
-|------|-------------|
-| `test_place_component_updates_model` | Simulating a placement action on `SchematicScene` results in the component appearing in the scene's internal `Schematic`. |
-| `test_undo_place` | Placing a component then calling undo removes it from the model. |
-| `test_undo_redo_place` | Place → undo → redo restores the component with identical field values. |
-| `test_undo_move` | Moving a component then calling undo restores its original position. |
-| `test_undo_delete` | Deleting a component then calling undo restores it and any connected wires. |
-| `test_undo_edit_label` | Editing a label then calling undo restores the previous label value. |
-| `test_undo_stack_depth` | Performing 20 sequential operations then undoing all 20 returns the schematic to its original empty state. |
-| `test_source_reflects_scene` | After placing a component, `generate()` of the scene's model contains the expected CircuiTikZ keyword (proxy for the Phase-9 source panel). |
-| `test_snap_to_grid` | A component placed/dragged between grid points snaps to the nearest 0.25 GU point. |
-| `test_component_drag_snaps_to_grid_mid_drag` | Component item position is snapped to 0.25 GU on every mouse-move during a drag, not only on release (regression: previously the visual was unsnapped mid-drag). |
-| `test_pin_snap` | Beginning a wire near a pin snaps the wire start point to the exact pin coordinates. |
-| `test_component_survives_repeated_moves` | A component dragged multiple times in succession stays visible and position-synced (regression: item reconciliation, not destroy/recreate). |
-| `test_items_movable_only_in_select_mode` | Component drag/selection is enabled only in Select mode. |
-| `test_wire_ghost_appears_during_component_drag` | Dragging a connected component shows a live ghost of the reshaped wires; the model is untouched until release. |
-| `test_wire_preview_*` | The in-progress wire ghost spawns, tracks the cursor, switches its snap marker for pin vs. grid node, and routes its corner by dominant axis (no modifier key flips it). |
-| `test_route_manhattan` | `route()` returns a two-point path for axis-aligned targets and a single dominant-axis corner otherwise. |
-| `test_grid_node_anchor_adds_vertex` | Clicking empty space mid-wire drops an intermediate anchor; a collinear anchor is simplified away. |
-| `test_click_free_pin_enters_wire_mode` / `test_terminate_on_pin_returns_to_select` | Auto-enter on a free-pin click; auto-exit when ending on a pin; connected-pin clicks behave per §6.4. |
-| `test_double_click_empty_space_exits_wire` | A double-click in empty space ends the wire and exits WIRE mode (returns to SELECT). |
-| `test_double_click_wire_body_enters_wire_mode` / `test_double_click_wire_vertex_enters_wire_mode` | Plain double-click on a wire body or interior vertex enters WIRE mode from that point (split-and-start). |
-| `test_double_click_wire_commits_splits_on_add` | A wire started by double-clicking a wire body splits the target into two halves on commit (3 wires + junction dot). |
-| `test_alt_double_click_wire_body_opens_mid_label_editor` | **Alt** + double-click on a wire body opens its mid-label editor and stays in SELECT. |
-| `test_double_click_empty_space_enters_wire_mode` | Double-clicking blank canvas in SELECT mode enters WIRE mode from the snapped grid point. |
-| `test_double_click_wire_near_component_reaches_wire` | The wire double-click is detected even when the wire is inside a component's bounding box — the wire check runs before the component check (regression: component bbox previously swallowed the event). |
-| `test_wire_label_inline_edit_commits` / `test_wire_label_inline_edit_cancel_leaves_model` | In-place editing of a wire endpoint label (§4.3): `begin_label_edit` pre-fills the editor with the raw fragment and hides the display; commit writes via `set_wire_*_label` and restores the display; Escape leaves the model unchanged. |
-| `test_set_wire_mid_label_and_pos` / `test_mid_label_noop_when_unchanged` | Mid-label text/position setters are undoable and clamp position to [0,1]; unchanged values push no command. |
-| `test_mid_label_inline_edit_commits` | Double-click editing of the mid-label (`begin_label_edit("mid")`) pre-fills/hides the display and commits via `set_wire_mid_label`, restoring the display. |
-| `test_double_click_free_endpoint_opens_label_editor` | Double-clicking a free wire endpoint opens its label editor for the correct end (start/last) and stays in SELECT mode (§6.4). |
-| `test_double_click_connected_endpoint_opens_endpoint_label_editor` | A wire endpoint on a component pin is a per-end label target: a double-click there opens that endpoint's label editor (not the mid-label). |
-| `test_press_on_pin_endpoint_starts_drag_to_disconnect` / `test_drag_connected_endpoint_disconnects_it` | A press on a connected endpoint starts a vertex drag; dragging it off the pin moves the endpoint and disconnects it (no longer coincident with the pin). |
-| `test_vertex_hit_test_returns_pin_endpoint` / `test_no_locked_indices_all_vertices_draggable` | `wire_vertex_at` returns a connected endpoint (now draggable); a wire's `locked_indices` is empty (every vertex shows a handle). |
-| `test_cycle_wire_label_placement_steps_and_is_independent` / `test_tab_over_endpoint_label_cycles_placement` | `cycle_at` over a rendered endpoint label cycles that label's placement through `WIRE_LABEL_PLACEMENTS` (wraps; `backward` reverses; per-end; undoable), taking priority over the endpoint-marker cycle. |
-| `test_tab_cycle_endpoint_marker` / `test_tab_cycle_start_vs_end_endpoint` | `cycle_at` on a free endpoint steps that end's marker through `WIRE_MARKER_CYCLE` (wraps; `backward` reverses; undoable); the cursor's endpoint picks start vs. end. |
-| `test_tab_cycle_marker_on_rect_connected_endpoint` / `test_tab_cycle_marker_on_circle_cardinal_endpoint` | `cycle_at` on a wire endpoint that sits on a rect edge / circle cardinal point cycles that end's *marker* (arrowhead), not the line style. |
-| `test_tab_cycle_line_style_on_body` / `test_tab_cycle_interior_vertex_cycles_line_style` | `cycle_at` on a wire body (or interior vertex) steps the line style through `WIRE_LINE_STYLE_CYCLE` without touching endpoint markers. |
-| `test_tab_cycle_empty_space_is_noop` | `cycle_at` off any wire changes nothing and returns False (so `Tab` keeps normal focus behaviour). |
-| `test_drag_corner_reshapes_wire` / `test_drag_vertex_is_undoable` / `test_vertex_drag_preview_is_manhattan` / `test_vertex_drag_preview_is_simplified` | Dragging a wire vertex reshapes the wire (Manhattan-preserving) and is undoable; the live drag preview is Manhattan and simplified throughout (no diagonal segments, no redundant collinear vertices until release). |
-| `test_coincident_vertices_finds_junction` / `test_move_junction_drags_all_connected_wires` | `_coincident_vertices` finds every wire vertex at a junction; `move_junction` drags them all together (all wires follow, geometry stays valid) and is undoable. |
-| `test_reshape_junction_wire_preserves_vertical_via_corner` / `test_reshape_junction_wire_preserves_horizontal_far_endpoint` / `test_move_junction_command_orientation_and_undo` | `reshape_junction_wire` / `MoveJunctionCommand` keep each wire's orientation into the junction (relocate the interior corner, or insert an orientation-preserving elbow to a far endpoint); undo restores. |
-| `test_move_junction_preserves_orientation_via_scene` | End-to-end: dragging a junction in the scene keeps a vertically-arriving wire vertical (the vertical segment follows the junction). |
-| `test_junction_drag_shows_highlight_and_clears` | Dragging a junction shows the highlighted `JunctionDragItem` at the cursor and hides the resting dot at the origin; the highlight clears on release. |
-| `test_junction_item_hover_grows_and_highlights` | Hovering a junction dot grows it and switches to the highlight colour (drag affordance). |
-| `test_new_wire_inherits_selected_wire_style` / `test_new_wire_inherits_style_from_tab_cycle` / `test_new_wire_inherits_style_from_inspector_setter` | New wires inherit the sticky `_new_wire_style`, captured from selecting a styled wire, from Tab-cycling a marker, or from an inspector style setter. |
-| `test_unconnected_perimeter_point_autostarts_wire` | Clicking a free rect-edge / circle-cardinal connection point auto-starts a wire there (`unconnected_pin_at` via `nearest_connection_point`). |
-| `test_perimeter_connection_dots` | `RectItem` marks every 0.25-GU perimeter point with a dot (32 for a 2×2 box); `CircleItem` marks only the four cardinal points. |
-| `test_ocirc_follows_dragged_endpoint` | Open-circle item tracks a free wire endpoint in real time as it is dragged — the stale position is removed and the new position appears before the drag is released (regression: ocirc previously stayed put until commit). |
-| `test_pin_circles_absent_by_default` / `test_pin_circles_appear_when_enabled` / `test_pin_circles_toggle_off_removes_items` | Unconnected-pin circles (§10.5) are absent until `set_mark_unconnected_pins(True)`, then drawn at each free pin, and removed again when toggled off. |
-| `test_line_hops_populate_hopping_wire_item` / `test_set_line_hops_toggles_bumps` | A non-connecting crossing puts a hop on the hopping wire item; `set_line_hops(False)` clears the bumps and `True` restores them. |
-| `test_set_wire_z_order_flips_hopper_and_is_undoable` / `test_hop_bump_bulges_off_the_line` | Raising a wire's `z_order` makes it the hopper (undoably); the painted path's bump extends off the wire line. |
-| `test_set_wire_hop_mode_never_yields_to_crosser_undoable` / `test_always_hop_mode_shows_even_when_global_off` | Setting a wire to `"never"` moves the bump onto the crossing wire (undoably); `"always"` shows the bump even with the global line-hops preference off. |
-| `test_bring_wire_to_front_above_components_and_wires` / `test_send_wire_to_back_below_all` / `test_bring_component_to_front_above_wire` | `bring_to_front` / `send_to_back` move a wire or drawing component to the extreme of the **combined** wire + component z-stack. |
-| `test_front_back_baseline_and_undoable` / `test_wire_inspector_move_buttons_call_through` | Front/back use a z=0 baseline (front ≥ 1, back ≤ −1) and are undoable; the wire inspector's Move buttons drive the scene methods and refresh the spinbox. |
-| `test_wire_draw_preview_shows_live_hops` / `test_wire_draw_preview_updates_existing_wire_then_clears` | Drawing a wire across an existing one shows a live bump on the ghost (or on a higher-z existing wire), which clears when the in-progress wire is discarded. |
-| `test_vertex_drag_preview_shows_live_hops` | Dragging a wire endpoint across another wire shows a live bump on the dragged wire (recomputed against preview geometry). |
-| `test_pin_circle_removed_when_pin_gets_wired` | With the preference on, attaching a wire to a previously-free pin removes that pin's circle on the next rebuild while the still-free pin keeps its own. |
-| `test_wire_shape_*` | Wire selection hit-area is the thin band along the segments, not the bounding rect, so a wire does not steal clicks from an overlapping component. |
-| `test_drag_release_at_same_spot_is_noop` / `test_click_near_endpoint_selects_short_wire` / `test_click_on_segment_near_vertex_does_not_move_it` | A vertex grab is a drag only if the snapped cursor moves between press and release; a stationary click selects the wire (no command, no geometry change), so a short wire with an open-circle end is selectable/deletable near its ends and clicking a segment near a vertex never relocates the vertex or inserts a spurious junction (regression). |
-| `test_click_at_t_junction_selects_through_wire_half` | With split-on-join, each half of a split through wire is a separate wire object; clicking on the body of each half selects that half (not the stub). |
-| `test_junction_dot_item_appears_for_three_wires` / `…removed_when_wire_deleted` | Junction dot items appear/disappear as wire connectivity changes. |
-| `test_snap_to_existing_wire_vertex` / `test_snap_onto_wire_segment` | Wire routing snaps to existing wire vertices and segment points (pin snap takes priority). |
-| `test_connect_to_mid_segment_splits_target` / `test_drag_vertex_onto_segment_splits_target` | Connecting (by drawing or by dragging a vertex) onto a wire's mid-segment splits the target into two independent wire objects, forms a junction, and is one undoable action that restores the original single wire. |
-| `test_connect_to_wire_corner_splits_l_wire` / `test_connect_to_wire_corner_split_is_one_undo` | Connecting a new wire at an L-wire's corner (intermediate vertex) splits the L-wire into two straight wires, forms a junction, and is one undoable action. Connecting at an existing endpoint leaves the wire unchanged. |
-| `test_click_near_endpoint_selects_short_wire` | After split-on-join the stub is selectable/deletable; deleting it merges the through-wire halves back into one wire (regression + merge-on-delete behavior). |
-| `test_delete_selected_wire` | A directly-selected wire is deleted and restored on undo. |
-| `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` | The scene uses `QGraphicsScene.NoIndex`; group-rotating a selection containing a junction dot and then deleting it, followed by a repaint, completes without crashing (regression: the default BSP index retained a dangling pointer to coordinate-keyed junction/open-circle dots freed during `_rebuild_items`, segfaulting on the next paint). Enforces the §6.8 memory-safety invariant. |
-| `test_random_mutation_sequences_never_crash_paint` | Randomized sequences of place/wire/rotate/delete/nudge/undo/redo, painting through a real view (and `scene.render`) after each step, never crash. A probabilistic safety net for the §6.8 graphics-item-lifetime invariant (a use-after-free faults nondeterministically and cannot be checked deterministically without a native sanitizer). |
-| `test_resolve_pen_style_mapping` | `_resolve_pen_style()` maps line-style tokens to Qt pen styles (case-insensitive; unknown/empty → solid), shared by rect and bipole items. |
-| `test_bipole_line_style_changes_canvas_rendering` | Setting a bipole's `line_style` to `"dashed"` via the scene renders a different canvas image than solid. Regression: `BipoleItem` previously ignored `line_style` when building its pen. |
+These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable), the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step).
 
 ### 13.4 Acceptance Criteria
 

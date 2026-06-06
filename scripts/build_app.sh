@@ -22,6 +22,26 @@ if [[ "$(uname)" == "Darwin" ]]; then
   fi
 fi
 
+# Ensure the canonical license texts are present for the LGPLv3 notice that ships
+# inside the bundle (see licenses/THIRD_PARTY_LICENSES.md). LGPL-3.0.txt is
+# committed; refresh it and fetch GPL-3.0.txt (referenced by the LGPLv3) if a
+# network is available. A failed fetch is non-fatal as long as the files exist.
+echo "Ensuring third-party license texts…"
+fetch_license() {  # url, dest
+  if command -v curl >/dev/null 2>&1; then
+    curl -sSL --max-time 20 "$1" -o "$2" && return 0
+  fi
+  return 1
+}
+fetch_license https://www.gnu.org/licenses/lgpl-3.0.txt licenses/LGPL-3.0.txt || true
+fetch_license https://www.gnu.org/licenses/gpl-3.0.txt  licenses/GPL-3.0.txt  || true
+for f in licenses/LGPL-3.0.txt licenses/GPL-3.0.txt; do
+  if [[ ! -s "$f" ]]; then
+    echo "WARNING: $f is missing/empty. The bundle's LGPLv3 notice references it;"
+    echo "         fetch it from https://www.gnu.org/licenses/ before distributing."
+  fi
+done
+
 echo "Cleaning previous build…"
 rm -rf build dist
 

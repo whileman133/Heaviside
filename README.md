@@ -70,6 +70,30 @@ Poppler's `pdftocairo`, checked only when you actually export EPS.) Editing,
 source generation, preview, and PDF/`.tex` export need only `pdflatex`. Build
 configuration lives in [`heaviside.spec`](heaviside.spec).
 
+### Opening the app on macOS (first launch)
+
+The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
+notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will
+therefore block it on first launch — typically with *“Heaviside” is damaged and
+can’t be opened* or *cannot be opened because Apple cannot check it for malicious
+software*. **The app is not actually damaged**; this is just how macOS treats
+downloaded apps without a paid Developer ID signature.
+
+To open it the first time, do **one** of the following:
+
+- **Right-click (or Control-click) the app → Open**, then confirm in the dialog.
+  After the first time it opens normally. *(On recent macOS this option may be
+  hidden; use the Terminal method below if so.)*
+- **Or** clear the download quarantine from Terminal, then open it:
+
+  ```sh
+  xattr -dr com.apple.quarantine /Applications/Heaviside.app
+  open /Applications/Heaviside.app
+  ```
+
+Windows builds may likewise show a SmartScreen “unknown publisher” prompt; choose
+**More info → Run anyway**. Linux builds run directly.
+
 ## Documentation
 
 - [`PROJECT_SPEC.md`](PROJECT_SPEC.md) — the authoritative, living specification.
@@ -103,10 +127,25 @@ Heaviside is released under the [MIT License](LICENSE).
 
 Its GUI toolkit, **PySide6 (Qt for Python), is licensed under the LGPL v3**.
 Using PySide6 as an ordinary dependency (the `uv run` workflow above) imposes no
-extra obligations on you. If you **redistribute the bundled standalone app**
-built with PyInstaller, the LGPL's relinking provision applies to the bundled Qt
-libraries: recipients must be able to substitute their own build of Qt/PySide6.
-In practice this means making the PySide6 source (or a written offer for it)
-available alongside the bundle and not statically linking it in a way that
-prevents replacement. The other Python dependencies (`pydantic`, `qtawesome`)
+extra obligations on you. The other Python dependencies (`pydantic`, `qtawesome`)
 are MIT-licensed and impose no such requirement.
+
+### Redistributing the standalone app (LGPL compliance)
+
+If you **redistribute the bundled `.app` / `.exe`** built with PyInstaller, the
+LGPLv3 attaches obligations to that binary for the bundled Qt/PySide6. They are
+satisfied out of the box by the files in [`licenses/`](licenses/), which the
+build bundles **inside** the distributable (see `heaviside.spec`):
+
+- **Notice + license text** — `licenses/THIRD_PARTY_LICENSES.md` plus
+  `LGPL-3.0.txt` (and `GPL-3.0.txt`, fetched at build time) ship inside the
+  `.app` / `Heaviside/` folder.
+- **Corresponding source** — the notice links to the exact PySide6/Qt source
+  releases bundled.
+- **Relinking** — the build is a *directory* bundle (`.app` / onedir), so the Qt
+  libraries are separate, user-replaceable files; do **not** switch to a
+  PyInstaller *onefile* build, which would defeat this.
+
+This keeps Heaviside itself fully MIT — the LGPL touches only the bundled Qt
+portion, and you are not required to open any of your own code. See
+`licenses/THIRD_PARTY_LICENSES.md` for the full details.

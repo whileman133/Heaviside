@@ -38,6 +38,10 @@ datas = [
 datas += [(f, "examples") for f in glob("examples/*.hv")]
 # qtawesome ships its icon fonts as package data (toolbar/ribbon glyphs).
 datas += collect_data_files("qtawesome")
+# Third-party license notices. The bundled Qt/PySide6 is LGPLv3, which requires
+# the attribution notice and license text to travel *inside* the distributed
+# application (.app / Heaviside/ folder). Ship the whole licenses/ folder.
+datas += [(f, "licenses") for f in glob("licenses/*")]
 
 # Trim clearly-unused heavyweight Qt modules to keep the bundle smaller. These
 # are safe for this app (no web, 3D, QML, multimedia, charts, or networking).
