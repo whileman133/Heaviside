@@ -610,13 +610,13 @@ The palette category display order is: **Bipoles → Tripoles → Nodes → Anno
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
-> **Planned replacement.** This manual procedure — and the five hand-maintained
-> files it spans (export tables, registry, `svgsym` placements, codegen tables,
-> item subclasses) — is slated to be superseded by a visual **Component Editor**
-> that imports a symbol from its generating command, automates the measurement
-> below, and emits one declarative *Component Definition* as the single source of
-> truth. See [`spec/component-editor.md`](spec/component-editor.md). Until that is
-> built, the procedure here remains authoritative.
+> **Being replaced.** The Step-1 measurement below is now automated by
+> `app/components/bake.py` (it reads each pin anchor via `\pgfpointanchor`), and
+> the resulting per-component numbers live in one generated data file,
+> `components/components.json`, instead of being hand-typed across the files this
+> section spans. See [`spec/component-editor.md`](spec/component-editor.md). The
+> data file is not yet wired into the live runtime, so until the switchover the
+> procedure here remains authoritative for the running app.
 
 CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
 fall on the 0.25-GU canvas grid. This section documents the procedure for

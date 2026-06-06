@@ -11,4 +11,4 @@ change is not complete until its spec is updated in the same change set.
 
 | Spec | Status | Summary |
 |------|--------|---------|
-| [`component-editor.md`](component-editor.md) | Draft (design — not yet implemented) | A developer-first editor that imports a CircuiTikZ symbol from its generating command, aligns it to the grid, captures pins/labels, and emits one declarative **Component Definition** that becomes the single source of truth — replacing the five hand-maintained files described in `PROJECT_SPEC.md` §5.5. |
+| [`component-editor.md`](component-editor.md) | Draft — measurement tool + data file built | Generate grid-aligned CircuiTikZ components without hand-stored magic numbers: a tool that **measures** a symbol's pin anchors via `latex`/`dvisvgm`, plus one flat data file (`components/components.json`) holding pins/bbox/alignment/metadata — replacing the hand-maintained numbers from `PROJECT_SPEC.md` §5.5. |

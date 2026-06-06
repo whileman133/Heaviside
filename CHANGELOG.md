@@ -17,7 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generating command, automates grid alignment, and emits one declarative
   Component Definition as the single source of truth — replacing the
   five-hand-maintained-files procedure documented in `PROJECT_SPEC.md` §5.5.
-  Design only; not yet implemented.
+- **Component Editor foundation** (developer-facing; not yet wired into the
+  running app — no behaviour change). Lets grid-aligned CircuiTikZ components be
+  generated without hand-stored magic numbers:
+  - A **measurement tool** (`app/components/bake.py`) that renders a symbol and
+    reads its pin anchors automatically (the manual `PROJECT_SPEC.md` §5.5
+    measurement, mechanised).
+  - One flat **data file** (`components/components.json`, built by
+    `tools/generate_components.py`) holding every CircuiTikZ symbol's pins, bbox,
+    alignment, and metadata — the per-component numbers that were previously
+    hand-maintained across `registry.py` and the `circuitikz` codegen tables.
+  - A **loader** (`app/components/library.py`) that rebuilds the current
+    `REGISTRY` and codegen tables from that file, with tests proving they match
+    exactly.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current
