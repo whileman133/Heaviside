@@ -1,17 +1,43 @@
 # Heaviside
 
 [![CI](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml/badge.svg)](https://github.com/whileman133/Heaviside/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A graphical editor for producing publication-quality circuit diagrams that
-output valid [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX markup.
-It targets researchers and engineers who author documents in LaTeX or LyX and
-need schematics with typeset mathematical annotations.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.
+It is designed for researchers, engineers, and educators who author schematics with typeset mathematical annotations.
 
-- Grid-disciplined, fixed-component-size canvas for schematic entry
-- Clean, human-readable CircuiTikZ source as the primary output
-- Lossless save/load via a JSON `.hv` format
+![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
+
+## Features
+
+**Schematic entry**
+
+- Grid-disciplined, fixed-component-size canvas with quarter-grid snapping
+- A library of two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal parts (op amps, MOSFETs, BJTs), grounds, and supply rails
+- Block-diagram primitives — labelled boxes, circles, and free text — with wires connecting anywhere on a shape's perimeter
+- 90° rotation, mirroring, resizing, copy/paste, and full undo/redo
+
+**Typeset math, WYSIWYM**
+
+- Component and wire labels are written as LaTeX fragments and shown **typeset directly on the canvas**, on their conventional sides — what you see is what the figure means
+- Wire endpoint, mid-wire, and component annotations (labels, voltages, currents)
+
+**Wiring**
+
+- Manhattan-routed wires with automatic junction dots derived from connectivity
+- Line hops at non-connecting crossings; per-wire line styles, widths, and endpoint markers/arrowheads
+
+**Output**
+
+- Clean, human-readable CircuiTikZ source as the primary output, plus PDF and EPS export
 - Live, rendered PDF preview of the current schematic
-- Wire-to-wire connectivity with automatic junction dots
+- Lossless save/load via a JSON `.hv` file format
+
+Component and wire labels are written as LaTeX and rendered as typeset math on the
+canvas, so equations read the way they will in the final figure:
+
+![Close-up of a schematic with typeset math labels and the component property inspector open](docs/images/screenshot-math-labels.png)
 
 > **Built spec-first with AI assistance.** Heaviside was developed from a
 > detailed written specification with substantial help from AI coding assistants.
@@ -76,7 +102,7 @@ The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
 notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will
 therefore block it on first launch — typically with *“Heaviside” is damaged and
 can’t be opened* or *cannot be opened because Apple cannot check it for malicious
-software*. **The app is not actually damaged**; this is just how macOS treats
+software*. **The app is not damaged**; this is just how macOS treats
 downloaded apps without a paid Developer ID signature.
 
 To open it the first time, do **one** of the following:

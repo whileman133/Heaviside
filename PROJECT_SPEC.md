@@ -35,7 +35,8 @@ Whenever a feature is **added, changed, or removed** — by a human or an AI age
 - **Adding a feature:** document its behavior in the relevant section(s) (data model, canvas behavior, code generation, UI, etc.), add or update any affected invariants, commands, keyboard shortcuts, and acceptance criteria, and add corresponding test entries in Section 13.
 - **Changing a feature:** edit every section that describes the old behavior so no stale description remains. Search the whole document for affected terms.
 - **Removing a feature:** delete its description (do not leave orphaned references) and move it to Section 14 (Out of Scope) if it is deferred rather than abandoned.
-- **Version bump:** increment the spec **Version** field for any substantive behavioral change, and note new behavior under the appropriate section.
+- **Version bump:** increment the spec **Version** field for any substantive behavioral change, and note new behavior under the appropriate section. Keep the spec **Version** aligned with the project version carried in `pyproject.toml`, `heaviside.spec`, and `CHANGELOG.md` (see `docs/releasing.md`).
+- **Changelog:** record user-facing additions, changes, fixes, and removals under the `## [Unreleased]` heading in `CHANGELOG.md` in the same change set.
 
 AI agents working on this project are explicitly required to follow this rule on every task that touches behavior. If a requested change would make the code and spec disagree, update both in the same change; if that is not possible, flag the discrepancy rather than silently letting them diverge. (Process notes for implementing this project with an AI assistant live in [`docs/ai-development.md`](docs/ai-development.md), separate from this behavior specification.)
 
@@ -788,7 +789,7 @@ dragged components' live positions and previewed wire points so the markers
 follow the gesture (e.g. a pin that picks up or loses a wire mid-drag) rather
 than waiting for commit. When the preference is off, no such items exist.
 
-### 5.8 On-Canvas Math Rendering (WYSIWYG labels)
+### 5.8 On-Canvas Math Rendering (WYSIWYM labels)
 
 Component labels, `text_node` content, and `bipole` box text are shown as
 **typeset math**, rendered to vector by `app/preview/mathrender.py`. This reuses
@@ -1908,7 +1909,7 @@ This creates `.venv/` in the project root, resolves all dependencies from `pypro
 ```toml
 [project]
 name = "heaviside"
-version = "0.1.0"
+version = "0.4.0"
 description = "Graphical editor for CircuiTikZ circuit diagrams"
 requires-python = ">=3.11"
 dependencies = [

@@ -120,12 +120,12 @@ if sys.platform == "darwin":
         name="Heaviside.app",
         icon="assets/icon.icns",
         bundle_identifier="com.heaviside.editor",
-        version="0.1.0",
+        version="0.4.0",
         info_plist={
             "CFBundleName": "Heaviside",
             "CFBundleDisplayName": "Heaviside",
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "0.1.0",
+            "CFBundleShortVersionString": "0.4.0",
+            "CFBundleVersion": "0.4.0",
             "NSHighResolutionCapable": True,
             "NSHumanReadableCopyright": "Wesley Hileman",
             # Associate the .hv schematic document type with this app.

@@ -49,8 +49,18 @@ A change is **not complete** until both of these are true:
    invariants, commands, keyboard shortcuts, acceptance criteria, and the §13
    test table.
 
+3. **`CHANGELOG.md`** reflects user-facing changes. Add additions, changes,
+   fixes, and removals under the `## [Unreleased]` heading. Internal-only
+   refactors that change no behavior may be skipped.
+
 Please run `QT_QPA_PLATFORM=offscreen uv run pytest` before opening a pull
 request and confirm the suite passes.
+
+## Cutting a release
+
+Maintainers: the release procedure (version bumping across the four files that
+carry the version, tagging, and publishing the binary build) is documented in
+[`docs/releasing.md`](docs/releasing.md).
 
 ## Security note for the preview pipeline
 
