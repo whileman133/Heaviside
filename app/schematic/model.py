@@ -224,6 +224,17 @@ class Schematic:
     wires: list[Wire] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    # Document-level CircuiTikZ label conventions (§4 / §7). Each is "american"
+    # or "european" and selects the voltage/current arrow style for the whole
+    # figure (emitted as a picture-scoped \ctikzset; see codegen). Defaults match
+    # CircuiTikZ's american default and keep pre-config files unchanged.
+    voltage_style: str = "american"
+    current_style: str = "american"
+
+
+#: Accepted values for the document voltage/current label styles.
+LABEL_STYLES: tuple[str, ...] = ("american", "european")
+
 
 # ---------------------------------------------------------------------------
 # Geometry helpers

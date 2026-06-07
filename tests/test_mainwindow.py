@@ -65,6 +65,25 @@ def test_auto_export_disabled_writes_nothing(tmp_path):
     assert not any(out.with_suffix(s).exists() for s in (".tex", ".pdf", ".eps", ".svg"))
 
 
+def test_document_settings_dialog_writes_styles():
+    """Accepting Document Settings writes the chosen styles onto the schematic."""
+    from app.schematic.model import Schematic
+    from app.ui.documentsettings import DocumentSettingsDialog
+
+    s = Schematic(version="0.2", name="t")
+    dlg = DocumentSettingsDialog(s)
+    dlg._voltage.setCurrentIndex(dlg._voltage.findData("european"))
+    dlg._on_accept()
+    assert s.voltage_style == "european"
+    assert s.current_style == "american"
+    assert dlg.changed() is True
+
+    # Accepting with no change reports changed() == False (caller skips recompile).
+    dlg2 = DocumentSettingsDialog(s)
+    dlg2._on_accept()
+    assert dlg2.changed() is False
+
+
 def test_retypeset_labels_runs_on_populated_scene(tmp_path):
     """Scene-wide re-typeset (used when the math engine changes) is safe and
     covers labelled components without error."""

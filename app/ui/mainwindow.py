@@ -73,6 +73,7 @@ from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
 from app.ui.palette import ComponentPalette
+from app.ui.documentsettings import DocumentSettingsDialog
 from app.ui.preferences import Preferences, PreferencesDialog
 from app.ui.properties import PropertiesPanel
 from app.ui.sourcepanel import SourcePanel
@@ -238,6 +239,10 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(act_delete)
 
         edit_menu.addSeparator()
+
+        self._act_doc_settings = QAction("Document &Settings…", self)
+        self._act_doc_settings.triggered.connect(self._on_document_settings)
+        edit_menu.addAction(self._act_doc_settings)
 
         self._act_preferences = QAction("&Preferences…", self)
         self._act_preferences.setShortcut(QKeySequence("Ctrl+,"))
@@ -787,6 +792,17 @@ class MainWindow(QMainWindow):
                 return
 
         self._status_compile.setText("Auto-exported " + ", ".join(written))
+
+    def _on_document_settings(self) -> None:
+        """Open the modal Document Settings dialog (§10): per-document CircuiTikZ
+        voltage/current label styles, stored in the .hv file.
+
+        On a change, emit ``schematic_changed`` so the document is marked modified
+        and the source panel + preview refresh (the styles flow into ``generate``).
+        """
+        dialog = DocumentSettingsDialog(self._scene.schematic, self)
+        if dialog.exec() == QDialog.Accepted and dialog.changed():
+            self._scene.schematic_changed.emit()
 
     def _on_preferences(self) -> None:
         """Open the modal Preferences dialog (§10.8).
