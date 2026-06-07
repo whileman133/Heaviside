@@ -112,6 +112,8 @@ def test_european_sources_and_variable_resistors_present():
         "ecI": ("Sources", "european controlled current source"),
         "evR": ("Resistors", "variable european resistor"),
         "epot": ("Resistors", "european potentiometer"),
+        "ethermistor": ("Resistors", "european resistive sensor"),
+        "pR": ("Resistors", "pR"),  # american potentiometer, pairs with epot
     }
     for kind, (category, tikz) in expected.items():
         defn = REGISTRY[kind]
