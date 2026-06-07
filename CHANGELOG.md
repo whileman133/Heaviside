@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-07
+
 ### Changed
 - **The Component Editor is shown only when its toolchain is present.** It is a
   developer tool that renders/measures CircuiTikZ symbols via `latex` + `dvisvgm`,
@@ -218,4 +220,5 @@ stable and may change before `1.0`.
   conversion, the `rect` style-in-`options` → `StyledComponent` fields
   conversion, and the old `text_node` `span_override` → `font_size` conversion.
 
+[0.2.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.2.0
 [0.1.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.1.0
