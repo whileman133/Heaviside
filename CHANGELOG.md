@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the data): bipoles `vR`, `eC`, `pC`, `fuse`, `lamp`, `ammeter`, `voltmeter`,
   `ohmmeter`, `battery1`, `varcap`, `memristor`, `thermistor`, `photodiode`,
   `tline`, `jumper`; and transistors `nfet`, `pfet`, `njfet`, `pjfet` (terminals
-  auto-discovered, grid-snapped, and alignment auto-derived).
+  auto-discovered, grid-snapped, and alignment auto-derived). `nfet`/`pfet` carry
+  a fourth **bulk** terminal and a `body_diode` variant (toggles the intrinsic
+  body diode), like the IGFET family.
 - Linux (x64) build: the release workflow now produces a
   `Heaviside-linux-x64.tar.gz` alongside the macOS and Windows binaries.
 - Design spec for a **Component Editor** (`spec/component-editor.md`) and a new

@@ -2530,6 +2530,8 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "nigfetd":   _MosfetItem,
     "pigfete":   _MosfetItem,
     "pigfetd":   _MosfetItem,
+    "nfet":      _MosfetItem,
+    "pfet":      _MosfetItem,
     "open":      OpenItem,      # resizable two-terminal annotations
     "short":     ShortItem,
     "text_node": TextNodeItem,  # drawing primitives

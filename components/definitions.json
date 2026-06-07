@@ -761,6 +761,14 @@
             0.75
           ],
           "anchor": "source"
+        },
+        {
+          "name": "bulk",
+          "offset": [
+            1,
+            0
+          ],
+          "anchor": "bulk"
         }
       ],
       "anchor_pin": "gate",
@@ -768,7 +776,14 @@
         1.0204,
         0.974
       ],
-      "leads": []
+      "leads": [],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
     },
     "nground": {
       "display_name": "Noiseless Ground",
@@ -1198,6 +1213,14 @@
             -0.75
           ],
           "anchor": "source"
+        },
+        {
+          "name": "bulk",
+          "offset": [
+            1,
+            0
+          ],
+          "anchor": "bulk"
         }
       ],
       "anchor_pin": "gate",
@@ -1205,7 +1228,14 @@
         1.0204,
         0.974
       ],
-      "leads": []
+      "leads": [],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
     },
     "pground": {
       "display_name": "Protective Earth",

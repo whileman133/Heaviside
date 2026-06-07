@@ -120,6 +120,17 @@ def test_circle_registered_like_rect() -> None:
     assert circ.component_class is CircleComponent
 
 
+def test_power_mosfets_have_bulk_pin_and_body_diode() -> None:
+    """nfet/pfet are 4-terminal: gate/drain/source plus a bulk (body) pin, and a
+    body_diode variant that draws the intrinsic diode."""
+    from app.components import library
+
+    for kind in ("nfet", "pfet"):
+        names = [p.name for p in REGISTRY[kind].pins]
+        assert names == ["gate", "drain", "source", "bulk"]
+        assert "body_diode" in {v["name"] for v in library.variant_specs(kind)}
+
+
 def test_display_order_is_a_preference_not_exhaustive() -> None:
     """A kind absent from _DISPLAY_ORDER still appears in REGISTRY (after the
     listed ones), so adding a component never requires editing the order list."""
