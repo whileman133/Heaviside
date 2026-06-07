@@ -112,7 +112,9 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
         return svg.read_text(encoding="utf-8"), r.stdout
 
 
-_ANCHOR_RE = re.compile(r"HVANCHOR (\S+) = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt")
+# Anchor name may contain spaces (logic gates use ``in 1``/``in 2``/…), so capture
+# the name non-greedily up to the " = " that precedes the coordinates.
+_ANCHOR_RE = re.compile(r"HVANCHOR (.+?) = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt")
 
 
 def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 10) -> dict[str, tuple[float, float]]:
