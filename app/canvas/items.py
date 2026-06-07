@@ -973,13 +973,10 @@ class ComponentItem(QGraphicsItem):
         color = self._body_color()
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
-        from app.components.model import DiodeComponent, MosfetComponent
-        if isinstance(self.component, DiodeComponent) and self.component.filled:
-            svg_kind = self.component.kind + "*"
-        elif isinstance(self.component, MosfetComponent) and self.component.body_diode:
-            svg_kind = self.component.kind + "_bodydiode"
-        else:
-            svg_kind = self.component.kind
+        from app.components import library
+        svg_kind = self.component.kind + library.variant_manifest_suffix(
+            self.component.kind, self.component.variants
+        )
         for sym in symbol_paths(svg_kind):
             lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
             pen = _pen(color, lw)
@@ -1108,9 +1105,8 @@ class _MosfetItem(ComponentItem):
     """Base for MOSFET items — extends boundingRect when body_diode is active."""
 
     def boundingRect(self) -> QRectF:
-        from app.components.model import MosfetComponent
         x0, y0, x1, y1 = self._defn.bbox
-        if isinstance(self.component, MosfetComponent) and self.component.body_diode:
+        if self.component.variants.get("body_diode"):
             x1 = x1 + _BODYDIODE_EXTRA_X
         margin = LINE_W_THICK
         return QRectF(

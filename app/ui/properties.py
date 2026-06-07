@@ -17,8 +17,8 @@ Section → applicability map:
   OptionsSection      – plain circuit components (not DrawingComponent)
   TextContentSection  – text_node
   BipoleLabelSection  – bipole
-  DiodeSection        – diode (filled checkbox)
-  MosfetSection       – mosfet (body-diode checkbox)
+  VariantSection      – one checkbox per boolean variant the kind declares
+                        (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
   FillBorderSection   – StyledComponent (rect, bipole)
   TransformSection    – rotation (all but rect, whose rotation is a codegen no-op)
@@ -55,10 +55,8 @@ from app.canvas.scene import SchematicScene
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
-    DiodeComponent,
     DrawingComponent,
     FontedComponent,
-    MosfetComponent,
     RectComponent,
     StyledComponent,
     TextNodeComponent,
@@ -573,52 +571,44 @@ class BipoleLabelSection(InspectorSection):
             t[0].edit_component_options(t[1], options)
 
 
-class DiodeSection(InspectorSection):
-    """Filled-variant checkbox for diodes."""
+class VariantSection(InspectorSection):
+    """A checkbox per boolean variant the component's *kind* declares.
+
+    Generic over any variant in ``components/components.json`` (e.g. a diode's
+    ``filled``, a MOSFET's ``body_diode``).  The checkboxes are rebuilt on
+    :meth:`_load` because the set of variants depends on the component's kind.
+    """
 
     title = None
 
     def _build(self) -> None:
-        self._cb = QCheckBox("Filled")
-        self._cb.stateChanged.connect(self._on_changed)
-        self.body.addWidget(self._cb)
+        self._checks: dict[str, "QCheckBox"] = {}
+        self._container = QVBoxLayout()
+        self._container.setSpacing(6)
+        self.body.addLayout(self._container)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, DiodeComponent)
+        from app.components import library
+        return bool(library.variant_specs(comp.kind))
 
     def _load(self, comp: Component) -> None:
-        self._cb.blockSignals(True)
-        self._cb.setChecked(comp.filled)
-        self._cb.blockSignals(False)
+        from app.components import library
+        for cb in self._checks.values():
+            cb.setParent(None)
+            cb.deleteLater()
+        self._checks.clear()
+        for v in library.variant_specs(comp.kind):
+            name = v["name"]
+            cb = QCheckBox(name.replace("_", " ").capitalize())
+            cb.setChecked(bool(comp.variants.get(name)))
+            cb.stateChanged.connect(lambda state, n=name: self._on_changed(n, state))
+            self._container.addWidget(cb)
+            self._checks[name] = cb
 
-    def _on_changed(self, state: int) -> None:
+    def _on_changed(self, name: str, state: int) -> None:
         t = self._target()
         if t:
-            t[0].set_component_filled(t[1], bool(state))
-
-
-class MosfetSection(InspectorSection):
-    """Body-diode checkbox for MOSFETs."""
-
-    title = None
-
-    def _build(self) -> None:
-        self._cb = QCheckBox("Body diode")
-        self._cb.stateChanged.connect(self._on_changed)
-        self.body.addWidget(self._cb)
-
-    def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, MosfetComponent)
-
-    def _load(self, comp: Component) -> None:
-        self._cb.blockSignals(True)
-        self._cb.setChecked(comp.body_diode)
-        self._cb.blockSignals(False)
-
-    def _on_changed(self, state: int) -> None:
-        t = self._target()
-        if t:
-            t[0].set_component_body_diode(t[1], bool(state))
+            t[0].set_component_variant(t[1], name, bool(state))
 
 
 class FontSection(InspectorSection):
@@ -1124,8 +1114,7 @@ class PropertiesPanel(QWidget):
             OptionsSection(),
             TextContentSection(),
             BipoleLabelSection(),
-            DiodeSection(),
-            MosfetSection(),
+            VariantSection(),
             FontSection(),
             FillBorderSection(),
             TransformSection(),

@@ -8,7 +8,7 @@ ComponentDef.component_class points to the appropriate subclass for each kind.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 # ---------------------------------------------------------------------------
@@ -54,21 +54,15 @@ class Component:
     meaningful when ``ComponentDef.resizable`` is True.
     """
 
-
-@dataclass
-class DiodeComponent(Component):
-    """A diode — supports the filled (``*``) CircuiTikZ variant."""
-
-    filled: bool = False
-    """Use the filled variant (e.g. ``D*``) when True."""
-
-
-@dataclass
-class MosfetComponent(Component):
-    """A MOSFET — supports the bodydiode CircuiTikZ variant."""
-
-    body_diode: bool = False
-    """Draw the intrinsic body diode when True."""
+    variants: dict[str, bool] = field(default_factory=dict)
+    """Active boolean variants, keyed by the variant names the component's
+    *kind* declares in ``components/components.json`` (e.g. ``{"filled": True}``
+    for a diode, ``{"body_diode": True}`` for a MOSFET).  A generic replacement
+    for the former ``DiodeComponent.filled`` / ``MosfetComponent.body_diode``
+    fields; the declared variants (name → TikZ token + mode) live in the
+    component library and are surfaced via :mod:`app.components.library`.
+    Only ``True`` entries are persisted (see ``schematic/io.py``).
+    """
 
 
 @dataclass
@@ -236,8 +230,9 @@ class ComponentDef:
     component_class: type = Component
     """The Component subclass to instantiate for placed instances of this kind.
 
-    Defaults to :class:`Component` (plain circuit element).  Overridden for
-    kinds that need extra per-instance state, e.g. ``DiodeComponent``,
-    ``MosfetComponent``, ``BipoleComponent``, ``TextNodeComponent``, and
-    ``RectComponent``.  See the registry entries for the authoritative mapping.
+    Defaults to :class:`Component` (plain circuit element — including diodes and
+    MOSFETs, whose ``filled``/``body_diode`` are now generic variants).  Overridden
+    only for the bespoke drawing kinds that carry extra per-instance state:
+    ``BipoleComponent``, ``TextNodeComponent``, ``RectComponent``,
+    ``CircleComponent``.  See the registry entries for the authoritative mapping.
     """

@@ -1,7 +1,7 @@
 # Heaviside — Component Editor Specification
 
 **Version:** 0.4
-**Status:** Implemented — the registry, codegen, and canvas all build from the generated data file, with no hand-stored geometry magic numbers. Generic per-instance variants and a GUI remain optional follow-ups.
+**Status:** Implemented — the registry, codegen, and canvas all build from the generated data file (no hand-stored geometry magic numbers), and per-instance variants are generic. A standalone authoring GUI is an optional follow-up.
 **Author:** Wes H.
 
 This document is governed by the living-document rule in [`PROJECT_SPEC.md`](../PROJECT_SPEC.md) §0.
@@ -165,10 +165,16 @@ scale — are all **removed**. The old `tools/export_circuitikz_svgs.py` is dele
 (the unified renderer supersedes it). MOSFET/BJT rendering changed slightly (a
 short lead stub instead of a stretched body), in both canvas and LaTeX.
 
-**Optional follow-ups** (not required; no remaining magic numbers):
+**Generic per-instance variants — done.** A placed component's active boolean
+variants live in a generic `Component.variants` map (no more `DiodeComponent` /
+`MosfetComponent` subclasses or `filled`/`body_diode` fields). The inspector
+auto-generates a checkbox per variant the kind declares (`VariantSection`),
+toggling is undoable (`SetVariantCommand`), and the `.hv` file stores a
+`variants` map (reading the legacy keys for back-compat). Canvas geometry and
+codegen pick the variant from the kind's declared `{name, token, mode}` via
+`library.variant_tikz` / `library.variant_manifest_suffix`.
 
-- **Generic per-instance variants** — store a placed component's active variants
-  as a map (with back-compat for the current `filled`/`body_diode` fields); this
-  touches the `.hv` format (PROJECT_SPEC §9).
+**Optional follow-up:**
+
 - **A GUI** over the renderer + data file, if interactive authoring is wanted; the
   tool/data design above does not require one.

@@ -71,9 +71,7 @@ from app.components import library as _library
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
-    DiodeComponent,
     DrawingComponent,
-    MosfetComponent,
     RectComponent,
     TextNodeComponent,
 )
@@ -466,7 +464,8 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
-    tikz_kind = defn.tikz_keyword + ("*" if isinstance(comp, DiodeComponent) and comp.filled else "")
+    _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
+    tikz_kind = defn.tikz_keyword + _suffix
     to_arg = tikz_kind
     if label_str:
         to_arg = f"{tikz_kind}, {label_str}"
@@ -489,8 +488,9 @@ def _multi_terminal_line(
     pin_positions = component_pin_positions(comp)
 
     kind_arg = comp.kind
-    if isinstance(comp, MosfetComponent) and comp.body_diode:
-        kind_arg = f"{kind_arg}, bodydiode"
+    _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
+    for _opt in _variant_opts:
+        kind_arg = f"{kind_arg}, {_opt}"
     extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"

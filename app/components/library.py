@@ -26,13 +26,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from app.components.model import (
-    Component,
-    ComponentDef,
-    DiodeComponent,
-    MosfetComponent,
-    PinDef,
-)
+from app.components.model import Component, ComponentDef, PinDef
 from app.resources import resource_path
 
 # Kinds NOT in the library (no CircuiTikZ-command symbol) — keep hand-coded defs.
@@ -66,13 +60,42 @@ def origin_svg() -> tuple[float, float]:
     return (float(x), float(y))
 
 
-def _component_class(entry: dict) -> type:
-    names = {v["name"] for v in entry.get("variants", [])}
-    if "filled" in names:
-        return DiodeComponent
-    if "body_diode" in names:
-        return MosfetComponent
-    return Component
+# ---------------------------------------------------------------------------
+# Variants (per-instance boolean attributes, spec §5.4 / §7.4a)
+# ---------------------------------------------------------------------------
+
+def variant_specs(kind: str) -> list[dict]:
+    """The boolean variants a *kind* declares: ``{name, token, mode}`` each."""
+    return list(load_library().get(kind, {}).get("variants", []))
+
+
+def variant_tikz(kind: str, variants: dict[str, bool]) -> tuple[str, list[str]]:
+    """For a component's active variants, return ``(keyword_suffix, [node_opts])``.
+
+    ``suffix`` mode appends a keyword suffix (``D`` -> ``D*``); ``option`` mode
+    adds a node option (``, bodydiode``).
+    """
+    suffix = ""
+    opts: list[str] = []
+    for v in variant_specs(kind):
+        if variants.get(v["name"]):
+            if v["mode"] == "suffix":
+                suffix += v["token"]
+            else:
+                opts.append(v["token"])
+    return suffix, opts
+
+
+def variant_manifest_suffix(kind: str, variants: dict[str, bool]) -> str:
+    """The manifest-key suffix for the active variant (e.g. ``"*"``/``"_bodydiode"``).
+
+    Variants are mutually exclusive in practice (at most one active), so the
+    first active one wins.  Empty string when none is active.
+    """
+    for v in variant_specs(kind):
+        if variants.get(v["name"]):
+            return v["token"] if v["mode"] == "suffix" else "_" + v["token"]
+    return ""
 
 
 def to_component_def(kind: str, entry: dict) -> ComponentDef:
@@ -93,7 +116,9 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
         tikz_keyword=entry["tikz"],
         default_span=default_span,
         resizable=False,  # every library (SVG-symbol) kind is fixed-size
-        component_class=_component_class(entry),
+        # Variants are now generic per-instance state on the base Component, so
+        # every library kind uses Component (no DiodeComponent/MosfetComponent).
+        component_class=Component,
     )
 
 

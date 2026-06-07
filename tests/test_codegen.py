@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
-from app.components.model import CircleComponent, DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
+from app.components.model import CircleComponent, Component, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -191,7 +191,7 @@ def test_diode_horizontal() -> None:
 
 def test_diode_filled() -> None:
     """Filled diode → to[D*] in output."""
-    comp = DiodeComponent(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    comp = Component(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
     src = generate(_schematic(comp))
     assert "(0,0) to[D*] (2,0)" in src
 
@@ -221,7 +221,7 @@ def test_zener_diode() -> None:
 
 def test_zener_diode_filled() -> None:
     """Filled Zener diode → to[zD*] in output."""
-    comp = DiodeComponent(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    comp = Component(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
     src = generate(_schematic(comp))
     assert "(0,0) to[zD*] (2,0)" in src
 
@@ -346,21 +346,21 @@ def test_pmos_depletion_node() -> None:
 
 def test_nmos_bodydiode() -> None:
     """nigfete with body_diode=True emits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
     assert "node[nigfete, bodydiode, anchor=gate]" in src
 
 
 def test_nmos_no_bodydiode() -> None:
-    """nigfete with body_diode=False omits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=False)
+    """nigfete with body_diode off omits the bodydiode option."""
+    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="")
     src = generate(_schematic(comp))
     assert "bodydiode" not in src
 
 
 def test_pmos_bodydiode() -> None:
     """pigfete with body_diode=True emits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    comp = Component(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
     assert "node[pigfete, bodydiode, anchor=gate]" in src
 
@@ -1478,7 +1478,7 @@ def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
     Coordinates are normalized toward the origin: the schematic at (5,5)→(3,5)
     is floor-shifted, so the bg wire emits at the absolute (2,1)→(0,1).
     """
-    fet = MosfetComponent(
+    fet = Component(
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )
@@ -1493,7 +1493,7 @@ def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
 def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
     """A foreground (z>0) wire is emitted after the node, so it keeps the named
     anchor reference (which resolves fine)."""
-    fet = MosfetComponent(
+    fet = Component(
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )

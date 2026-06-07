@@ -40,6 +40,7 @@ from app.canvas.commands import (
     MoveWireVertexCommand,
     PlaceCommand,
     ResizeCommand,
+    SetVariantCommand,
     SetWireEndLabelCommand,
     SetWireEndLabelPlacementCommand,
     SetWireEndMarkerCommand,
@@ -1273,6 +1274,18 @@ def test_set_wire_end_label_do_undo():
     assert stack.schematic.wires[0].end_label == "$y(t)$"
     stack.undo()
     assert stack.schematic.wires[0].end_label == ""
+
+
+def test_set_variant_do_undo_redo():
+    stack = _stack()
+    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="")
+    stack.push(PlaceCommand(comp))
+    stack.push(SetVariantCommand(comp.id, "body_diode", True))
+    assert stack.schematic.components[0].variants.get("body_diode") is True
+    stack.undo()
+    assert stack.schematic.components[0].variants.get("body_diode") in (False, None)
+    stack.redo()
+    assert stack.schematic.components[0].variants.get("body_diode") is True
 
 
 def test_set_wire_start_label_placement_do_undo_redo():

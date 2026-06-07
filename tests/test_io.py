@@ -523,34 +523,50 @@ def test_styled_defaults_not_saved(tmp_path: Path) -> None:
     assert "line_style" not in comp_dict
 
 
-def test_mosfet_body_diode_roundtrip(tmp_path: Path) -> None:
-    """MosfetComponent.body_diode=True survives a save/load cycle."""
-    from app.components.model import MosfetComponent
-    comp = MosfetComponent(
+def test_variant_roundtrip(tmp_path: Path) -> None:
+    """An active variant (body_diode) survives a save/load cycle via the map."""
+    comp = Component(
         id=_uid(), kind="nigfete", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="", body_diode=True,
+        rotation=0, mirror=False, options="", variants={"body_diode": True},
     )
     s = Schematic(version="0.1", name="nmos-bd", components=[comp])
     p = tmp_path / "nmos_bd.hv"
     save(s, p)
-    s2 = load(p)
-    loaded = s2.components[0]
-    assert isinstance(loaded, MosfetComponent)
-    assert loaded.body_diode is True
+    raw = json.loads(p.read_text())
+    assert raw["components"][0]["variants"] == {"body_diode": True}
+    loaded = load(p).components[0]
+    assert loaded.variants.get("body_diode") is True
 
 
-def test_mosfet_body_diode_false_not_saved(tmp_path: Path) -> None:
-    """body_diode=False (default) is omitted from the saved JSON."""
-    from app.components.model import MosfetComponent
-    comp = MosfetComponent(
+def test_variant_inactive_not_saved(tmp_path: Path) -> None:
+    """A false/absent variant is omitted from the saved JSON."""
+    comp = Component(
         id=_uid(), kind="nigfete", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="", body_diode=False,
+        rotation=0, mirror=False, options="", variants={"body_diode": False},
     )
     s = Schematic(version="0.1", name="nmos-no-bd", components=[comp])
     p = tmp_path / "nmos_no_bd.hv"
     save(s, p)
     raw = json.loads(p.read_text())
-    assert "body_diode" not in raw["components"][0]
+    assert "variants" not in raw["components"][0]
+
+
+def test_legacy_variant_keys_back_compat(tmp_path: Path) -> None:
+    """Pre-variants .hv files (legacy `filled`/`body_diode` keys) still load."""
+    p = tmp_path / "legacy.hv"
+    p.write_text(json.dumps({
+        "version": "0.1", "name": "legacy", "metadata": {},
+        "components": [
+            {"id": _uid(), "kind": "D", "position": [0, 0], "rotation": 0,
+             "mirror": False, "options": "", "filled": True},
+            {"id": _uid(), "kind": "nigfete", "position": [2, 0], "rotation": 0,
+             "mirror": False, "options": "", "body_diode": True},
+        ],
+        "wires": [],
+    }))
+    comps = load(p).components
+    assert comps[0].variants.get("filled") is True
+    assert comps[1].variants.get("body_diode") is True
 
 
 # ---------------------------------------------------------------------------

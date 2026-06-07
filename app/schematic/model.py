@@ -13,7 +13,6 @@ from typing import Any
 
 from app.components.model import (  # re-export for backwards compat
     Component,
-    DiodeComponent,
     DrawingComponent,
     RectComponent,
     TextNodeComponent,
@@ -21,7 +20,6 @@ from app.components.model import (  # re-export for backwards compat
 
 __all__ = [
     "Component",
-    "DiodeComponent",
     "DrawingComponent",
     "RectComponent",
     "TextNodeComponent",

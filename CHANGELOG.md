@@ -40,6 +40,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     stub instead of a stretched body — a small visual change in both the canvas
     and the LaTeX output. Everything else is unchanged; the bundled examples still
     compile and the full suite passes.
+  - **Per-instance variants are generic.** A placed component's boolean variants
+    (diode `filled`, MOSFET `body_diode`) now live in a generic
+    `Component.variants` map instead of the `DiodeComponent`/`MosfetComponent`
+    subclasses, driven by the variants its kind declares in `components.json`.
+    The Properties panel auto-generates a checkbox per variant, undoable via a
+    single `SetVariantCommand`. The `.hv` file stores a `variants` map (only
+    active ones); pre-variants files with legacy `filled`/`body_diode` keys still
+    load (back-compatible, no format-version bump).
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

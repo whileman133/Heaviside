@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from app.codegen import circuitikz as cg
 from app.components import library
-from app.components.model import Component, DiodeComponent, MosfetComponent, PinDef
+from app.components.model import Component, PinDef
 from app.components.registry import REGISTRY
 
 _LIBRARY_KINDS = set(REGISTRY) - library.NON_LIBRARY_KINDS
@@ -60,16 +60,19 @@ def test_op_amp_def():
     assert a.label_slots == ["l"]
 
 
-def test_nigfete_def_is_mosfet():
+def test_nigfete_def():
     m = REGISTRY["nigfete"]
     assert m.pins == [
         PinDef("gate", (0.0, 0.0)), PinDef("drain", (1.0, -1.0)), PinDef("source", (1.0, 0.5)),
     ]
-    assert m.component_class is MosfetComponent
+    # Variants are generic per-instance state now; the kind is a plain Component.
+    assert m.component_class is Component
+    assert "body_diode" in {v["name"] for v in library.variant_specs("nigfete")}
 
 
-def test_diode_def_is_diode():
-    assert REGISTRY["D"].component_class is DiodeComponent
+def test_diode_declares_filled_variant():
+    assert REGISTRY["D"].component_class is Component
+    assert "filled" in {v["name"] for v in library.variant_specs("D")}
 
 
 # ---------------------------------------------------------------------------

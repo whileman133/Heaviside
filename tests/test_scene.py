@@ -2812,3 +2812,14 @@ def test_wire_inspector_move_buttons_call_through(scene: SchematicScene):
     assert section._z_spin.value() == 6
     section._move(to_front=False)
     assert scene._wire_by_id(a.id).z_order == -1     # min(5, 0) - 1
+
+
+def test_set_component_variant_toggles_and_undoes(scene: SchematicScene):
+    """scene.set_component_variant toggles a generic boolean variant, undoably."""
+    a = scene.place_component("nigfete", (0.0, 0.0))
+    scene.set_component_variant(a.id, "body_diode", True)
+    comp = next(c for c in scene.schematic.components if c.id == a.id)
+    assert comp.variants.get("body_diode") is True
+    scene._stack.undo()
+    comp = next(c for c in scene.schematic.components if c.id == a.id)
+    assert not comp.variants.get("body_diode")
