@@ -611,13 +611,20 @@ The palette category display order is: **Resistors → Capacitors → Inductors 
 
 **American vs. european shapes.** Both conventions are offered as *distinct
 components* sitting side by side in their category, rather than a global toggle:
-the american resistor `R` and **european resistor** `eR` (Resistors), and the
+the american resistor `R` and **european resistor** `eR` (Resistors); the
 american inductor `L` with the **european** `eL` and **cute** `cuteL` inductors
-(Inductors). Each european/cute kind uses CircuiTikZ's *style-independent* shape
-keyword (`european resistor`, `european inductor`, `cute inductor`), so its shape
-is fixed in both the canvas and the output regardless of any global
-`resistor`/`inductor` style. (This is orthogonal to the document **voltage/current
-label** styles of §7.2, which are a per-document setting.)
+(Inductors); and, for **Logic**, the american gates (`and`, `or`, `nand`, `nor`,
+`xor`, `xnor`, `not`, `buffer`) alongside their european/IEC counterparts
+(`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`). Each
+european kind uses CircuiTikZ's *style-independent* shape keyword (`european
+resistor`, `european inductor`, `cute inductor`, `european and port`, …), so its
+shape is fixed in both the canvas and the output regardless of any global
+`resistor`/`inductor`/`logic ports` style. The european AND/OR-family gates are
+**parametric** (2–16 inputs) exactly like the american ones, with their own
+measured per-N alignment and the `tripoles/european … port/height` body-height
+key (§5.5); `enot`/`ebuffer` are fixed single-input. (This is orthogonal to the
+document **voltage/current label** styles of §7.2, which are a per-document
+setting.)
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
