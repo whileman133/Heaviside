@@ -435,41 +435,47 @@ class MainWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
 
-        outer = QVBoxLayout(central)
+        # Top-level layout: a full-height palette on the left, and everything
+        # else (canvas + properties over the source/preview strip) on the right —
+        # so the CircuiTikZ source and LaTeX preview no longer run underneath the
+        # palette.
+        outer = QHBoxLayout(central)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Horizontal splitter: palette | canvas | properties.
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(4)
-
-        # Left: palette.
+        # Left: palette, spanning the full window height.
         self._palette = ComponentPalette()
         self._palette.set_scene(self._scene)
-        splitter.addWidget(self._palette)
+        outer.addWidget(self._palette)
 
-        # Centre: stacked widget — welcome screen (page 0) / canvas (page 1).
+        # Right: a vertical stack of (canvas | properties) over (source | preview).
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        # Top of the right region: canvas (stretch) + properties (fixed).
+        top_split = QSplitter(Qt.Horizontal)
+        top_split.setHandleWidth(4)
+
         from PySide6.QtWidgets import QStackedWidget
         self._canvas_stack = QStackedWidget()
         self._canvas_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._canvas_stack.addWidget(_WelcomeScreen())   # index 0
         self._canvas_stack.addWidget(self._view)          # index 1
         self._canvas_stack.setCurrentIndex(0)
-        splitter.addWidget(self._canvas_stack)
+        top_split.addWidget(self._canvas_stack)
 
-        # Right: properties.
         self._props = PropertiesPanel()
         self._props.set_scene(self._scene)
-        splitter.addWidget(self._props)
+        top_split.addWidget(self._props)
 
-        splitter.setStretchFactor(0, 0)   # palette: fixed
-        splitter.setStretchFactor(1, 1)   # canvas: stretch
-        splitter.setStretchFactor(2, 0)   # props: fixed
+        top_split.setStretchFactor(0, 1)   # canvas: stretch
+        top_split.setStretchFactor(1, 0)   # props: fixed
+        right_layout.addWidget(top_split, 1)
 
-        outer.addWidget(splitter, 1)
-
-        # Bottom strip: source panel (left) + preview panel (right), in a
-        # draggable splitter. The CircuiTikZ source lines are short, so the
+        # Bottom of the right region: source panel (left) + preview panel (right),
+        # in a draggable splitter. The CircuiTikZ source lines are short, so the
         # preview gets the larger initial share of the width; the user can drag
         # the handle to rebalance.
         bottom = QWidget()
@@ -495,7 +501,9 @@ class MainWindow(QMainWindow):
         bottom_split.setSizes([440, 840])
 
         bottom_layout.addWidget(bottom_split)
-        outer.addWidget(bottom)
+        right_layout.addWidget(bottom)
+
+        outer.addWidget(right, 1)
 
     # ------------------------------------------------------------------
     # Status bar

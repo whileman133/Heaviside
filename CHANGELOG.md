@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Full-height palette.** The component palette now spans the whole window
+  height on the left; the CircuiTikZ source and LaTeX preview panels moved into
+  the region to its right (no longer running underneath the palette).
 - **Redesigned component palette.** The left panel is now an icon-tile picker:
   a search box (focus with `Ctrl+/`), an **In use in document** section that
   tracks the kinds you've placed, a 2-column **Categories** card grid, and the
