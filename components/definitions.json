@@ -3877,6 +3877,120 @@
           "anchor": null
         }
       ]
+    },
+    "eR": {
+      "display_name": "Resistor (European)",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european resistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "eL": {
+      "display_name": "Inductor (European)",
+      "category": "Inductors",
+      "emission": "path",
+      "tikz": "european inductor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cuteL": {
+      "display_name": "Inductor (Cute)",
+      "category": "Inductors",
+      "emission": "path",
+      "tikz": "cute inductor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.15
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
     }
   }
 }
