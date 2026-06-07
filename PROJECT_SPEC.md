@@ -1767,11 +1767,25 @@ via `QDesktopServices.openUrl`, so users can file a report without leaving the a
 
 ### 10.2 Component Palette
 
-- Left panel, fixed width ~180px, white background.
-- Components grouped by `category` in collapsible sections.
-- Each entry shows a thumbnail rendered from the component's `ComponentItem` at 32×32px, alongside the `display_name`.
-- Clicking an entry enters **Place** mode.
-- A search field at the top filters by `display_name`.
+Left panel, fixed width ~236px, white background. A search box at the top
+(focus with `Ctrl+/`) and three collapsible sections (`_CollapsibleSection`):
+
+- **In use in document** — icon tiles for the distinct kinds already placed,
+  ordered by category. Rebuilt on `schematic_changed`; hidden when the document
+  is empty (or while a search is active).
+- **Categories** — a 2-column grid of cards (a qtawesome icon + the category name
+  + a component count). Clicking a card makes it the **active** category
+  (highlighted); category order follows §5.4.
+- **&lt;active category&gt;** — the components in the active category.
+
+Components are **icon-only tiles**: a thumbnail rendered from the component's own
+`ComponentItem` (32×32, cached), with the `display_name` + kind shown as a hover
+**tooltip** rather than inline, to keep the panel compact. Clicking a tile calls
+`scene.start_placement(kind)` (enters **Place** mode).
+
+A non-empty **search** replaces the categories/active/in-use sections with a flat
+**Search results** grid of every component whose `kind` or `display_name` matches
+(across all categories); clearing the box restores the normal view.
 
 ### 10.3 Properties Panel
 
@@ -1993,6 +2007,7 @@ heaviside/
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
+    ├── test_palette.py            # component palette: cards, active category, search, in-use (offscreen Qt)
     ├── test_tools.py              # external-tool path resolution (override vs PATH)
     ├── test_mainwindow.py         # MainWindow auto-export + label re-typeset (offscreen Qt)
     ├── test_welcome.py            # welcome screen + Help dialog reference tables (offscreen Qt)
@@ -2311,6 +2326,15 @@ when it points at a runnable file; a non-runnable override is ignored and
 resolution falls back to `PATH`; `resolve` is `None` when neither yields a tool;
 a blank value clears an override; `set_tool_paths` ignores unknown keys; and
 `is_runnable` accepts only existing executable files (not directories or blanks).
+
+#### Component palette (`test_palette.py`)
+
+The redesigned palette (§10.2), offscreen Qt: a category card is built per
+registry category and a default active category is selected; selecting a card
+makes it active and retitles the active section; the **in use** section is hidden
+for an empty document and appears once a kind is placed; a non-empty search hides
+the categories/active sections and shows the flat results grid (restored on
+clear); and clicking a tile calls `scene.start_placement(kind)`.
 
 #### Main window (`test_mainwindow.py`)
 

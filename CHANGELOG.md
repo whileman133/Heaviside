@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Redesigned component palette.** The left panel is now an icon-tile picker:
+  a search box (focus with `Ctrl+/`), an **In use in document** section that
+  tracks the kinds you've placed, a 2-column **Categories** card grid, and the
+  active category's components below. Component tiles are icon-only with the name
+  on hover (tooltip) to stay compact; searching shows a flat results grid across
+  all categories.
+
 ### Added
 - **Copy figure to clipboard.** File ▸ *Copy Figure as PNG* (Ctrl+Shift+C) and
   *Copy Figure as SVG* put the compiled schematic on the clipboard — a raster
