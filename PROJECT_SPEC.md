@@ -1571,6 +1571,14 @@ compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
 PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows; SVG
 suits the web and vector editors (Inkscape, Illustrator).
 
+**Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`) and **Copy
+Figure as SVG** place the compiled figure on the clipboard instead of writing a
+file, for pasting directly into slides/docs/chat. PNG renders the compiled PDF to
+a `QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`;
+SVG converts via `pdf_to_svg` and sets a `QMimeData` with `image/svg+xml` plus a
+`text/plain` fallback. Same toolchain requirements as the matching exports
+(`pdflatex`; `pdftocairo` for SVG); failures report as for export.
+
 ### 8.7 Dependencies
 
 - `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Checked at startup (`check_dependencies`); a warning dialog is shown if not found.
@@ -2314,7 +2322,11 @@ off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
 labelled component without error (used when the math engine / ziamath preference
 changes, §8.4); and `DocumentSettingsDialog` writes the chosen voltage/current
 styles onto the schematic on accept, reporting `changed()` only when a value
-actually differs (§10.9).
+actually differs (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
+non-null clipboard image and copy-as-SVG sets an `image/svg+xml` payload (compile
++ convert stubbed, so no LaTeX). MainWindow tests neutralise the startup
+dependency check (an autouse fixture) so a missing tool never pops a modal that
+would hang a headless run.
 
 #### Welcome screen & Help dialog (`test_welcome.py`)
 
