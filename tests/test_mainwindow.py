@@ -25,8 +25,19 @@ try:
 except Exception as exc:  # pragma: no cover - depends on host GL/EGL libs
     pytest.skip(f"Qt platform unavailable: {exc}", allow_module_level=True)
 
+import app.ui.mainwindow as mw  # noqa: E402
 from app.ui.mainwindow import MainWindow  # noqa: E402
 from app.ui.preferences import Preferences  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_dependency_modal(monkeypatch):
+    """Stop MainWindow's startup dependency check from popping a *modal*
+    QMessageBox when a tool (e.g. pdflatex) is absent — on a headless CI runner
+    that dialog blocks forever and hangs the whole suite. Tests don't assert on
+    it, so neutralise the check for every MainWindow built here.
+    """
+    monkeypatch.setattr(mw, "check_dependencies", lambda: [])
 
 
 def _win(tmp_path):
