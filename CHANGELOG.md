@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **SVG export.** A new **File → Export to SVG…** writes a vector SVG of the
+  schematic, and an **Auto-export SVG on save** preference writes `<name>.svg`
+  next to the `.hv` file. SVG uses the same Poppler `pdftocairo` tool as EPS
+  (via the `-svg` flag), so it adds **no new dependency** beyond what EPS export
+  already needs.
+
+### Changed
+- **Component emission types collapsed to two.** A component's `emission` is now
+  either `path` (CircuiTikZ `to[…]` syntax) or `node` (`node[…]` syntax),
+  replacing the former three-way `two_terminal`/`node`/`multi_terminal`. A `node`
+  element is a single-terminal node (grounds, supplies) or a multi-terminal node
+  (op amps, transistors, gates) depending purely on whether its pins carry
+  CircuiTikZ anchors — the distinction is derived from the data, not a separate
+  type. This affects only `components/definitions.json` and the Component Editor;
+  saved `.hv` files are unaffected (they never stored emission). The generated
+  LaTeX output is byte-for-byte unchanged.
+
 ## [0.2.0] - 2026-06-07
 
 ### Changed

@@ -66,6 +66,7 @@ from app.preview.latex import (
     check_dependencies,
     compile_tex,
     pdf_to_eps,
+    pdf_to_svg,
 )
 from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
@@ -182,6 +183,10 @@ class MainWindow(QMainWindow):
         self._act_export_eps = QAction("Export to E&PS…", self)
         self._act_export_eps.triggered.connect(self._on_export_eps)
         file_menu.addAction(self._act_export_eps)
+
+        self._act_export_svg = QAction("Export to S&VG…", self)
+        self._act_export_svg.triggered.connect(self._on_export_svg)
+        file_menu.addAction(self._act_export_svg)
 
         file_menu.addSeparator()
 
@@ -731,7 +736,8 @@ class MainWindow(QMainWindow):
         """
         want_pdf = self._prefs.auto_export_pdf
         want_eps = self._prefs.auto_export_eps
-        if not (want_pdf or want_eps):
+        want_svg = self._prefs.auto_export_svg
+        if not (want_pdf or want_eps or want_svg):
             return
 
         self._status_compile.setText("Auto-exporting…")
@@ -750,6 +756,10 @@ class MainWindow(QMainWindow):
                 eps_path = path.with_suffix(".eps")
                 eps_path.write_bytes(pdf_to_eps(pdf_bytes))
                 written.append(eps_path.name)
+            if want_svg:
+                svg_path = path.with_suffix(".svg")
+                svg_path.write_bytes(pdf_to_svg(pdf_bytes))
+                written.append(svg_path.name)
         except (OSError, CompileError) as exc:
             self._status_compile.setText(f"Auto-export failed: {exc}")
             return
@@ -866,6 +876,34 @@ class MainWindow(QMainWindow):
             path += ".eps"
         try:
             Path(path).write_bytes(eps_bytes)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            return
+        self._status_compile.setText(f"Exported to {Path(path).name}")
+
+    def _on_export_svg(self) -> None:
+        """Export the schematic as an SVG image (compile then convert, §8.6)."""
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Export failed")
+            return
+        try:
+            svg_bytes = pdf_to_svg(pdf_bytes)
+        except CompileError as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            self._status_compile.setText("Export failed")
+            return
+        default_name = (self._current_path.stem if self._current_path else "untitled") + ".svg"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to SVG", default_name, "SVG Image (*.svg);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".svg"):
+            path += ".svg"
+        try:
+            Path(path).write_bytes(svg_bytes)
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
             return

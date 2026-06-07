@@ -82,7 +82,7 @@ class ComponentEditorWindow(QMainWindow):
         self._labels = QLineEdit()
         self._labels.setPlaceholderText("comma-separated, e.g. l, l_, v")
         self._anchor_pin = QLineEdit()
-        self._anchor_pin.setPlaceholderText("multi-terminal only; blank = place by centre")
+        self._anchor_pin.setPlaceholderText("node elements with anchors; blank = place by centre")
         form.addRow("Kind", self._kind)
         form.addRow("Display name", self._display)
         form.addRow("Category", self._category)
@@ -224,7 +224,7 @@ class ComponentEditorWindow(QMainWindow):
             "pins": pins,
         }
         ap = self._anchor_pin.text().strip()
-        if entry["emission"] == "multi_terminal":
+        if library.is_multi_terminal_entry(entry):
             entry["anchor_pin"] = ap or None
             sx, sy = self._get_scale()
             if abs(sx - 1.0) > 1e-9 or abs(sy - 1.0) > 1e-9:
@@ -255,7 +255,7 @@ class ComponentEditorWindow(QMainWindow):
         self._kind.setText(kind)
         self._display.setText(entry.get("display_name", ""))
         self._category.setCurrentText(entry.get("category", ""))
-        self._emission.setCurrentText(entry.get("emission", "two_terminal"))
+        self._emission.setCurrentText(entry.get("emission", "path"))
         self._tikz.setText(entry.get("tikz", ""))
         self._labels.setText(", ".join(entry.get("labels", [])))
         self._anchor_pin.setText(entry.get("anchor_pin") or "")
@@ -319,8 +319,8 @@ class ComponentEditorWindow(QMainWindow):
         Use for transistors/symbols whose terminals fall between grid points.
         """
         _kind, entry = self._form_to_entry()
-        if entry.get("emission") != "multi_terminal":
-            self._log("Fit applies to multi-terminal components (scales the symbol "
+        if entry.get("emission") != "node":
+            self._log("Fit applies to node elements (scales the symbol "
                       "so its pins land on the grid).")
             return
         if not any(p.get("anchor") for p in entry["pins"]):

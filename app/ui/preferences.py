@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 # QSettings keys.
 _KEY_AUTO_PDF = "export/auto_pdf_on_save"
 _KEY_AUTO_EPS = "export/auto_eps_on_save"
+_KEY_AUTO_SVG = "export/auto_svg_on_save"
 _KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
 _KEY_LINE_HOPS = "display/line_hops"
 
@@ -68,6 +69,14 @@ class Preferences:
     @auto_export_eps.setter
     def auto_export_eps(self, value: bool) -> None:
         self._settings.setValue(_KEY_AUTO_EPS, bool(value))
+
+    @property
+    def auto_export_svg(self) -> bool:
+        return _to_bool(self._settings.value(_KEY_AUTO_SVG), default=False)
+
+    @auto_export_svg.setter
+    def auto_export_svg(self, value: bool) -> None:
+        self._settings.setValue(_KEY_AUTO_SVG, bool(value))
 
     # -- Display -------------------------------------------------------------
 
@@ -119,10 +128,14 @@ class PreferencesDialog(QDialog):
         self._chk_eps.setChecked(prefs.auto_export_eps)
         group_layout.addWidget(self._chk_eps)
 
+        self._chk_svg = QCheckBox("Export an SVG next to the schematic file")
+        self._chk_svg.setChecked(prefs.auto_export_svg)
+        group_layout.addWidget(self._chk_svg)
+
         hint = QLabel(
-            "When saving <name>.hv, also write <name>.pdf / <name>.eps to the "
-            "same folder so an \\includegraphics in your LaTeX document stays up "
-            "to date.  Requires pdflatex (and pdftocairo for EPS)."
+            "When saving <name>.hv, also write <name>.pdf / <name>.eps / <name>.svg "
+            "to the same folder so an \\includegraphics in your LaTeX document stays "
+            "up to date.  Requires pdflatex (and pdftocairo for EPS/SVG)."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666; font-size: 11px;")
@@ -170,6 +183,7 @@ class PreferencesDialog(QDialog):
         """Persist the checkbox state to the Preferences store and close."""
         self._prefs.auto_export_pdf = self._chk_pdf.isChecked()
         self._prefs.auto_export_eps = self._chk_eps.isChecked()
+        self._prefs.auto_export_svg = self._chk_svg.isChecked()
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
         self._prefs.line_hops = self._chk_line_hops.isChecked()
         self.accept()

@@ -331,15 +331,14 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `components/geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/definitions.json` (registry/codegen data + the single `origin_svg` placement constant; see [`spec/component-editor.md`](spec/component-editor.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
-Each component declares an **`emission`** type in `definitions.json` that selects how it is rendered (and later generated — §5.6); this is independent of its palette `category`:
+Each component declares an **`emission`** type in `definitions.json` that selects which CircuiTikZ syntax renders it (and later generates — §5.6); this is independent of its palette `category`. There are exactly two emission types, named for the syntax they produce:
 
-| `emission` | LaTeX template | Examples |
+| `emission` | LaTeX syntax | Examples |
 |------------|----------------|---------|
-| `two_terminal` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
-| `multi_terminal` | `\node[kind] (X) at (0,0) {}; <leads>` | op amp, nigfete, nfet |
-| `node` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
+| `path` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
+| `node` | `\draw (0,0) node[kind] {};` (single point), or `\node[kind, anchor=…] (X) at (0,0) {}; <leads>` (multi-terminal) | ground, vcc, … (single point); op amp, nigfete, npn (multi-terminal) |
 
-The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds); multi-terminal parts carry computed lead routing that extends each named terminal anchor to a grid-aligned coordinate (§4 of [`spec/component-editor.md`](spec/component-editor.md)).
+A **`node`** element comes in two flavours, distinguished by the *data* rather than a third emission type: a **single-point** node (grounds, power rails — pins carry no CircuiTikZ anchor) placed at one coordinate, and a **multi-terminal** node (op amps, transistors, logic gates — at least one pin maps to a CircuiTikZ anchor, or an `anchor_pin` is set) placed by one anchor with computed lead routing extending each other terminal to a grid-aligned coordinate (`library.is_multi_terminal_entry`; §4 of [`spec/component-editor.md`](spec/component-editor.md)). The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds).
 
 **Geometry schema.** Each entry is keyed by component name and holds `kind`, `name`, `viewBox`, `width_pt`/`height_pt`, and two geometry lists (both in SVG point coordinates):
 
@@ -1486,9 +1485,9 @@ document rather than compiled on its own. The source is generated with
 
 ### 8.6 Export to PDF / EPS
 
-**File → Export to PDF…** and **File → Export to EPS…** write a compiled image
-of the schematic, suitable for `\includegraphics` in a LaTeX document (or any
-other consumer). Both reuse the §8.1 compile pipeline:
+**File → Export to PDF…**, **File → Export to EPS…**, and **File → Export to
+SVG…** write a compiled image of the schematic, suitable for `\includegraphics`
+in a LaTeX document (or any other consumer). All reuse the §8.1 compile pipeline:
 
 1. `generate(schematic, y_flip=True)` → `build_tex()` → `compile_tex()` yields
    PDF bytes (run synchronously on the UI thread; the status bar shows
@@ -1497,19 +1496,24 @@ other consumer). Both reuse the §8.1 compile pipeline:
 3. **EPS export** converts them with `pdf_to_eps()`, which runs
    `pdftocairo -eps`. The `-eps` flag emits Encapsulated PostScript with a tight
    bounding box derived from the PDF crop box.
+4. **SVG export** converts them with `pdf_to_svg()`, which runs
+   `pdftocairo -svg` — the same Poppler tool as EPS, so SVG adds **no dependency**
+   beyond the one EPS already requires. The standalone PDF is already cropped
+   tight, so the SVG inherits that extent. Both share the `_pdf_to_vector` helper.
 
 Unlike the §8.5 `.tex` snippet, these formats require `pdflatex` to be available
-at export time (and `pdftocairo` for EPS), but the result is a self-contained
+at export time (and `pdftocairo` for EPS/SVG), but the result is a self-contained
 image that does not need the host document to load `circuitikz`. Compile or
 conversion failures are reported in a dialog (the `pdflatex` log is included for
 compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
-PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows.
+PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows; SVG
+suits the web and vector editors (Inkscape, Illustrator).
 
 ### 8.7 Dependencies
 
 - `pdflatex` must be on the system `PATH`. Checked at startup (`check_dependencies`); a warning dialog is shown if not found. It is the only tool required for normal use.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
-- `pdftocairo` (Poppler) is required **only** for EPS export (§8.6). It is checked on demand in `pdf_to_eps` (not at startup), so users who never export EPS are not warned about a missing Poppler.
+- `pdftocairo` (Poppler) is required **only** for EPS and SVG export (§8.6). It is checked on demand in `pdf_to_eps`/`pdf_to_svg` (not at startup), so users who never export EPS or SVG are not warned about a missing Poppler.
 - The `circuitikz` LaTeX package must be installed in the TeX distribution.
 
 ---
@@ -1799,14 +1803,15 @@ Current settings:
 |---------|-----|---------|--------|
 | Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
+| Auto-export SVG on save | `export/auto_svg_on_save` | off | After a successful save, also write `<name>.svg` to the same directory. |
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
 
-When either is enabled, `_do_save()` calls `_auto_export()`, which compiles the
+When any is enabled, `_do_save()` calls `_auto_export()`, which compiles the
 schematic **once** (reusing the §8.6 pipeline) and writes the requested sibling
-file(s) — the single PDF is converted to EPS via `pdf_to_eps()` when both are
-requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`) in a LaTeX
-document in sync with the schematic without a manual export step.
+file(s) — the single PDF is converted via `pdf_to_eps()` / `pdf_to_svg()` as
+requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`/`.svg`) in a
+LaTeX document in sync with the schematic without a manual export step.
 
 Auto-export never blocks or aborts the save: it runs only *after* the `.hv`
 is written, and any failure (invalid schematic, missing `pdflatex`/`pdftocairo`,
@@ -2046,9 +2051,9 @@ The following must be installed separately from uv — they are not Python packa
 |------------|---------|---------|
 | `pdflatex` | Compiling LaTeX previews | TeX Live (`texlive-full`) or MiKTeX |
 | `circuitikz` | LaTeX package for circuit diagrams | Included in `texlive-science` or MiKTeX package manager |
-| `pdftocairo` *(optional)* | PDF→EPS conversion for **EPS export only** | Poppler (`poppler-utils` on Debian/Ubuntu) |
+| `pdftocairo` *(optional)* | PDF→EPS/SVG conversion for **EPS and SVG export only** | Poppler (`poppler-utils` on Debian/Ubuntu) |
 
-The PDF preview is rendered by the `QtPdf` module bundled with PySide6, so no Poppler is needed for normal use. The application checks for `pdflatex` on the system `PATH` at startup and shows a warning dialog if it is missing; `pdftocairo` is checked only when EPS export is invoked.
+The PDF preview is rendered by the `QtPdf` module bundled with PySide6, so no Poppler is needed for normal use. The application checks for `pdflatex` on the system `PATH` at startup and shows a warning dialog if it is missing; `pdftocairo` is checked only when EPS or SVG export is invoked.
 
 ---
 
@@ -2096,8 +2101,9 @@ and z-layering (shared vs. standalone `\draw`, background/foreground ordering an
 the named-anchor-vs-absolute-coordinate rule), endpoint markers (`arrows.meta`
 tips), endpoint/mid labels and their placement and Y-flip-aware anchoring, drawing
 annotations (text nodes, rects, circles with centred text and fonts), bipole
-node styling, and the `build_tex`/`build_snippet`/`pdf_to_eps` helpers
-(`arrows.meta` loading, preamble documentation, EPS conversion).
+node styling, and the `build_tex`/`build_snippet`/`pdf_to_eps`/`pdf_to_svg`
+helpers (`arrows.meta` loading, preamble documentation, EPS/SVG conversion —
+including the missing-`pdftocairo` error and a round-trip when present).
 
 #### File I/O (`test_io.py`)
 
@@ -2177,7 +2183,7 @@ On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests alway
 The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
 isolated `QSettings` backed by a temp INI file (never touching the real user
 store): auto-export and mark-unconnected-pins defaults are off, **line-hops
-defaults on** (`test_line_hops_default_on_and_roundtrip`); PDF/EPS and the
+defaults on** (`test_line_hops_default_on_and_roundtrip`); PDF/EPS/SVG and the
 display flags round-trip and persist across new `Preferences` instances over the
 same backing file; `_to_bool` normalizes the string booleans `QSettings` may
 return; the dialog persists all checkbox state on accept and discards it on

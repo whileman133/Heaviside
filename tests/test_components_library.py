@@ -85,6 +85,23 @@ def test_two_terminal_kinds_include_bespoke():
     assert "op amp" not in cg._TWO_TERMINAL_KINDS
 
 
+def test_emission_is_path_or_node():
+    # Emission collapses to two LaTeX-syntax groups: ``path`` (to[…]) and
+    # ``node`` (node[…]).  Multi-terminal-ness is derived from the data, not a
+    # third emission type.
+    comps = library.load_library()
+    assert {e["emission"] for e in comps.values()} == {"path", "node"}
+
+
+def test_is_multi_terminal_entry_derived():
+    comps = library.load_library()
+    # A node element with anchored pins (op amp) is multi-terminal; a single-
+    # point node element (ground) is not; a path element (R) never is.
+    assert library.is_multi_terminal_entry(comps["op amp"]) is True
+    assert library.is_multi_terminal_entry(comps["ground"]) is False
+    assert library.is_multi_terminal_entry(comps["R"]) is False
+
+
 def test_multi_terminal_kinds():
     # The curated multi-terminal kinds must stay classified as such.  This is a
     # subset check, not an exact inventory: importing more components (e.g. extra

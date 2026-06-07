@@ -19,7 +19,7 @@ import re
 from pathlib import Path
 
 from app.canvas.style import SVG_PT_PER_GU
-from app.components import render
+from app.components import library, render
 from app.resources import resource_path
 
 # Fixed bounding-box half-extent (GU); diode body scale (matches
@@ -94,9 +94,9 @@ def render_body(entry: dict, *, suffix: str = "", option: str = "") -> str:
     tikz, emission, pins = entry["tikz"], entry["emission"], entry["pins"]
     bbox = rf"\useasboundingbox ({-BBOX},{-BBOX}) rectangle ({BBOX},{BBOX});"
 
-    if emission == "two_terminal":
+    if emission == "path":
         return bbox + "\n" + rf"\draw (0,0) to[{tikz}{suffix}] {_tex(pins[1]['offset'])};"
-    if emission == "node":
+    if not library.is_multi_terminal_entry(entry):
         return bbox + "\n" + rf"\draw (0,0) node[{tikz}] {{}};"
 
     ap = entry.get("anchor_pin")
@@ -199,7 +199,7 @@ def fit_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
     the alignment automatically on re-generation.  Requires the toolchain (it
     renders to measure); a non-multi-terminal entry returns ``(None, [])``.
     """
-    if entry.get("emission") != "multi_terminal":
+    if not library.is_multi_terminal_entry(entry):
         return None, []
     pins = entry["pins"]
     anchor_of = {p["name"]: p.get("anchor") for p in pins}
@@ -335,7 +335,7 @@ def data_entry(kind: str, entry: dict) -> dict:
             for p in entry["pins"]
         ],
     }
-    if entry["emission"] == "multi_terminal":
+    if library.is_multi_terminal_entry(entry):
         out["anchor_pin"] = entry.get("anchor_pin")
         if entry.get("scale"):
             out["scale"] = [round(float(s), 4) for s in entry["scale"]]
@@ -361,7 +361,7 @@ def realigned(entry: dict) -> dict:
     measurement (no-op for non-multi-terminal kinds).  Makes the alignment a
     *computed* property of the current CircuiTikZ library rather than a stored
     constant, so re-generation reflows it automatically (see ``fit_alignment``)."""
-    if entry.get("emission") != "multi_terminal":
+    if not library.is_multi_terminal_entry(entry):
         return entry
     scale, leads = fit_alignment(entry)
     out = {**entry, "leads": leads}
