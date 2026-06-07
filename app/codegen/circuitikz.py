@@ -247,6 +247,17 @@ def generate(
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
         lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
 
+    # Document voltage/current label conventions (§4 / §7.2), picture-scoped so
+    # the snippet is self-contained.  Emitted only for the non-default (european)
+    # values, so american output (the default) is byte-for-byte unchanged.
+    style_opts = []
+    if getattr(schematic, "voltage_style", "american") == "european":
+        style_opts.append("voltage=european")
+    if getattr(schematic, "current_style", "american") == "european":
+        style_opts.append("current=european")
+    if style_opts:
+        lines.append(rf"  \ctikzset{{{', '.join(style_opts)}}}")
+
     # Line-hops (decoration where wires cross without connecting, §6.4), grouped
     # per hopping wire. Default-mode wires hop only when mark_line_hops is on;
     # per-wire hop_mode overrides ("always"/"never") apply either way.

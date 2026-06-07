@@ -22,17 +22,19 @@ from app.components.model import (
     StyledComponent,
 )
 from app.components.registry import REGISTRY
-from app.schematic.model import WIRE_HOP_MODES, Schematic, Wire
+from app.schematic.model import LABEL_STYLES, WIRE_HOP_MODES, Schematic, Wire
 from app.schematic.validate import validate
 
 # File-format version written by the current code.  Distinct from the spec
 # version.  "0.1" is the initial (pre-1.0) format: the on-disk shape is not yet
 # stable and may change between early releases without migration support. There
 # are no earlier formats to migrate from.
-_FORMAT_VERSION: str = "0.1"
+#: 0.2 added the top-level ``config`` object (document voltage/current label
+#: styles). 0.1 files load unchanged with american defaults.
+_FORMAT_VERSION: str = "0.2"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2"}
 
 # Component-kind migration map: ``{old_kind: current_kind}``.  A ``.hv`` file
 # stores only a component's ``kind`` string (never its geometry), so the kind is
@@ -116,6 +118,10 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
         # Always written as the current format version.
         "version": _FORMAT_VERSION,
         "name": s.name,
+        "config": {
+            "voltage_style": s.voltage_style,
+            "current_style": s.current_style,
+        },
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
         "metadata": s.metadata,
@@ -247,12 +253,24 @@ def _dict_to_schematic(data: dict) -> Schematic:
     if not isinstance(metadata, dict):
         raise SchematicLoadError("Field 'metadata' must be an object")
 
+    # Document config (added in 0.2). Absent in 0.1 files → american defaults.
+    # Unknown style values fall back to "american" rather than failing the load.
+    config = data.get("config", {})
+    if not isinstance(config, dict):
+        raise SchematicLoadError("Field 'config' must be an object")
+
+    def _style(key: str) -> str:
+        value = config.get(key, "american")
+        return value if value in LABEL_STYLES else "american"
+
     return Schematic(
         version=version,
         name=name,
         components=components,
         wires=wires,
         metadata=metadata,
+        voltage_style=_style("voltage_style"),
+        current_style=_style("current_style"),
     )
 
 

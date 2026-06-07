@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document Settings (Edit ▸ Document Settings…).** Choose the CircuiTikZ
+  **american/european** style for voltage (`v=`) and current (`i=`) labels
+  per-document. Stored in the `.hv` file (new `config` object; format bumped to
+  `0.2`, older files still open with american defaults) and emitted as a
+  picture-scoped `\ctikzset`, so it applies to the preview and exported figure.
 - **Configurable tool paths (Preferences → Tools).** Set explicit paths to
   `pdflatex`, `latex`, `dvisvgm`, and `pdftocairo` when they aren't on your
   `PATH` or you want a specific install (à la LaTeXiT). Each field has a

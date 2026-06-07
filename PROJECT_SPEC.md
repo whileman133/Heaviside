@@ -277,12 +277,20 @@ The root document object.
 ```python
 @dataclass
 class Schematic:
-    version: str                     # File-format version (§9.4), e.g. "0.1"; normalised on save
+    version: str                     # File-format version (§9.4), e.g. "0.2"; normalised on save
     name: str                        # User-visible schematic name
     components: list[Component]
     wires: list[Wire]
     metadata: dict[str, Any]         # Arbitrary key-value store for future use
+    voltage_style: str = "american"  # document voltage-label style: "american"/"european" (§7.2)
+    current_style: str = "american"  # document current-label style: "american"/"european" (§7.2)
 ```
+
+Document-level `voltage_style` / `current_style` (`LABEL_STYLES = ("american",
+"european")`) select the CircuiTikZ arrow convention for `v=`/`i=` labels for the
+whole figure; they are edited via **Edit ▸ Document Settings…** (§10), saved in
+the `.hv` `config` object (§9.2), and emitted by codegen as a picture-scoped
+`\ctikzset` (§7.2).
 
 ### 4.5 Invariants
 
@@ -1174,6 +1182,18 @@ The code generator produces a self-contained `circuitikz` environment:
 
 ### 7.2 Mapping Rules
 
+#### Document label styles (voltage / current)
+
+At the top of the `circuitikz` environment, `generate()` emits a picture-scoped
+`\ctikzset{voltage=european}` and/or `current=european` **only for the
+non-default (european) values** of the schematic's `voltage_style`/`current_style`
+(§4). So an american document (the default) produces byte-for-byte the same
+output as before this feature, and a european document carries its own style
+inside the source — making the `.tex` snippet self-contained regardless of the
+host document's preamble. (The standalone preview template still sets
+`voltage=american, current=american` globally; the picture-scoped setting
+overrides it per figure.)
+
 #### Two-Terminal Components (R, C, L, D, sources)
 
 Each two-terminal component with origin at `(x0, y0)` and terminal pin at `(x1, y1)` (after rotation) maps to:
@@ -1553,8 +1573,12 @@ Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.t
 
 ```json
 {
-  "version": "0.1",
+  "version": "0.2",
   "name": "My Schematic",
+  "config": {
+    "voltage_style": "american",
+    "current_style": "american"
+  },
   "components": [
     {
       "id": "3f2a1b4c-...",
@@ -1574,6 +1598,12 @@ Saving is **atomic**: the JSON is written to a sibling temporary file (`<name>.t
   "metadata": {}
 }
 ```
+
+The top-level **`config`** object (added in format 0.2) holds document-level
+CircuiTikZ conventions: `voltage_style` and `current_style`, each `"american"`
+or `"european"` (§4 / §7.2). A 0.1 file has no `config`; it loads with american
+defaults, and an unrecognised style value is coerced to american rather than
+failing the load. `save` always writes the object at the current version.
 
 A component may also carry optional keys when non-default: `span_override`,
 `z_order`, drawing-style fields (`fill_color`/`border_width`/`line_style`/font
@@ -1606,7 +1636,7 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1"}`); `save` always writes the **current** format version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2"}`); `save` always writes the **current** format version (`0.2`). Format 0.2 added the top-level `config` object (§9.2); a 0.1 file loads unchanged with american defaults, so the bump is backward-compatible (older files still open) — `save` then re-stamps them as 0.2. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
@@ -1848,6 +1878,18 @@ dialog, which would be intrusive on every save. The image compile is synchronous
 so saving adds the compile latency when PDF/EPS/SVG auto-export is enabled (the
 TeX snippet adds negligible time).
 
+### 10.9 Document Settings
+
+**Edit ▸ Document Settings…** opens a modal dialog (`DocumentSettingsDialog`,
+`app/ui/documentsettings.py`) editing the *per-document* CircuiTikZ conventions —
+the **voltage** and **current** label styles (american / european, §7.2) — as
+opposed to the app-wide Preferences (§10.8). The dialog reads the styles from the
+current `Schematic` and writes them back only on **OK**; if a value actually
+changed, the main window emits `schematic_changed`, which marks the document
+modified and refreshes the source panel and preview (the styles flow into
+`generate()`). The settings persist in the `.hv` `config` object (§9.2), so they
+travel with the document rather than the application.
+
 ---
 
 ## 11. Project Structure
@@ -1909,6 +1951,7 @@ heaviside/
 │       ├── palette.py             # ComponentPalette(QWidget)
 │       ├── properties.py          # PropertiesPanel(QWidget)
 │       ├── preferences.py         # Preferences (QSettings), PreferencesDialog
+│       ├── documentsettings.py    # DocumentSettingsDialog (per-document v/i styles)
 │       └── sourcepanel.py         # SourcePanel(QWidget)
 └── tests/
     ├── test_model.py              # model + validation + geometry helpers (simplify,
@@ -2121,7 +2164,10 @@ ending on a rect edge or circle cardinal point counts as connected.
 #### Code Generation (`test_codegen.py`)
 
 The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end.
-This includes the `to[…]` syntax for every two-terminal kind (R, C, L, the diode
+This includes the **document voltage/current styles** (american emits no
+`\ctikzset` line, so output is unchanged; european emits a picture-scoped
+`\ctikzset{voltage=european}` / `current=european`, combined when both), the
+`to[…]` syntax for every two-terminal kind (R, C, L, the diode
 family with filled/`*` variants and the picture-scoped `diodes/scale`), the
 `node[…]` syntax and computed scale/lead alignment for multi-terminal kinds
 (op amp leads; IGFET family `anchor=gate` + `xscale`/`yscale` + residual lead;
@@ -2143,8 +2189,11 @@ including the missing-`pdftocairo` error and a round-trip when present).
 #### File I/O (`test_io.py`)
 
 Covers `save`/`load` round-trips for every component and wire field, the
-"defaults are omitted from the JSON" rule (which keeps plain documents compact),
-and load-time validation: every typed field rejects the wrong type with a
+**document `config`** (voltage/current styles round-trip; `save` writes the
+`config` object at version `0.2`; a `0.1` file with no `config` loads with
+american defaults; an unrecognised style value coerces to american),
+the "defaults are omitted from the JSON" rule (which keeps plain documents
+compact), and load-time validation: every typed field rejects the wrong type with a
 `SchematicLoadError`, unknown versions and malformed/invalid JSON raise
 descriptive errors, and invariant violations are caught on load. Also covers that
 a `rect`'s `options` text is loaded verbatim (never parsed as a style string),
@@ -2242,7 +2291,9 @@ invoking the compiler (asserted by failing the test if `_compile_to_pdf` is
 called) — confirming it needs no `pdflatex`; with every auto-export preference
 off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
 labelled component without error (used when the math engine / ziamath preference
-changes, §8.4).
+changes, §8.4); and `DocumentSettingsDialog` writes the chosen voltage/current
+styles onto the schematic on accept, reporting `changed()` only when a value
+actually differs (§10.9).
 
 #### Welcome screen & Help dialog (`test_welcome.py`)
 

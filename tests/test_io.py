@@ -103,6 +103,53 @@ def test_roundtrip_empty(tmp_path: Path) -> None:
     assert loaded.components == original.components
     assert loaded.wires == original.wires
     assert loaded.metadata == original.metadata
+    # Document config defaults to american and round-trips.
+    assert loaded.voltage_style == "american"
+    assert loaded.current_style == "american"
+
+
+# ---------------------------------------------------------------------------
+# Document config (voltage/current label styles, format 0.2)
+# ---------------------------------------------------------------------------
+
+def test_config_roundtrip(tmp_path: Path) -> None:
+    """Non-default voltage/current styles round-trip through save/load."""
+    s = Schematic(version="0.1", name="cfg", voltage_style="european",
+                  current_style="american")
+    p = tmp_path / "cfg.hv"
+    save(s, p)
+    loaded = load(p)
+    assert loaded.voltage_style == "european"
+    assert loaded.current_style == "american"
+    # save() writes a config object at the current format version.
+    import json
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["version"] == "0.2"
+    assert data["config"] == {"voltage_style": "european", "current_style": "american"}
+
+
+def test_load_v01_defaults_config_to_american(tmp_path: Path) -> None:
+    """A 0.1 file (no config object) loads with american defaults."""
+    p = tmp_path / "old.hv"
+    p.write_text(
+        '{"version": "0.1", "name": "old", "components": [], "wires": []}',
+        encoding="utf-8",
+    )
+    loaded = load(p)
+    assert (loaded.voltage_style, loaded.current_style) == ("american", "american")
+
+
+def test_load_unknown_style_falls_back_to_american(tmp_path: Path) -> None:
+    """An unrecognised style value is coerced to american rather than failing."""
+    p = tmp_path / "weird.hv"
+    p.write_text(
+        '{"version": "0.2", "name": "w", "components": [], "wires": [], '
+        '"config": {"voltage_style": "martian", "current_style": "european"}}',
+        encoding="utf-8",
+    )
+    loaded = load(p)
+    assert loaded.voltage_style == "american"   # bogus → default
+    assert loaded.current_style == "european"   # valid → kept
 
 
 # ---------------------------------------------------------------------------

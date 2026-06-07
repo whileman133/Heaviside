@@ -50,6 +50,33 @@ def _wire(points) -> Wire:
 
 
 # ---------------------------------------------------------------------------
+# Document voltage/current label styles (§7.2)
+# ---------------------------------------------------------------------------
+
+def test_american_style_emits_no_ctikzset() -> None:
+    """The default (american) styles add no voltage/current ctikzset line, so
+    existing output is byte-for-byte unchanged."""
+    src = generate(_schematic(_comp("R", options="v=$V$, i=$I$")))
+    assert "voltage=" not in src
+    assert "current=" not in src
+
+
+def test_european_voltage_emits_scoped_ctikzset() -> None:
+    s = _schematic(_comp("R"))
+    s.voltage_style = "european"
+    lines = [l.strip() for l in generate(s).splitlines() if "ctikzset" in l]
+    assert r"\ctikzset{voltage=european}" in lines
+    assert "current=european" not in "\n".join(lines)
+
+
+def test_european_both_styles_combined() -> None:
+    s = _schematic(_comp("R"))
+    s.voltage_style = "european"
+    s.current_style = "european"
+    assert r"\ctikzset{voltage=european, current=european}" in generate(s)
+
+
+# ---------------------------------------------------------------------------
 # test_resistor_horizontal
 # ---------------------------------------------------------------------------
 

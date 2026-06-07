@@ -1,6 +1,10 @@
 {
-  "version": "0.1",
+  "version": "0.2",
   "name": "untitled",
+  "config": {
+    "voltage_style": "american",
+    "current_style": "american"
+  },
   "components": [
     {
       "id": "c7b39d24-c2e7-407d-a2fb-33d65d49178e",
