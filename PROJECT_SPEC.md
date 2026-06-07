@@ -1707,14 +1707,17 @@ enforces this — it loads every bundled example and asserts each declares
 │ ⌁  │Resistors│   (QGraphicsView)         │                  │
 │ ✋  │Diodes   │                           │  (context-       │
 │    │Transist…│                           │   sensitive)     │
-│    │Sources  │                           │                  │
-│    │         │                           │                  │
-├────┴─────────┴──────────────┬────────────┴──────────────────┤
-│  Source Panel (CircuiTikZ)  │  LaTeX Preview (draggable)    │
-├─────────────────────────────┴───────────────────────────────┤
+│    │Sources  ├──────────────┬────────────┴──────────────────┤
+│    │ (full   │ Source Panel │  LaTeX Preview (draggable)     │
+│    │ height) │ (CircuiTikZ) │                                │
+├────┴─────────┴──────────────┴────────────────────────────────┤
 │  Status bar: cursor coords | zoom level | compile status    │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+The **palette spans the full window height** on the left; the canvas + properties
+and, beneath them, the source/preview strip occupy the region to its right (so the
+source and preview no longer run underneath the palette).
 
 **Window background.** The window background is white: `MainWindow` sets its
 palette `Window` color to `#ffffff`, which child widgets inherit (central area,
