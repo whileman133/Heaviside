@@ -126,6 +126,23 @@ def test_roundtrip_components(tmp_path: Path) -> None:
         assert load_c.options  == orig_c.options
 
 
+def test_parametric_params_round_trip(tmp_path: Path) -> None:
+    """A parametric component's integer params (logic-gate input count) survive
+    save/load; the default is omitted from the file."""
+    s = Schematic(version="0.1", name="gates", components=[
+        Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+                  options="l=$U_1$", params={"inputs": 5}),
+        Component(id=_uid(), kind="and", position=(4.0, 0.0), rotation=0,
+                  options="l=$U_2$"),  # default inputs -> no params
+    ])
+    p = tmp_path / "gates.hv"
+    save(s, p)
+    assert '"params"' in p.read_text(encoding="utf-8")          # the n=5 one is written
+    loaded = load(p)
+    assert loaded.components[0].params == {"inputs": 5}
+    assert loaded.components[1].params == {}                    # default omitted
+
+
 def test_kind_alias_migrates_renamed_kind_on_load(tmp_path: Path, monkeypatch) -> None:
     """A renamed kind keeps loading via _KIND_ALIASES (old -> current), so a
     CircuiTikZ re-generation that renames a symbol doesn't break old .hv files."""

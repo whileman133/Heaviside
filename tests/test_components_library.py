@@ -148,3 +148,23 @@ def test_mosfets_have_body_diode_variant():
     lib = library.load_library()
     for kind in ("nigfete", "nigfetd", "pigfete", "pigfetd"):
         assert "body_diode" in {v["name"] for v in lib[kind].get("variants", [])}
+
+
+def test_parametric_accessors_for_logic_gate():
+    """library resolves a parametric kind's value and pins from the instance."""
+    from app.components import library
+    from app.components.model import Component
+
+    assert library.is_parametric("and") and not library.is_parametric("R")
+    c = Component(id="x", kind="and", position=(0, 0), rotation=0, options="",
+                  params={"inputs": 4})
+    assert library.param_value(c) == 4
+    pins = library.resolved_pins(c)
+    assert [p.name for p in pins] == ["out", "in1", "in2", "in3", "in4"]
+    # inputs symmetric about the output, on the 0.25 grid
+    ys = [p.offset[1] for p in pins[1:]]
+    assert ys == [-0.75, -0.25, 0.25, 0.75]
+    # value clamps to the declared range
+    over = Component(id="y", kind="and", position=(0, 0), rotation=0, options="",
+                     params={"inputs": 99})
+    assert library.param_value(over) == 16

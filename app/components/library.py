@@ -98,6 +98,70 @@ def variant_geometry_suffix(kind: str, variants: dict[str, bool]) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Parametric components (variable pin count — e.g. logic gates).  A kind declares
+# a ``param`` block; an instance carries an integer value in ``Component.params``.
+# ---------------------------------------------------------------------------
+
+def param_spec(kind: str) -> dict | None:
+    """The parametric declaration a *kind* carries, or ``None`` for a fixed kind."""
+    return load_library().get(kind, {}).get("param")
+
+
+def is_parametric(kind: str) -> bool:
+    return param_spec(kind) is not None
+
+
+def param_value(comp: "Component") -> int | None:
+    """The instance's parameter value, clamped to ``[min, max]``; ``None`` if the
+    kind is not parametric (empty/absent value means the declared default)."""
+    spec = param_spec(comp.kind)
+    if spec is None:
+        return None
+    n = comp.params.get(spec["name"], spec["default"])
+    return max(int(spec["min"]), min(int(spec["max"]), int(n)))
+
+
+def param_pins(spec: dict, n: int) -> list[dict]:
+    """Pins for value *n*: the output plus *n* inputs at the declared pitch,
+    symmetric about the output's y (pure — the single source of this layout)."""
+    o = spec["output"]
+    pins = [{"name": o["name"], "offset": list(o["offset"]), "anchor": o["anchor"]}]
+    inp = spec["input"]
+    for i in range(n):
+        y = round((i - (n - 1) / 2) * inp["pitch"], 4)
+        pins.append({"name": inp["name"].format(i=i + 1),
+                     "offset": [inp["x"], y],
+                     "anchor": inp["anchor"].format(i=i + 1)})
+    return pins
+
+
+def resolved_pins(comp: "Component") -> list[PinDef]:
+    """The pins for this instance — computed from the parameter for a parametric
+    kind, else the kind's static registry pins."""
+    spec = param_spec(comp.kind)
+    if spec is None:
+        from app.components.registry import REGISTRY
+        defn = REGISTRY.get(comp.kind)
+        return list(defn.pins) if defn else []
+    return [PinDef(name=p["name"], offset=tuple(p["offset"]))
+            for p in param_pins(spec, param_value(comp))]
+
+
+def param_geometry_suffix(comp: "Component") -> str:
+    """Geometry-key suffix for a parametric instance (``":N"``), else ``""``."""
+    n = param_value(comp)
+    return f":{n}" if n is not None else ""
+
+
+def param_n_data(comp: "Component") -> dict | None:
+    """The per-value record (``scale``/``leads``/``bbox``) for this instance."""
+    spec = param_spec(comp.kind)
+    if spec is None:
+        return None
+    return spec.get("n_data", {}).get(str(param_value(comp)))
+
+
 def to_component_def(kind: str, entry: dict) -> ComponentDef:
     """Build a registry :class:`ComponentDef` from one library entry."""
     pins = [PinDef(name=p["name"], offset=tuple(p["offset"])) for p in entry["pins"]]

@@ -1490,3 +1490,23 @@ def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
     w = Wire(id="g", points=[(5.0, 5.0), (3.0, 5.0)], z_order=1)
     src = generate(_schematic(fet, wires=(w,)))
     assert ".gate)" in src                    # references the MOSFET gate anchor
+
+
+# ---------------------------------------------------------------------------
+# Parametric logic gates (variable input count)
+# ---------------------------------------------------------------------------
+
+def test_logic_gate_emits_number_inputs_and_per_n_scale():
+    """A parametric gate generates node[and port, number inputs=N, xscale, yscale,
+    anchor=out] with the value's own scale (default and an explicit value)."""
+    # Default value (2 inputs): CircuiTikZ default, base 2-input scale.
+    d2 = _schematic(_comp("and", options="l=$U_1$"))
+    line2 = [l for l in generate(d2).splitlines() if "and port" in l][0]
+    assert "and port, number inputs=2" in line2
+    assert "yscale=0.8929" in line2 and "anchor=out" in line2
+
+    # Explicit 4 inputs: number inputs=4 and the 4-input yscale.
+    c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+                  options="l=$U_2$", params={"inputs": 4})
+    line4 = [l for l in generate(_schematic(c)).splitlines() if "and port" in l][0]
+    assert "number inputs=4" in line4 and "yscale=1.7857" in line4

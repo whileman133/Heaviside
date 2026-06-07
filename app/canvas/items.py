@@ -634,6 +634,25 @@ class ComponentItem(QGraphicsItem):
     def component(self) -> "Component":
         return self._component
 
+    # Instance-resolved geometry/pins/bbox — identical to the registry defaults
+    # for a fixed kind, but vary with the parameter value for a parametric kind
+    # (logic gates).  Painting, hit-testing, and labels go through these.
+    def _resolved_pins(self) -> list:
+        from app.components import library
+        return library.resolved_pins(self._component)
+
+    def _instance_bbox(self) -> tuple:
+        from app.components import library
+        nd = library.param_n_data(self._component)
+        return tuple(nd["bbox"]) if nd else self._defn.bbox
+
+    def _geometry_kind(self) -> str:
+        """Geometry key for this instance: kind + parametric suffix + variant suffix."""
+        from app.components import library
+        c = self._component
+        return c.kind + library.param_geometry_suffix(c) + library.variant_geometry_suffix(
+            c.kind, c.variants)
+
     @component.setter
     def component(self, comp: "Component") -> None:
         if self._options_item.is_editing:
@@ -959,7 +978,7 @@ class ComponentItem(QGraphicsItem):
     # ------------------------------------------------------------------
 
     def boundingRect(self) -> QRectF:
-        x0, y0, x1, y1 = self._defn.bbox
+        x0, y0, x1, y1 = self._instance_bbox()
         margin = LINE_W_THICK
         return QRectF(
             x0 * GRID_PX - margin,
@@ -973,11 +992,7 @@ class ComponentItem(QGraphicsItem):
         color = self._body_color()
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
-        from app.components import library
-        svg_kind = self.component.kind + library.variant_geometry_suffix(
-            self.component.kind, self.component.variants
-        )
-        for sym in symbol_paths(svg_kind):
+        for sym in symbol_paths(self._geometry_kind()):
             lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
             pen = _pen(color, lw)
             painter.setPen(pen)
@@ -991,7 +1006,7 @@ class ComponentItem(QGraphicsItem):
         if not self._ghost:
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
-            for pdef in self._defn.pins:
+            for pdef in self._resolved_pins():
                 dx, dy = pdef.offset
                 painter.drawEllipse(
                     QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R

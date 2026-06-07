@@ -64,6 +64,13 @@ class Component:
     Only ``True`` entries are persisted (see ``schematic/io.py``).
     """
 
+    params: dict[str, int] = field(default_factory=dict)
+    """Integer parameters for a *parametric* kind (e.g. ``{"inputs": 4}`` for a
+    logic gate's input count).  The kind declares the parameter (name, min, max,
+    default) in ``components/definitions.json``; an empty/absent value means the
+    declared default.  Surfaced via :mod:`app.components.library`; persisted in
+    ``schematic/io.py`` only when it differs from the default."""
+
 
 @dataclass
 class DrawingComponent(Component):

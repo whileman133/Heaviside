@@ -48,6 +48,7 @@ from app.canvas.commands import (
     MirrorCommand,
     SetFontSizeCommand,
     SetVariantCommand,
+    SetParamCommand,
     MoveCommand,
     MoveJunctionCommand,
     MoveOptionsLabelCommand,
@@ -787,6 +788,10 @@ class SchematicScene(QGraphicsScene):
     def set_component_variant(self, component_id: str, name: str, value: bool) -> None:
         """Toggle a named boolean variant on a component (undoable, generic)."""
         self._push(SetVariantCommand(component_id, name, value))
+
+    def set_component_param(self, component_id: str, name: str, value: int) -> None:
+        """Set a named integer parameter on a component (undoable, generic)."""
+        self._push(SetParamCommand(component_id, name, value))
 
     def set_fill_color(self, component_id: str, new_fill: str) -> None:
         """Set fill_color on a StyledComponent (bipole or rect) via an undoable command."""

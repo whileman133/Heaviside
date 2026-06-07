@@ -494,7 +494,15 @@ def _multi_terminal_line(
     _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
     for _opt in _variant_opts:
         kind_arg = f"{kind_arg}, {_opt}"
-    extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
+    # Parametric kinds (logic gates): append the param option (e.g. "number
+    # inputs=4") and use that value's scale; fixed kinds use the static table.
+    _param = _library.param_spec(comp.kind)
+    if _param is not None:
+        kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
+        _nd = _library.param_n_data(comp)
+        extra_opts = _library._scale_opts(_nd["scale"]) if _nd else ""
+    else:
+        extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)

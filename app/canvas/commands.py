@@ -1244,6 +1244,35 @@ class SetVariantCommand(Command):
         comp.variants[self._name] = bool(self._old_value)
 
 
+class SetParamCommand(Command):
+    """Set an integer parameter on a parametric component (e.g. a logic gate's
+    input count).  Generic over any parameter the component's kind declares."""
+
+    label = "Set Parameter"
+
+    def __init__(self, component_id: str, name: str, new_value: int,
+                 old_value: int | None = None, had_value: bool | None = None) -> None:
+        self._component_id = component_id
+        self._name = name
+        self._new_value = int(new_value)
+        self._old_value = old_value
+        self._had_value = had_value
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._had_value is None:
+            self._had_value = self._name in comp.params
+            self._old_value = comp.params.get(self._name)
+        comp.params[self._name] = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._had_value:
+            comp.params[self._name] = int(self._old_value)
+        else:
+            comp.params.pop(self._name, None)
+
+
 class SetFillColorCommand(Command):
     """Set fill_color on a StyledComponent (bipole or rect)."""
 

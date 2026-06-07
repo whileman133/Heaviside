@@ -611,6 +611,50 @@ class VariantSection(InspectorSection):
             t[0].set_component_variant(t[1], name, bool(state))
 
 
+class ParamSection(InspectorSection):
+    """A spinbox for the integer parameter a *parametric* kind declares (e.g. a
+    logic gate's input count).  Generic over the ``param`` block in
+    ``components/definitions.json``; rebuilt on :meth:`_load` per kind."""
+
+    title = None
+
+    def _build(self) -> None:
+        self._spin: "QSpinBox | None" = None
+        self._param_name: str | None = None
+        self._container = QVBoxLayout()
+        self._container.setSpacing(6)
+        self.body.addLayout(self._container)
+
+    def applies_to(self, comp: Component) -> bool:
+        from app.components import library
+        return library.param_spec(comp.kind) is not None
+
+    def _load(self, comp: Component) -> None:
+        from app.components import library
+        if self._spin is not None:
+            self._spin.setParent(None)
+            self._spin.deleteLater()
+            self._spin = None
+        spec = library.param_spec(comp.kind)
+        if not spec:
+            return
+        self._param_name = spec["name"]
+        row = QHBoxLayout()
+        row.addWidget(QLabel(spec["name"].capitalize()))
+        spin = QSpinBox()
+        spin.setRange(int(spec["min"]), int(spec["max"]))
+        spin.setValue(library.param_value(comp))
+        spin.valueChanged.connect(self._on_changed)
+        row.addWidget(spin)
+        self._container.addLayout(row)
+        self._spin = spin
+
+    def _on_changed(self, value: int) -> None:
+        t = self._target()
+        if t and self._param_name:
+            t[0].set_component_param(t[1], self._param_name, int(value))
+
+
 class FontSection(InspectorSection):
     """Font controls for any FontedComponent (text_node, bipole)."""
 
@@ -1115,6 +1159,7 @@ class PropertiesPanel(QWidget):
             TextContentSection(),
             BipoleLabelSection(),
             VariantSection(),
+            ParamSection(),
             FontSection(),
             FillBorderSection(),
             TransformSection(),

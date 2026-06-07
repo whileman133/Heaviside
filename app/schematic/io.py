@@ -141,6 +141,10 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     active = {name: True for name, on in c.variants.items() if on}
     if active:
         d["variants"] = active
+    # Integer parameters for a parametric kind (e.g. {"inputs": 4}); omitted when
+    # none set (the kind's default applies).
+    if c.params:
+        d["params"] = {name: int(v) for name, v in c.params.items()}
     if isinstance(c, StyledComponent):
         if c.fill_color:
             d["fill_color"] = c.fill_color
@@ -326,6 +330,15 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if data.get("body_diode"):
         variants["body_diode"] = True
 
+    # Integer parameters for a parametric kind (e.g. logic-gate input count).
+    raw_params = data.get("params", {})
+    if not isinstance(raw_params, dict):
+        raise SchematicLoadError(f"{ctx}.params must be an object")
+    try:
+        params = {str(name): int(v) for name, v in raw_params.items()}
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.params values must be integers") from exc
+
     kwargs: dict = {
         "id": comp_id,
         "kind": kind,
@@ -336,6 +349,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "label_offset": label_offset,
         "span_override": span_override,
         "variants": variants,
+        "params": params,
     }
 
     if issubclass(cls, DrawingComponent):

@@ -385,18 +385,10 @@ def param_geometry_key(kind: str, n: int) -> str:
 
 
 def param_pins(entry: dict, n: int) -> list[dict]:
-    """Pins for a parametric instance with value *n*: the output plus *n* inputs
-    spaced at the declared pitch, symmetric about the output's y."""
-    p = entry["param"]
-    o = p["output"]
-    pins = [{"name": o["name"], "offset": list(o["offset"]), "anchor": o["anchor"]}]
-    inp = p["input"]
-    for i in range(n):
-        y = round((i - (n - 1) / 2) * inp["pitch"], 4)
-        pins.append({"name": inp["name"].format(i=i + 1),
-                     "offset": [inp["x"], y],
-                     "anchor": inp["anchor"].format(i=i + 1)})
-    return pins
+    """Pins for a parametric instance with value *n* (delegates to the library so
+    the generator and runtime share one pin-layout implementation)."""
+    from app.components import library
+    return library.param_pins(entry["param"], n)
 
 
 def _param_entry_at(entry: dict, n: int) -> dict:
