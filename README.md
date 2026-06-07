@@ -49,6 +49,8 @@ Or browse all releases (with checksums and release notes) on the
 > **PDF preview pane** and the **PDF / EPS / SVG image exports** — these compile
 > the schematic with LaTeX. The app warns at startup if it can't find `pdflatex`.
 > When LaTeX *is* installed, the canvas labels use it for the highest fidelity.
+> If a tool isn't on your `PATH` (or you want a specific install), set its path
+> in **Preferences → Tools**.
 >
 > **Optional: Poppler (for EPS and SVG export).** Exporting to **EPS** or **SVG**
 > additionally needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/).

@@ -18,11 +18,17 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
+    QGridLayout,
     QGroupBox,
     QLabel,
+    QLineEdit,
+    QPushButton,
     QVBoxLayout,
     QWidget,
 )
+
+from app.preview import tools as _tools
 
 # QSettings keys.
 _KEY_AUTO_TEX = "export/auto_tex_on_save"
@@ -120,6 +126,21 @@ class Preferences:
     def force_ziamath(self, value: bool) -> None:
         self._settings.setValue(_KEY_FORCE_ZIAMATH, bool(value))
 
+    # -- External tool paths -------------------------------------------------
+    #
+    # Explicit paths to pdflatex/latex/dvisvgm/pdftocairo. Empty means "discover
+    # on PATH" (the default). Consumed by app.preview.tools via set_tool_paths.
+
+    def tool_path(self, name: str) -> str:
+        return str(self._settings.value(f"tools/{name}", "") or "")
+
+    def set_tool_path(self, name: str, value: str) -> None:
+        self._settings.setValue(f"tools/{name}", str(value or "").strip())
+
+    @property
+    def tool_paths(self) -> dict[str, str]:
+        return {name: self.tool_path(name) for name in _tools.TOOLS}
+
 
 class PreferencesDialog(QDialog):
     """Modal preferences editor.
@@ -133,6 +154,7 @@ class PreferencesDialog(QDialog):
         self._prefs = prefs
         self.setWindowTitle("Preferences")
         self.setModal(True)
+        self.setMinimumWidth(520)  # room for the tool path fields + Browse button
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 16)
@@ -223,10 +245,72 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(render_group)
 
+        tools_group = QGroupBox("Tools")
+        tools_grid = QGridLayout(tools_group)
+        tools_grid.setHorizontalSpacing(8)
+        tools_grid.setVerticalSpacing(4)
+        tools_grid.setColumnStretch(1, 1)  # the path field column takes the slack
+        tools_intro = QLabel(
+            "Explicit paths to the external tools. Leave blank to auto-detect on "
+            "your <tt>PATH</tt>. Set a path only if a tool isn't found or you want "
+            "a specific install."
+        )
+        tools_intro.setWordWrap(True)
+        tools_intro.setStyleSheet("color: #666; font-size: 11px;")
+        tools_grid.addWidget(tools_intro, 0, 0, 1, 3)
+
+        self._tool_edits: dict[str, QLineEdit] = {}
+        self._tool_status: dict[str, QLabel] = {}
+        for i, name in enumerate(_tools.TOOLS):
+            # Two grid rows per tool: [name | path field | Browse] then a status
+            # line spanning the field+button so it never squashes the edit.
+            r = 1 + i * 2
+            edit = QLineEdit(prefs.tool_path(name))
+            edit.setPlaceholderText("auto-detect on PATH")
+            edit.setMinimumWidth(280)
+            edit.setClearButtonEnabled(True)
+            browse = QPushButton("Browse…")
+            browse.clicked.connect(lambda _checked=False, n=name: self._browse_tool(n))
+            status = QLabel()
+            status.setStyleSheet("color: #666; font-size: 11px;")
+            tools_grid.addWidget(QLabel(name), r, 0, Qt.AlignRight)
+            tools_grid.addWidget(edit, r, 1)
+            tools_grid.addWidget(browse, r, 2)
+            tools_grid.addWidget(status, r + 1, 1, 1, 2)
+            self._tool_edits[name] = edit
+            self._tool_status[name] = status
+            edit.textChanged.connect(lambda _t="", n=name: self._update_tool_status(n))
+            self._update_tool_status(name)
+
+        layout.addWidget(tools_group)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    def _browse_tool(self, name: str) -> None:
+        """Pick an executable for tool *name* via a file dialog."""
+        start = self._tool_edits[name].text().strip()
+        path, _ = QFileDialog.getOpenFileName(self, f"Locate {name}", start)
+        if path:
+            self._tool_edits[name].setText(path)
+
+    def _update_tool_status(self, name: str) -> None:
+        """Reflect where tool *name* would resolve given the field's current text."""
+        value = self._tool_edits[name].text().strip()
+        if value:
+            if _tools.is_runnable(value):
+                self._tool_status[name].setText("✓ will use this path")
+            else:
+                self._tool_status[name].setText(
+                    "⚠ not an executable file — will fall back to PATH"
+                )
+        else:
+            found = _tools.path_on_path(name)
+            self._tool_status[name].setText(
+                f"✓ found on PATH: {found}" if found else "✗ not found on PATH"
+            )
 
     def _on_accept(self) -> None:
         """Persist the checkbox state to the Preferences store and close."""
@@ -237,4 +321,6 @@ class PreferencesDialog(QDialog):
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
         self._prefs.line_hops = self._chk_line_hops.isChecked()
         self._prefs.force_ziamath = self._chk_force_ziamath.isChecked()
+        for name, edit in self._tool_edits.items():
+            self._prefs.set_tool_path(name, edit.text())
         self.accept()

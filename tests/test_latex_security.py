@@ -10,7 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from app.preview import latex
+from app.preview import latex, tools
 
 
 class _FakeCompleted:
@@ -36,7 +36,8 @@ def test_compile_tex_disables_shell_escape(monkeypatch) -> None:
             (Path(cwd) / "schematic.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         return _FakeCompleted()
 
-    monkeypatch.setattr(latex.shutil, "which", lambda _name: "/usr/bin/pdflatex")
+    monkeypatch.setattr(tools.shutil, "which", lambda _name: "/usr/bin/pdflatex")
+    tools.set_tool_paths({})  # resolve via (patched) PATH, no override
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     latex.compile_tex(
@@ -58,7 +59,8 @@ def test_compile_tex_never_uses_shell(monkeypatch) -> None:
             (Path(cwd) / "schematic.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
         return _FakeCompleted()
 
-    monkeypatch.setattr(latex.shutil, "which", lambda _name: "/usr/bin/pdflatex")
+    monkeypatch.setattr(tools.shutil, "which", lambda _name: "/usr/bin/pdflatex")
+    tools.set_tool_paths({})  # resolve via (patched) PATH, no override
     monkeypatch.setattr(subprocess, "run", _fake_run)
 
     latex.compile_tex(

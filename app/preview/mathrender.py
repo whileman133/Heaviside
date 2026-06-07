@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import hashlib
 import re
-import shutil
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -57,7 +56,7 @@ from app.canvas.svgsym import parse_path
 # so the code generator can share it; re-exported under its historical private
 # name for the canvas label parser and its tests.
 from app.components.style import split_top_level as _split_top_level
-from app.preview.latex import _ensure_tool_dirs_on_path
+from app.preview import tools as _tools
 
 # Body font size of the render template, in LaTeX points.  Callers scale a
 # rendered path by ``font_size / TEMPLATE_PT`` to reach the desired point size.
@@ -126,8 +125,9 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
         text = cache_file.read_text(encoding="utf-8")
         return text or None
 
-    _ensure_tool_dirs_on_path()
-    if shutil.which("latex") is None or shutil.which("dvisvgm") is None:
+    latex_exe = _tools.resolve("latex")
+    dvisvgm_exe = _tools.resolve("dvisvgm")
+    if latex_exe is None or dvisvgm_exe is None:
         return None
 
     tex = _TEMPLATE.replace("%FRAGMENT%", fragment)
@@ -136,14 +136,14 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
         (tmp_path / "m.tex").write_text(tex, encoding="utf-8")
         try:
             r = subprocess.run(
-                ["latex", "-interaction=nonstopmode", "-halt-on-error", "m.tex"],
+                [latex_exe, "-interaction=nonstopmode", "-halt-on-error", "m.tex"],
                 cwd=tmp, capture_output=True, timeout=timeout,
             )
             if r.returncode != 0 or not (tmp_path / "m.dvi").exists():
                 cache_file.write_text("", encoding="utf-8")
                 return None
             r = subprocess.run(
-                ["dvisvgm", "--no-fonts", "m.dvi", "-o", "m.svg"],
+                [dvisvgm_exe, "--no-fonts", "m.dvi", "-o", "m.svg"],
                 cwd=tmp, capture_output=True, timeout=timeout,
             )
             svg_file = tmp_path / "m.svg"
@@ -321,8 +321,7 @@ def set_force_ziamath(value: bool) -> None:
 
 
 def _latex_available() -> bool:
-    _ensure_tool_dirs_on_path()
-    return shutil.which("latex") is not None and shutil.which("dvisvgm") is not None
+    return _tools.available("latex") and _tools.available("dvisvgm")
 
 
 def _active_engine() -> str:
