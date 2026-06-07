@@ -63,7 +63,7 @@ maps each `kind` to a flat record. Example (a resistor and an op-amp):
   "origin_svg": [15.0312, 15.0312],   // SVG point that every symbol's origin pin maps to
   "components": {
     "R": {
-      "display_name": "Resistor", "category": "Bipoles",
+      "display_name": "Resistor", "category": "Resistors",
       "emission": "two_terminal", "tikz": "R",
       "labels": ["l", "l_", "v", "v^", "i", "i_"],
       "bbox": [0.0, -0.25, 2.0, 0.25],
@@ -71,7 +71,7 @@ maps each `kind` to a flat record. Example (a resistor and an op-amp):
                {"name": "out", "offset": [2,0], "anchor": null}]
     },
     "op amp": {
-      "display_name": "Op-Amp", "category": "Tripoles",
+      "display_name": "Op-Amp", "category": "Amplifiers",
       "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
       "bbox": [-1.5,-1.0,1.5,1.0],
       "pins": [{"name":"+","offset":[-1.5,0.5],"anchor":"+"}, ...],

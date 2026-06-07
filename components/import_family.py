@@ -51,7 +51,7 @@ _BIPOLE_LABELS = ["l", "l_", "v", "v^", "i", "i_"]
 
 def bipole_candidate(keyword: str, display: str) -> dict:
     return {
-        "display_name": display, "category": "Bipoles", "emission": "two_terminal",
+        "display_name": display, "category": "Misc", "emission": "two_terminal",
         "tikz": keyword, "labels": list(_BIPOLE_LABELS),
         "pins": [{"name": "in", "offset": [0, 0], "anchor": None},
                  {"name": "out", "offset": [2, 0], "anchor": None}],
@@ -85,7 +85,7 @@ def transistor_candidate(keyword: str, display: str, names: list[str], anchor_pi
     for name, (x, y) in terminals.items():
         pins.append({"name": name, "offset": [snap(x - ox), snap(y - oy)], "anchor": name})
     entry = {
-        "display_name": display, "category": "Tripoles", "emission": "multi_terminal",
+        "display_name": display, "category": "Transistors", "emission": "multi_terminal",
         "tikz": keyword, "labels": ["l"], "anchor_pin": anchor_pin, "pins": pins,
     }
     scale, leads = renderer.fit_alignment(entry)        # derive alignment

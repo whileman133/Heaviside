@@ -75,8 +75,8 @@ _SHORT = ComponentDef(
 
 _BIPOLE = ComponentDef(
     kind="bipole",
-    display_name="Bipole",
-    category="Bipoles",
+    display_name="Generic Bipole",
+    category="Misc",
     # bbox matches standard bipole half-height (±0.25 GU).
     # BipoleItem overrides boundingRect() dynamically from span_override.
     bbox=(0.0, -0.25, 1.0, 0.25),
@@ -140,23 +140,35 @@ _BESPOKE: dict[str, ComponentDef] = {
 # Registry assembly
 # ---------------------------------------------------------------------------
 
-# Within-category palette display order (§5.4).  Bipoles → Tripoles → Nodes →
-# Annotations → Drawing; the per-category order is the sequence here.
+# Within-category palette display order (§5.4): the per-category sequence is the
+# order here.  Engineer-facing groups (Resistors/Capacitors/…/Transistors) rather
+# than the CircuiTikZ bipole/tripole classification.
 _DISPLAY_ORDER: list[str] = [
-    # Bipoles
-    "R", "C", "L",
-    "D", "zD", "sD", "tD", "zzD", "leD",
-    "V", "I", "vsourcesin", "isourcesin", "cV", "cI",
-    "bipole",
-    # Tripoles
-    "op amp",
-    "nigfete", "nigfetd", "pigfete", "pigfetd",
+    # Resistors / Capacitors / Inductors
+    "R", "vR", "thermistor", "memristor",
+    "C", "eC", "pC", "varcap",
+    "L",
+    # Diodes
+    "D", "zD", "sD", "tD", "zzD", "leD", "photodiode",
+    # Transistors
     "npn", "pnp",
+    "nigfete", "nigfetd", "pigfete", "pigfetd",
+    "nfet", "pfet",
+    "njfet", "pjfet",
+    # Amplifiers
+    "op amp",
+    # Sources
+    "V", "I", "vsourcesin", "isourcesin", "cV", "cI", "battery1",
+    # Instruments
+    "ammeter", "voltmeter", "ohmmeter",
+    # Grounds
+    "ground", "rground", "sground", "nground", "pground", "cground", "eground",
+    # Supplies
+    "vcc", "vdd", "vee", "vss",
+    # Misc
+    "fuse", "lamp", "jumper", "tline", "bipole",
     # Annotations
     "open", "short",
-    # Nodes
-    "ground", "rground", "sground", "nground", "pground", "cground", "eground",
-    "vcc", "vdd", "vee", "vss",
     # Drawing
     "text_node", "rect", "circle",
 ]

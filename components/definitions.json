@@ -6,7 +6,7 @@
   "components": {
     "C": {
       "display_name": "Capacitor",
-      "category": "Bipoles",
+      "category": "Capacitors",
       "emission": "two_terminal",
       "tikz": "C",
       "labels": [
@@ -44,7 +44,7 @@
     },
     "D": {
       "display_name": "Diode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "D",
       "labels": [
@@ -89,7 +89,7 @@
     },
     "I": {
       "display_name": "Current Source",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "I",
       "labels": [
@@ -125,7 +125,7 @@
     },
     "L": {
       "display_name": "Inductor",
-      "category": "Bipoles",
+      "category": "Inductors",
       "emission": "two_terminal",
       "tikz": "L",
       "labels": [
@@ -163,7 +163,7 @@
     },
     "R": {
       "display_name": "Resistor",
-      "category": "Bipoles",
+      "category": "Resistors",
       "emission": "two_terminal",
       "tikz": "R",
       "labels": [
@@ -201,7 +201,7 @@
     },
     "V": {
       "display_name": "Voltage Source",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "V",
       "labels": [
@@ -237,7 +237,7 @@
     },
     "ammeter": {
       "display_name": "Ammeter",
-      "category": "Bipoles",
+      "category": "Instruments",
       "emission": "two_terminal",
       "tikz": "ammeter",
       "labels": [
@@ -275,7 +275,7 @@
     },
     "battery1": {
       "display_name": "Battery",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "battery1",
       "labels": [
@@ -313,7 +313,7 @@
     },
     "cI": {
       "display_name": "VCCS",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "cI",
       "labels": [
@@ -349,7 +349,7 @@
     },
     "cV": {
       "display_name": "VCVS",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "cV",
       "labels": [
@@ -385,7 +385,7 @@
     },
     "cground": {
       "display_name": "Chassis Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "cground",
       "labels": [],
@@ -407,8 +407,8 @@
       ]
     },
     "eC": {
-      "display_name": "Polarized Capacitor",
-      "category": "Bipoles",
+      "display_name": "Electrolytic Capacitor",
+      "category": "Capacitors",
       "emission": "two_terminal",
       "tikz": "eC",
       "labels": [
@@ -446,7 +446,7 @@
     },
     "eground": {
       "display_name": "Earth Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "eground",
       "labels": [],
@@ -469,7 +469,7 @@
     },
     "fuse": {
       "display_name": "Fuse",
-      "category": "Bipoles",
+      "category": "Misc",
       "emission": "two_terminal",
       "tikz": "fuse",
       "labels": [
@@ -507,7 +507,7 @@
     },
     "ground": {
       "display_name": "Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "ground",
       "labels": [],
@@ -530,7 +530,7 @@
     },
     "isourcesin": {
       "display_name": "AC Current Source",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "isourcesin",
       "labels": [
@@ -566,7 +566,7 @@
     },
     "jumper": {
       "display_name": "Jumper",
-      "category": "Bipoles",
+      "category": "Misc",
       "emission": "two_terminal",
       "tikz": "jumper",
       "labels": [
@@ -604,7 +604,7 @@
     },
     "lamp": {
       "display_name": "Lamp",
-      "category": "Bipoles",
+      "category": "Misc",
       "emission": "two_terminal",
       "tikz": "lamp",
       "labels": [
@@ -642,7 +642,7 @@
     },
     "leD": {
       "display_name": "LED",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "leD",
       "labels": [
@@ -687,7 +687,7 @@
     },
     "memristor": {
       "display_name": "Memristor",
-      "category": "Bipoles",
+      "category": "Resistors",
       "emission": "two_terminal",
       "tikz": "memristor",
       "labels": [
@@ -724,8 +724,8 @@
       ]
     },
     "nfet": {
-      "display_name": "N-MOSFET",
-      "category": "Tripoles",
+      "display_name": "N-MOSFET (4-terminal)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "nfet",
       "labels": [
@@ -787,7 +787,7 @@
     },
     "nground": {
       "display_name": "Noiseless Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "nground",
       "labels": [],
@@ -809,8 +809,8 @@
       ]
     },
     "nigfetd": {
-      "display_name": "NMOS (depletion)",
-      "category": "Tripoles",
+      "display_name": "N-MOSFET (depl.)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "nigfetd",
       "labels": [
@@ -871,8 +871,8 @@
       ]
     },
     "nigfete": {
-      "display_name": "NMOS",
-      "category": "Tripoles",
+      "display_name": "N-MOSFET (enh.)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "nigfete",
       "labels": [
@@ -934,7 +934,7 @@
     },
     "njfet": {
       "display_name": "N-JFET",
-      "category": "Tripoles",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "njfet",
       "labels": [
@@ -989,7 +989,7 @@
     },
     "npn": {
       "display_name": "NPN BJT",
-      "category": "Tripoles",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "npn",
       "labels": [
@@ -1036,7 +1036,7 @@
     },
     "ohmmeter": {
       "display_name": "Ohmmeter",
-      "category": "Bipoles",
+      "category": "Instruments",
       "emission": "two_terminal",
       "tikz": "ohmmeter",
       "labels": [
@@ -1074,7 +1074,7 @@
     },
     "op amp": {
       "display_name": "Op-Amp",
-      "category": "Tripoles",
+      "category": "Amplifiers",
       "emission": "multi_terminal",
       "tikz": "op amp",
       "labels": [
@@ -1138,8 +1138,8 @@
       ]
     },
     "pC": {
-      "display_name": "Polar Capacitor",
-      "category": "Bipoles",
+      "display_name": "Polarized Capacitor",
+      "category": "Capacitors",
       "emission": "two_terminal",
       "tikz": "pC",
       "labels": [
@@ -1176,8 +1176,8 @@
       ]
     },
     "pfet": {
-      "display_name": "P-MOSFET",
-      "category": "Tripoles",
+      "display_name": "P-MOSFET (4-terminal)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "pfet",
       "labels": [
@@ -1239,7 +1239,7 @@
     },
     "pground": {
       "display_name": "Protective Earth",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "pground",
       "labels": [],
@@ -1262,7 +1262,7 @@
     },
     "photodiode": {
       "display_name": "Photodiode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "photodiode",
       "labels": [
@@ -1299,8 +1299,8 @@
       ]
     },
     "pigfetd": {
-      "display_name": "PMOS (depletion)",
-      "category": "Tripoles",
+      "display_name": "P-MOSFET (depl.)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "pigfetd",
       "labels": [
@@ -1361,8 +1361,8 @@
       ]
     },
     "pigfete": {
-      "display_name": "PMOS",
-      "category": "Tripoles",
+      "display_name": "P-MOSFET (enh.)",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "pigfete",
       "labels": [
@@ -1424,7 +1424,7 @@
     },
     "pjfet": {
       "display_name": "P-JFET",
-      "category": "Tripoles",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "pjfet",
       "labels": [
@@ -1479,7 +1479,7 @@
     },
     "pnp": {
       "display_name": "PNP BJT",
-      "category": "Tripoles",
+      "category": "Transistors",
       "emission": "multi_terminal",
       "tikz": "pnp",
       "labels": [
@@ -1526,7 +1526,7 @@
     },
     "rground": {
       "display_name": "Reference Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "rground",
       "labels": [],
@@ -1549,7 +1549,7 @@
     },
     "sD": {
       "display_name": "Schottky Diode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "sD",
       "labels": [
@@ -1594,7 +1594,7 @@
     },
     "sground": {
       "display_name": "Signal Ground",
-      "category": "Nodes",
+      "category": "Grounds",
       "emission": "node",
       "tikz": "sground",
       "labels": [],
@@ -1617,7 +1617,7 @@
     },
     "tD": {
       "display_name": "Tunnel Diode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "tD",
       "labels": [
@@ -1662,7 +1662,7 @@
     },
     "thermistor": {
       "display_name": "Thermistor",
-      "category": "Bipoles",
+      "category": "Resistors",
       "emission": "two_terminal",
       "tikz": "thermistor",
       "labels": [
@@ -1700,7 +1700,7 @@
     },
     "tline": {
       "display_name": "Transmission Line",
-      "category": "Bipoles",
+      "category": "Misc",
       "emission": "two_terminal",
       "tikz": "tline",
       "labels": [
@@ -1738,7 +1738,7 @@
     },
     "vR": {
       "display_name": "Variable Resistor",
-      "category": "Bipoles",
+      "category": "Resistors",
       "emission": "two_terminal",
       "tikz": "vR",
       "labels": [
@@ -1776,7 +1776,7 @@
     },
     "varcap": {
       "display_name": "Varactor",
-      "category": "Bipoles",
+      "category": "Capacitors",
       "emission": "two_terminal",
       "tikz": "varcap",
       "labels": [
@@ -1814,7 +1814,7 @@
     },
     "vcc": {
       "display_name": "VCC",
-      "category": "Nodes",
+      "category": "Supplies",
       "emission": "node",
       "tikz": "vcc",
       "labels": [
@@ -1839,7 +1839,7 @@
     },
     "vdd": {
       "display_name": "VDD",
-      "category": "Nodes",
+      "category": "Supplies",
       "emission": "node",
       "tikz": "vdd",
       "labels": [
@@ -1864,7 +1864,7 @@
     },
     "vee": {
       "display_name": "VEE",
-      "category": "Nodes",
+      "category": "Supplies",
       "emission": "node",
       "tikz": "vee",
       "labels": [
@@ -1889,7 +1889,7 @@
     },
     "voltmeter": {
       "display_name": "Voltmeter",
-      "category": "Bipoles",
+      "category": "Instruments",
       "emission": "two_terminal",
       "tikz": "voltmeter",
       "labels": [
@@ -1927,7 +1927,7 @@
     },
     "vsourcesin": {
       "display_name": "AC Voltage Source",
-      "category": "Bipoles",
+      "category": "Sources",
       "emission": "two_terminal",
       "tikz": "vsourcesin",
       "labels": [
@@ -1963,7 +1963,7 @@
     },
     "vss": {
       "display_name": "VSS",
-      "category": "Nodes",
+      "category": "Supplies",
       "emission": "node",
       "tikz": "vss",
       "labels": [
@@ -1988,7 +1988,7 @@
     },
     "zD": {
       "display_name": "Zener Diode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "zD",
       "labels": [
@@ -2033,7 +2033,7 @@
     },
     "zzD": {
       "display_name": "TVS Diode",
-      "category": "Bipoles",
+      "category": "Diodes",
       "emission": "two_terminal",
       "tikz": "zzD",
       "labels": [

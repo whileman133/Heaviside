@@ -144,7 +144,7 @@ class PinDef:
 class ComponentDef:
     kind: str                        # CircuiTikZ keyword, e.g. "R", "C", "op amp"
     display_name: str                # Human-readable, e.g. "Resistor"
-    category: str                    # e.g. "Bipoles", "Tripoles", "Nodes"
+    category: str                    # palette group, e.g. "Resistors", "Diodes", "Transistors"
     bbox: tuple[float, float, float, float]  # (x0, y0, x1, y1) relative to origin, in GU
     pins: list[PinDef]
     label_slots: list[str]           # valid slot names for this kind, shown as UI hint
@@ -331,15 +331,15 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `components/geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/definitions.json` (registry/codegen data + the single `origin_svg` placement constant; see [`spec/component-editor.md`](spec/component-editor.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
-The pipeline supports three component categories, each with an output subdirectory:
+Each component declares an **`emission`** type in `definitions.json` that selects how it is rendered (and later generated — §5.6); this is independent of its palette `category`:
 
-| Category | Subdirectory | LaTeX template | Examples |
-|----------|-------------|----------------|---------|
-| `bipoles` | `bipoles/` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
-| `tripoles` | `tripoles/` | `\node[kind] (X) at (0,0) {}; <leads>` | op amp, nigfete |
-| `nodes` | `nodes/` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
+| `emission` | LaTeX template | Examples |
+|------------|----------------|---------|
+| `two_terminal` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
+| `multi_terminal` | `\node[kind] (X) at (0,0) {}; <leads>` | op amp, nigfete, nfet |
+| `node` | `\draw (0,0) node[kind] {};` | ground, sground, cground, vcc, vdd, vee, vss |
 
-The component set is exactly what the registry uses (defined in the `BIPOLES`/`NODES`/`TRIPOLES` tables in the script); multi-terminal parts carry per-component lead routing that extends each named terminal anchor to a grid-aligned coordinate.
+The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds); multi-terminal parts carry computed lead routing that extends each named terminal anchor to a grid-aligned coordinate (§4 of [`spec/component-editor.md`](spec/component-editor.md)).
 
 **Geometry schema.** Each entry is keyed by component name and holds `kind`, `name`, `viewBox`, `width_pt`/`height_pt`, and two geometry lists (both in SVG point coordinates):
 
@@ -442,7 +442,7 @@ The component palette renders each component's thumbnail by instantiating its `C
 | `cV` | VCVS | `l`, `l_`, `v`, `v^` |
 | `cI` | VCCS | `l`, `l_`, `i`, `i_` |
 
-The **Bipole** (`bipole`) component appears last in the Bipoles group — see §7.7.
+The **Generic Bipole** (`bipole`) component appears in the **Misc** group — see §7.7.
 
 Each component's `bbox` is **computed**, not hand-chosen: `components/generate_components.py` takes the extent of the rendered ink (paths + glyphs) unioned with the pin positions and rounds it outward to 0.05 GU (`renderer.compute_bbox`; see [`spec/component-editor.md`](spec/component-editor.md) §3). So every box is snug to the actual symbol — the resistor/inductor stay tight perpendicular to the leads (≈±0.25 around the zigzag/humps), the capacitor reaches its plates (±0.45), and the LED's box follows its emission arrows (asymmetric, y0=−0.6, y1=0.3). This drives label clearance (§5.8) and the hit/selection region (§5.4), so the box tracks the drawn symbol rather than a typed constant.
 
@@ -516,11 +516,11 @@ Drawing annotations are non-circuit visual elements that appear in the palette u
 
 #### Bipole Component (`bipole`)
 
-The `bipole` kind is a generic labelled rectangular box representing an arbitrary two-terminal subsystem (named "Bipole" to the user; distinct from the **Bipoles** palette *category* it sits in). Wires connect to its left (`in`) and right (`out`) pins. Although two-terminal, it is **not** emitted via the CircuiTikZ `to[...]` path syntax — it is rendered as a standalone `\node` (see Code generation below), like the other `DrawingComponent` kinds.
+The `bipole` kind is a generic labelled rectangular box representing an arbitrary two-terminal subsystem (named "Generic Bipole" to the user; it sits in the **Misc** palette category). Wires connect to its left (`in`) and right (`out`) pins. Although two-terminal, it is **not** emitted via the CircuiTikZ `to[...]` path syntax — it is rendered as a standalone `\node` (see Code generation below), like the other `DrawingComponent` kinds.
 
 | Kind | Display Name | Category | Pins | Default Span | Resizable |
 |------|-------------|----------|------|-------------|-----------|
-| `bipole` | Bipole | Bipoles | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
+| `bipole` | Generic Bipole | Misc | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
 
 **Model:** `BipoleComponent(FontedComponent, StyledComponent, DrawingComponent)` — composes both capability mixins (gains `font_*` for the label and `fill_color`/`border_width`/`line_style` for the box) over the `DrawingComponent` base (`z_order`). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
 
@@ -600,7 +600,7 @@ Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()
 
 **SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
 
-The palette category display order is: **Bipoles → Tripoles → Nodes → Annotations → Drawing**.
+The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Sources → Instruments → Grounds → Supplies → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components.
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
@@ -1618,10 +1618,10 @@ enforces this — it loads every bundled example and asserts each declares
 ├────┬─────────┬───────────────────────────┬──────────────────┤
 │Tool│ Palette │                           │  Properties      │
 │ ↖  │         │        Canvas             │  Panel           │
-│ ⌁  │Bipoles  │   (QGraphicsView)         │                  │
-│ ✋  │Amps     │                           │  (context-       │
-│    │Sources  │                           │   sensitive)     │
-│    │Tripoles │                           │                  │
+│ ⌁  │Resistors│   (QGraphicsView)         │                  │
+│ ✋  │Diodes   │                           │  (context-       │
+│    │Transist…│                           │   sensitive)     │
+│    │Sources  │                           │                  │
 │    │         │                           │                  │
 ├────┴─────────┴──────────────┬────────────┴──────────────────┤
 │  Source Panel (CircuiTikZ)  │  LaTeX Preview (draggable)    │
@@ -2207,7 +2207,7 @@ These exercise the full editor on a live scene: component placement, move, delet
 The following criteria define v1 completion. Each must be verified manually by the author against a working build on the development machine.
 
 #### AC-1: Component Placement
-- [ ] All 13 v1 component types appear in the palette, grouped by category.
+- [ ] Every registered component type appears in the palette, grouped by category.
 - [ ] Each component can be placed on the canvas by clicking the palette entry and clicking the canvas.
 - [ ] Placed components snap to the 0.25 GU grid visibly and consistently.
 - [ ] A ghost preview follows the cursor during placement.

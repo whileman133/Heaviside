@@ -182,8 +182,13 @@ class ComponentPalette(QWidget):
 
     def _build_entries(self) -> None:
         """Populate the palette grouped by category in a fixed display order."""
-        # Fixed category order (spec §5.4).
-        category_order = ["Bipoles", "Tripoles", "Nodes", "Annotations", "Drawing"]
+        # Preferred category order (spec §5.4).  Engineer-facing groups rather
+        # than the CircuiTikZ "bipole/tripole" classifications.
+        category_order = [
+            "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors",
+            "Amplifiers", "Sources", "Instruments", "Grounds", "Supplies",
+            "Misc", "Annotations", "Drawing",
+        ]
 
         # Group kinds by category preserving insertion order.
         from collections import defaultdict
@@ -191,7 +196,11 @@ class ComponentPalette(QWidget):
         for kind, defn in REGISTRY.items():
             by_cat[defn.category].append(kind)
 
-        for cat in category_order:
+        # Any category not in the preferred order still shows (after it), so a new
+        # category can never silently hide its components.
+        ordered = category_order + [c for c in by_cat if c not in category_order]
+
+        for cat in ordered:
             if cat not in by_cat:
                 continue
             # Category header.

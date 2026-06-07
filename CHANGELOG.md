@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Engineer-facing palette categories.** Replaced the broad CircuiTikZ
+  "Bipoles/Tripoles/Nodes" groupings with categories an EE recognises: Resistors,
+  Capacitors, Inductors, Diodes, Transistors, Amplifiers, Sources, Instruments,
+  Grounds, Supplies, Misc (plus Annotations, Drawing). The category is independent
+  of terminal count, so the 4-terminal MOSFETs sit naturally under Transistors.
+  The palette's category order is now a preference — an unlisted category still
+  shows (after the listed ones) rather than silently hiding its components.
+- **Clearer MOSFET names** so the flavours are distinguishable: `nigfete`/`nigfetd`
+  → "N-MOSFET (enh.)" / "N-MOSFET (depl.)", `pigfete`/`pigfetd` → the P versions,
+  `nfet`/`pfet` → "N-MOSFET (4-terminal)" / "P-MOSFET (4-terminal)" (the body-diode
+  ones), and `njfet`/`pjfet` stay "N-JFET"/"P-JFET". Also `eC` → "Electrolytic
+  Capacitor" to distinguish it from `pC` "Polarized Capacitor".
 - **Component alignment is re-derived on every generation, not frozen.** The batch
   generator (`components/generate_components.py`) now recomputes each
   multi-terminal symbol's `scale`/`leads` from a fresh anchor measurement

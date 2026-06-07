@@ -22,7 +22,7 @@ _HAVE_TOOLCHAIN = bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
 def _opamp_entry() -> dict:
     return {
-        "display_name": "Op-Amp", "category": "Tripoles",
+        "display_name": "Op-Amp", "category": "Amplifiers",
         "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
         "bbox": [-1.5, -1.0, 1.5, 1.0],
         "pins": [
@@ -36,7 +36,7 @@ def _opamp_entry() -> dict:
 
 def _resistor_entry() -> dict:
     return {
-        "display_name": "Resistor", "category": "Bipoles",
+        "display_name": "Resistor", "category": "Resistors",
         "emission": "two_terminal", "tikz": "R", "labels": ["l"],
         "bbox": [0.0, -0.25, 2.0, 0.25],
         "pins": [
@@ -63,7 +63,7 @@ def test_data_entry_computes_leads_for_centre_placed():
 
 def test_data_entry_anchor_pin_excluded_from_leads():
     nigfete = {
-        "display_name": "NMOS", "category": "Tripoles", "emission": "multi_terminal",
+        "display_name": "NMOS", "category": "Transistors", "emission": "multi_terminal",
         "tikz": "nigfete", "labels": ["l"], "bbox": [-0.05, -1.1, 1.05, 0.55],
         "anchor_pin": "gate",
         "pins": [
