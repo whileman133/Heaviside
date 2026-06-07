@@ -5975,6 +5975,82 @@
           "anchor": null
         }
       ]
+    },
+    "ethermistor": {
+      "display_name": "Thermistor (European)",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european resistive sensor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pR": {
+      "display_name": "Potentiometer",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "pR",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.6,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
     }
   }
 }

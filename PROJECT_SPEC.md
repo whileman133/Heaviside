@@ -611,13 +611,14 @@ The palette category display order is: **Resistors → Capacitors → Inductors 
 
 **American vs. european shapes.** Both conventions are offered as *distinct
 components* sitting side by side in their category, rather than a global toggle:
-the american resistor `R` and **european resistor** `eR` (Resistors); the
+the american resistor `R` and **european resistor** `eR`, the variable resistor
+`vR`/`evR`, the potentiometer `pR`/`epot`, and the resistive sensor
+`thermistor`/`ethermistor` (Resistors); the
 american inductor `L` with the **european** `eL` and **cute** `cuteL` inductors
 (Inductors); and, for **Logic**, the american gates (`and`, `or`, `nand`, `nor`,
 `xor`, `xnor`, `not`, `buffer`) alongside their european/IEC counterparts
-(`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`); the european
-**sources** `eV`/`eI` and controlled `ecV`/`ecI` (Sources); and the european
-**variable resistor** `evR` and **potentiometer** `epot` (Resistors). Each
+(`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`); and the
+european **sources** `eV`/`eI` and controlled `ecV`/`ecI` (Sources). Each
 european kind uses CircuiTikZ's *style-independent* shape keyword (`european
 resistor`, `european inductor`, `cute inductor`, `european and port`, `european
 voltage source`, `variable european resistor`, …), so its

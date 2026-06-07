@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sources `eV`/`eI` and their controlled forms `ecV`/`ecI` (Sources), plus a
   European variable resistor `evR` and potentiometer `epot` (Resistors), using
   the `european …` shape keywords.
+- **European resistive sensor & american potentiometer.** Added a European
+  resistive sensor `ethermistor` (the european thermistor equivalent,
+  `european resistive sensor`) to pair with the american `thermistor`, and an
+  american potentiometer `pR` to pair with the European `epot` (both Resistors).
 - **Document Settings (Edit ▸ Document Settings…).** Choose the CircuiTikZ
   **american/european** style for voltage (`v=`) and current (`i=`) labels
   per-document. Stored in the `.hv` file (new `config` object; format bumped to
