@@ -609,6 +609,16 @@ Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()
 
 The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Sources → Instruments → Grounds → Supplies → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components.
 
+**American vs. european shapes.** Both conventions are offered as *distinct
+components* sitting side by side in their category, rather than a global toggle:
+the american resistor `R` and **european resistor** `eR` (Resistors), and the
+american inductor `L` with the **european** `eL` and **cute** `cuteL` inductors
+(Inductors). Each european/cute kind uses CircuiTikZ's *style-independent* shape
+keyword (`european resistor`, `european inductor`, `cute inductor`), so its shape
+is fixed in both the canvas and the output regardless of any global
+`resistor`/`inductor` style. (This is orthogonal to the document **voltage/current
+label** styles of §7.2, which are a per-document setting.)
+
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
 > **Superseded.** This manual procedure no longer applies to the running app.

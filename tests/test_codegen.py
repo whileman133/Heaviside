@@ -50,6 +50,18 @@ def _wire(points) -> Wire:
 
 
 # ---------------------------------------------------------------------------
+# European / cute component shape keywords (§5)
+# ---------------------------------------------------------------------------
+
+def test_european_components_emit_shape_keywords() -> None:
+    """European/cute components emit their style-independent shape keyword, so the
+    shape is fixed regardless of the document's global resistor/inductor style."""
+    assert "to[european resistor]" in generate(_schematic(_comp("eR")))
+    assert "to[european inductor]" in generate(_schematic(_comp("eL")))
+    assert "to[cute inductor]" in generate(_schematic(_comp("cuteL")))
+
+
+# ---------------------------------------------------------------------------
 # Document voltage/current label styles (§7.2)
 # ---------------------------------------------------------------------------
 

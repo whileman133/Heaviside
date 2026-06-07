@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **European / cute component variants.** Added a European-style resistor
+  (Resistors) and European and "cute" inductors (Inductors), using CircuiTikZ's
+  style-independent shape keywords (`european resistor`, `european inductor`,
+  `cute inductor`) so they render the same shape on the canvas and in output
+  regardless of the global style — and can sit alongside the american symbols.
 - **Document Settings (Edit ▸ Document Settings…).** Choose the CircuiTikZ
   **american/european** style for voltage (`v=`) and current (`i=`) labels
   per-document. Stored in the `.hv` file (new `config` object; format bumped to

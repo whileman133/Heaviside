@@ -85,6 +85,23 @@ def test_two_terminal_kinds_include_bespoke():
     assert "op amp" not in cg._TWO_TERMINAL_KINDS
 
 
+def test_european_and_cute_variants_present():
+    """European resistor/inductor and cute inductor are registered path elements
+    using CircuiTikZ's style-independent shape keywords, in the R/L categories."""
+    expected = {
+        "eR": ("Resistors", "european resistor"),
+        "eL": ("Inductors", "european inductor"),
+        "cuteL": ("Inductors", "cute inductor"),
+    }
+    for kind, (category, tikz) in expected.items():
+        defn = REGISTRY[kind]
+        assert defn.category == category
+        assert defn.tikz_keyword == tikz
+        assert [p.name for p in defn.pins] == ["in", "out"]
+        # path emission (to[…]), so not classified multi-terminal/node
+        assert kind in cg._TWO_TERMINAL_KINDS
+
+
 def test_emission_is_path_or_node():
     # Emission collapses to two LaTeX-syntax groups: ``path`` (to[…]) and
     # ``node`` (node[…]).  Multi-terminal-ness is derived from the data, not a
