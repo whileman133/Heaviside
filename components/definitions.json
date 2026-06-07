@@ -3839,6 +3839,44 @@
           "mode": "suffix"
         }
       ]
+    },
+    "cpe": {
+      "display_name": "Constant Phase Element",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "cpe",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
     }
   }
 }

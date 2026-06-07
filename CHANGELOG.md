@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *renamed* kind on load, so a future symbol rename won't break old files.
 
 ### Added
+- **CPE (Constant Phase Element)** — the `cpe` two-terminal bipole, for impedance
+  / EIS equivalent-circuit work, under the Capacitors category.
 - **Logic gates with a live input count.** The American gate family — AND, OR,
   NAND, NOR, XOR, XNOR (each **2–16 inputs**), plus NOT and Buffer — under a new
   **Logic** palette category. The multi-input gates are *parametric*: the input
