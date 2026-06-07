@@ -68,7 +68,7 @@ from app.preview.latex import (
     pdf_to_eps,
     pdf_to_svg,
 )
-from app.preview import mathrender
+from app.preview import mathrender, tools
 from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
@@ -112,6 +112,9 @@ class MainWindow(QMainWindow):
         self._current_path: Path | None = None
         self._modified = False
         self._prefs = Preferences()
+        # Apply configured external-tool paths before any discovery (dependency
+        # check, preview, math-label engine) so they honour the user's settings.
+        tools.set_tool_paths(self._prefs.tool_paths)
         self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
         self._scene.set_line_hops(self._prefs.line_hops)
         mathrender.set_force_ziamath(self._prefs.force_ziamath)
@@ -794,12 +797,17 @@ class MainWindow(QMainWindow):
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
             self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
             self._scene.set_line_hops(self._prefs.line_hops)
+            # Apply configured tool paths first so the engine choice, re-typeset,
+            # and recompile below all see the updated discovery (§8.7 / §10.8).
+            tools.set_tool_paths(self._prefs.tool_paths)
             # Apply the label-render engine choice and re-typeset existing labels
-            # so a ziamath toggle is reflected immediately (§10.8).
+            # so a ziamath toggle (or a new latex path) is reflected immediately.
             mathrender.set_force_ziamath(self._prefs.force_ziamath)
             self._scene.retypeset_labels()
             self._source_panel.refresh()
             self._on_auto_compile()
+            # Surface any still-missing required tool (silent when now resolved).
+            self._check_and_warn_dependencies()
 
     def _on_export_tex(self) -> None:
         """Export the schematic as an includable CircuiTikZ ``.tex`` snippet.

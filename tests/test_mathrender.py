@@ -248,7 +248,10 @@ def test_force_ziamath_selects_engine() -> None:
 
 def test_fallback_to_ziamath_when_latex_absent(monkeypatch) -> None:
     """With no latex/dvisvgm on PATH, auto-selection falls back to ziamath."""
-    monkeypatch.setattr(_mr.shutil, "which", lambda name: None)
+    from app.preview import tools
+
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    tools.set_tool_paths({})  # no explicit override
     set_force_ziamath(False)
     assert _active_engine() == "ziamath"
 

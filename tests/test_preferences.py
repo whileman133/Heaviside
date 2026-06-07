@@ -47,6 +47,24 @@ def test_roundtrip_tex(prefs: Preferences) -> None:
     assert prefs.auto_export_tex is False
 
 
+def test_tool_paths_default_empty(prefs: Preferences) -> None:
+    """No tool paths configured by default; the dict covers every tool."""
+    from app.preview import tools
+
+    assert set(prefs.tool_paths) == set(tools.TOOLS)
+    assert all(v == "" for v in prefs.tool_paths.values())
+
+
+def test_tool_path_roundtrip(prefs: Preferences) -> None:
+    prefs.set_tool_path("pdflatex", "/opt/tex/pdflatex")
+    assert prefs.tool_path("pdflatex") == "/opt/tex/pdflatex"
+    assert prefs.tool_paths["pdflatex"] == "/opt/tex/pdflatex"
+    prefs.set_tool_path("pdflatex", "  /opt/tex/bin/pdflatex  ")  # trimmed
+    assert prefs.tool_path("pdflatex") == "/opt/tex/bin/pdflatex"
+    prefs.set_tool_path("pdflatex", "")
+    assert prefs.tool_path("pdflatex") == ""
+
+
 def test_roundtrip_force_ziamath(prefs: Preferences) -> None:
     assert prefs.force_ziamath is False
     prefs.force_ziamath = True
@@ -118,12 +136,14 @@ def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     dlg._chk_open_pins.setChecked(True)
     dlg._chk_line_hops.setChecked(False)
     dlg._chk_force_ziamath.setChecked(True)
+    dlg._tool_edits["pdflatex"].setText("/opt/tex/pdflatex")
     dlg._on_accept()
     assert prefs.auto_export_tex is True
     assert prefs.auto_export_pdf is True
     assert prefs.auto_export_eps is True
     assert prefs.auto_export_svg is True
     assert prefs.force_ziamath is True
+    assert prefs.tool_path("pdflatex") == "/opt/tex/pdflatex"
     assert prefs.mark_unconnected_pins is True
     assert prefs.line_hops is False
 

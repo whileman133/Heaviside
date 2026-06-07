@@ -1333,9 +1333,10 @@ def test_build_snippet_has_no_document_wrapper() -> None:
 
 def test_pdf_to_eps_missing_tool(monkeypatch) -> None:
     """pdf_to_eps raises CompileError when pdftocairo is absent."""
-    from app.preview import latex
+    from app.preview import latex, tools
 
-    monkeypatch.setattr(latex.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    tools.set_tool_paths({})  # no explicit override -> falls through to (patched) PATH
     with pytest.raises(latex.CompileError, match="pdftocairo"):
         latex.pdf_to_eps(b"%PDF-1.4")
 
@@ -1363,9 +1364,10 @@ def test_pdf_to_eps_roundtrip() -> None:
 
 def test_pdf_to_svg_missing_tool(monkeypatch) -> None:
     """pdf_to_svg raises CompileError when pdftocairo is absent."""
-    from app.preview import latex
+    from app.preview import latex, tools
 
-    monkeypatch.setattr(latex.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    tools.set_tool_paths({})
     with pytest.raises(latex.CompileError, match="pdftocairo"):
         latex.pdf_to_svg(b"%PDF-1.4")
 
@@ -1391,46 +1393,46 @@ def test_pdf_to_svg_roundtrip() -> None:
 
 def test_ensure_tool_dirs_adds_existing_dir(monkeypatch, tmp_path) -> None:
     """An existing tool dir missing from PATH is appended (macOS)."""
-    from app.preview import latex
+    from app.preview import tools
 
-    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setattr(tools.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tools, "_MAC_TOOL_DIRS", (str(tmp_path),))
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
-    latex._ensure_tool_dirs_on_path()
+    tools.ensure_tool_dirs_on_path()
     assert str(tmp_path) in os.environ["PATH"].split(os.pathsep)
 
 
 def test_ensure_tool_dirs_idempotent(monkeypatch, tmp_path) -> None:
     """Calling twice does not duplicate the appended dir."""
-    from app.preview import latex
+    from app.preview import tools
 
-    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setattr(tools.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tools, "_MAC_TOOL_DIRS", (str(tmp_path),))
     monkeypatch.setenv("PATH", "/usr/bin")
-    latex._ensure_tool_dirs_on_path()
-    latex._ensure_tool_dirs_on_path()
+    tools.ensure_tool_dirs_on_path()
+    tools.ensure_tool_dirs_on_path()
     assert os.environ["PATH"].split(os.pathsep).count(str(tmp_path)) == 1
 
 
 def test_ensure_tool_dirs_skips_missing_dir(monkeypatch) -> None:
     """A non-existent tool dir is never added."""
-    from app.preview import latex
+    from app.preview import tools
 
-    monkeypatch.setattr(latex.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", ("/no/such/dir/xyz",))
+    monkeypatch.setattr(tools.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(tools, "_MAC_TOOL_DIRS", ("/no/such/dir/xyz",))
     monkeypatch.setenv("PATH", "/usr/bin")
-    latex._ensure_tool_dirs_on_path()
+    tools.ensure_tool_dirs_on_path()
     assert "/no/such/dir/xyz" not in os.environ["PATH"].split(os.pathsep)
 
 
 def test_ensure_tool_dirs_noop_off_darwin(monkeypatch, tmp_path) -> None:
     """Off macOS the function makes no change to PATH."""
-    from app.preview import latex
+    from app.preview import tools
 
-    monkeypatch.setattr(latex.platform, "system", lambda: "Linux")
-    monkeypatch.setattr(latex, "_MAC_TOOL_DIRS", (str(tmp_path),))
+    monkeypatch.setattr(tools.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(tools, "_MAC_TOOL_DIRS", (str(tmp_path),))
     monkeypatch.setenv("PATH", "/usr/bin")
-    latex._ensure_tool_dirs_on_path()
+    tools.ensure_tool_dirs_on_path()
     assert os.environ["PATH"] == "/usr/bin"
 
 

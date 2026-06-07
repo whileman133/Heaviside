@@ -1533,6 +1533,7 @@ suits the web and vector editors (Inkscape, Illustrator).
 ### 8.7 Dependencies
 
 - `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Checked at startup (`check_dependencies`); a warning dialog is shown if not found.
+- **Tool discovery.** Which binary runs for each external tool (`pdflatex`, `latex`, `dvisvgm`, `pdftocairo`) is resolved by `app/preview/tools.py`: an explicit **user-configured path** (Preferences → Tools, §10.8) wins when it points at a runnable file, otherwise the tool is looked up on the `PATH` (augmented on macOS with common install dirs a Finder/Dock launch would not inherit). The UI pushes the configured paths into `tools.set_tool_paths()` at startup and when preferences change; `tools` has no Qt dependency, so the codegen/preview modules never touch `QSettings`.
 - **On-canvas equation labels need no LaTeX.** They render via the bundled, pure-Python **ziamath** engine when `latex`/`dvisvgm` are absent (§8.4); when those are present the higher-fidelity LaTeX engine is used instead. So drawing, typeset canvas labels, CircuiTikZ source generation, and the `.tex` export all work with no LaTeX install — only the PDF preview and image exports require it.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
 - `pdftocairo` (Poppler) is required **only** for EPS and SVG export (§8.6). It is checked on demand in `pdf_to_eps`/`pdf_to_svg` (not at startup), so users who never export EPS or SVG are not warned about a missing Poppler.
@@ -1830,6 +1831,7 @@ Current settings:
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
 | Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
+| Tool paths | `tools/pdflatex`, `tools/latex`, `tools/dvisvgm`, `tools/pdftocairo` | empty (auto-detect) | Explicit path to each external tool (§8.7). Blank = discover on `PATH`. A **Tools** group in the dialog provides a field + **Browse…** per tool with live status (found-on-PATH / will-use-this-path / not-found). Applied via `tools.set_tool_paths()` on accept, then the dependency check, label re-typeset, and recompile re-run. |
 
 When any is enabled, `_do_save()` calls `_auto_export()`. The `.tex` snippet is
 generated directly (`generate()` → `build_snippet()`, pure Python — **no LaTeX
@@ -1899,7 +1901,9 @@ heaviside/
 │   │   └── circuitikz.py          # generate(schematic) → str
 │   ├── preview/
 │   │   ├── worker.py              # PreviewWorker(QThread)
-│   │   └── latex.py               # build_tex / build_snippet / pdf_to_eps, helpers
+│   │   ├── tools.py               # external-tool path resolution (pdflatex/latex/dvisvgm/pdftocairo)
+│   │   ├── mathrender.py          # on-canvas math labels → QPainterPath (latex or ziamath engine)
+│   │   └── latex.py               # build_tex / build_snippet / pdf_to_eps / pdf_to_svg, helpers
 │   └── ui/
 │       ├── mainwindow.py          # MainWindow(QMainWindow)
 │       ├── palette.py             # ComponentPalette(QWidget)
@@ -1917,6 +1921,7 @@ heaviside/
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
+    ├── test_tools.py              # external-tool path resolution (override vs PATH)
     ├── test_mainwindow.py         # MainWindow auto-export + label re-typeset (offscreen Qt)
     ├── test_welcome.py            # welcome screen + Help dialog reference tables (offscreen Qt)
     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
@@ -2215,8 +2220,17 @@ defaults on** (`test_line_hops_default_on_and_roundtrip`); TeX/PDF/EPS/SVG, the
 `force_ziamath` render flag, and the display flags round-trip and persist across
 new `Preferences` instances over the
 same backing file; `_to_bool` normalizes the string booleans `QSettings` may
-return; the dialog persists all checkbox state on accept and discards it on
-cancel.
+return; the **per-tool path** accessors default to empty and round-trip (trimmed);
+and the dialog persists all checkbox state **and the tool-path fields** on accept
+and discards them on cancel.
+
+#### External tools (`test_tools.py`)
+
+`app/preview/tools` resolution (§8.7), pure (no Qt): a configured override wins
+when it points at a runnable file; a non-runnable override is ignored and
+resolution falls back to `PATH`; `resolve` is `None` when neither yields a tool;
+a blank value clears an override; `set_tool_paths` ignores unknown keys; and
+`is_runnable` accepts only existing executable files (not directories or blanks).
 
 #### Main window (`test_mainwindow.py`)
 

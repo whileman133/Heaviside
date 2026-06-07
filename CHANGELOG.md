@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Configurable tool paths (Preferences → Tools).** Set explicit paths to
+  `pdflatex`, `latex`, `dvisvgm`, and `pdftocairo` when they aren't on your
+  `PATH` or you want a specific install (à la LaTeXiT). Each field has a
+  **Browse…** picker and live status (found-on-PATH / will-use-this-path /
+  not-found); blank means auto-detect. Resolution now goes through a single
+  `app/preview/tools` resolver (configured path → PATH).
 - **LaTeX-free on-canvas equation labels.** Typeset component/wire/annotation
   labels now render via a bundled, pure-Python engine (**ziamath**, ~3 MB, ships
   the STIX Two Math font) when a system LaTeX install isn't available — so

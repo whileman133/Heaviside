@@ -34,45 +34,20 @@ check_dependencies() -> list[str]
 
 from __future__ import annotations
 
-import os
-import platform
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Tool discovery (PATH augmentation)
+# Tool discovery
 # ---------------------------------------------------------------------------
+#
+# Which binary to run for each external tool (honouring a user-configured path,
+# else PATH) is decided by app.preview.tools.  ``_ensure_tool_dirs_on_path`` is
+# re-exported for the modules/tests that still import it from here.
 
-# Directories where TeX and Poppler binaries commonly live on macOS but which a
-# GUI app launched from Finder/Dock does NOT inherit: such an app gets only a
-# minimal PATH (``/usr/bin:/bin:/usr/sbin:/sbin``), so pdflatex (and pdftocairo
-# for EPS export) appear "missing" even when installed. We append these to PATH so
-# the tools are found regardless of how the app was launched. Appending (not
-# prepending) preserves any working PATH from a terminal launch.
-_MAC_TOOL_DIRS = (
-    "/Library/TeX/texbin",   # MacTeX / BasicTeX
-    "/usr/local/bin",        # Intel Homebrew, MacPorts symlinks
-    "/opt/homebrew/bin",     # Apple Silicon Homebrew
-    "/opt/local/bin",        # MacPorts
-)
-
-
-def _ensure_tool_dirs_on_path() -> None:
-    """Append common macOS TeX/Poppler bin dirs to PATH if absent.
-
-    Idempotent; only adds directories that exist and are not already on PATH.
-    No-op off macOS. Called before any ``shutil.which`` / ``subprocess`` use so
-    the dependency check and compilation behave the same whether the app was
-    launched from a terminal or from Finder/Dock.
-    """
-    if platform.system() != "Darwin":
-        return
-    parts = os.environ.get("PATH", "").split(os.pathsep)
-    extra = [d for d in _MAC_TOOL_DIRS if os.path.isdir(d) and d not in parts]
-    if extra:
-        os.environ["PATH"] = os.pathsep.join([p for p in parts if p] + extra)
+from app.preview.tools import ensure_tool_dirs_on_path as _ensure_tool_dirs_on_path  # noqa: E402
+from app.preview import tools as _tools  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -159,14 +134,14 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
     Raises
     ------
     CompileError
-        If pdflatex is not found on PATH, exits with a non-zero status, or
-        exceeds *timeout*.
+        If pdflatex is not found (PATH or a configured path), exits with a
+        non-zero status, or exceeds *timeout*.
     """
-    _ensure_tool_dirs_on_path()
-    if shutil.which("pdflatex") is None:
+    pdflatex = _tools.resolve("pdflatex")
+    if pdflatex is None:
         raise CompileError(
-            "pdflatex not found on PATH. "
-            "Install TeX Live (texlive-full) or MiKTeX."
+            "pdflatex not found. Install TeX Live (texlive-full) or MiKTeX, or "
+            "set its path in Preferences → Tools."
         )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -177,7 +152,7 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
         try:
             result = subprocess.run(
                 [
-                    "pdflatex",
+                    pdflatex,
                     "-interaction=nonstopmode",
                     "-halt-on-error",
                     # Defence in depth: a .hv file may come from an untrusted
@@ -232,14 +207,14 @@ def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout
     Raises
     ------
     CompileError
-        If ``pdftocairo`` is not found on PATH, exits non-zero, times out, or
-        produces no output.
+        If ``pdftocairo`` is not found (PATH or a configured path), exits
+        non-zero, times out, or produces no output.
     """
-    _ensure_tool_dirs_on_path()
-    if shutil.which("pdftocairo") is None:
+    pdftocairo = _tools.resolve("pdftocairo")
+    if pdftocairo is None:
         raise CompileError(
-            "pdftocairo not found on PATH. "
-            f"Install Poppler (poppler-utils) to enable {label} export."
+            "pdftocairo not found. Install Poppler (poppler-utils) to enable "
+            f"{label} export, or set its path in Preferences → Tools."
         )
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -250,7 +225,7 @@ def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout
 
         try:
             result = subprocess.run(
-                ["pdftocairo", flag, str(pdf_file), str(out_file)],
+                [pdftocairo, flag, str(pdf_file), str(out_file)],
                 cwd=tmp,
                 capture_output=True,
                 timeout=timeout,
@@ -367,18 +342,18 @@ def check_dependencies() -> list[str]:
     """
     Return a list of warning strings for missing system dependencies.
 
-    An empty list means all required tools are present on PATH.
+    An empty list means all required tools are present (on PATH or via a
+    configured path in Preferences → Tools).
 
     Only ``pdflatex`` is required for normal use: the preview is rendered by
     Qt's own PDF engine (no Poppler).  ``pdftocairo`` (Poppler) is needed *only*
-    for EPS export and is checked on demand in :func:`pdf_to_eps`, so it is not
-    reported here — a missing Poppler should not warn users who never export EPS.
+    for EPS/SVG export and is checked on demand, so it is not reported here — a
+    missing Poppler should not warn users who never export EPS/SVG.
     """
-    _ensure_tool_dirs_on_path()
     missing: list[str] = []
-    if shutil.which("pdflatex") is None:
+    if _tools.resolve("pdflatex") is None:
         missing.append(
-            "pdflatex not found on PATH. "
-            "Install TeX Live (texlive-full) or MiKTeX to enable preview."
+            "pdflatex not found. Install TeX Live (texlive-full) or MiKTeX to "
+            "enable preview, or set its path in Preferences → Tools."
         )
     return missing
