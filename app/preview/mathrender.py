@@ -2,7 +2,7 @@ r"""
 Vector rendering of LaTeX fragments for on-canvas WYSIWYG labels (prototype).
 
 This reuses the *exact* toolchain that produces the component symbols
-(``tools/generate_components.py`` / ``app/components/render.py``)::
+(``components/generate_components.py`` / ``app/components/render.py``)::
 
     latex -> .dvi -> dvisvgm --no-fonts -> SVG -> svgsym.parse_path -> QPainterPath
 

@@ -10,12 +10,12 @@ Three functions, all Qt-free, requiring ``latex`` + ``dvisvgm`` at run time (a
 developer-tool dependency, not a shipped-app one):
 
 * :func:`render_svg`        — circuitikz body -> (svg_text, latex_log)
-* :func:`parse_geometry`— svg_text -> manifest-style ``{viewBox, paths, glyphs}``
+* :func:`parse_geometry`— svg_text -> geometry-style ``{viewBox, paths, glyphs}``
 * :func:`measure_anchors` — read ``\pgfpointanchor`` dumps -> ``{name: (gu_x, gu_y)}``
   as a **GU offset** (Qt y-down), directly comparable to a pin position.
 
-This is the single renderer/parser: ``tools/generate_components.py`` drives it to
-produce both the manifest geometry and the component data file.
+This is the single renderer/parser: ``components/generate_components.py`` drives it to
+produce both the symbol geometry and the component data file.
 """
 
 from __future__ import annotations
@@ -127,6 +127,43 @@ def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 1
     for name, xs, ys in _ANCHOR_RE.findall(log):
         out[name] = (round(float(xs) / TEXPT_PER_GU, 4), round(-float(ys) / TEXPT_PER_GU, 4))
     return out
+
+
+_NO_SUCH_ANCHOR = "hv__no_such_anchor__"
+
+
+def discover_terminals(tikz_keyword: str, candidates: list[str], *,
+                       border_pt: int = 10) -> dict[str, tuple[float, float]]:
+    """Discover a shape's wireable terminals from a *candidates* anchor list.
+
+    CircuiTikZ/pgf exposes no machine-readable terminal list: an undefined anchor
+    name resolves to the shape **centre** (the fallback) rather than erroring, and
+    aliases (``B``/``base``/``G``/``gate``) collapse to one point.  So we measure
+    all candidates plus a sentinel, drop any that land on the sentinel's fallback
+    point, and de-duplicate by position — keeping the first candidate name that
+    reaches each distinct terminal.  Returns ``{anchor_name: (gu_x, gu_y)}``.
+
+    The candidate *order* picks the canonical name per terminal (put your preferred
+    names first).  Intended for offline import/discovery, not the runtime hot path.
+    """
+    probe = list(candidates) + [_NO_SUCH_ANCHOR]
+    try:                                              # fast path: one render
+        measured = measure_anchors(tikz_keyword, probe, border_pt=border_pt)
+    except RenderError:                               # strict shape: probe one-by-one
+        measured = {}
+        for anchor in probe:
+            try:
+                measured.update(measure_anchors(tikz_keyword, [anchor], border_pt=border_pt))
+            except RenderError:
+                pass
+    fallback = measured.get(_NO_SUCH_ANCHOR)
+    by_pos: dict[tuple[float, float], str] = {}
+    for name in candidates:                           # candidate order => canonical name
+        pos = measured.get(name)
+        if pos is None or pos == fallback:
+            continue
+        by_pos.setdefault(pos, name)
+    return {name: pos for pos, name in by_pos.items()}
 
 
 # ---------------------------------------------------------------------------

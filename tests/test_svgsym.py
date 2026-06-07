@@ -3,7 +3,7 @@ Tests for app/canvas/svgsym.py — symbol geometry, including glyph (+/-) marks.
 
 Symbols whose CircuiTikZ output contains text marks (the +/- of a voltage or
 controlled source, op-amp labels, etc.) record those as opaque <use> glyph
-references in the manifest. svgsym reconstructs them by reading the original
+references in the geometry. svgsym reconstructs them by reading the original
 .svg file. These tests guard that reconstruction so the marks don't silently
 disappear (a regression that also surfaced as a packaging bug when the .svg
 files were not bundled).
@@ -27,16 +27,16 @@ except Exception as exc:  # pragma: no cover - environment-dependent
 
 import json  # noqa: E402
 
-from app.canvas.style import MANIFEST_PATH  # noqa: E402
-from app.canvas.svgsym import manifest_key, symbol_paths  # noqa: E402
+from app.canvas.style import GEOMETRY_PATH  # noqa: E402
+from app.canvas.svgsym import geometry_key, symbol_paths  # noqa: E402
 
 
-def test_manifest_is_self_contained_for_glyph_kind() -> None:
-    """The controlled-source's +/- marks are baked into the manifest (`glyphs`),
+def test_geometry_is_self_contained_for_glyph_kind() -> None:
+    """The controlled-source's +/- marks are baked into the geometry (`glyphs`),
     so the app needs no .svg access at run time."""
-    with open(MANIFEST_PATH, encoding="utf-8") as fh:
-        manifest = json.load(fh)
-    entry = manifest[manifest_key("cV")]
+    with open(GEOMETRY_PATH, encoding="utf-8") as fh:
+        geometry = json.load(fh)
+    entry = geometry[geometry_key("cV")]
     assert entry["glyphs"], "cV must carry baked glyph marks"
     g = entry["glyphs"][0]
     assert g["d"].lstrip()[:1] in "Mm"          # real path geometry, not a placeholder

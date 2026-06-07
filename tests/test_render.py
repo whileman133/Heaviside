@@ -48,6 +48,18 @@ def test_npn_anchors_measured():
     assert _close(a["E"], (0.0, 0.77))
 
 
+def test_discover_terminals_finds_distinct_terminals():
+    # pgf resolves unknown anchors to the centre, so discovery must (a) drop the
+    # fallback, (b) dedupe aliases by position, (c) name by candidate order.
+    t = render.discover_terminals(
+        "npn", ["base", "collector", "emitter", "B", "C", "E", "center", "bogus"]
+    )
+    assert set(t) == {"base", "collector", "emitter"}      # 3 distinct, friendly-named
+    assert _close(t["base"], (-0.84, 0.0))
+    assert _close(t["collector"], (0.0, -0.77))
+    assert _close(t["emitter"], (0.0, 0.77))
+
+
 def test_geometry_parsed():
     svg, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
     geo = render.parse_geometry(svg)

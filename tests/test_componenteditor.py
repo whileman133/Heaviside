@@ -76,6 +76,36 @@ def test_data_entry_anchor_pin_excluded_from_leads():
     assert {l["anchor"] for l in e["leads"]} == {"drain", "source"}  # gate is the origin
 
 
+def test_compute_bbox_from_ink_extent_union_pins():
+    # SVG coords for a symbol spanning x:[0,1.02] GU, y:[-0.21,0.21] GU about the
+    # origin, with pins at (0,0) and (1,0).  The bbox = ink ∪ pins, rounded
+    # outward to 0.05.
+    ox = oy = 15.0312
+    K = 28.34765
+    geom = {
+        "paths": [{"d": f"M{ox} {oy - 0.21 * K} L{ox + 1.02 * K} {oy + 0.21 * K}"}],
+        "glyphs": [],
+    }
+    pins = [{"name": "in", "offset": [0, 0]}, {"name": "out", "offset": [1, 0]}]
+    assert renderer.compute_bbox(geom, (ox, oy), pins) == [0.0, -0.25, 1.05, 0.25]
+
+
+def test_compute_bbox_handles_hv_and_curves():
+    # H/V (axis moves) and C (control points) must not desync coordinate pairing.
+    ox = oy = 15.0312
+    K = 28.34765
+    geom = {
+        "paths": [{
+            "d": (f"M{ox} {oy}H{ox + 0.5 * K}V{oy - 0.3 * K}"
+                  f"C{ox + 0.5 * K} {oy - 0.3 * K} {ox + 0.5 * K} {oy} {ox + K} {oy}"),
+        }],
+        "glyphs": [],
+    }
+    pins = [{"name": "p", "offset": [0, 0]}]
+    # x spans 0..1.0, y spans -0.3..0 (Qt y-down) -> rounds to clean 0.05 grid.
+    assert renderer.compute_bbox(geom, (ox, oy), pins) == [0.0, -0.3, 1.0, 0.0]
+
+
 def test_variant_key():
     assert renderer.variant_key("D", {"name": "filled", "token": "*", "mode": "suffix"}) == "D*"
     assert renderer.variant_key("nigfete", {"name": "body_diode", "token": "bodydiode",
@@ -125,29 +155,70 @@ def test_derived_component_def():
 @pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
 def test_render_store_reproduces_committed_files():
     authored = renderer.load_authored()
-    manifest, components, origin = renderer.render_store(authored)
-    cur = json.loads(renderer.COMPONENTS_PATH.read_text())
+    geometry, components, origin = renderer.render_store(authored)
+    cur = json.loads(renderer.DEFINITIONS_PATH.read_text())
     assert list(origin) == cur["origin_svg"]
     assert components == cur["components"]
-    assert manifest == json.loads(renderer.MANIFEST_PATH.read_text())
+    assert geometry == json.loads(renderer.GEOMETRY_PATH.read_text())
+
+
+@pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
+def test_fit_alignment_derives_scale_and_leads():
+    """Alignment is recomputed from measurement (not read from the stored values),
+    with the scale-vs-leads strategy driven by anchor_pin."""
+    defs = json.loads(renderer.DEFINITIONS_PATH.read_text())["components"]
+
+    # Centre-placed (anchor_pin=None): leads-only, no scale (don't distort).
+    scale, leads = renderer.fit_alignment(defs["op amp"])
+    assert scale is None
+    assert {ld["anchor"] for ld in leads} == {"+", "-", "out"}
+
+    # Anchor-pinned BJT: a single scale lands collector/emitter exactly, no leads.
+    scale, leads = renderer.fit_alignment(defs["npn"])
+    assert scale == [1.1905, 1.2987] and leads == []
+
+    # Anchor-pinned MOSFET: scale + one residual source lead.
+    scale, leads = renderer.fit_alignment(defs["nigfete"])
+    assert scale == [1.0204, 0.962]
+    assert [ld["anchor"] for ld in leads] == ["source"]
+
+
+@pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
+def test_lead_paths_isolated_by_leadsfree_diff():
+    # The editor colours pin extensions (leads) by diffing the full render against
+    # a leads-free render: the extra paths are exactly the extensions.
+    opamp = _opamp_entry()
+    opamp["leads"] = [{"anchor": "+", "to": [-1.5, 0.5]},
+                      {"anchor": "-", "to": [-1.5, -0.5]},
+                      {"anchor": "out", "to": [1.5, 0.0]}]
+    full = renderer.geometry(opamp)
+    body = renderer.geometry({**opamp, "leads": []})
+    body_ds = {p["d"] for p in body["paths"]}
+    leads = [p["d"] for p in full["paths"] if p["d"] not in body_ds]
+    assert len(leads) == 3                      # one extension per pin
+    # A symbol with no extensions yields no extra paths.
+    r = _resistor_entry()
+    rfull = renderer.geometry(r)
+    rbody = renderer.geometry({**r, "leads": []})
+    assert {p["d"] for p in rfull["paths"]} == {p["d"] for p in rbody["paths"]}
 
 
 @pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
 def test_save_component_round_trips(tmp_path, monkeypatch):
     # Redirect the store to temp files seeded with a minimal valid store.
-    comp_path = tmp_path / "components.json"
-    man_path = tmp_path / "manifest.json"
+    comp_path = tmp_path / "definitions.json"
+    man_path = tmp_path / "geometry.json"
     comp_path.write_text(json.dumps({"origin_svg": [15.0312, 15.0312], "components": {}}))
     man_path.write_text("{}")
-    monkeypatch.setattr(renderer, "COMPONENTS_PATH", comp_path)
-    monkeypatch.setattr(renderer, "MANIFEST_PATH", man_path)
+    monkeypatch.setattr(renderer, "DEFINITIONS_PATH", comp_path)
+    monkeypatch.setattr(renderer, "GEOMETRY_PATH", man_path)
 
     renderer.save_component("R", _resistor_entry())
     data = json.loads(comp_path.read_text())
     assert "R" in data["components"]
     assert data["components"]["R"]["tikz"] == "R"
-    manifest = json.loads(man_path.read_text())
-    assert "R" in manifest and manifest["R"]["paths"]
+    geometry = json.loads(man_path.read_text())
+    assert "R" in geometry and geometry["R"]["paths"]
 
 
 # ---------------------------------------------------------------------------
@@ -195,3 +266,20 @@ def test_window_scale_is_editable_and_round_trips():
     win._set_scale(2.0, 0.5)
     _, out2 = win._form_to_entry()
     assert out2["scale"] == [2.0, 0.5]
+
+
+def test_window_bbox_is_read_only_and_derived():
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+    try:
+        QApplication.instance() or QApplication([])
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Qt unavailable: {exc}")
+    from app.componenteditor.window import ComponentEditorWindow
+
+    win = ComponentEditorWindow()
+    # The bbox is computed on Render, not hand-typed: the spin boxes are read-only.
+    assert all(sb.isReadOnly() for sb in win._bbox)
+    win._set_bbox([0.0, -0.25, 2.05, 0.25])
+    _, entry = win._form_to_entry()
+    assert entry["bbox"] == [0.0, -0.25, 2.05, 0.25]

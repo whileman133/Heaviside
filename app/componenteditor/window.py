@@ -4,7 +4,7 @@ Standalone component-editor window (Qt).
 A form-driven editor for CircuiTikZ symbols: enter the keyword, emission, pins,
 and metadata; **Measure** reads the CircuiTikZ pin anchors automatically;
 **Render & preview** renders the symbol; **Save** writes it into the component data
-files (``components.json`` + ``manifest.json``) via :mod:`app.componenteditor.renderer`.
+files (``definitions.json`` + ``geometry.json``) via :mod:`app.componenteditor.renderer`.
 
 The window is a thin shell over the Qt-free :mod:`app.componenteditor.draft` /
 ``renderer`` core (which the tests exercise head-less).  Launch with
@@ -16,6 +16,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen, QTransform
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
@@ -90,17 +91,21 @@ class ComponentEditorWindow(QMainWindow):
         form.addRow("Label slots", self._labels)
         form.addRow("Anchor pin", self._anchor_pin)
 
+        # Bounding box is computed from the rendered ink extent (∪ pins) on
+        # Render — never hand-typed — so these are read-only displays.
         self._bbox = [QDoubleSpinBox() for _ in range(4)]
         bbox_row = QHBoxLayout()
         for sb, lbl in zip(self._bbox, ("x0", "y0", "x1", "y1")):
             sb.setRange(-20, 20)
-            sb.setSingleStep(0.25)
             sb.setDecimals(2)
+            sb.setReadOnly(True)
+            sb.setButtonSymbols(QAbstractSpinBox.NoButtons)
+            sb.setFocusPolicy(Qt.NoFocus)
             bbox_row.addWidget(QLabel(lbl))
             bbox_row.addWidget(sb)
         bbox_w = QWidget()
         bbox_w.setLayout(bbox_row)
-        form.addRow("Bounding box", bbox_w)
+        form.addRow("Bounding box (auto)", bbox_w)
 
         # Editable node scale (multi-terminal alignment).  "Fit pins to grid"
         # fills these; they can also be set by hand.
@@ -239,6 +244,10 @@ class ComponentEditorWindow(QMainWindow):
             sb.setValue(float(v))
             sb.blockSignals(False)
 
+    def _set_bbox(self, bbox: list[float]) -> None:
+        for sb, v in zip(self._bbox, bbox):
+            sb.setValue(float(v))
+
     def _entry_to_form(self, kind: str, entry: dict) -> None:
         self._leads = [dict(ld) for ld in entry["leads"]] if "leads" in entry else None
         sx, sy = entry.get("scale") or (1.0, 1.0)
@@ -314,46 +323,49 @@ class ComponentEditorWindow(QMainWindow):
             self._log("Fit applies to multi-terminal components (scales the symbol "
                       "so its pins land on the grid).")
             return
-        pins = entry["pins"]
-        anchor_of = {p["name"]: p.get("anchor") for p in pins}
-        if not any(anchor_of.values()):
+        if not any(p.get("anchor") for p in entry["pins"]):
             self._log("Set each pin's CircuiTikZ anchor first, then Fit.")
             return
         try:
-            measured = render.measure_anchors(entry["tikz"], [a for a in anchor_of.values() if a])
+            scale, leads = renderer.fit_alignment(entry)  # same logic the batch generator uses
         except render.RenderError as exc:
             self._log(f"Measure failed:\n{exc}\n\n{getattr(exc, 'log', '')[-800:]}")
             return
-        ap = entry.get("anchor_pin")
-        if ap and anchor_of.get(ap) in measured:
-            ox, oy = measured[anchor_of[ap]]
-            other = [p for p in pins if p["name"] != ap]
-        else:  # centre-placed (no anchor pin): anchors are already centre-relative
-            ox, oy = 0.0, 0.0
-            other = list(pins)
-        rel = {p["name"]: (round(measured[p["anchor"]][0] - ox, 4),
-                           round(measured[p["anchor"]][1] - oy, 4))
-               for p in other if p.get("anchor") in measured}
-        targets = {p["name"]: tuple(p["offset"]) for p in other if p["name"] in rel}
-        scale, residual = renderer.compute_alignment(rel, targets)
-        self._set_scale(scale[0], scale[1])
-        self._leads = [{"anchor": anchor_of[n], "to": list(targets[n])} for n in residual]
+        self._set_scale(*(scale or (1.0, 1.0)))
+        self._leads = leads
         self._on_render()
         self._out.setPlainText(
-            f"Fit: scale={tuple(scale)}, residual leads={residual}\n\n" + self._out.toPlainText()
+            f"Fit: scale={scale}, residual leads={[ld['anchor'] for ld in leads]}\n\n"
+            + self._out.toPlainText()
         )
 
     def _on_render(self) -> None:
         kind, entry = self._form_to_entry()
-        errs = draft.validate_entry(kind, entry)
-        report = ["VALID ✓" if not errs else "Problems:"] + [f"  • {e}" for e in errs]
         try:
             geom = renderer.geometry(entry)
         except render.RenderError as exc:
+            errs = draft.validate_entry(kind, entry)
+            report = ["VALID ✓" if not errs else "Problems:"] + [f"  • {e}" for e in errs]
             self._log("\n".join(report) + f"\n\nRender failed:\n{exc}\n\n{exc.log[-1200:]}")
             self._scene.clear()
             return
-        self._render_preview(geom, entry)
+        # The bbox is derived from the rendered ink extent (∪ pins), not authored.
+        entry["bbox"] = renderer.compute_bbox(geom, library.origin_svg(), entry["pins"])
+        self._set_bbox(entry["bbox"])
+        errs = draft.validate_entry(kind, entry)
+        report = ["VALID ✓" if not errs else "Problems:"] + [f"  • {e}" for e in errs]
+        # Identify the pin-extension (lead) paths by diffing against a leads-free
+        # render, so the preview can draw them in a distinct colour.  Only re-renders
+        # when the component actually has extensions.
+        lead_ds: set[str] = set()
+        if renderer.entry_leads(entry):
+            try:
+                body = renderer.geometry({**entry, "leads": []})
+                body_ds = {p["d"] for p in body["paths"]}
+                lead_ds = {p["d"] for p in geom["paths"] if p["d"] not in body_ds}
+            except render.RenderError:
+                lead_ds = set()
+        self._render_preview(geom, entry, lead_ds)
         cdef = draft.derived_component_def(kind, entry)
         report.append("")
         if entry.get("scale") or self._leads:
@@ -382,7 +394,8 @@ class ComponentEditorWindow(QMainWindow):
         QMessageBox.information(self, "Saved", f"Component {kind!r} saved.")
 
     # -- preview ---------------------------------------------------------
-    def _render_preview(self, geom: dict, entry: dict) -> None:
+    def _render_preview(self, geom: dict, entry: dict,
+                        lead_ds: set[str] | None = None) -> None:
         self._scene.clear()
         # Same transform as svgsym: translate(-origin) then uniform scale.
         try:
@@ -415,12 +428,18 @@ class ComponentEditorWindow(QMainWindow):
                                 bbox_pen, QBrush(Qt.NoBrush))
 
         from app.canvas.svgsym import parse_path
+        lead_ds = lead_ds or set()
         body_pen = QPen(QColor("#000000"))
         body_pen.setWidthF(2.0)
+        lead_pen = QPen(QColor("#CC0000"))  # pin extensions (leads) — match the pin markers
+        lead_pen.setWidthF(2.0)
         for p in geom["paths"]:
             path = t.map(parse_path(p["d"]))
-            self._scene.addPath(path, body_pen,
-                                QBrush(QColor("#000000")) if p.get("fill", "none") != "none" else QBrush(Qt.NoBrush))
+            if p["d"] in lead_ds:  # a grid-alignment extension: draw red, never filled
+                self._scene.addPath(path, lead_pen, QBrush(Qt.NoBrush))
+            else:
+                self._scene.addPath(path, body_pen,
+                                    QBrush(QColor("#000000")) if p.get("fill", "none") != "none" else QBrush(Qt.NoBrush))
 
         # pin markers at the registry offsets
         pin_pen = QPen(QColor("#CC0000"))

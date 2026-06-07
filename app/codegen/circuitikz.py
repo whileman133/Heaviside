@@ -46,10 +46,10 @@ corrections.
 
 These placement/alignment tables (``_MULTI_TERMINAL_KINDS``,
 ``_MULTI_TERMINAL_ANCHOR_PIN``, ``_PIN_TO_CTIKZ_ANCHOR``, ``_MULTI_TERMINAL_LEADS``)
-are **derived** from ``components/components.json`` via
+are **derived** from ``components/definitions.json`` via
 ``app.components.library.build_codegen_tables`` — they are not hand-maintained.
 The canvas (``app/canvas/svgsym.py``) draws the same lead bridges (baked into the
-geometry by ``tools/generate_components.py``), so the canvas and the LaTeX agree.
+geometry by ``components/generate_components.py``), so the canvas and the LaTeX agree.
 See ``spec/component-editor.md``.
 
 Named anchor references
@@ -153,7 +153,7 @@ def _translate_to_origin(schematic: Schematic) -> Schematic:
 # ---------------------------------------------------------------------------
 # Component classification
 #
-# These tables are derived from the component data file (components/components.json
+# These tables are derived from the component data file (components/definitions.json
 # via app/components/library.py), not hand-maintained.  The library carries every
 # CircuiTikZ symbol's emission mode, pin→anchor mapping, and alignment (scale /
 # lead stubs); the two-terminal annotations open/short are bespoke (no symbol in
@@ -170,12 +170,12 @@ _TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
 # Diode-family bipoles.  CircuiTikZ's default diode body is visually large
 # relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
 # a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
-# exported at the same scale (see tools/generate_components.py) so the canvas
+# exported at the same scale (see components/generate_components.py) so the canvas
 # and the rendered output stay in sync (§5.3 / §7.2).
 _DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
-#: Must match DIODE_SCALE in tools/generate_components.py.
+#: Must match DIODE_SCALE in components/generate_components.py.
 DIODE_SYMBOL_SCALE: float = 0.8
 
 # Multi-terminal components use node[] syntax.

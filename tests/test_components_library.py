@@ -2,13 +2,13 @@
 Tests for the component library (spec: ``spec/component-editor.md``).
 
 ``REGISTRY`` and the ``circuitikz`` codegen tables are now built from
-``components/components.json`` (via ``app/components/library.py``).  These tests
+``components/definitions.json`` (via ``app/components/library.py``).  These tests
 pin the expected values as golden constants — independent of the source — so a
 drift in the data file is caught here, and verify the registry/codegen are wired
 from the library.  End-to-end behaviour is covered by ``test_registry``,
 ``test_codegen``, and ``test_examples``.
 
-Regenerate the file with ``python tools/generate_components.py`` after changing a
+Regenerate the file with ``python components/generate_components.py`` after changing a
 component.
 """
 

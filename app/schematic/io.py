@@ -34,6 +34,13 @@ _FORMAT_VERSION: str = "0.1"
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {"0.1"}
 
+# Component-kind migration map: ``{old_kind: current_kind}``.  A ``.hv`` file
+# stores only a component's ``kind`` string (never its geometry), so the kind is
+# the stable identifier across CircuiTikZ-library re-generations.  If a future
+# re-generation renames a kind, add the old→new mapping here and old files keep
+# loading.  Applied in :func:`_dict_to_component` before the registry lookup.
+_KIND_ALIASES: dict[str, str] = {}
+
 
 class SchematicLoadError(Exception):
     """Raised when a .hv file cannot be loaded for any reason."""
@@ -259,6 +266,9 @@ def _dict_to_component(data: Any, index: int) -> Component:
         raise SchematicLoadError(f"{ctx}.id must be a string")
     if not isinstance(kind, str):
         raise SchematicLoadError(f"{ctx}.kind must be a string")
+    # Migrate a renamed kind to its current name so old files keep loading after
+    # a CircuiTikZ-library re-generation renames a symbol (see _KIND_ALIASES).
+    kind = _KIND_ALIASES.get(kind, kind)
     if not (isinstance(pos_raw, list) and len(pos_raw) == 2):
         raise SchematicLoadError(f"{ctx}.position must be a two-element array")
     if not isinstance(rot_raw, int):

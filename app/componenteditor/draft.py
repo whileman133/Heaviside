@@ -2,7 +2,7 @@
 Editing model for the component editor (Qt-free).
 
 A *draft* is just the authored ``entry`` dict (the same shape stored in
-``components/components.json`` under a kind).  This module validates a draft and
+``components/definitions.json`` under a kind).  This module validates a draft and
 builds preview artifacts, so the GUI window stays a thin shell over it.
 """
 

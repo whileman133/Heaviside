@@ -1415,8 +1415,9 @@ def test_wire_does_not_cover_overlapping_component(scene: SchematicScene):
     scene.add_wire([(0.0, 0.0), (0.0, 2.0), (2.0, 2.0)])    # L overlapping bbox
 
     pt = scene.gu_to_scene(1.0, 0.0)                        # resistor body centre
+    # The resistor uses the generic ComponentItem (no special subclass).
+    assert any(isinstance(i, ComponentItem) for i in scene.items(pt))
     types = {type(i).__name__ for i in scene.items(pt)}
-    assert "ResistorItem" in types
     assert "WireItem" not in types
 
 

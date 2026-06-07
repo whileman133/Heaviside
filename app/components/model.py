@@ -56,7 +56,7 @@ class Component:
 
     variants: dict[str, bool] = field(default_factory=dict)
     """Active boolean variants, keyed by the variant names the component's
-    *kind* declares in ``components/components.json`` (e.g. ``{"filled": True}``
+    *kind* declares in ``components/definitions.json`` (e.g. ``{"filled": True}``
     for a diode, ``{"body_diode": True}`` for a MOSFET).  A generic replacement
     for the former ``DiodeComponent.filled`` / ``MosfetComponent.body_diode``
     fields; the declared variants (name → TikZ token + mode) live in the

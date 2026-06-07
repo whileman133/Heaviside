@@ -574,7 +574,7 @@ class BipoleLabelSection(InspectorSection):
 class VariantSection(InspectorSection):
     """A checkbox per boolean variant the component's *kind* declares.
 
-    Generic over any variant in ``components/components.json`` (e.g. a diode's
+    Generic over any variant in ``components/definitions.json`` (e.g. a diode's
     ``filled``, a MOSFET's ``body_diode``).  The checkboxes are rebuilt on
     :meth:`_load` because the set of variants depends on the component's kind.
     """

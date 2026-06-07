@@ -1,6 +1,6 @@
 # Heaviside — Component Editor Specification
 
-**Version:** 0.4
+**Version:** 0.5
 **Status:** Implemented — the registry, codegen, and canvas build from the generated data file (no hand-stored geometry magic numbers); per-instance variants are generic; and a standalone authoring GUI is provided (`python -m app.componenteditor` / Tools menu).
 **Author:** Wes H.
 
@@ -39,11 +39,11 @@ Two pieces, both small:
    coordinate off a figure. (`latex`/`dvisvgm` are a developer-tool dependency,
    not a shipped-app one.)
 
-2. **One renderer, two outputs** (`tools/generate_components.py`). It renders
+2. **One renderer, two outputs** (`components/generate_components.py`). It renders
    every symbol (and variant) and writes:
-   - `tools/circuitikz_svgs/manifest.json` — the symbol *geometry* (paths/glyphs,
+   - `components/geometry.json` — the symbol *geometry* (paths/glyphs,
      read by `svgsym.py`); and
-   - `components/components.json` — the registry + codegen data (pins, bbox,
+   - `components/definitions.json` — the registry + codegen data (pins, bbox,
      leads, metadata) plus one `origin_svg` placement constant.
 
 The app builds its registry (`registry.py`), codegen tables (`circuitikz.py`),
@@ -55,7 +55,7 @@ registry, the codegen tables, or `svgsym`'s placement.
 
 ## 3. The data file
 
-`components/components.json` is `{origin_svg, components}`, where `components`
+`components/definitions.json` is `{origin_svg, components}`, where `components`
 maps each `kind` to a flat record. Example (a resistor and an op-amp):
 
 ```jsonc
@@ -91,7 +91,7 @@ Fields:
 | `display_name`, `category`, `labels` | Palette metadata + valid options-string slots. |
 | `emission` | `two_terminal` (`to[…]`), `node` (single-terminal `node[…]`), or `multi_terminal` (`node[…, anchor=…]` + leads). |
 | `tikz` | The CircuiTikZ keyword. |
-| `bbox` | Bounding box `(x0,y0,x1,y1)` in GU (a design choice, kept snug for label placement). |
+| `bbox` | Bounding box `(x0,y0,x1,y1)` in GU. **Computed**, not authored: the rendered ink extent (paths + glyphs) ∪ pin positions, rounded outward to 0.05 GU (`renderer.compute_bbox`). Drives label clearance and the hit/selection region; tracks the drawn symbol. |
 | `pins` | Each pin: `name`, grid `offset` (GU, multiple of 0.25), and the CircuiTikZ `anchor` it maps to (`null` for two-terminal/node, whose pins are the draw endpoints). |
 | `anchor_pin`, `scale`, `leads` | **Alignment** for multi-terminal symbols — see §4. `scale` is `[sx,sy]` (node `xscale=`/`yscale=`); `leads` bridge residuals. All computed, never hand-typed; each present only when used (the op amp has leads, BJTs a scale, MOSFETs both). |
 | `variants` | Boolean modifiers: `{name, token, mode}` where `mode` is `suffix` (`D`→`D*`) or `option` (append `, bodydiode`). Generalises the diode `filled` and MOSFET `body_diode` flags. |
@@ -128,12 +128,21 @@ the grid, so two **computed** corrections bring them on:
   whose grid pins are *chosen outward* of the body so a clean axis-aligned lead is
   the natural fit (the op amp's `±1.5`, which scaling would distort).
 
-Both are **computed from the measured anchors**, not hand-typed, and stored in the
-data file; the canvas (geometry baked with the scale + leads) and the codegen
-(`xscale=`/`yscale=` + lead `\draw`s) read the same values, so they agree by
-construction. Whether a given component is scaled, led, or both is recorded per
-entry (the editor's **Fit pins to grid** computes it). The op amp uses leads
-only; BJTs use scale only; MOSFETs use scale plus one small residual source lead.
+Both are **computed from the measured anchors**, not hand-typed (`renderer.fit_alignment`,
+shared by the editor's **Fit pins to grid** and the batch generator). The
+**batch generator re-derives them on every run** (`render_store` → `realigned`),
+so `scale`/`leads` are a *computed property of the current CircuiTikZ library*, not
+a frozen constant — re-generating after a CircuiTikZ update reflows the alignment
+automatically. The canvas (geometry baked with the scale + leads) and the codegen
+(`xscale=`/`yscale=` + lead `\draw`s) read the same stored values, so they agree
+by construction.
+
+The **scale-vs-leads strategy** is driven by the authored `anchor_pin`: a
+centre-placed symbol (`anchor_pin: null`) bridges every pin with a clean lead
+(scaling would distort its form — e.g. the op-amp triangle), while an
+anchor-pinned symbol stretches onto the grid and bridges only the residual. So:
+the op amp uses leads only; BJTs use scale only; MOSFETs use scale plus one small
+residual source lead.
 
 ---
 
@@ -145,16 +154,21 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
    each anchor's grid offset (the editor's **Measure anchors** button).
 2. **Choose pin grid positions.** Snap each measured offset to the nearest 0.25
    GU (or pick a clean outward position, as the op-amp's ±1.5 does).
-3. **Add the entry** to `components/components.json` (`components` map): emission,
-   tikz, pins (name/offset/anchor), `anchor_pin`, labels, bbox, variants. Run
+3. **Add the entry** to `components/definitions.json` (`components` map): emission,
+   tikz, pins (name/offset/anchor), `anchor_pin`, labels, variants. Run
    the editor's **Fit pins to grid** (or `compute_alignment`) to compute the
-   `scale` + residual `leads` that land the pins on the grid (§4).
-4. **Render & verify.** `python tools/generate_components.py` rebuilds the
-   manifest geometry and the data file; `tests/test_components_library.py` checks
-   the registry/codegen, and the suite checks the canvas geometry and that the
-   examples compile.
-5. Add a `ComponentItem` mapping in `app/canvas/items.py` and the `kind` to
-   `_DISPLAY_ORDER` in `registry.py`.
+   `scale` + residual `leads` that land the pins on the grid (§4). The `bbox` is
+   not authored — the renderer computes it from the ink extent (§3).
+4. **Render & verify.** `python components/generate_components.py` rebuilds the
+   geometry and the data file (computing each `bbox` from the rendered
+   ink); `tests/test_components_library.py` checks the registry/codegen, and the
+   suite checks the canvas geometry and that the examples compile.
+5. *(Optional.)* Nothing else is needed for a plain symbol — the canvas item
+   falls back to the generic `ComponentItem` and the palette shows the kind
+   automatically (`_DISPLAY_ORDER` is a preference, not a requirement). Add a
+   `ComponentItem` subclass + `ITEM_CLASSES` row in `app/canvas/items.py` *only*
+   if the component needs special canvas behaviour (custom `boundingRect`,
+   hit-testing, or resize).
 
 ---
 
@@ -165,7 +179,7 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
 | Piece | File |
 |-------|------|
 | Measurement / render / parse core | `app/components/render.py` |
-| Unified renderer → `manifest.json` (geometry) + `components.json` (data) | `tools/generate_components.py` |
+| Unified renderer → `geometry.json` (geometry) + `definitions.json` (data) | `components/generate_components.py` |
 | Loader → registry `ComponentDef`s, codegen tables, `origin_svg` | `app/components/library.py` |
 | Registry built from the data (33 SVG kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
 | Codegen classification + scale/lead alignment derived from the data | `app/codegen/circuitikz.py` |
@@ -187,24 +201,28 @@ auto-generates a checkbox per variant the kind declares (`VariantSection`),
 toggling is undoable (`SetVariantCommand`), and the `.hv` file stores a
 `variants` map (reading the legacy keys for back-compat). Canvas geometry and
 codegen pick the variant from the kind's declared `{name, token, mode}` via
-`library.variant_tikz` / `library.variant_manifest_suffix`.
+`library.variant_tikz` / `library.variant_geometry_suffix`.
 
 **Authoring GUI — done.** A standalone, form-driven editor
 (`python -m app.componenteditor`, also **Tools → Component Editor…** in the app)
 over the renderer + data file:
 
-- A form for identity, emission, CircuiTikZ keyword, label slots, bbox, **editable
-  `xscale`/`yscale` spin boxes**, and a **pins table** (name / X / Y / anchor); a
-  variants field; and an *existing-component* picker to load and re-align any
-  current symbol.
+- A form for identity, emission, CircuiTikZ keyword, label slots, a **read-only
+  auto bbox** (computed on Render, not editable), **editable `xscale`/`yscale`
+  spin boxes**, and a **pins table** (name / X / Y / anchor); a variants field;
+  and an *existing-component* picker to load and re-align any current symbol.
 - **Measure anchors** runs `render.measure_anchors` and lists each pin's measured
   GU offset. **Fit pins to grid** computes the `scale` (+ residual leads) that
   lands the pins on the grid (§4) and fills the scale spin boxes — which can also
-  be edited by hand. **Render & preview** renders the symbol on a **0.25 GU** grid
-  with the **bbox drawn (dashed) for reference** and pin markers, and shows the
-  derived `ComponentDef` + validation — and runs automatically when a component is
-  picked from the *existing* list. **Save** writes the entry into `components.json`
-  and the geometry into `manifest.json` via `renderer.save_component` (the same
+  be edited by hand. **Render & preview** renders the symbol on a **0.25 GU** grid,
+  computes the **bbox from the rendered ink extent** (`renderer.compute_bbox`,
+  shown in the read-only fields and **drawn dashed** for reference) with pin
+  markers, and shows the derived `ComponentDef` + validation — and runs
+  automatically when a component is picked from the *existing* list. **Pin
+  extensions** (the grid-alignment leads, §4) are drawn in **red** to distinguish
+  them from the symbol body; the editor isolates them by diffing the render
+  against a leads-free render (the extra paths are the extensions). **Save** writes the entry into `definitions.json`
+  and the geometry into `geometry.json` via `renderer.save_component` (the same
   render path as the CLI).
 - The window is a thin shell over the Qt-free `draft` / `renderer` core; the core
   (validation, entry building, render, save, alignment) is unit-tested head-less,
@@ -213,3 +231,32 @@ over the renderer + data file:
 Because the alignment model auto-measures anchors and computes the scale/leads,
 the editor needs no interactive click-to-place-pins / drag-to-draw-leads canvas —
 the pins table plus the Measure/Fit helpers cover it.
+
+---
+
+## 7. Bulk import (scaling to the whole library)
+
+Because geometry, alignment, and bbox are all derived, importing a CircuiTikZ
+component is *mostly* data entry — and for whole families it can be largely
+automated. Two primitives support this:
+
+- **`render.discover_terminals(keyword, candidates)`** — CircuiTikZ exposes no
+  machine-readable terminal list (an unknown anchor resolves to the shape centre
+  rather than erroring, and aliases like `B`/`base`/`G`/`gate` collapse to one
+  point). This probes a candidate anchor list, drops anything that lands on the
+  centre-fallback, and de-dupes by position — returning the shape's distinct
+  wireable terminals `{name: (gu_x, gu_y)}`. The candidate *order* supplies the
+  canonical name per terminal (the per-family naming convention).
+- **`renderer.fit_alignment(entry)`** — derives `scale`/`leads` for a candidate
+  (§4), so a discovered, grid-snapped transistor aligns automatically.
+
+**`components/import_family.py`** is a dry-run prototype that uses these to
+generate *candidate* `definitions.json` entries for a family, render-verifies each,
+and prints a review report + ready-to-paste JSON (it does not write the data file).
+It shows the real curation cost: **two-terminal bipoles** import with zero curation
+(input = keyword + display name; pins are the draw endpoints, everything else
+derived), while **multi-terminal** families need only a naming convention and a
+quick grid review. What does *not* generalise: components that don't fit the
+`two_terminal`/`node`/`multi_terminal` model with simple point terminals
+(multi-pin ICs, logic with configurable pins, buses) — those need model work, not
+just a data entry.

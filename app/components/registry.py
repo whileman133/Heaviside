@@ -5,7 +5,7 @@ Component registry.
 assembled from two sources:
 
 * the **CircuiTikZ-symbol kinds** (resistor, diodes, sources, op-amp, MOSFETs,
-  BJTs, grounds, rails) are built from ``components/components.json`` via
+  BJTs, grounds, rails) are built from ``components/definitions.json`` via
   :func:`app.components.library.library_component_defs` — their pins, bbox, and
   alignment data are measured/generated, not hand-typed (see
   ``spec/component-editor.md``); and
@@ -13,12 +13,18 @@ assembled from two sources:
   drawing primitives ``bipole``/``rect``/``circle``/``text_node``) are defined as
   literals below — they are not derived from a CircuiTikZ command.
 
-``_DISPLAY_ORDER`` fixes the within-category palette order (§5.4).
+``_DISPLAY_ORDER`` is a *preference* for the within-category palette order
+(§5.4) — kinds not named in it still appear (after the named ones), so it never
+needs editing to add a component.
 
-To add a CircuiTikZ component: measure it (``app/components/render.py``), add an
-entry to ``components/components.json`` (``tools/generate_components.py``), add a
-``ComponentItem`` mapping to ``ITEM_CLASSES`` in ``app/canvas/items.py``, and add
-its kind to ``_DISPLAY_ORDER``.
+To add a plain CircuiTikZ component: measure it (``app/components/render.py``) and
+add an entry to ``components/definitions.json`` (``components/generate_components.py``).
+That's it — the registry, codegen, and canvas all derive from the data, and the
+canvas item falls back to the generic ``ComponentItem``.  Only a component that
+needs special item behaviour (a custom ``boundingRect``, hit-testing, or resize)
+also needs a ``ComponentItem`` subclass + an ``ITEM_CLASSES`` row in
+``app/canvas/items.py``; an unusual palette position can optionally be set in
+``_DISPLAY_ORDER``.
 """
 
 from __future__ import annotations
@@ -157,13 +163,19 @@ _DISPLAY_ORDER: list[str] = [
 
 _ALL: dict[str, ComponentDef] = {**_BESPOKE, **library_component_defs()}
 
-# Sanity: the display order must name exactly the kinds we have (catches a
-# components.json / display-order drift at import time).
-assert set(_ALL) == set(_DISPLAY_ORDER), (
-    f"registry kinds {set(_ALL) ^ set(_DISPLAY_ORDER)} are not in _DISPLAY_ORDER"
-)
+# ``_DISPLAY_ORDER`` is a *preference*, not an exhaustive list.  Kinds named in
+# it are ordered as listed; any kind present in the data but not named falls in
+# after them (then alphabetically).  The palette groups by category, so a new
+# definitions.json entry simply appears at the end of its category — adding a
+# component needs no edit here, while the curated order of known kinds is kept.
+def _order_key(kind: str) -> tuple[int, str]:
+    return (_DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else len(_DISPLAY_ORDER),
+            kind)
 
-REGISTRY: dict[str, ComponentDef] = {kind: _ALL[kind] for kind in _DISPLAY_ORDER}
+
+REGISTRY: dict[str, ComponentDef] = {
+    kind: _ALL[kind] for kind in sorted(_ALL, key=_order_key)
+}
 
 # ---------------------------------------------------------------------------
 # ITEM_CLASSES — populated by app/canvas/items.py at import time.
@@ -172,7 +184,7 @@ REGISTRY: dict[str, ComponentDef] = {kind: _ALL[kind] for kind in _DISPLAY_ORDER
 
 # The canvas module sets this at import time:
 #   from app.components.registry import ITEM_CLASSES
-#   ITEM_CLASSES.update({ "R": ResistorItem, ... })
+#   ITEM_CLASSES.update({ "nigfete": _MosfetItem, ... })  # special-behaviour kinds only
 #
 # Before canvas is imported it is empty; test_registry tests against the
 # canvas module directly (importing items.py) to verify the mapping.

@@ -126,6 +126,26 @@ def test_roundtrip_components(tmp_path: Path) -> None:
         assert load_c.options  == orig_c.options
 
 
+def test_kind_alias_migrates_renamed_kind_on_load(tmp_path: Path, monkeypatch) -> None:
+    """A renamed kind keeps loading via _KIND_ALIASES (old -> current), so a
+    CircuiTikZ re-generation that renames a symbol doesn't break old .hv files."""
+    import app.schematic.io as io
+
+    # Pretend "R" was once written as the (now-defunct) kind "resistor".
+    monkeypatch.setitem(io._KIND_ALIASES, "resistor", "R")
+    original = Schematic(version="0.1", name="aliased", components=[
+        Component(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, options="l=$R_1$"),
+    ])
+    p = tmp_path / "aliased.hv"
+    save(original, p)
+    # Rewrite the on-disk kind to the old name, as an old file would have it.
+    text = p.read_text(encoding="utf-8").replace('"kind": "R"', '"kind": "resistor"')
+    p.write_text(text, encoding="utf-8")
+
+    loaded = load(p)                          # must not raise "unknown kind"
+    assert [c.kind for c in loaded.components] == ["R"]
+
+
 # ---------------------------------------------------------------------------
 # test_roundtrip_wires
 # ---------------------------------------------------------------------------

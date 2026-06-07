@@ -120,14 +120,32 @@ def test_circle_registered_like_rect() -> None:
     assert circ.component_class is CircleComponent
 
 
-def test_all_kinds_have_item_class() -> None:
-    """Every kind in REGISTRY has a corresponding entry in ITEM_CLASSES."""
+def test_display_order_is_a_preference_not_exhaustive() -> None:
+    """A kind absent from _DISPLAY_ORDER still appears in REGISTRY (after the
+    listed ones), so adding a component never requires editing the order list."""
+    import app.components.registry as reg
+
+    # Every kind the library/bespoke defs provide is present — nothing dropped.
+    assert set(reg.REGISTRY) == set(reg._ALL)
+    # Listed kinds keep their curated relative order.
+    listed = [k for k in reg.REGISTRY if k in reg._DISPLAY_ORDER]
+    assert listed == [k for k in reg._DISPLAY_ORDER if k in reg._ALL]
+    # An unlisted kind sorts after every listed kind.
+    assert reg._order_key("zzz_new_kind") > reg._order_key(reg._DISPLAY_ORDER[-1])
+
+
+def test_all_kinds_resolve_to_a_component_item() -> None:
+    """Every REGISTRY kind resolves to a ComponentItem (explicit entry or the
+    generic fallback), exactly as the canvas/palette look it up.  Most kinds have
+    no explicit entry — they intentionally fall back to the base ComponentItem."""
     try:
-        from app.canvas.items import ITEM_CLASSES  # type: ignore[import]
+        from app.canvas.items import ITEM_CLASSES, ComponentItem  # type: ignore[import]
     except ImportError:
         pytest.skip("app.canvas.items not available yet")
 
     for kind in REGISTRY:
-        assert kind in ITEM_CLASSES, (
-            f"REGISTRY kind '{kind}' has no entry in ITEM_CLASSES"
-        )
+        cls = ITEM_CLASSES.get(kind, ComponentItem)  # the real lookup (scene/palette)
+        assert issubclass(cls, ComponentItem), f"kind '{kind}' -> non-ComponentItem {cls}"
+    # Explicit entries exist only for special-behaviour kinds, never plain symbols.
+    assert "R" not in ITEM_CLASSES and "ground" not in ITEM_CLASSES
+    assert {"nigfete", "open", "rect"} <= set(ITEM_CLASSES)
