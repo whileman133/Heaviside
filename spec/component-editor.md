@@ -1,7 +1,7 @@
 # Heaviside — Component Editor Specification
 
 **Version:** 0.4
-**Status:** Implemented — the registry, codegen, and canvas all build from the generated data file (no hand-stored geometry magic numbers), and per-instance variants are generic. A standalone authoring GUI is an optional follow-up.
+**Status:** Implemented — the registry, codegen, and canvas build from the generated data file (no hand-stored geometry magic numbers); per-instance variants are generic; and a standalone authoring GUI is provided (`python -m app.componenteditor` / Tools menu).
 **Author:** Wes H.
 
 This document is governed by the living-document rule in [`PROJECT_SPEC.md`](../PROJECT_SPEC.md) §0.
@@ -157,6 +157,8 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
 | Registry built from the data (33 SVG kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
 | Codegen classification + lead-only alignment derived from the data | `app/codegen/circuitikz.py` |
 | Canvas placement = `translate(-origin_svg)` + uniform scale (no per-component anchors) | `app/canvas/svgsym.py` |
+| Render/save core (shared by the CLI and the GUI) | `app/componenteditor/baker.py` |
+| Standalone authoring GUI | `app/componenteditor/window.py`, `__main__.py` |
 | Bundles the data file | `heaviside.spec` |
 
 The former hand-maintained magic numbers — registry `ComponentDef` literals, the
@@ -174,7 +176,22 @@ toggling is undoable (`SetVariantCommand`), and the `.hv` file stores a
 codegen pick the variant from the kind's declared `{name, token, mode}` via
 `library.variant_tikz` / `library.variant_manifest_suffix`.
 
-**Optional follow-up:**
+**Authoring GUI — done.** A standalone, form-driven editor
+(`python -m app.componenteditor`, also **Tools → Component Editor…** in the app)
+over the renderer + data file:
 
-- **A GUI** over the renderer + data file, if interactive authoring is wanted; the
-  tool/data design above does not require one.
+- A form for identity, emission, CircuiTikZ keyword, label slots, bbox, and a
+  **pins table** (name / X / Y / anchor); a variants field; and an
+  *existing-component* picker to load and re-align any current symbol.
+- **Measure anchors** runs `bake.measure_anchors` and lists each pin's measured
+  GU offset (snap to 0.25). **Bake & preview** renders the symbol, draws it on a
+  GU grid with pin markers, and shows the derived `ComponentDef` + validation.
+  **Save** writes the entry into `components.json` and the geometry into
+  `manifest.json` via `baker.save_component` (the same render path as the CLI).
+- The window is a thin shell over the Qt-free `draft` / `baker` core; the core
+  (validation, entry building, render, save) is unit-tested head-less, and the
+  window is smoke-tested offscreen.
+
+Because the alignment model auto-measures anchors and auto-derives leads, the
+editor needs no interactive click-to-place-pins / drag-to-draw-leads canvas — the
+pins table plus the measure helper cover it.

@@ -48,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     single `SetVariantCommand`. The `.hv` file stores a `variants` map (only
     active ones); pre-variants files with legacy `filled`/`body_diode` keys still
     load (back-compatible, no format-version bump).
+  - **A standalone Component Editor** (`python -m app.componenteditor`, also
+    **Tools → Component Editor…**). A form-driven, developer-facing tool to author
+    or re-align a CircuiTikZ symbol: enter the keyword/emission/pins, **Measure**
+    its pin anchors automatically, **Bake & preview** the rendered symbol on a
+    grid, and **Save** it into `components.json` + `manifest.json`. The render/save
+    core (`app/componenteditor/baker.py`) is shared with the batch CLI, so there
+    is one renderer.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

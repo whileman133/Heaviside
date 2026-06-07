@@ -1597,7 +1597,7 @@ enforces this — it loads every bundled example and asserts each declares
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Menu Bar: File | Edit | View | Help                        │
+│  Menu Bar: File | Edit | View | Tools | Help                │
 ├─────────────────────────────────────────────────────────────┤
 │  Toolbar: New | Open | Save | | Undo | Redo | | Compile  …  ? │
 ├────┬─────────┬───────────────────────────┬──────────────────┤
@@ -1620,6 +1620,12 @@ palette `Window` color to `#ffffff`, which child widgets inherit (central area,
 panels, splitter gaps, status bar). The two **toolbars keep their gray** (`#ebebeb`,
 set via their own stylesheets) and input controls are unaffected (they paint
 with the `Base`/`Button` palette roles, not `Window`).
+
+**Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
+editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning
+CircuiTikZ component symbols (it writes `components/components.json` +
+`manifest.json`; see [`spec/component-editor.md`](spec/component-editor.md)). It
+can also be launched independently with `python -m app.componenteditor`.
 
 **Welcome screen.** The canvas slot is a `QStackedWidget`: page 0 is a painted
 `_WelcomeScreen`, page 1 is the live `SchematicView`. Before any document is
@@ -1801,6 +1807,11 @@ heaviside/
 ├── scripts/
 │   ├── build.py                   # Cross-platform PyInstaller build helper
 │   └── make_icons.py              # Regenerate assets/icon.ico + icon.icns from icon.png
+├── tools/
+│   ├── generate_components.py     # Batch renderer CLI (→ manifest.json + components.json)
+│   └── circuitikz_svgs/manifest.json  # Generated symbol geometry (bundled runtime resource)
+├── components/
+│   └── components.json            # Generated per-component registry/codegen data + origin_svg
 ├── examples/                      # Bundled example .hv schematics (File → Open Example, §9.5)
 ├── app/
 │   ├── resources.py               # resource_path(): frozen-safe bundled-file resolution
@@ -1819,8 +1830,16 @@ heaviside/
 │   │   ├── style.py               # GRID_PX, LINE_W, PIN_R, LEAD_LEN, colors, and constants
 │   │   └── commands.py            # Undo/redo command classes
 │   ├── components/
-│   │   ├── model.py               # ComponentDef, PinDef dataclasses
-│   │   └── registry.py            # REGISTRY dict and all ComponentDef entries
+│   │   ├── model.py               # ComponentDef, PinDef, Component (+ variants) dataclasses
+│   │   ├── registry.py            # REGISTRY: bespoke literals + library-derived kinds
+│   │   ├── library.py             # loads components/components.json → ComponentDefs,
+│   │   │                          #   codegen tables, origin_svg, variant helpers
+│   │   └── bake.py                # render a symbol + measure pin anchors (latex/dvisvgm)
+│   ├── componenteditor/           # Component editor (spec/component-editor.md)
+│   │   ├── baker.py               # Qt-free render/save core (shared with the CLI)
+│   │   ├── draft.py               # editing model: validation + preview helpers
+│   │   ├── window.py              # standalone Qt editor window
+│   │   └── __main__.py            # python -m app.componenteditor
 │   ├── schematic/
 │   │   ├── model.py               # Component, Wire, Schematic dataclasses + geometry helpers
 │   │   │                          #   (simplify_points, component_pin_positions,
@@ -1852,7 +1871,10 @@ heaviside/
     ├── test_welcome.py            # welcome screen + Help dialog reference tables (offscreen Qt)
     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
     ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; render gated on latex/dvisvgm)
-    └── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
+    ├── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
+    ├── test_components_library.py # components.json → registry/codegen reconstruction
+    ├── test_bake.py               # symbol render + automatic anchor measurement (gated)
+    └── test_componenteditor.py    # editor baker/draft core + offscreen window smoke
 ```
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
