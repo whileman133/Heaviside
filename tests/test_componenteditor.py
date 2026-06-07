@@ -1,8 +1,8 @@
 """
 Component-editor core tests (spec/component-editor.md).
 
-The Qt-free core (baker data/validation + draft) is tested directly; the bake
-(render) paths are gated on latex/dvisvgm; the window is smoke-tested offscreen.
+The Qt-free core (renderer data/validation + draft) is tested directly; the
+render paths are gated on latex/dvisvgm; the window is smoke-tested offscreen.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from app.componenteditor import baker, draft
+from app.componenteditor import draft, renderer
 
 _HAVE_TOOLCHAIN = bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
@@ -47,11 +47,11 @@ def _resistor_entry() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# baker.data_entry — computed leads
+# renderer.data_entry — computed leads
 # ---------------------------------------------------------------------------
 
 def test_data_entry_computes_leads_for_centre_placed():
-    e = baker.data_entry("op amp", _opamp_entry())
+    e = renderer.data_entry("op amp", _opamp_entry())
     assert e["anchor_pin"] is None
     # Centre-placed: every pin gets a lead to its grid offset.
     assert e["leads"] == [
@@ -72,13 +72,13 @@ def test_data_entry_anchor_pin_excluded_from_leads():
             {"name": "source", "offset": [1, 0.5], "anchor": "source"},
         ],
     }
-    e = baker.data_entry("nigfete", nigfete)
+    e = renderer.data_entry("nigfete", nigfete)
     assert {l["anchor"] for l in e["leads"]} == {"drain", "source"}  # gate is the origin
 
 
 def test_variant_key():
-    assert baker.variant_key("D", {"name": "filled", "token": "*", "mode": "suffix"}) == "D*"
-    assert baker.variant_key("nigfete", {"name": "body_diode", "token": "bodydiode",
+    assert renderer.variant_key("D", {"name": "filled", "token": "*", "mode": "suffix"}) == "D*"
+    assert renderer.variant_key("nigfete", {"name": "body_diode", "token": "bodydiode",
                                          "mode": "option"}) == "nigfete_bodydiode"
 
 
@@ -124,12 +124,12 @@ def test_derived_component_def():
 
 @pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
 def test_render_store_reproduces_committed_files():
-    authored = baker.load_authored()
-    manifest, components, origin = baker.render_store(authored)
-    cur = json.loads(baker.COMPONENTS_PATH.read_text())
+    authored = renderer.load_authored()
+    manifest, components, origin = renderer.render_store(authored)
+    cur = json.loads(renderer.COMPONENTS_PATH.read_text())
     assert list(origin) == cur["origin_svg"]
     assert components == cur["components"]
-    assert manifest == json.loads(baker.MANIFEST_PATH.read_text())
+    assert manifest == json.loads(renderer.MANIFEST_PATH.read_text())
 
 
 @pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
@@ -139,10 +139,10 @@ def test_save_component_round_trips(tmp_path, monkeypatch):
     man_path = tmp_path / "manifest.json"
     comp_path.write_text(json.dumps({"origin_svg": [15.0312, 15.0312], "components": {}}))
     man_path.write_text("{}")
-    monkeypatch.setattr(baker, "COMPONENTS_PATH", comp_path)
-    monkeypatch.setattr(baker, "MANIFEST_PATH", man_path)
+    monkeypatch.setattr(renderer, "COMPONENTS_PATH", comp_path)
+    monkeypatch.setattr(renderer, "MANIFEST_PATH", man_path)
 
-    baker.save_component("R", _resistor_entry())
+    renderer.save_component("R", _resistor_entry())
     data = json.loads(comp_path.read_text())
     assert "R" in data["components"]
     assert data["components"]["R"]["tikz"] == "R"

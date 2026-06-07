@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.components import bake
+from app.components import render
 from app.resources import resource_path
 
 # Fixed bounding-box half-extent (GU); diode body scale (matches
@@ -51,16 +51,38 @@ def ctikzset(entry: dict) -> list[str]:
 
 
 def lead_pins(entry: dict) -> list[dict]:
-    """Pins that get a bridge lead: every pin except the placement origin
-    (all pins when ``anchor_pin`` is null, e.g. the centre-placed op amp)."""
+    """Pins that get a bridge lead by default: every pin except the placement
+    origin (all pins when ``anchor_pin`` is null, e.g. the centre-placed op amp)."""
     ap = entry.get("anchor_pin")
     if ap is None:
         return list(entry["pins"])
     return [p for p in entry["pins"] if p["name"] != ap]
 
 
+def entry_leads(entry: dict) -> list[dict]:
+    """The leads to draw/emit: the explicit ``leads`` list if present (computed
+    residual leads after scaling), else a lead to every non-origin pin (the
+    lead-only default for un-scaled kinds like the op amp)."""
+    if "leads" in entry:
+        return [{"anchor": ld["anchor"], "to": list(ld["to"])} for ld in entry["leads"]]
+    return [{"anchor": p["anchor"], "to": list(p["offset"])} for p in lead_pins(entry)]
+
+
+def _scale_opt(entry: dict) -> str:
+    """``", xscale=…, yscale=…"`` node option for the entry's scale (or "")."""
+    scale = entry.get("scale")
+    if not scale:
+        return ""
+    parts = []
+    if abs(scale[0] - 1.0) > 1e-9:
+        parts.append(f"xscale={scale[0]:g}")
+    if abs(scale[1] - 1.0) > 1e-9:
+        parts.append(f"yscale={scale[1]:g}")
+    return (", " + ", ".join(parts)) if parts else ""
+
+
 def render_body(entry: dict, *, suffix: str = "", option: str = "") -> str:
-    """Build the TikZ body: origin pin at (0,0), leads to grid offsets."""
+    """Build the TikZ body: origin pin at (0,0), optional scale, leads to grid."""
     tikz, emission, pins = entry["tikz"], entry["emission"], entry["pins"]
     bbox = rf"\useasboundingbox ({-BBOX},{-BBOX}) rectangle ({BBOX},{BBOX});"
 
@@ -70,23 +92,23 @@ def render_body(entry: dict, *, suffix: str = "", option: str = "") -> str:
         return bbox + "\n" + rf"\draw (0,0) node[{tikz}] {{}};"
 
     ap = entry.get("anchor_pin")
-    head = tikz + option
+    head = tikz + option + _scale_opt(entry)
     if ap is not None:
         oa = next(p["anchor"] for p in pins if p["name"] == ap)
         node = rf"\node[{head}, anchor={oa}] (X) at (0,0) {{}};"
     else:
         node = rf"\node[{head}] (X) at (0,0) {{}};"
     leads = "".join(
-        rf"\draw (X.{p['anchor']}) -- {_tex(p['offset'])};" for p in lead_pins(entry)
+        rf"\draw (X.{ld['anchor']}) -- {_tex(ld['to'])};" for ld in entry_leads(entry)
     )
     return bbox + "\n" + node + leads
 
 
 def geometry(entry: dict, *, suffix: str = "", option: str = "") -> dict:
     """Render and parse one (variant of a) symbol into a manifest geometry dict."""
-    svg, _ = bake.render(render_body(entry, suffix=suffix, option=option),
+    svg, _ = render.render_svg(render_body(entry, suffix=suffix, option=option),
                          border_pt=BORDER_PT, ctikzset=ctikzset(entry))
-    return bake.parse_geometry(svg)
+    return render.parse_geometry(svg)
 
 
 def variant_key(kind: str, variant: dict) -> str:
@@ -111,15 +133,52 @@ def measure_origin(sample: dict) -> tuple[float, float]:
     import re
     body = render_body(sample)
     cs = ctikzset(sample)
-    plain, _ = bake.render(body, border_pt=BORDER_PT, ctikzset=cs)
-    marked, _ = bake.render(body + r"\fill (0,0) circle (0.6pt);", border_pt=BORDER_PT, ctikzset=cs)
-    seen = {p["d"] for p in bake.parse_geometry(plain)["paths"]}
-    extra = [p for p in bake.parse_geometry(marked)["paths"] if p["d"] not in seen]
+    plain, _ = render.render_svg(body, border_pt=BORDER_PT, ctikzset=cs)
+    marked, _ = render.render_svg(body + r"\fill (0,0) circle (0.6pt);", border_pt=BORDER_PT, ctikzset=cs)
+    seen = {p["d"] for p in render.parse_geometry(plain)["paths"]}
+    extra = [p for p in render.parse_geometry(marked)["paths"] if p["d"] not in seen]
     if len(extra) != 1:
-        raise bake.BakeError(f"origin calibration found {len(extra)} marks")
+        raise render.RenderError(f"origin calibration found {len(extra)} marks")
     nums = [float(x) for x in re.findall(r"-?\d+\.?\d*", extra[0]["d"])]
     xs, ys = nums[0::2], nums[1::2]
     return (round((min(xs) + max(xs)) / 2, 4), round((min(ys) + max(ys)) / 2, 4))
+
+
+# ---------------------------------------------------------------------------
+# Alignment computation (for the migration / editor)
+# ---------------------------------------------------------------------------
+
+def compute_alignment(measured: dict, targets: dict, *, tol: float = 0.01):
+    """Compute a per-axis scale that lands pins on the grid, plus residual leads.
+
+    *measured* / *targets* map each (non-origin) pin name to its offset from the
+    origin pin — measured CircuiTikZ anchor vs. desired grid position.  Returns
+    ``((sx, sy), [residual_pin_names])``: ``(sx, sy)`` is the common
+    target/measured ratio per axis when it is consistent across all pins (so a
+    single scale lands them, e.g. the BJT), else 1.0 for that axis; the residual
+    list is the pins still off-grid after scaling (they need a bridge lead, e.g.
+    the MOSFET drain in y).
+    """
+    names = [n for n in targets if n in measured]
+
+    def axis_scale(i: int) -> float:
+        movable = [n for n in names if abs(measured[n][i]) > 1e-6]
+        ratios = [targets[n][i] / measured[n][i] for n in movable]
+        if not ratios:
+            return 1.0
+        if max(ratios) - min(ratios) <= 1e-2:   # consistent → one scale lands all (BJT)
+            return sum(ratios) / len(ratios)
+        # Inconsistent (e.g. MOSFET drain vs source in y): pick the candidate scale
+        # that minimises the worst residual; the rest get a short bridge lead.
+        return min(ratios, key=lambda s: max(abs(measured[n][i] * s - targets[n][i]) for n in movable))
+
+    sx, sy = axis_scale(0), axis_scale(1)
+    residual = [
+        n for n in names
+        if abs(measured[n][0] * sx - targets[n][0]) > tol
+        or abs(measured[n][1] * sy - targets[n][1]) > tol
+    ]
+    return (round(sx, 4), round(sy, 4)), residual
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +201,9 @@ def data_entry(kind: str, entry: dict) -> dict:
     }
     if entry["emission"] == "multi_terminal":
         out["anchor_pin"] = entry.get("anchor_pin")
-        out["leads"] = [
-            {"anchor": p["anchor"], "to": list(p["offset"])} for p in lead_pins(entry)
-        ]
+        if entry.get("scale"):
+            out["scale"] = [round(float(s), 4) for s in entry["scale"]]
+        out["leads"] = entry_leads(entry)
     if entry.get("variants"):
         out["variants"] = [
             {"name": v["name"], "token": v["token"], "mode": v["mode"]}

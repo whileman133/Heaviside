@@ -521,14 +521,11 @@
         }
       ],
       "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
       "leads": [
-        {
-          "anchor": "drain",
-          "to": [
-            1.0,
-            -1.0
-          ]
-        },
         {
           "anchor": "source",
           "to": [
@@ -586,14 +583,11 @@
         }
       ],
       "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
       "leads": [
-        {
-          "anchor": "drain",
-          "to": [
-            1.0,
-            -1.0
-          ]
-        },
         {
           "anchor": "source",
           "to": [
@@ -651,22 +645,11 @@
         }
       ],
       "anchor_pin": "base",
-      "leads": [
-        {
-          "anchor": "C",
-          "to": [
-            1.0,
-            -1.0
-          ]
-        },
-        {
-          "anchor": "E",
-          "to": [
-            1.0,
-            1.0
-          ]
-        }
-      ]
+      "scale": [
+        1.1905,
+        1.2987
+      ],
+      "leads": []
     },
     "op amp": {
       "display_name": "Op-Amp",
@@ -797,19 +780,16 @@
         }
       ],
       "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
       "leads": [
         {
           "anchor": "source",
           "to": [
             1.0,
             -0.5
-          ]
-        },
-        {
-          "anchor": "drain",
-          "to": [
-            1.0,
-            1.0
           ]
         }
       ],
@@ -862,19 +842,16 @@
         }
       ],
       "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
       "leads": [
         {
           "anchor": "source",
           "to": [
             1.0,
             -0.5
-          ]
-        },
-        {
-          "anchor": "drain",
-          "to": [
-            1.0,
-            1.0
           ]
         }
       ],
@@ -927,22 +904,11 @@
         }
       ],
       "anchor_pin": "base",
-      "leads": [
-        {
-          "anchor": "E",
-          "to": [
-            1.0,
-            -1.0
-          ]
-        },
-        {
-          "anchor": "C",
-          "to": [
-            1.0,
-            1.0
-          ]
-        }
-      ]
+      "scale": [
+        1.1905,
+        1.2987
+      ],
+      "leads": []
     },
     "rground": {
       "display_name": "Reference Ground",

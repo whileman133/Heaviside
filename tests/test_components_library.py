@@ -91,17 +91,26 @@ def test_multi_terminal_kinds():
     )
 
 
-def test_no_scale_corrections():
-    # Lead-only alignment — every pin is bridged to the grid with a lead, so there
-    # are no per-component xscale/yscale corrections.
-    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {}
+def test_scale_corrections_golden():
+    # BJT/MOSFET are scaled so their pins land on the grid (no diagonal stubs);
+    # the op amp uses leads instead (it is absent here).
+    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {
+        "npn": "xscale=1.1905, yscale=1.2987",
+        "pnp": "xscale=1.1905, yscale=1.2987",
+        "nigfete": "xscale=1.0204, yscale=0.962",
+        "nigfetd": "xscale=1.0204, yscale=0.962",
+        "pigfete": "xscale=1.0204, yscale=0.962",
+        "pigfetd": "xscale=1.0204, yscale=0.962",
+    }
+    assert "op amp" not in cg._MULTI_TERMINAL_EXTRA_OPTS
 
 
 def test_leads_golden():
-    # Every non-origin pin gets a bridge lead to its grid offset.
+    # op amp extends clean leads; BJT scales fully (no leads); MOSFET adds a
+    # single small residual lead for the source's sub-grid y offset.
     assert cg._MULTI_TERMINAL_LEADS["op amp"] == [("+", "+"), ("-", "-"), ("out", "out")]
-    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == [("drain", "drain"), ("source", "source")]
-    assert cg._MULTI_TERMINAL_LEADS["npn"] == [("C", "collector"), ("E", "emitter")]
+    assert cg._MULTI_TERMINAL_LEADS["npn"] == []
+    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == [("source", "source")]
 
 
 def test_anchor_pin_golden():

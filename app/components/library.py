@@ -127,12 +127,25 @@ def library_component_defs() -> dict[str, ComponentDef]:
     return {kind: to_component_def(kind, entry) for kind, entry in load_library().items()}
 
 
+def _scale_opts(scale) -> str:
+    """Format a ``[sx, sy]`` scale as a ``xscale=…, yscale=…`` node-option string."""
+    if not scale:
+        return ""
+    parts = []
+    if abs(scale[0] - 1.0) > 1e-9:
+        parts.append(f"xscale={scale[0]:g}")
+    if abs(scale[1] - 1.0) > 1e-9:
+        parts.append(f"yscale={scale[1]:g}")
+    return ", ".join(parts)
+
+
 def build_codegen_tables() -> dict:
     """Project the ``circuitikz`` codegen tables from the library.
 
-    Alignment is now lead-only: every multi-terminal kind places its node by the
-    ``anchor_pin`` (or by centre when null) and bridges every other pin to the
-    grid with a lead.  There is no per-component scale, so ``extra_opts`` is empty.
+    Multi-terminal alignment uses a per-component scale (``extra_opts``) and/or
+    bridge ``leads``, both stored in the data: BJT/MOSFET land their pins on grid
+    by scaling the node, the op amp extends clean leads, and the MOSFET adds a
+    short residual lead.  Both are computed (measured), not hand-typed.
     """
     two: set[str] = set()
     multi: set[str] = set()
@@ -140,6 +153,7 @@ def build_codegen_tables() -> dict:
     diode: set[str] = set()
     anchor_pin: dict[str, tuple[str, str]] = {}
     pin_to_ctikz: dict[str, dict[str, str]] = {}
+    extra_opts: dict[str, str] = {}
     leads: dict[str, list[tuple[str, str]]] = {}
 
     for kind, e in load_library().items():
@@ -157,6 +171,8 @@ def build_codegen_tables() -> dict:
                 ctikz = next((p["anchor"] for p in e["pins"] if p["name"] == ap), None)
                 if ctikz:
                     anchor_pin[kind] = (ctikz, ap)
+            if (opts := _scale_opts(e.get("scale"))):
+                extra_opts[kind] = opts
             anchor_to_pin = {p["anchor"]: p["name"] for p in e["pins"] if p.get("anchor")}
             leads[kind] = [
                 (ld["anchor"], anchor_to_pin[ld["anchor"]])
@@ -170,6 +186,6 @@ def build_codegen_tables() -> dict:
         "diode_kinds": diode,
         "anchor_pin": anchor_pin,
         "pin_to_ctikz": pin_to_ctikz,
-        "extra_opts": {},  # lead-only alignment — no scale corrections
+        "extra_opts": extra_opts,
         "leads": leads,
     }

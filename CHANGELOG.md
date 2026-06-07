@@ -17,29 +17,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generating command, automates grid alignment, and emits one declarative
   Component Definition as the single source of truth — replacing the
   five-hand-maintained-files procedure documented in `PROJECT_SPEC.md` §5.5.
-- **Component Editor foundation** (no behaviour change). Lets grid-aligned
-  CircuiTikZ components be generated without hand-stored magic numbers:
-  - A **measurement tool** (`app/components/bake.py`) that renders a symbol and
-    reads its pin anchors automatically (the manual `PROJECT_SPEC.md` §5.5
-    measurement, mechanised).
-  - A **unified renderer** (`tools/generate_components.py`) that renders every
-    symbol in a fixed bounding box (origin pin at the centre, leads bridging each
-    pin to the grid) and writes both `tools/circuitikz_svgs/manifest.json`
-    (geometry) and `components/components.json` (pins, bbox, leads, metadata, plus
-    one `origin_svg` placement constant). Replaces the old
+- **Component Editor** — generate grid-aligned CircuiTikZ components without
+  hand-stored magic numbers:
+  - A **measurement tool** (`app/components/render.py`) renders a symbol via
+    `latex`/`dvisvgm` and reads its pin anchors automatically (the manual
+    `PROJECT_SPEC.md` §5.5 measurement, mechanised).
+  - A **renderer** (`app/componenteditor/renderer.py`, driven by the
+    `tools/generate_components.py` CLI) renders every symbol in a fixed bounding
+    box and writes both `tools/circuitikz_svgs/manifest.json` (geometry) and
+    `components/components.json` (pins, bbox, alignment, metadata, plus one
+    `origin_svg` placement constant). Replaces the old
     `tools/export_circuitikz_svgs.py`, which is removed.
   - **The registry, code generator, and canvas all build from this data**
     (`app/components/library.py`): `registry.py` derives the 33 CircuiTikZ-symbol
     `ComponentDef`s (keeping the 6 bespoke kinds as literals); `circuitikz.py`
-    derives its classification + lead-only alignment tables; and `svgsym.py`'s
-    canvas transform is now just `translate(-origin_svg)` + a uniform scale. The
-    removed magic numbers: the registry literals, the five codegen tables, and
-    `svgsym`'s per-component placement anchors and scale corrections.
-  - Alignment is now **lead-only** (one mechanism, no per-component
-    `xscale`/`yscale`). As a result MOSFET/BJT symbols render with a short lead
-    stub instead of a stretched body — a small visual change in both the canvas
-    and the LaTeX output. Everything else is unchanged; the bundled examples still
-    compile and the full suite passes.
+    derives its classification + alignment tables; and `svgsym.py`'s canvas
+    transform is just `translate(-origin_svg)` + a uniform pixel scale. The removed
+    magic numbers: the registry literals, the five hand-maintained codegen tables,
+    and `svgsym`'s `_MULTI_ANCHORS` / bipole anchors.
+  - **Alignment is computed, not hand-typed.** Multi-terminal symbols whose
+    CircuiTikZ terminals fall between grid points are scaled onto the grid by a
+    measured per-axis `node[xscale=…, yscale=…]` (BJTs exactly; MOSFETs plus one
+    small residual lead); the op amp extends clean leads to its outward pins. Both
+    scale and leads are derived from the measurements and stored in the data file.
   - **Per-instance variants are generic.** A placed component's boolean variants
     (diode `filled`, MOSFET `body_diode`) now live in a generic
     `Component.variants` map instead of the `DiodeComponent`/`MosfetComponent`
@@ -48,13 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     single `SetVariantCommand`. The `.hv` file stores a `variants` map (only
     active ones); pre-variants files with legacy `filled`/`body_diode` keys still
     load (back-compatible, no format-version bump).
-  - **A standalone Component Editor** (`python -m app.componenteditor`, also
+  - **A standalone Component Editor GUI** (`python -m app.componenteditor`, also
     **Tools → Component Editor…**). A form-driven, developer-facing tool to author
-    or re-align a CircuiTikZ symbol: enter the keyword/emission/pins, **Measure**
-    its pin anchors automatically, **Bake & preview** the rendered symbol on a
-    grid, and **Save** it into `components.json` + `manifest.json`. The render/save
-    core (`app/componenteditor/baker.py`) is shared with the batch CLI, so there
-    is one renderer.
+    or re-align a CircuiTikZ symbol: pick an existing component (which renders and
+    previews it immediately), enter the keyword/emission/pins, **Measure anchors**
+    automatically, **Fit pins to grid** to compute the scale/leads, **Render &
+    preview** on a 0.25 GU grid, and **Save** into `components.json` +
+    `manifest.json`. Shares the one render/save core with the CLI.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

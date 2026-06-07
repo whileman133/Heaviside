@@ -9,7 +9,7 @@ automatically.
 Three functions, all Qt-free, requiring ``latex`` + ``dvisvgm`` at run time (a
 developer-tool dependency, not a shipped-app one):
 
-* :func:`render`        — circuitikz body -> (svg_text, latex_log)
+* :func:`render_svg`        — circuitikz body -> (svg_text, latex_log)
 * :func:`parse_geometry`— svg_text -> manifest-style ``{viewBox, paths, glyphs}``
 * :func:`measure_anchors` — read ``\pgfpointanchor`` dumps -> ``{name: (gu_x, gu_y)}``
   as a **GU offset** (Qt y-down), directly comparable to a pin position.
@@ -53,7 +53,7 @@ _LIBGS_CANDIDATES = (
 )
 
 
-class BakeError(RuntimeError):
+class RenderError(RuntimeError):
     """Raised when ``latex``/``dvisvgm`` fail; carries the captured log."""
 
     def __init__(self, message: str, log: str = "") -> None:
@@ -84,7 +84,7 @@ def _anchor_dump(node_id: str, anchors: list[str]) -> str:
     return "\n".join(lines)
 
 
-def render(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
+def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
            node_id: str = "X", anchors: list[str] | None = None) -> tuple[str, str]:
     """Render a circuitikz ``body`` to SVG; return ``(svg_text, latex_log)``."""
     doc = _DOC % {
@@ -101,14 +101,14 @@ def render(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
             capture_output=True, text=True, cwd=work,
         )
         if not (work / "sym.dvi").exists():
-            raise BakeError("latex failed to produce a DVI", r.stdout)
+            raise RenderError("latex failed to produce a DVI", r.stdout)
         svg = work / "sym.svg"
         rs = subprocess.run(
             ["dvisvgm", "--no-fonts", str(work / "sym.dvi"), "-o", str(svg)],
             capture_output=True, text=True, cwd=work, env=_render_env(),
         )
         if not svg.exists() or "0pt x 0pt" in rs.stderr:
-            raise BakeError("dvisvgm failed (Ghostscript/LIBGS?)", r.stdout + rs.stderr)
+            raise RenderError("dvisvgm failed (Ghostscript/LIBGS?)", r.stdout + rs.stderr)
         return svg.read_text(encoding="utf-8"), r.stdout
 
 
@@ -122,7 +122,7 @@ def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 1
     CircuiTikZ's y-up to the canvas y-down convention.
     """
     body = rf"\node[{tikz_keyword}] (X) at (0,0) {{}};"
-    _svg, log = render(body, border_pt=border_pt, node_id="X", anchors=anchors)
+    _svg, log = render_svg(body, border_pt=border_pt, node_id="X", anchors=anchors)
     out: dict[str, tuple[float, float]] = {}
     for name, xs, ys in _ANCHOR_RE.findall(log):
         out[name] = (round(float(xs) / TEXPT_PER_GU, 4), round(-float(ys) / TEXPT_PER_GU, 4))

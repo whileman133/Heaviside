@@ -15,7 +15,7 @@ assembled from two sources:
 
 ``_DISPLAY_ORDER`` fixes the within-category palette order (§5.4).
 
-To add a CircuiTikZ component: measure it (``app/components/bake.py``), add an
+To add a CircuiTikZ component: measure it (``app/components/render.py``), add an
 entry to ``components/components.json`` (``tools/generate_components.py``), add a
 ``ComponentItem`` mapping to ``ITEM_CLASSES`` in ``app/canvas/items.py``, and add
 its kind to ``_DISPLAY_ORDER``.

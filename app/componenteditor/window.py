@@ -3,11 +3,11 @@ Standalone component-editor window (Qt).
 
 A form-driven editor for CircuiTikZ symbols: enter the keyword, emission, pins,
 and metadata; **Measure** reads the CircuiTikZ pin anchors automatically;
-**Bake & preview** renders the symbol; **Save** writes it into the component data
-files (``components.json`` + ``manifest.json``) via :mod:`app.componenteditor.baker`.
+**Render & preview** renders the symbol; **Save** writes it into the component data
+files (``components.json`` + ``manifest.json``) via :mod:`app.componenteditor.renderer`.
 
 The window is a thin shell over the Qt-free :mod:`app.componenteditor.draft` /
-``baker`` core (which the tests exercise head-less).  Launch with
+``renderer`` core (which the tests exercise head-less).  Launch with
 ``python -m app.componenteditor``.
 """
 
@@ -38,10 +38,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.canvas.style import GRID_PX, SVG_PT_PER_GU
-from app.components import bake, library
-from app.componenteditor import baker, draft
+from app.components import library, render
+from app.componenteditor import draft, renderer
 
-_PIN_COLS = ("Pin name", "X (GU)", "Y (GU)", "CircuiTikZ anchor")
+_PIN_COLS = ("Pin", "X (GU)", "Y (GU)", "Anchor")
 
 
 class ComponentEditorWindow(QMainWindow):
@@ -49,6 +49,11 @@ class ComponentEditorWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Heaviside — Component Editor")
         self.resize(1000, 700)
+        # Alignment a multi-terminal symbol uses: a per-axis node scale and bridge
+        # leads (both computed by "Fit pins to grid").  Preserved across the form
+        # round-trip and written on Save.
+        self._scale: list[float] | None = None
+        self._leads: list[dict] | None = None
         self._build_ui()
         self._refresh_existing()
 
@@ -119,7 +124,8 @@ class ComponentEditorWindow(QMainWindow):
 
         actions = QHBoxLayout()
         for label, slot in (("Measure anchors", self._on_measure),
-                            ("Bake && preview", self._on_bake),
+                            ("Fit pins to grid", self._on_fit),
+                            ("Render && preview", self._on_render),
                             ("Save", self._on_save)):
             b = QPushButton(label)
             b.clicked.connect(slot)
@@ -200,11 +206,17 @@ class ComponentEditorWindow(QMainWindow):
         ap = self._anchor_pin.text().strip()
         if entry["emission"] == "multi_terminal":
             entry["anchor_pin"] = ap or None
+            if self._scale:
+                entry["scale"] = list(self._scale)
+            if self._leads is not None:
+                entry["leads"] = [dict(ld) for ld in self._leads]
         if variants:
             entry["variants"] = variants
         return self._kind.text().strip(), entry
 
     def _entry_to_form(self, kind: str, entry: dict) -> None:
+        self._scale = list(entry["scale"]) if entry.get("scale") else None
+        self._leads = [dict(ld) for ld in entry["leads"]] if "leads" in entry else None
         self._kind.setText(kind)
         self._display.setText(entry.get("display_name", ""))
         self._category.setCurrentText(entry.get("category", ""))
@@ -229,19 +241,21 @@ class ComponentEditorWindow(QMainWindow):
         self._existing.clear()
         self._existing.addItem("— new component —")
         try:
-            self._existing.addItems(sorted(baker.load_authored()))
+            self._existing.addItems(sorted(renderer.load_authored()))
         except Exception:  # noqa: BLE001 - no store yet is fine
             pass
         self._existing.blockSignals(False)
 
     def _load_existing(self, kind: str) -> None:
         if not kind or kind.startswith("—"):
+            self._scale = self._leads = None
             return
         try:
-            entry = baker.load_authored()[kind]
+            entry = renderer.load_authored()[kind]
         except Exception:  # noqa: BLE001
             return
         self._entry_to_form(kind, entry)
+        self._on_render()  # render + preview immediately on selecting a component
 
     # -- actions ---------------------------------------------------------
     def _log(self, text: str) -> None:
@@ -251,7 +265,7 @@ class ComponentEditorWindow(QMainWindow):
         _kind, entry = self._form_to_entry()
         try:
             anchors = draft.measured_anchors(entry)
-        except bake.BakeError as exc:
+        except render.RenderError as exc:
             self._log(f"Measurement failed:\n{exc}\n\n{exc.log[-1500:]}")
             return
         if not anchors:
@@ -261,19 +275,63 @@ class ComponentEditorWindow(QMainWindow):
         lines += [f"  {name}: ({x:+.3f}, {y:+.3f})  → snap to 0.25" for name, (x, y) in anchors.items()]
         self._log("\n".join(lines))
 
-    def _on_bake(self) -> None:
+    def _on_fit(self) -> None:
+        """Compute a node scale (+ residual leads) that lands the pins on grid.
+
+        Measures the CircuiTikZ anchors and derives the per-axis scale; the symbol
+        is stretched onto the grid pins instead of bridged with diagonal leads.
+        Use for transistors/symbols whose terminals fall between grid points.
+        """
+        _kind, entry = self._form_to_entry()
+        if entry.get("emission") != "multi_terminal":
+            self._log("Fit applies to multi-terminal components (scales the symbol "
+                      "so its pins land on the grid).")
+            return
+        pins = entry["pins"]
+        anchor_of = {p["name"]: p.get("anchor") for p in pins}
+        if not any(anchor_of.values()):
+            self._log("Set each pin's CircuiTikZ anchor first, then Fit.")
+            return
+        try:
+            measured = render.measure_anchors(entry["tikz"], [a for a in anchor_of.values() if a])
+        except render.RenderError as exc:
+            self._log(f"Measure failed:\n{exc}\n\n{getattr(exc, 'log', '')[-800:]}")
+            return
+        ap = entry.get("anchor_pin")
+        if ap and anchor_of.get(ap) in measured:
+            ox, oy = measured[anchor_of[ap]]
+            other = [p for p in pins if p["name"] != ap]
+        else:  # centre-placed (no anchor pin): anchors are already centre-relative
+            ox, oy = 0.0, 0.0
+            other = list(pins)
+        rel = {p["name"]: (round(measured[p["anchor"]][0] - ox, 4),
+                           round(measured[p["anchor"]][1] - oy, 4))
+               for p in other if p.get("anchor") in measured}
+        targets = {p["name"]: tuple(p["offset"]) for p in other if p["name"] in rel}
+        scale, residual = renderer.compute_alignment(rel, targets)
+        self._scale = list(scale) if (scale[0] != 1.0 or scale[1] != 1.0) else None
+        self._leads = [{"anchor": anchor_of[n], "to": list(targets[n])} for n in residual]
+        self._on_render()
+        self._out.setPlainText(
+            f"Fit: scale={tuple(scale)}, residual leads={residual}\n\n" + self._out.toPlainText()
+        )
+
+    def _on_render(self) -> None:
         kind, entry = self._form_to_entry()
         errs = draft.validate_entry(kind, entry)
         report = ["VALID ✓" if not errs else "Problems:"] + [f"  • {e}" for e in errs]
         try:
-            geom = baker.geometry(entry)
-        except bake.BakeError as exc:
-            self._log("\n".join(report) + f"\n\nBake failed:\n{exc}\n\n{exc.log[-1200:]}")
+            geom = renderer.geometry(entry)
+        except render.RenderError as exc:
+            self._log("\n".join(report) + f"\n\nRender failed:\n{exc}\n\n{exc.log[-1200:]}")
             self._scene.clear()
             return
         self._render_preview(geom, entry)
         cdef = draft.derived_component_def(kind, entry)
         report.append("")
+        if self._scale:
+            report.append(f"Scale: {tuple(self._scale)}  Leads: "
+                          f"{[(ld['anchor'], tuple(ld['to'])) for ld in (self._leads or [])]}")
         report.append(f"Derived ComponentDef: {cdef.kind!r}  pins="
                       f"{[(p.name, p.offset) for p in cdef.pins]}  span={cdef.default_span}")
         report.append(f"Geometry: {len(geom['paths'])} path(s), {len(geom['glyphs'])} glyph(s).")
@@ -287,8 +345,8 @@ class ComponentEditorWindow(QMainWindow):
                                 "Fix these first:\n\n" + "\n".join(f"• {e}" for e in errs))
             return
         try:
-            baker.save_component(kind, entry)
-        except bake.BakeError as exc:
+            renderer.save_component(kind, entry)
+        except render.RenderError as exc:
             QMessageBox.critical(self, "Render failed", f"{exc}\n\n{exc.log[-1500:]}")
             return
         library._data.cache_clear()  # the saved store changed; drop the cached read
@@ -308,11 +366,15 @@ class ComponentEditorWindow(QMainWindow):
         t.scale(GRID_PX / SVG_PT_PER_GU, GRID_PX / SVG_PT_PER_GU)
         t.translate(-ox, -oy)
 
-        # faint grid
-        grid_pen = QPen(QColor("#E0E0E0"))
-        for g in range(-3, 4):
-            self._scene.addLine(g * GRID_PX, -3 * GRID_PX, g * GRID_PX, 3 * GRID_PX, grid_pen)
-            self._scene.addLine(-3 * GRID_PX, g * GRID_PX, 3 * GRID_PX, g * GRID_PX, grid_pen)
+        # 0.25 GU grid (minor lines faint, integer lines darker) — pins sit on it.
+        EXT, STEP = 3.0, 0.25
+        minor, major = QPen(QColor("#EEEEEE")), QPen(QColor("#C8C8C8"))
+        n = round(EXT / STEP)
+        for i in range(-n, n + 1):
+            g = i * STEP
+            pen = major if abs(g - round(g)) < 1e-9 else minor
+            self._scene.addLine(g * GRID_PX, -EXT * GRID_PX, g * GRID_PX, EXT * GRID_PX, pen)
+            self._scene.addLine(-EXT * GRID_PX, g * GRID_PX, EXT * GRID_PX, g * GRID_PX, pen)
 
         from app.canvas.svgsym import parse_path
         body_pen = QPen(QColor("#000000"))

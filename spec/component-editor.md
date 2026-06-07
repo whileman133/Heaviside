@@ -32,7 +32,7 @@ the export script renders). The 6 bespoke kinds — the resizable annotations
 
 Two pieces, both small:
 
-1. **A measurement tool** (`app/components/bake.py`). Given a CircuiTikZ keyword,
+1. **A measurement tool** (`app/components/render.py`). Given a CircuiTikZ keyword,
    it renders the symbol with `latex`/`dvisvgm` and reads each pin's **anchor
    position automatically** (via `\pgfpointanchor`), returning a grid-unit offset.
    This is PROJECT_SPEC §5.5 Step 1 done by the machine — no human reads a
@@ -93,7 +93,7 @@ Fields:
 | `tikz` | The CircuiTikZ keyword. |
 | `bbox` | Bounding box `(x0,y0,x1,y1)` in GU (a design choice, kept snug for label placement). |
 | `pins` | Each pin: `name`, grid `offset` (GU, multiple of 0.25), and the CircuiTikZ `anchor` it maps to (`null` for two-terminal/node, whose pins are the draw endpoints). |
-| `anchor_pin`, `leads` | **Alignment** for multi-terminal symbols — see §4. Computed, never hand-typed. |
+| `anchor_pin`, `scale`, `leads` | **Alignment** for multi-terminal symbols — see §4. `scale` is `[sx,sy]` (node `xscale=`/`yscale=`); `leads` bridge residuals. All computed, never hand-typed; each present only when used (the op amp has leads, BJTs a scale, MOSFETs both). |
 | `variants` | Boolean modifiers: `{name, token, mode}` where `mode` is `suffix` (`D`→`D*`) or `option` (append `, bodydiode`). Generalises the diode `filled` and MOSFET `body_diode` flags. |
 
 `default_span` and `resizable` are derived (terminal-minus-origin for a two-pin
@@ -103,25 +103,37 @@ device; library kinds are never resizable), so they are not stored.
 
 ## 4. Alignment
 
-Alignment is **lead-only** — one mechanism, no per-component scale. Every symbol
-is rendered inside a **fixed bounding box** with its origin pin placed at TeX
-`(0,0)`; a short `\draw (node.anchor) -- (grid)` lead then bridges every other
-pin to its registry grid offset. Two consequences:
+Every symbol is rendered inside a **fixed bounding box** with its origin pin
+placed at TeX `(0,0)`. Two things follow:
 
 - **Placement is one constant.** Because the origin pin is always at TeX `(0,0)`
   and the bounding box is fixed, TeX origin maps to a single SVG point —
   `origin_svg` — for *every* symbol. The canvas transform (`svgsym.py`) is just
-  `translate(-origin_svg)` then a uniform scale: no per-component anchors,
-  rotation, or scale corrections.
-- **The same leads drive canvas and LaTeX.** The leads are baked into the
-  manifest geometry (canvas) and emitted by the codegen (LaTeX) from the same
-  data, so the two agree by construction.
+  `translate(-origin_svg)` then a uniform pixel scale: no per-component placement
+  anchors or rotation.
 
-This replaces the former design, which used hand-measured per-component SVG
-anchors plus a confusable mix of `xscale`/`yscale` corrections and bridge leads
-(PROJECT_SPEC §5.5). Lead-only is simpler and fully derived from the measurements;
-the trade-off is that symbols whose CircuiTikZ body is smaller than its grid span
-(MOSFETs, BJTs) show a short lead stub instead of a stretched body.
+A multi-terminal node's other pins (CircuiTikZ's internal anchors) rarely land on
+the grid, so two **computed** corrections bring them on:
+
+- **`scale`** `[sx, sy]` — a per-axis node scale (`node[KIND, xscale=…, yscale=…]`)
+  that stretches the symbol so its anchors land on the grid pins. Computed by
+  `compute_alignment`: when a single ratio `target/measured` is consistent across
+  all pins on an axis, that scale lands them exactly (e.g. the symmetric BJT
+  collector/emitter); otherwise the best-fit ratio (minimising the worst residual)
+  is used. This is preferred for symbols whose terminals fall *between* grid
+  points (BJTs, MOSFETs) — it keeps the symbol intact rather than adding a
+  diagonal stub.
+- **`leads`** — short `\draw (node.anchor) -- (grid)` bridges. Used for the
+  residual a scale can't remove (the MOSFET source's sub-grid y), and for symbols
+  whose grid pins are *chosen outward* of the body so a clean axis-aligned lead is
+  the natural fit (the op amp's `±1.5`, which scaling would distort).
+
+Both are **computed from the measured anchors**, not hand-typed, and stored in the
+data file; the canvas (geometry baked with the scale + leads) and the codegen
+(`xscale=`/`yscale=` + lead `\draw`s) read the same values, so they agree by
+construction. Whether a given component is scaled, led, or both is recorded per
+entry (the editor's **Fit pins to grid** computes it). The op amp uses leads
+only; BJTs use scale only; MOSFETs use scale plus one small residual source lead.
 
 ---
 
@@ -129,13 +141,14 @@ the trade-off is that symbols whose CircuiTikZ body is smaller than its grid spa
 
 This replaces the manual PROJECT_SPEC §5.5 procedure:
 
-1. **Measure.** `bake.measure_anchors("<tikz keyword>", ["<anchor>", …])` prints
-   each anchor's grid offset.
+1. **Measure.** `render.measure_anchors("<tikz keyword>", ["<anchor>", …])` prints
+   each anchor's grid offset (the editor's **Measure anchors** button).
 2. **Choose pin grid positions.** Snap each measured offset to the nearest 0.25
    GU (or pick a clean outward position, as the op-amp's ±1.5 does).
 3. **Add the entry** to `components/components.json` (`components` map): emission,
-   tikz, pins (name/offset/anchor), `anchor_pin`, labels, bbox, variants. The
-   leads are computed (each non-origin pin → its offset).
+   tikz, pins (name/offset/anchor), `anchor_pin`, labels, bbox, variants. Run
+   the editor's **Fit pins to grid** (or `compute_alignment`) to compute the
+   `scale` + residual `leads` that land the pins on the grid (§4).
 4. **Render & verify.** `python tools/generate_components.py` rebuilds the
    manifest geometry and the data file; `tests/test_components_library.py` checks
    the registry/codegen, and the suite checks the canvas geometry and that the
@@ -151,21 +164,21 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
 
 | Piece | File |
 |-------|------|
-| Measurement / render / parse core | `app/components/bake.py` |
+| Measurement / render / parse core | `app/components/render.py` |
 | Unified renderer → `manifest.json` (geometry) + `components.json` (data) | `tools/generate_components.py` |
 | Loader → registry `ComponentDef`s, codegen tables, `origin_svg` | `app/components/library.py` |
 | Registry built from the data (33 SVG kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
-| Codegen classification + lead-only alignment derived from the data | `app/codegen/circuitikz.py` |
+| Codegen classification + scale/lead alignment derived from the data | `app/codegen/circuitikz.py` |
 | Canvas placement = `translate(-origin_svg)` + uniform scale (no per-component anchors) | `app/canvas/svgsym.py` |
-| Render/save core (shared by the CLI and the GUI) | `app/componenteditor/baker.py` |
+| Render/save core (shared by the CLI and the GUI) | `app/componenteditor/renderer.py` |
 | Standalone authoring GUI | `app/componenteditor/window.py`, `__main__.py` |
 | Bundles the data file | `heaviside.spec` |
 
 The former hand-maintained magic numbers — registry `ComponentDef` literals, the
-five codegen tables, and `svgsym`'s `_MULTI_ANCHORS` / bipole anchors / per-kind
-scale — are all **removed**. The old `tools/export_circuitikz_svgs.py` is deleted
-(the unified renderer supersedes it). MOSFET/BJT rendering changed slightly (a
-short lead stub instead of a stretched body), in both canvas and LaTeX.
+five codegen tables, and `svgsym`'s `_MULTI_ANCHORS` / bipole anchors — are all
+**removed**; the per-component scale that remains is *computed* and stored in the
+data file. The old `tools/export_circuitikz_svgs.py` is deleted (the unified
+renderer supersedes it).
 
 **Generic per-instance variants — done.** A placed component's active boolean
 variants live in a generic `Component.variants` map (no more `DiodeComponent` /
@@ -183,15 +196,18 @@ over the renderer + data file:
 - A form for identity, emission, CircuiTikZ keyword, label slots, bbox, and a
   **pins table** (name / X / Y / anchor); a variants field; and an
   *existing-component* picker to load and re-align any current symbol.
-- **Measure anchors** runs `bake.measure_anchors` and lists each pin's measured
-  GU offset (snap to 0.25). **Bake & preview** renders the symbol, draws it on a
-  GU grid with pin markers, and shows the derived `ComponentDef` + validation.
-  **Save** writes the entry into `components.json` and the geometry into
-  `manifest.json` via `baker.save_component` (the same render path as the CLI).
-- The window is a thin shell over the Qt-free `draft` / `baker` core; the core
-  (validation, entry building, render, save) is unit-tested head-less, and the
-  window is smoke-tested offscreen.
+- **Measure anchors** runs `render.measure_anchors` and lists each pin's measured
+  GU offset. **Fit pins to grid** computes the `scale` (+ residual leads) that
+  lands the pins on the grid (§4). **Render & preview** renders the symbol on a
+  **0.25 GU** grid with pin markers and shows the derived `ComponentDef` +
+  validation — and runs automatically when a component is picked from the
+  *existing* list. **Save** writes the entry into `components.json` and the
+  geometry into `manifest.json` via `renderer.save_component` (the same render
+  path as the CLI).
+- The window is a thin shell over the Qt-free `draft` / `renderer` core; the core
+  (validation, entry building, render, save, alignment) is unit-tested head-less,
+  and the window is smoke-tested offscreen.
 
-Because the alignment model auto-measures anchors and auto-derives leads, the
-editor needs no interactive click-to-place-pins / drag-to-draw-leads canvas — the
-pins table plus the measure helper cover it.
+Because the alignment model auto-measures anchors and computes the scale/leads,
+the editor needs no interactive click-to-place-pins / drag-to-draw-leads canvas —
+the pins table plus the Measure/Fit helpers cover it.

@@ -1,5 +1,5 @@
 """
-Tests for the measurement tool (``app/components/bake.py``, spec §3).
+Tests for the measurement tool (``app/components/render.py``, spec §3).
 
 Gated on ``latex`` + ``dvisvgm`` (a developer-tool dependency).  These prove the
 automated anchor measurement reproduces the values PROJECT_SPEC §5.5 obtained by
@@ -12,7 +12,7 @@ import shutil
 
 import pytest
 
-from app.components import bake
+from app.components import render
 
 pytestmark = pytest.mark.skipif(
     not (shutil.which("latex") and shutil.which("dvisvgm")),
@@ -27,7 +27,7 @@ def _close(a, b, tol=_TOL):
 
 
 def test_op_amp_anchors_measured():
-    a = bake.measure_anchors("op amp", ["+", "-", "out"])
+    a = render.measure_anchors("op amp", ["+", "-", "out"])
     # Codegen docstring (Qt y-down): + (-1.194,+0.492), - (-1.194,-0.492), out (1.194,0)
     assert _close(a["+"], (-1.19, 0.49))
     assert _close(a["-"], (-1.19, -0.49))
@@ -35,34 +35,34 @@ def test_op_amp_anchors_measured():
 
 
 def test_nigfete_anchors_measured():
-    a = bake.measure_anchors("nigfete", ["gate", "drain", "source"])
+    a = render.measure_anchors("nigfete", ["gate", "drain", "source"])
     assert _close(a["gate"], (-0.98, 0.27))
     assert _close(a["drain"], (0.0, -0.77))
     assert _close(a["source"], (0.0, 0.77))
 
 
 def test_npn_anchors_measured():
-    a = bake.measure_anchors("npn", ["B", "C", "E"])
+    a = render.measure_anchors("npn", ["B", "C", "E"])
     assert _close(a["B"], (-0.84, 0.0))
     assert _close(a["C"], (0.0, -0.77))
     assert _close(a["E"], (0.0, 0.77))
 
 
 def test_geometry_parsed():
-    svg, _ = bake.render(r"\draw (0,0) to[R] (2,0);", border_pt=2)
-    geo = bake.parse_geometry(svg)
+    svg, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
+    geo = render.parse_geometry(svg)
     assert geo["paths"], "resistor should have body paths"
     assert geo["viewBox"]
 
 
 def test_render_is_deterministic():
-    svg1, _ = bake.render(r"\draw (0,0) to[R] (2,0);", border_pt=2)
-    svg2, _ = bake.render(r"\draw (0,0) to[R] (2,0);", border_pt=2)
+    svg1, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
+    svg2, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
     assert svg1 == svg2
 
 
 def test_diode_filled_geometry_differs():
-    # The bake handles the filled (*) variant body (needs Ghostscript via LIBGS).
-    plain, _ = bake.render(r"\ctikzset{diodes/scale=0.8}\draw (0,0) to[D] (2,0);", border_pt=2)
-    filled, _ = bake.render(r"\ctikzset{diodes/scale=0.8}\draw (0,0) to[D*] (2,0);", border_pt=2)
-    assert bake.parse_geometry(plain)["paths"] != bake.parse_geometry(filled)["paths"]
+    # The renderer handles the filled (*) variant body (needs Ghostscript via LIBGS).
+    plain, _ = render.render_svg(r"\ctikzset{diodes/scale=0.8}\draw (0,0) to[D] (2,0);", border_pt=2)
+    filled, _ = render.render_svg(r"\ctikzset{diodes/scale=0.8}\draw (0,0) to[D*] (2,0);", border_pt=2)
+    assert render.parse_geometry(plain)["paths"] != render.parse_geometry(filled)["paths"]
