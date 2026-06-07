@@ -8,32 +8,27 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. It's a streamlined, local-first desktop tool designed for researchers, engineers, and educators that integrates into LyX and Overleaf workflows.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. It's a streamlined desktop tool designed for researchers, engineers, and educators. It integrates into LyX, Overleaf, and LaTeX workflows with minimum effort.
 
 ![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
 
 ## Features
 
-- Inline LaTeX label editing, rendered as typeset math directly on the canvas (WYSIWYM)
-- Automatic junction dots where wires and pins connect
-- Open-terminal dots at unconnected wire ends and pins (configurable)
-- Line hops at crossings where wires do not connect (configurable)
-- Manhattan-routed wires with per-wire line styles, widths, and endpoint markers/arrowheads
-- A component library of two-terminal parts (R, C, L, diodes, sources), multi-terminal parts (op amps, MOSFETs, BJTs), grounds, and supply rails
-- Block-diagram primitives: labeled boxes, circles, and free text, with wires connecting anywhere on a shape's perimeter
-- 90° rotation, mirroring, resizing, copy/paste, and full undo/redo
-- Grid-disciplined canvas with quarter-grid CircuiTikZ snapping
-- Clean, human-readable CircuiTikZ source as the primary output
-- Parallel PDF, EPS, and SVG export for inclusion in LaTeX, LyX, or web documents
-- Live, rendered PDF preview of the current schematic
-- Save/load via a JSON `.hv` file format
+### Intelligent Canvas
+* **Grid-Disciplined Editing:** Quarter-grid CircuiTikZ snapping guarantees your components and wires line up.
+* **Smart Wiring:** Automatic junction dots at connections, optional open-terminal dots at loose ends, and optional line hops at wire crossings.
+* **Smart Routing:** Wires route at right angles, with customizable line style, weight, endpoint arrowheads, and typeset endpoint and mid-point labels.
+* **Transformations:** 90° rotation, horizontal mirroring, shape resizing, copy/paste, and undo/redo.
+* **Live PDF Preview:** Displays a real-time, compiled PDF rendering of your schematic directly inside the editor as you work.
 
-> **Built spec-first with AI assistance.** Heaviside was developed from a
-> detailed written specification with substantial help from AI coding assistants.
-> The implementation follows the spec, the test suite (660+ tests) and spec are
-> kept in sync, and the full methodology is documented in
-> [`docs/ai-development.md`](docs/ai-development.md). See
-> [`CONTRIBUTING.md`](CONTRIBUTING.md) for more.
+### Component & Block Libraries
+* **Schematic Symbols:** Built-in library with standard two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal semiconductors (op-amps, MOSFETs, BJTs), logic gates with a configurable number of inputs, grounds, and power supply rails.
+* **Block-Diagram Primitives:** Build system diagrams using boxes, circles, and free text, with wires that snap dynamically to any point on a shape's perimeter.
+
+### Export Pipeline
+* **Automatic Export:** Every save updates the Heaviside schematic (`.hv`), CircuiTikZ code (`.tex`), and compiled vector graphics (`.pdf`, `.svg`, or `.eps`) on the filesystem. Your paper's figures stay up to date without manual exports.
+
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
 
 ## Download
 
@@ -46,17 +41,19 @@ Pre-built apps (always the latest release):
 Or browse all releases (with checksums and release notes) on the
 [Releases page](https://github.com/whileman133/Heaviside/releases).
 
-> **Required: `pdflatex`.** The downloaded app bundles everything **except** a
-> LaTeX installation. You must have `pdflatex` (from [TeX Live](https://tug.org/texlive/)
-> or [MiKTeX](https://miktex.org/)), with the `circuitikz` package, on your
-> `PATH` — it compiles the live preview and the PDF/`.tex`/EPS/SVG exports. The app
-> warns at startup if it can't find it. Drawing and CircuiTikZ source generation
-> work without it; the preview and exports do not.
+> **Works without LaTeX — for the most part.** Drawing, on-canvas typeset
+> equation labels (rendered by a bundled, pure-Python engine), CircuiTikZ source
+> generation, and `.tex` export all work with **no LaTeX installation**.
+>
+> **Needs `pdflatex` (with the `circuitikz` package) on your `PATH`:** the live
+> **PDF preview pane** and the **PDF / EPS / SVG image exports** — these compile
+> the schematic with LaTeX. The app warns at startup if it can't find `pdflatex`.
+> When LaTeX *is* installed, the canvas labels use it for the highest fidelity.
 >
 > **Optional: Poppler (for EPS and SVG export).** Exporting to **EPS** or **SVG**
 > additionally needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/).
-> Everything else — including PDF export — needs only `pdflatex`, so you can skip
-> Poppler unless you specifically export EPS or SVG.
+> PDF export needs only `pdflatex`, so you can skip Poppler unless you export EPS
+> or SVG.
 
 > **First launch:** these builds are not code-signed/notarized (Heaviside is a
 > free, open-source alpha), so macOS and Windows will warn on first open — see

@@ -382,6 +382,14 @@ class LabelTextItem(QGraphicsTextItem):
 
         render_async(fragment, _on_done)
 
+    def retypeset(self) -> None:
+        """Re-render the current fragment with the active math engine (e.g. after
+        the ziamath debug preference changed).  No-op when nothing is shown."""
+        frag = self._vec_fragment
+        if frag:
+            self._vec_fragment = None  # defeat request_vector's same-fragment guard
+            self.request_vector(frag)
+
     def _vec_rect(self) -> QRectF:
         """Scaled bounding rect of the vector path in item coordinates."""
         r = self._vec_path.boundingRect()
@@ -444,6 +452,30 @@ class LabelTextItem(QGraphicsTextItem):
 # Per-side annotation label (display only)
 # ---------------------------------------------------------------------------
 
+def _reissue_vector_render(item) -> None:  # noqa: ANN001
+    """Re-render *item*'s current fragment with the active math engine.
+
+    Shared by the baseline-anchored label items (``_SlotLabel`` / ``_WireEndLabel``
+    / ``_WireMidLabel``), which all hold ``_fragment``/``_path`` and a
+    ``_reposition``.  Used to refresh labels after the math engine changes (e.g.
+    the ziamath debug preference).  No-op when the item shows nothing.
+    """
+    frag = getattr(item, "_fragment", None)
+    if not frag:
+        return
+    from app.preview.mathrender import render_async
+
+    def _done(path, f=frag):  # noqa: ANN001
+        if not isValid(item) or f != (getattr(item, "_fragment", None) or ""):
+            return
+        item.prepareGeometryChange()
+        item._path = path
+        item._reposition()
+        item.update()
+
+    render_async(frag, _done)
+
+
 class _SlotLabel(QGraphicsItem):
     """Non-interactive, baseline-anchored vector render of one annotation slot.
 
@@ -468,6 +500,10 @@ class _SlotLabel(QGraphicsItem):
         self._step = 0.0                      # stacking offset along _dir
         self._inv = QTransform()              # screen-rel -> parent-local
         self._centered = False                # centre on the axis vs. beside it
+
+    def retypeset(self) -> None:
+        """Re-render with the active math engine (see _reissue_vector_render)."""
+        _reissue_vector_render(self)
 
     def configure(
         self,
@@ -973,6 +1009,14 @@ class ComponentItem(QGraphicsItem):
 
         render_async(fragment, _on_done)
 
+    def retypeset(self) -> None:
+        """Re-render the inline label with the active math engine (e.g. after the
+        ziamath debug preference changed).  No-op when nothing is shown."""
+        frag = self._vec_fragment
+        if frag:
+            self._vec_fragment = None  # defeat _request_vector's same-fragment guard
+            self._request_vector(frag)
+
     # ------------------------------------------------------------------
     # QGraphicsItem interface
     # ------------------------------------------------------------------
@@ -1195,6 +1239,10 @@ class _WireEndLabel(QGraphicsItem):
         self._out = QPointF(1.0, 0.0)      # unit outward direction (canvas)
         self._placement = ""               # "" = off-end, "above", "below"
 
+    def retypeset(self) -> None:
+        """Re-render with the active math engine (see _reissue_vector_render)."""
+        _reissue_vector_render(self)
+
     def configure(
         self, fragment: str, center: QPointF, out: QPointF, placement: str = ""
     ) -> None:
@@ -1304,6 +1352,10 @@ class _WireMidLabel(QGraphicsItem):
         self._fragment: str | None = None
         self._center = QPointF(0.0, 0.0)        # committed centre, parent-local px
         self._preview_center: QPointF | None = None
+
+    def retypeset(self) -> None:
+        """Re-render with the active math engine (see _reissue_vector_render)."""
+        _reissue_vector_render(self)
 
     def configure(self, fragment: str, center: QPointF) -> None:
         self._center = center

@@ -1,10 +1,21 @@
 r"""
-Vector rendering of LaTeX fragments for on-canvas WYSIWYG labels (prototype).
+Vector rendering of LaTeX fragments for on-canvas WYSIWYG labels.
 
-This reuses the *exact* toolchain that produces the component symbols
-(``components/generate_components.py`` / ``app/components/render.py``)::
+Two engines produce a QPainterPath from a fragment; both normalise to a shared
+baseline so callers can place them identically (see :func:`render_path`):
 
-    latex -> .dvi -> dvisvgm --no-fonts -> SVG -> svgsym.parse_path -> QPainterPath
+  * **latex** (the reference) reuses the *exact* toolchain that produces the
+    component symbols (``components/generate_components.py`` /
+    ``app/components/render.py``)::
+
+        latex -> .dvi -> dvisvgm --no-fonts -> SVG -> svgsym.parse_path -> QPainterPath
+
+  * **ziamath** (a pure-Python, no-install fallback that bundles STIX Two Math)
+    typesets a LaTeX-math subset directly to SVG -> QPainterPath, so canvas labels
+    render even with no ``latex``/``dvisvgm`` present.
+
+The active engine is chosen by :func:`_active_engine`: LaTeX when installed, else
+ziamath; a debug preference can force ziamath (:func:`set_force_ziamath`).
 
 ``dvisvgm --no-fonts`` emits every glyph as a ``<path>`` outline in ``<defs>``
 referenced by ``<use x y>`` placements, plus any rule geometry (fraction bars,
@@ -206,6 +217,123 @@ def _svg_to_path(svg_text: str) -> QPainterPath:
 
 
 # ---------------------------------------------------------------------------
+# ziamath fallback: fragment -> QPainterPath, with no LaTeX install
+# ---------------------------------------------------------------------------
+#
+# ziamath (pure Python, bundles STIX Two Math) typesets a LaTeX-math subset to
+# SVG so the canvas labels render even when ``latex``/``dvisvgm`` are absent.  Its
+# SVG differs from dvisvgm's: glyphs are ``<symbol viewBox><path></symbol>``
+# referenced by ``<use x y width height>`` (a scaled-symbol placement), and rule
+# geometry (fraction bars, radicals) is ``<rect>`` in root coordinates.  Like
+# dvisvgm, the baseline sits at y=0 and coordinates are in pt at the requested
+# ``size`` — so a ``size=TEMPLATE_PT`` render drops into the same pt-based scaling
+# the LaTeX path uses.
+
+def _ziamath_svg_to_path(svg_text: str) -> QPainterPath:
+    """Parse a ziamath SVG (``<symbol>``+``<use>`` glyphs, ``<rect>`` rules) into
+    one combined QPainterPath in pt units."""
+    root = ET.fromstring(svg_text)
+
+    def tag(el: ET.Element) -> str:
+        return el.tag.rsplit("}", 1)[-1]
+
+    # Glyph templates: id -> (viewBox (minx,miny,w,h), path d).
+    symbols: dict[str, tuple[tuple[float, float, float, float], str]] = {}
+    for el in root.iter():
+        if tag(el) == "symbol" and el.get("id"):
+            vb = el.get("viewBox", "").split()
+            d = next((c.get("d", "") for c in el if tag(c) == "path"), "")
+            if len(vb) == 4:
+                symbols[el.get("id")] = (tuple(float(v) for v in vb), d)  # type: ignore[assignment]
+
+    out = QPainterPath()
+    for el in root.iter():
+        t = tag(el)
+        if t == "use":
+            ref = (el.get(_HREF) or el.get("href") or "").lstrip("#")
+            sym = symbols.get(ref)
+            if not sym:
+                continue
+            (vmx, vmy, vbw, vbh), d = sym
+            x = float(el.get("x", "0"))
+            y = float(el.get("y", "0"))
+            w = float(el.get("width", str(vbw)))
+            h = float(el.get("height", str(vbh)))
+            # A <use> scales the symbol's viewBox into the (w,h) box at (x,y):
+            # (px,py) -> (x + (px-vmx)*sx, y + (py-vmy)*sy).
+            sx = w / vbw if vbw else 1.0
+            sy = h / vbh if vbh else 1.0
+            tr = QTransform(sx, 0.0, 0.0, sy, x - vmx * sx, y - vmy * sy)
+            out.addPath(tr.map(parse_path(d)))
+        elif t == "rect":
+            rp = QPainterPath()
+            rp.addRect(
+                float(el.get("x", "0")), float(el.get("y", "0")),
+                float(el.get("width", "0")), float(el.get("height", "0")),
+            )
+            out.addPath(rp)
+    return out
+
+
+def _ziamath_path(fragment: str) -> QPainterPath | None:
+    """Render *fragment* to a QPainterPath via ziamath, or ``None`` if ziamath is
+    missing or the fragment fails to typeset.
+
+    Uses ``ziamath.Text`` (mixed text with inline math delimited by ``$…$``), which
+    matches the fragment convention the LaTeX engine consumes (``\\strut %FRAGMENT%``
+    in a document body): plain text renders verbatim and ``$…$`` spans typeset as
+    math.  (``ziamath.Latex`` is math-only — it would render the ``$`` delimiters
+    as literal dollar glyphs.)
+    """
+    try:
+        import ziamath
+    except ImportError:  # pragma: no cover - ziamath is a declared dependency
+        return None
+    try:
+        svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()
+    except Exception:  # noqa: BLE001 - any parse/layout failure -> raw-text fallback
+        return None
+    return _ziamath_svg_to_path(svg)
+
+
+# ---------------------------------------------------------------------------
+# Engine selection
+# ---------------------------------------------------------------------------
+#
+# "latex" (latex + dvisvgm) is the reference renderer; "ziamath" is the pure
+# Python, no-install fallback.  Default ("auto") uses LaTeX when present and falls
+# back to ziamath otherwise; a debug preference can force ziamath even when LaTeX
+# is installed (see set_force_ziamath / app preferences §10.8).
+
+_force_ziamath = False
+
+
+def set_force_ziamath(value: bool) -> None:
+    """Force the ziamath renderer even when system LaTeX is available.
+
+    A debugging aid wired to a preference.  Off by default, so the engine is
+    chosen automatically (LaTeX if installed, else ziamath).  Affects renders
+    requested *after* the call; callers wanting an immediate visual change should
+    re-typeset existing labels (the app does this on preference change).
+    """
+    global _force_ziamath
+    _force_ziamath = bool(value)
+
+
+def _latex_available() -> bool:
+    _ensure_tool_dirs_on_path()
+    return shutil.which("latex") is not None and shutil.which("dvisvgm") is not None
+
+
+def _active_engine() -> str:
+    """The renderer to use right now: ``"ziamath"`` when forced or when LaTeX is
+    absent, else ``"latex"``."""
+    if _force_ziamath:
+        return "ziamath"
+    return "latex" if _latex_available() else "ziamath"
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -225,28 +353,53 @@ def _baseline_y() -> float:
     return 0.0 if p.isEmpty() else p.boundingRect().bottom()
 
 
+@lru_cache(maxsize=1)
+def _ziamath_baseline_y() -> float:
+    """Device-y of the text baseline for the ziamath renderer (pt).
+
+    ziamath places the baseline at y=0 already; we recover it the same way as the
+    LaTeX path — the ink bottom of ``x`` (a zero-depth glyph) — so the two engines
+    normalise identically.
+    """
+    p = _ziamath_path("x")
+    return 0.0 if (p is None or p.isEmpty()) else p.boundingRect().bottom()
+
+
 @lru_cache(maxsize=512)
-def render_latex(fragment: str) -> QPainterPath | None:
-    """Render a LaTeX *fragment* to a QPainterPath in pt units.
+def render_path(fragment: str, engine: str) -> QPainterPath | None:
+    """Render *fragment* with a specific *engine* (``"latex"`` or ``"ziamath"``).
 
     The path is normalised so its **baseline is at y=0** and its **left ink edge
-    at x=0**; ascenders have negative y, descenders positive y.  This lets
-    callers anchor multiple fragments to a shared baseline.  Returns ``None`` if
-    the fragment is empty or fails to compile.  Cached in-process; the SVG is
-    cached on disk.
+    at x=0**; ascenders have negative y, descenders positive y.  This lets callers
+    anchor multiple fragments to a shared baseline.  Returns ``None`` if the
+    fragment is empty or fails to render.  Cached in-process per (fragment,
+    engine); the LaTeX SVG is additionally cached on disk.
     """
     fragment = fragment.strip()
     if not fragment:
         return None
-    svg = _compile_svg(fragment)
-    if not svg:
-        return None
-    path = _svg_to_path(svg)
-    if path.isEmpty():
+    if engine == "ziamath":
+        path = _ziamath_path(fragment)
+        baseline = _ziamath_baseline_y()
+    else:
+        svg = _compile_svg(fragment)
+        path = _svg_to_path(svg) if svg else None
+        baseline = _baseline_y()
+    if path is None or path.isEmpty():
         return None
     norm = QTransform()
-    norm.translate(-path.boundingRect().left(), -_baseline_y())
+    norm.translate(-path.boundingRect().left(), -baseline)
     return norm.map(path)
+
+
+def render_latex(fragment: str) -> QPainterPath | None:
+    """Render a LaTeX *fragment* to a QPainterPath in pt units, using the active
+    engine (LaTeX when available, else the ziamath fallback; forceable via
+    :func:`set_force_ziamath`).  See :func:`render_path`."""
+    fragment = fragment.strip()
+    if not fragment:
+        return None
+    return render_path(fragment, _active_engine())
 
 
 # ---------------------------------------------------------------------------

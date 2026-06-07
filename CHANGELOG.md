@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **LaTeX-free on-canvas equation labels.** Typeset component/wire/annotation
+  labels now render via a bundled, pure-Python engine (**ziamath**, ~3 MB, ships
+  the STIX Two Math font) when a system LaTeX install isn't available — so
+  drawing, typeset canvas labels, CircuiTikZ source, and `.tex` export all work
+  with no LaTeX. When `latex`/`dvisvgm` are present, the higher-fidelity LaTeX
+  engine is still used. (The PDF preview pane and PDF/EPS/SVG image exports still
+  require `pdflatex`.)
+- **Preference: "Force the built-in (ziamath) label renderer."** A debug aid to
+  use ziamath even when LaTeX is installed; toggling it re-typesets existing
+  labels immediately.
+- **Auto-export TeX snippet on save.** A new **Auto-export TeX on save**
+  preference writes the includable `<name>.tex` snippet next to the `.hv` file on
+  every save, alongside the existing PDF/EPS/SVG auto-export options. Unlike the
+  image formats it is generated directly (no `pdflatex`), so it works with no
+  LaTeX install. Multiple image formats still share a single compile.
 - **SVG export.** A new **File → Export to SVG…** writes a vector SVG of the
   schematic, and an **Auto-export SVG on save** preference writes `<name>.svg`
   next to the `.hv` file. SVG uses the same Poppler `pdftocairo` tool as EPS
