@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keywords (`european resistor`, `european inductor`, `cute inductor`,
   `european … port`) so they render the same shape on the canvas and in output
   regardless of the global style — and sit alongside the american symbols.
+- **European sources & variable resistors.** Added European voltage/current
+  sources `eV`/`eI` and their controlled forms `ecV`/`ecI` (Sources), plus a
+  European variable resistor `evR` and potentiometer `epot` (Resistors), using
+  the `european …` shape keywords.
 - **Document Settings (Edit ▸ Document Settings…).** Choose the CircuiTikZ
   **american/european** style for voltage (`v=`) and current (`i=`) labels
   per-document. Stored in the `.hv` file (new `config` object; format bumped to

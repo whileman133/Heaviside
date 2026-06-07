@@ -59,6 +59,10 @@ def test_european_components_emit_shape_keywords() -> None:
     assert "to[european resistor]" in generate(_schematic(_comp("eR")))
     assert "to[european inductor]" in generate(_schematic(_comp("eL")))
     assert "to[cute inductor]" in generate(_schematic(_comp("cuteL")))
+    assert "to[european voltage source]" in generate(_schematic(_comp("eV")))
+    assert "to[european current source]" in generate(_schematic(_comp("eI")))
+    assert "to[variable european resistor]" in generate(_schematic(_comp("evR")))
+    assert "to[european potentiometer]" in generate(_schematic(_comp("epot")))
 
 
 def test_european_logic_gates_emit_keywords() -> None:
