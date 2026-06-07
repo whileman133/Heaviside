@@ -49,10 +49,9 @@ class ComponentEditorWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("Heaviside — Component Editor")
         self.resize(1000, 700)
-        # Alignment a multi-terminal symbol uses: a per-axis node scale and bridge
-        # leads (both computed by "Fit pins to grid").  Preserved across the form
-        # round-trip and written on Save.
-        self._scale: list[float] | None = None
+        # Residual bridge leads a multi-terminal symbol uses (computed by "Fit pins
+        # to grid", preserved across the form round-trip).  The node scale lives in
+        # the editable xscale/yscale spin boxes built in _build_ui.
         self._leads: list[dict] | None = None
         self._build_ui()
         self._refresh_existing()
@@ -102,6 +101,22 @@ class ComponentEditorWindow(QMainWindow):
         bbox_w = QWidget()
         bbox_w.setLayout(bbox_row)
         form.addRow("Bounding box", bbox_w)
+
+        # Editable node scale (multi-terminal alignment).  "Fit pins to grid"
+        # fills these; they can also be set by hand.
+        self._scale_x = QDoubleSpinBox()
+        self._scale_y = QDoubleSpinBox()
+        scale_row = QHBoxLayout()
+        for sb, lbl in ((self._scale_x, "xscale"), (self._scale_y, "yscale")):
+            sb.setRange(0.05, 20.0)
+            sb.setSingleStep(0.01)
+            sb.setDecimals(4)
+            sb.setValue(1.0)
+            scale_row.addWidget(QLabel(lbl))
+            scale_row.addWidget(sb)
+        scale_w = QWidget()
+        scale_w.setLayout(scale_row)
+        form.addRow("Scale (node)", scale_w)
 
         self._pins = QTableWidget(0, len(_PIN_COLS))
         self._pins.setHorizontalHeaderLabels(_PIN_COLS)
@@ -206,17 +221,28 @@ class ComponentEditorWindow(QMainWindow):
         ap = self._anchor_pin.text().strip()
         if entry["emission"] == "multi_terminal":
             entry["anchor_pin"] = ap or None
-            if self._scale:
-                entry["scale"] = list(self._scale)
+            sx, sy = self._get_scale()
+            if abs(sx - 1.0) > 1e-9 or abs(sy - 1.0) > 1e-9:
+                entry["scale"] = [sx, sy]
             if self._leads is not None:
                 entry["leads"] = [dict(ld) for ld in self._leads]
         if variants:
             entry["variants"] = variants
         return self._kind.text().strip(), entry
 
+    def _get_scale(self) -> list[float]:
+        return [round(self._scale_x.value(), 4), round(self._scale_y.value(), 4)]
+
+    def _set_scale(self, sx: float, sy: float) -> None:
+        for sb, v in ((self._scale_x, sx), (self._scale_y, sy)):
+            sb.blockSignals(True)
+            sb.setValue(float(v))
+            sb.blockSignals(False)
+
     def _entry_to_form(self, kind: str, entry: dict) -> None:
-        self._scale = list(entry["scale"]) if entry.get("scale") else None
         self._leads = [dict(ld) for ld in entry["leads"]] if "leads" in entry else None
+        sx, sy = entry.get("scale") or (1.0, 1.0)
+        self._set_scale(sx, sy)
         self._kind.setText(kind)
         self._display.setText(entry.get("display_name", ""))
         self._category.setCurrentText(entry.get("category", ""))
@@ -248,7 +274,8 @@ class ComponentEditorWindow(QMainWindow):
 
     def _load_existing(self, kind: str) -> None:
         if not kind or kind.startswith("—"):
-            self._scale = self._leads = None
+            self._leads = None
+            self._set_scale(1.0, 1.0)
             return
         try:
             entry = renderer.load_authored()[kind]
@@ -309,7 +336,7 @@ class ComponentEditorWindow(QMainWindow):
                for p in other if p.get("anchor") in measured}
         targets = {p["name"]: tuple(p["offset"]) for p in other if p["name"] in rel}
         scale, residual = renderer.compute_alignment(rel, targets)
-        self._scale = list(scale) if (scale[0] != 1.0 or scale[1] != 1.0) else None
+        self._set_scale(scale[0], scale[1])
         self._leads = [{"anchor": anchor_of[n], "to": list(targets[n])} for n in residual]
         self._on_render()
         self._out.setPlainText(
@@ -329,8 +356,8 @@ class ComponentEditorWindow(QMainWindow):
         self._render_preview(geom, entry)
         cdef = draft.derived_component_def(kind, entry)
         report.append("")
-        if self._scale:
-            report.append(f"Scale: {tuple(self._scale)}  Leads: "
+        if entry.get("scale") or self._leads:
+            report.append(f"Scale: {tuple(self._get_scale())}  Leads: "
                           f"{[(ld['anchor'], tuple(ld['to'])) for ld in (self._leads or [])]}")
         report.append(f"Derived ComponentDef: {cdef.kind!r}  pins="
                       f"{[(p.name, p.offset) for p in cdef.pins]}  span={cdef.default_span}")
@@ -375,6 +402,17 @@ class ComponentEditorWindow(QMainWindow):
             pen = major if abs(g - round(g)) < 1e-9 else minor
             self._scene.addLine(g * GRID_PX, -EXT * GRID_PX, g * GRID_PX, EXT * GRID_PX, pen)
             self._scene.addLine(-EXT * GRID_PX, g * GRID_PX, EXT * GRID_PX, g * GRID_PX, pen)
+
+        # bounding box (dashed blue) — the ComponentDef.bbox, for reference.
+        bbox = entry.get("bbox")
+        if bbox and len(bbox) == 4:
+            x0, y0, x1, y1 = (float(v) for v in bbox)
+            bbox_pen = QPen(QColor("#0055CC"))
+            bbox_pen.setStyle(Qt.DashLine)
+            bbox_pen.setCosmetic(True)
+            self._scene.addRect(min(x0, x1) * GRID_PX, min(y0, y1) * GRID_PX,
+                                abs(x1 - x0) * GRID_PX, abs(y1 - y0) * GRID_PX,
+                                bbox_pen, QBrush(Qt.NoBrush))
 
         from app.canvas.svgsym import parse_path
         body_pen = QPen(QColor("#000000"))

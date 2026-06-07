@@ -169,4 +169,29 @@ def test_window_constructs_and_round_trips_form():
     assert kind == "op amp"
     assert entry["emission"] == "multi_terminal"
     assert [p["name"] for p in entry["pins"]] == ["+", "-", "out"]
+    assert "scale" not in entry  # op amp has no scale (it uses leads)
     assert draft.validate_entry(kind, entry) == []
+
+
+def test_window_scale_is_editable_and_round_trips():
+    pytest.importorskip("PySide6.QtWidgets")
+    from PySide6.QtWidgets import QApplication
+    try:
+        QApplication.instance() or QApplication([])
+    except Exception as exc:  # pragma: no cover
+        pytest.skip(f"Qt unavailable: {exc}")
+    from app.componenteditor.window import ComponentEditorWindow
+
+    win = ComponentEditorWindow()
+    scaled = {**_opamp_entry(), "scale": [1.1905, 1.2987]}
+    win._entry_to_form("npn", scaled)
+    # Loaded into the editable spin boxes...
+    assert win._scale_x.value() == 1.1905
+    assert win._scale_y.value() == 1.2987
+    # ...and written back out.
+    _, out = win._form_to_entry()
+    assert out["scale"] == [1.1905, 1.2987]
+    # Editing the spin boxes by hand flows into the entry.
+    win._set_scale(2.0, 0.5)
+    _, out2 = win._form_to_entry()
+    assert out2["scale"] == [2.0, 0.5]

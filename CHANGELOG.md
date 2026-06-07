@@ -52,8 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     **Tools → Component Editor…**). A form-driven, developer-facing tool to author
     or re-align a CircuiTikZ symbol: pick an existing component (which renders and
     previews it immediately), enter the keyword/emission/pins, **Measure anchors**
-    automatically, **Fit pins to grid** to compute the scale/leads, **Render &
-    preview** on a 0.25 GU grid, and **Save** into `components.json` +
+    automatically, **Fit pins to grid** to compute the scale/leads (or set the
+    `xscale`/`yscale` by hand), **Render & preview** on a 0.25 GU grid with the
+    bounding box drawn for reference, and **Save** into `components.json` +
     `manifest.json`. Shares the one render/save core with the CLI.
 
 ### Fixed

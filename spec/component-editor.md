@@ -193,17 +193,19 @@ codegen pick the variant from the kind's declared `{name, token, mode}` via
 (`python -m app.componenteditor`, also **Tools → Component Editor…** in the app)
 over the renderer + data file:
 
-- A form for identity, emission, CircuiTikZ keyword, label slots, bbox, and a
-  **pins table** (name / X / Y / anchor); a variants field; and an
-  *existing-component* picker to load and re-align any current symbol.
+- A form for identity, emission, CircuiTikZ keyword, label slots, bbox, **editable
+  `xscale`/`yscale` spin boxes**, and a **pins table** (name / X / Y / anchor); a
+  variants field; and an *existing-component* picker to load and re-align any
+  current symbol.
 - **Measure anchors** runs `render.measure_anchors` and lists each pin's measured
   GU offset. **Fit pins to grid** computes the `scale` (+ residual leads) that
-  lands the pins on the grid (§4). **Render & preview** renders the symbol on a
-  **0.25 GU** grid with pin markers and shows the derived `ComponentDef` +
-  validation — and runs automatically when a component is picked from the
-  *existing* list. **Save** writes the entry into `components.json` and the
-  geometry into `manifest.json` via `renderer.save_component` (the same render
-  path as the CLI).
+  lands the pins on the grid (§4) and fills the scale spin boxes — which can also
+  be edited by hand. **Render & preview** renders the symbol on a **0.25 GU** grid
+  with the **bbox drawn (dashed) for reference** and pin markers, and shows the
+  derived `ComponentDef` + validation — and runs automatically when a component is
+  picked from the *existing* list. **Save** writes the entry into `components.json`
+  and the geometry into `manifest.json` via `renderer.save_component` (the same
+  render path as the CLI).
 - The window is a thin shell over the Qt-free `draft` / `renderer` core; the core
   (validation, entry building, render, save, alignment) is unit-tested head-less,
   and the window is smoke-tested offscreen.
