@@ -26,7 +26,7 @@ LEAD_LEN: float = 15.0
 LINE_W: float = 2.0
 """Default stroke width for component bodies and wires, in pixels.
 
-Maps from the thin (~0.3985 pt) strokes in the SVG manifest.
+Maps from the thin (~0.3985 pt) strokes in the SVG geometry.
 """
 
 LINE_W_THICK: float = LINE_W * 2.0
@@ -53,8 +53,8 @@ OPEN_ANNOTATION_OPACITY: float = 0.3
 # SVG symbol reference (see app/canvas/svgsym.py)
 # ---------------------------------------------------------------------------
 
-MANIFEST_PATH: str = str(resource_path("tools", "circuitikz_svgs", "manifest.json"))
-"""Absolute path to the CircuiTikZ SVG export manifest."""
+GEOMETRY_PATH: str = str(resource_path("components", "geometry.json"))
+"""Absolute path to the generated CircuiTikZ symbol geometry file."""
 
 SVG_PT_PER_GU: float = 28.34765
 """SVG point units per grid unit.

@@ -1,0 +1,3882 @@
+{
+  "origin_svg": [
+    15.0312,
+    15.0312
+  ],
+  "components": {
+    "C": {
+      "display_name": "Capacitor",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "C",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "D": {
+      "display_name": "Diode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "D",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "I": {
+      "display_name": "Current Source",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "I",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "L": {
+      "display_name": "Inductor",
+      "category": "Inductors",
+      "emission": "two_terminal",
+      "tikz": "L",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "R": {
+      "display_name": "Resistor",
+      "category": "Resistors",
+      "emission": "two_terminal",
+      "tikz": "R",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "V": {
+      "display_name": "Voltage Source",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "V",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ammeter": {
+      "display_name": "Ammeter",
+      "category": "Instruments",
+      "emission": "two_terminal",
+      "tikz": "ammeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "and": {
+      "display_name": "AND Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "and port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american and port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "battery1": {
+      "display_name": "Battery",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "battery1",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "buffer": {
+      "display_name": "Buffer",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "buffer port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.75,
+        0.05,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            0
+          ],
+          "anchor": "in 1"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        1.0714,
+        1.0
+      ],
+      "leads": []
+    },
+    "cI": {
+      "display_name": "VCCS",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "cI",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cV": {
+      "display_name": "VCVS",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "cV",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cground": {
+      "display_name": "Chassis Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "cground",
+      "labels": [],
+      "bbox": [
+        -0.4,
+        0.0,
+        0.3,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "eC": {
+      "display_name": "Electrolytic Capacitor",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "eC",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "eground": {
+      "display_name": "Earth Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "eground",
+      "labels": [],
+      "bbox": [
+        -0.4,
+        0.0,
+        0.4,
+        0.6
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "fuse": {
+      "display_name": "Fuse",
+      "category": "Misc",
+      "emission": "two_terminal",
+      "tikz": "fuse",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.15,
+        2.05,
+        0.15
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ground": {
+      "display_name": "Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "ground",
+      "labels": [],
+      "bbox": [
+        -0.25,
+        0.0,
+        0.25,
+        0.6
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "isourcesin": {
+      "display_name": "AC Current Source",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "isourcesin",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "jumper": {
+      "display_name": "Jumper",
+      "category": "Misc",
+      "emission": "two_terminal",
+      "tikz": "jumper",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        0.0,
+        2.05,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "lamp": {
+      "display_name": "Lamp",
+      "category": "Misc",
+      "emission": "two_terminal",
+      "tikz": "lamp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "leD": {
+      "display_name": "LED",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "leD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.6,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "memristor": {
+      "display_name": "Memristor",
+      "category": "Resistors",
+      "emission": "two_terminal",
+      "tikz": "memristor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "nand": {
+      "display_name": "NAND Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "nand port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american nand port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "nfet": {
+      "display_name": "N-MOSFET (4-terminal)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "nfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.8,
+        1.05,
+        0.8
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -0.75
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.75
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "bulk",
+          "offset": [
+            1,
+            0
+          ],
+          "anchor": "bulk"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.974
+      ],
+      "leads": [],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "nground": {
+      "display_name": "Noiseless Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "nground",
+      "labels": [],
+      "bbox": [
+        -0.35,
+        0.0,
+        0.35,
+        0.6
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "nigfetd": {
+      "display_name": "N-MOSFET (depl.)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "nigfetd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.05,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "nigfete": {
+      "display_name": "N-MOSFET (enh.)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "nigfete",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.05,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "njfet": {
+      "display_name": "N-JFET",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "njfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -1.05,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ]
+    },
+    "nor": {
+      "display_name": "NOR Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "nor port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american nor port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "not": {
+      "display_name": "NOT Gate (Inverter)",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "not port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.75,
+        0.05,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            0
+          ],
+          "anchor": "in 1"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        1.0714,
+        1.0
+      ],
+      "leads": []
+    },
+    "npn": {
+      "display_name": "NPN BJT",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "npn",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.05,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "base",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "B"
+        },
+        {
+          "name": "collector",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "C"
+        },
+        {
+          "name": "emitter",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "E"
+        }
+      ],
+      "anchor_pin": "base",
+      "scale": [
+        1.1905,
+        1.2987
+      ],
+      "leads": []
+    },
+    "ohmmeter": {
+      "display_name": "Ohmmeter",
+      "category": "Instruments",
+      "emission": "two_terminal",
+      "tikz": "ohmmeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "op amp": {
+      "display_name": "Op-Amp",
+      "category": "Amplifiers",
+      "emission": "multi_terminal",
+      "tikz": "op amp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -1.0,
+        1.5,
+        1.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            -1.5,
+            0.5
+          ],
+          "anchor": "+"
+        },
+        {
+          "name": "-",
+          "offset": [
+            -1.5,
+            -0.5
+          ],
+          "anchor": "-"
+        },
+        {
+          "name": "out",
+          "offset": [
+            1.5,
+            0.0
+          ],
+          "anchor": "out"
+        }
+      ],
+      "anchor_pin": null,
+      "leads": [
+        {
+          "anchor": "+",
+          "to": [
+            -1.5,
+            0.5
+          ]
+        },
+        {
+          "anchor": "-",
+          "to": [
+            -1.5,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "out",
+          "to": [
+            1.5,
+            0.0
+          ]
+        }
+      ]
+    },
+    "or": {
+      "display_name": "OR Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "or port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american or port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "pC": {
+      "display_name": "Polarized Capacitor",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "pC",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pfet": {
+      "display_name": "P-MOSFET (4-terminal)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "pfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.8,
+        1.05,
+        0.8
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            0.75
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.75
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "bulk",
+          "offset": [
+            1,
+            0
+          ],
+          "anchor": "bulk"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.974
+      ],
+      "leads": [],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "pground": {
+      "display_name": "Protective Earth",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "pground",
+      "labels": [],
+      "bbox": [
+        -0.35,
+        0.0,
+        0.35,
+        0.65
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "photodiode": {
+      "display_name": "Photodiode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "photodiode",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.75,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pigfetd": {
+      "display_name": "P-MOSFET (depl.)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "pigfetd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.5,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "pigfete": {
+      "display_name": "P-MOSFET (enh.)",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "pigfete",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.5,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "pjfet": {
+      "display_name": "P-JFET",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "pjfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
+        }
+      ]
+    },
+    "pnp": {
+      "display_name": "PNP BJT",
+      "category": "Transistors",
+      "emission": "multi_terminal",
+      "tikz": "pnp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.05,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "base",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "B"
+        },
+        {
+          "name": "emitter",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "E"
+        },
+        {
+          "name": "collector",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "C"
+        }
+      ],
+      "anchor_pin": "base",
+      "scale": [
+        1.1905,
+        1.2987
+      ],
+      "leads": []
+    },
+    "rground": {
+      "display_name": "Reference Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "rground",
+      "labels": [],
+      "bbox": [
+        -0.25,
+        0.0,
+        0.25,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "sD": {
+      "display_name": "Schottky Diode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "sD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "sground": {
+      "display_name": "Signal Ground",
+      "category": "Grounds",
+      "emission": "node",
+      "tikz": "sground",
+      "labels": [],
+      "bbox": [
+        -0.25,
+        0.0,
+        0.25,
+        0.65
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "tD": {
+      "display_name": "Tunnel Diode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "tD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "thermistor": {
+      "display_name": "Thermistor",
+      "category": "Resistors",
+      "emission": "two_terminal",
+      "tikz": "thermistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "tline": {
+      "display_name": "Transmission Line",
+      "category": "Misc",
+      "emission": "two_terminal",
+      "tikz": "tline",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vR": {
+      "display_name": "Variable Resistor",
+      "category": "Resistors",
+      "emission": "two_terminal",
+      "tikz": "vR",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "varcap": {
+      "display_name": "Varactor",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "varcap",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vcc": {
+      "display_name": "VCC",
+      "category": "Supplies",
+      "emission": "node",
+      "tikz": "vcc",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.15,
+        -0.45,
+        0.15,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vdd": {
+      "display_name": "VDD",
+      "category": "Supplies",
+      "emission": "node",
+      "tikz": "vdd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.15,
+        -0.45,
+        0.15,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vee": {
+      "display_name": "VEE",
+      "category": "Supplies",
+      "emission": "node",
+      "tikz": "vee",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.15,
+        0.0,
+        0.15,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "voltmeter": {
+      "display_name": "Voltmeter",
+      "category": "Instruments",
+      "emission": "two_terminal",
+      "tikz": "voltmeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vsourcesin": {
+      "display_name": "AC Voltage Source",
+      "category": "Sources",
+      "emission": "two_terminal",
+      "tikz": "vsourcesin",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vss": {
+      "display_name": "VSS",
+      "category": "Supplies",
+      "emission": "node",
+      "tikz": "vss",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.15,
+        0.0,
+        0.15,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "xnor": {
+      "display_name": "XNOR Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "xnor port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american xnor port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "xor": {
+      "display_name": "XOR Gate",
+      "category": "Logic",
+      "emission": "multi_terminal",
+      "tikz": "xor port",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -0.5,
+        0.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "out",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": "out"
+        },
+        {
+          "name": "in1",
+          "offset": [
+            -1.5,
+            -0.25
+          ],
+          "anchor": "in 1"
+        },
+        {
+          "name": "in2",
+          "offset": [
+            -1.5,
+            0.25
+          ],
+          "anchor": "in 2"
+        }
+      ],
+      "anchor_pin": "out",
+      "scale": [
+        0.974,
+        1.0
+      ],
+      "leads": [],
+      "param": {
+        "name": "inputs",
+        "min": 2,
+        "max": 16,
+        "default": 2,
+        "option": "number inputs={n}",
+        "input": {
+          "name": "in{i}",
+          "anchor": "in {i}",
+          "x": -1.5,
+          "pitch": 0.5
+        },
+        "output": {
+          "name": "out",
+          "anchor": "out",
+          "offset": [
+            0,
+            0
+          ]
+        },
+        "height_key": "tripoles/american xor port/height",
+        "n_data": {
+          "2": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.5,
+              0.05,
+              0.55
+            ],
+            "height": 0.7143
+          },
+          "3": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -0.75,
+              0.05,
+              0.8
+            ],
+            "height": 1.0714
+          },
+          "4": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.0,
+              0.05,
+              1.05
+            ],
+            "height": 1.4286
+          },
+          "5": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.25,
+              0.05,
+              1.25
+            ],
+            "height": 1.7857
+          },
+          "6": {
+            "scale": [
+              0.974,
+              0.9999
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.55,
+              0.05,
+              1.55
+            ],
+            "height": 2.1432
+          },
+          "7": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -1.75,
+              0.05,
+              1.75
+            ],
+            "height": 2.5
+          },
+          "8": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.0,
+              0.05,
+              2.0
+            ],
+            "height": 2.8571
+          },
+          "9": {
+            "scale": [
+              0.974,
+              0.9997
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.25,
+              0.05,
+              2.3
+            ],
+            "height": 3.2154
+          },
+          "10": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.5,
+              0.05,
+              2.5
+            ],
+            "height": 3.5714
+          },
+          "11": {
+            "scale": [
+              0.974,
+              1.0002
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -2.75,
+              0.05,
+              2.75
+            ],
+            "height": 3.9277
+          },
+          "12": {
+            "scale": [
+              0.974,
+              1.0003
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.0,
+              0.05,
+              3.05
+            ],
+            "height": 4.2845
+          },
+          "13": {
+            "scale": [
+              0.974,
+              1.0001
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.25,
+              0.05,
+              3.25
+            ],
+            "height": 4.6425
+          },
+          "14": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.5,
+              0.05,
+              3.5
+            ],
+            "height": 5.0
+          },
+          "15": {
+            "scale": [
+              0.974,
+              0.9996
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -3.75,
+              0.05,
+              3.75
+            ],
+            "height": 5.3591
+          },
+          "16": {
+            "scale": [
+              0.974,
+              1.0
+            ],
+            "leads": [],
+            "bbox": [
+              -1.5,
+              -4.0,
+              0.05,
+              4.0
+            ],
+            "height": 5.7143
+          }
+        }
+      }
+    },
+    "zD": {
+      "display_name": "Zener Diode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "zD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "zzD": {
+      "display_name": "TVS Diode",
+      "category": "Diodes",
+      "emission": "two_terminal",
+      "tikz": "zzD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "cpe": {
+      "display_name": "Constant Phase Element",
+      "category": "Capacitors",
+      "emission": "two_terminal",
+      "tikz": "cpe",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    }
+  }
+}

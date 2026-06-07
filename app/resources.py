@@ -2,8 +2,8 @@
 Runtime resource resolution (works from source *and* when frozen).
 
 The app reads two bundled data files at runtime — the application icon
-(``assets/icon.png``) and the CircuiTikZ SVG manifest
-(``tools/circuitikz_svgs/manifest.json``).  When running from a source checkout
+(``assets/icon.png``) and the CircuiTikZ SVG geometry
+(``components/geometry.json``).  When running from a source checkout
 these sit under the project root.  When packaged with PyInstaller they are
 unpacked under ``sys._MEIPASS`` (PyInstaller sets this in both one-file and
 one-directory modes), so a plain ``__file__``-relative path no longer resolves.

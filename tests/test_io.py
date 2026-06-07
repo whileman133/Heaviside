@@ -126,6 +126,43 @@ def test_roundtrip_components(tmp_path: Path) -> None:
         assert load_c.options  == orig_c.options
 
 
+def test_parametric_params_round_trip(tmp_path: Path) -> None:
+    """A parametric component's integer params (logic-gate input count) survive
+    save/load; the default is omitted from the file."""
+    s = Schematic(version="0.1", name="gates", components=[
+        Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+                  options="l=$U_1$", params={"inputs": 5}),
+        Component(id=_uid(), kind="and", position=(4.0, 0.0), rotation=0,
+                  options="l=$U_2$"),  # default inputs -> no params
+    ])
+    p = tmp_path / "gates.hv"
+    save(s, p)
+    assert '"params"' in p.read_text(encoding="utf-8")          # the n=5 one is written
+    loaded = load(p)
+    assert loaded.components[0].params == {"inputs": 5}
+    assert loaded.components[1].params == {}                    # default omitted
+
+
+def test_kind_alias_migrates_renamed_kind_on_load(tmp_path: Path, monkeypatch) -> None:
+    """A renamed kind keeps loading via _KIND_ALIASES (old -> current), so a
+    CircuiTikZ re-generation that renames a symbol doesn't break old .hv files."""
+    import app.schematic.io as io
+
+    # Pretend "R" was once written as the (now-defunct) kind "resistor".
+    monkeypatch.setitem(io._KIND_ALIASES, "resistor", "R")
+    original = Schematic(version="0.1", name="aliased", components=[
+        Component(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, options="l=$R_1$"),
+    ])
+    p = tmp_path / "aliased.hv"
+    save(original, p)
+    # Rewrite the on-disk kind to the old name, as an old file would have it.
+    text = p.read_text(encoding="utf-8").replace('"kind": "R"', '"kind": "resistor"')
+    p.write_text(text, encoding="utf-8")
+
+    loaded = load(p)                          # must not raise "unknown kind"
+    assert [c.kind for c in loaded.components] == ["R"]
+
+
 # ---------------------------------------------------------------------------
 # test_roundtrip_wires
 # ---------------------------------------------------------------------------
@@ -523,34 +560,50 @@ def test_styled_defaults_not_saved(tmp_path: Path) -> None:
     assert "line_style" not in comp_dict
 
 
-def test_mosfet_body_diode_roundtrip(tmp_path: Path) -> None:
-    """MosfetComponent.body_diode=True survives a save/load cycle."""
-    from app.components.model import MosfetComponent
-    comp = MosfetComponent(
+def test_variant_roundtrip(tmp_path: Path) -> None:
+    """An active variant (body_diode) survives a save/load cycle via the map."""
+    comp = Component(
         id=_uid(), kind="nigfete", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="", body_diode=True,
+        rotation=0, mirror=False, options="", variants={"body_diode": True},
     )
     s = Schematic(version="0.1", name="nmos-bd", components=[comp])
     p = tmp_path / "nmos_bd.hv"
     save(s, p)
-    s2 = load(p)
-    loaded = s2.components[0]
-    assert isinstance(loaded, MosfetComponent)
-    assert loaded.body_diode is True
+    raw = json.loads(p.read_text())
+    assert raw["components"][0]["variants"] == {"body_diode": True}
+    loaded = load(p).components[0]
+    assert loaded.variants.get("body_diode") is True
 
 
-def test_mosfet_body_diode_false_not_saved(tmp_path: Path) -> None:
-    """body_diode=False (default) is omitted from the saved JSON."""
-    from app.components.model import MosfetComponent
-    comp = MosfetComponent(
+def test_variant_inactive_not_saved(tmp_path: Path) -> None:
+    """A false/absent variant is omitted from the saved JSON."""
+    comp = Component(
         id=_uid(), kind="nigfete", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="", body_diode=False,
+        rotation=0, mirror=False, options="", variants={"body_diode": False},
     )
     s = Schematic(version="0.1", name="nmos-no-bd", components=[comp])
     p = tmp_path / "nmos_no_bd.hv"
     save(s, p)
     raw = json.loads(p.read_text())
-    assert "body_diode" not in raw["components"][0]
+    assert "variants" not in raw["components"][0]
+
+
+def test_legacy_variant_keys_back_compat(tmp_path: Path) -> None:
+    """Pre-variants .hv files (legacy `filled`/`body_diode` keys) still load."""
+    p = tmp_path / "legacy.hv"
+    p.write_text(json.dumps({
+        "version": "0.1", "name": "legacy", "metadata": {},
+        "components": [
+            {"id": _uid(), "kind": "D", "position": [0, 0], "rotation": 0,
+             "mirror": False, "options": "", "filled": True},
+            {"id": _uid(), "kind": "nigfete", "position": [2, 0], "rotation": 0,
+             "mirror": False, "options": "", "body_diode": True},
+        ],
+        "wires": [],
+    }))
+    comps = load(p).components
+    assert comps[0].variants.get("filled") is True
+    assert comps[1].variants.get("body_diode") is True
 
 
 # ---------------------------------------------------------------------------

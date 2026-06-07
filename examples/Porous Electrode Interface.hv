@@ -18,21 +18,6 @@
       ]
     },
     {
-      "id": "cfc2ede7-c9b5-46d7-8096-2220ff0c5d93",
-      "kind": "C",
-      "position": [
-        79.5,
-        79.0
-      ],
-      "rotation": 0,
-      "mirror": false,
-      "options": "l=$\\bar{C}_\\mathrm{dl}$",
-      "label_offset": [
-        75.0234375,
-        -42.0
-      ]
-    },
-    {
       "id": "3547f287-6f9b-4bbf-a327-3c8086f77403",
       "kind": "cV",
       "position": [
@@ -172,6 +157,17 @@
         1.0,
         0.0
       ]
+    },
+    {
+      "id": "dc023448-1b45-4d22-8898-c1aac97502d3",
+      "kind": "cpe",
+      "position": [
+        79.5,
+        79.0
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$\\bar{C}_\\mathrm{dl}$"
     }
   ],
   "wires": [
@@ -233,25 +229,6 @@
       "end_label": "$\\Phi_\\mathrm{s}$"
     },
     {
-      "id": "eb7bad83-7d06-4278-8e06-6fc9ddc96410",
-      "points": [
-        [
-          81.5,
-          79.0
-        ],
-        [
-          82.0,
-          79.0
-        ],
-        [
-          82.0,
-          80.0
-        ]
-      ],
-      "end_label": "$\\Phi_\\mathrm{sf}$",
-      "end_label_placement": "above"
-    },
-    {
       "id": "89ae7091-7ef9-41a2-863d-ea9740b2ba43",
       "points": [
         [
@@ -296,6 +273,25 @@
         ]
       ],
       "start_label": "$\\Phi_\\mathrm{e}$"
+    },
+    {
+      "id": "01e38dcc-3f39-4c8f-9b29-b927f2e37463",
+      "points": [
+        [
+          81.5,
+          79.0
+        ],
+        [
+          82.0,
+          79.0
+        ],
+        [
+          82.0,
+          80.0
+        ]
+      ],
+      "end_label": "$\\Phi_\\mathrm{sf}$",
+      "end_label_placement": "above"
     }
   ],
   "metadata": {}

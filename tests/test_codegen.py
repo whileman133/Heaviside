@@ -13,7 +13,7 @@ import uuid
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
-from app.components.model import CircleComponent, DiodeComponent, MosfetComponent, RectComponent, TextNodeComponent
+from app.components.model import CircleComponent, Component, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -191,7 +191,7 @@ def test_diode_horizontal() -> None:
 
 def test_diode_filled() -> None:
     """Filled diode → to[D*] in output."""
-    comp = DiodeComponent(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    comp = Component(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
     src = generate(_schematic(comp))
     assert "(0,0) to[D*] (2,0)" in src
 
@@ -221,7 +221,7 @@ def test_zener_diode() -> None:
 
 def test_zener_diode_filled() -> None:
     """Filled Zener diode → to[zD*] in output."""
-    comp = DiodeComponent(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", filled=True)
+    comp = Component(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
     src = generate(_schematic(comp))
     assert "(0,0) to[zD*] (2,0)" in src
 
@@ -261,31 +261,45 @@ def test_opamp_node() -> None:
 # ---------------------------------------------------------------------------
 
 def test_npn_node() -> None:
-    """NPN BJT is placed with xscale/yscale correction and anchor=B (spec §7.2)."""
+    """NPN BJT is scaled so its collector/emitter land on the grid (no stubs);
+    placed anchor=B (spec/component-editor.md §4)."""
     comp = _comp("npn", position=(2.0, 3.0))
     src = generate(_schematic(comp))
-    assert "node[npn, xscale=1.181, yscale=1.287, anchor=B]" in src
-    # Normalised toward origin; the BJT's collector/emitter extend right/below, so
-    # the base anchor lands at (0,1).
-    assert "(0,1)" in src
+    assert "node[npn, xscale=1.1905, yscale=1.2987, anchor=B]" in src
 
 
 def test_pnp_node() -> None:
-    """PNP BJT is placed with xscale/yscale correction and anchor=B."""
+    """PNP BJT is scaled (anchor=B), same as NPN."""
     comp = _comp("pnp", position=(1.0, 1.0))
     src = generate(_schematic(comp))
-    assert "node[pnp, xscale=1.181, yscale=1.287, anchor=B]" in src
+    assert "node[pnp, xscale=1.1905, yscale=1.2987, anchor=B]" in src
 
 
 def test_npn_no_bridge_leads() -> None:
-    """NPN uses scale correction — no bridge lead wires should appear."""
+    """NPN lands C/E on grid by scaling — no bridge lead wires are needed."""
     comp = _comp("npn", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    # The only reference to .C/.E should be in named anchor wire refs, not
-    # standalone bridge lines (which would look like "(node_X.C) --").
-    # With scale correction the C/E anchors land on-grid; no bridge needed.
-    assert "xscale=1.181" in src
-    assert "yscale=1.287" in src
+    assert "xscale=1.1905" in src
+    assert ".C) -- " not in src
+    assert ".E) -- " not in src
+
+
+def test_gate_label_emitted_as_label_above() -> None:
+    """Logic-port shapes reject the bipole ``l=`` quick key, so a gate's label
+    slot is emitted as ``label=above:{…}`` (which CircuiTikZ accepts), not ``l=``.
+    Above matches where the canvas draws the gate's ``l`` slot."""
+    comp = _comp("nand", options=r"l=$U$")
+    src = generate(_schematic(comp))
+    assert "label=above:{$U$}" in src
+    assert "l=$U$" not in src
+
+
+def test_not_gate_label_emitted_as_label_above() -> None:
+    """Non-parametric gates (not/buffer) take the same label path."""
+    comp = _comp("not", options=r"l=$Y$")
+    src = generate(_schematic(comp))
+    assert "label=above:{$Y$}" in src
+    assert "l=$Y$" not in src
 
 
 def test_npn_pin_offsets() -> None:
@@ -309,60 +323,54 @@ def test_pnp_pin_offsets() -> None:
 
 
 def test_nmos_node() -> None:
-    """nigfete is placed as node[nigfete] with its geometry correction (spec §7.2).
-
-    The symbol is anchored at the gate pin and stretched horizontally by
-    xscale=1.0167 to align the drain/source pins to the 0.5-GU grid.
-    """
+    """nigfete is scaled (anchor=gate) so drain/source align with the grid; a
+    short residual lead bridges the source's sub-grid y offset."""
     comp = _comp("nigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfete, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfete, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert ".source) -- " in src  # small residual lead
 
 
 def test_nmos_depletion_node() -> None:
-    """nigfetd uses the same xscale geometry correction as nigfete (spec §5.5)."""
+    """nigfetd is scaled (anchor=gate), same as nigfete."""
     comp = _comp("nigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfetd, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfetd, xscale=1.0204, yscale=0.962, anchor=gate]" in src
 
 
 def test_pmos_node() -> None:
-    """pigfete is placed with xscale=1.0167 and anchor=gate (spec §7.2).
-
-    PMOS has source at top (Qt offset (1.0,-0.5)) and drain at bottom
-    (Qt offset (1.0,+1.0)) — the y-mirror of nigfete.
-    """
+    """pigfete is scaled (anchor=gate) — the y-mirror of nigfete."""
     comp = _comp("pigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfete, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfete, xscale=1.0204, yscale=0.962, anchor=gate]" in src
 
 
 def test_pmos_depletion_node() -> None:
-    """pigfetd uses the same geometry correction as pigfete (spec §5.5)."""
+    """pigfetd is scaled (anchor=gate), same as pigfete."""
     comp = _comp("pigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfetd, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfetd, xscale=1.0204, yscale=0.962, anchor=gate]" in src
 
 
 def test_nmos_bodydiode() -> None:
-    """nigfete with body_diode=True emits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    """nigfete with body_diode=True emits the bodydiode option (with the scale)."""
+    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
-    assert "node[nigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfete, bodydiode, xscale=1.0204, yscale=0.962, anchor=gate]" in src
 
 
 def test_nmos_no_bodydiode() -> None:
-    """nigfete with body_diode=False omits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=False)
+    """nigfete with body_diode off omits the bodydiode option."""
+    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="")
     src = generate(_schematic(comp))
     assert "bodydiode" not in src
 
 
 def test_pmos_bodydiode() -> None:
     """pigfete with body_diode=True emits the bodydiode option."""
-    comp = MosfetComponent(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
+    comp = Component(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
-    assert "node[pigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfete, bodydiode, xscale=1.0204, yscale=0.962, anchor=gate]" in src
 
 
 def test_pmos_pin_offsets() -> None:
@@ -1478,7 +1486,7 @@ def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
     Coordinates are normalized toward the origin: the schematic at (5,5)→(3,5)
     is floor-shifted, so the bg wire emits at the absolute (2,1)→(0,1).
     """
-    fet = MosfetComponent(
+    fet = Component(
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )
@@ -1493,10 +1501,35 @@ def test_background_wire_to_mosfet_uses_absolute_coords() -> None:
 def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
     """A foreground (z>0) wire is emitted after the node, so it keeps the named
     anchor reference (which resolves fine)."""
-    fet = MosfetComponent(
+    fet = Component(
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )
     w = Wire(id="g", points=[(5.0, 5.0), (3.0, 5.0)], z_order=1)
     src = generate(_schematic(fet, wires=(w,)))
     assert ".gate)" in src                    # references the MOSFET gate anchor
+
+
+# ---------------------------------------------------------------------------
+# Parametric logic gates (variable input count)
+# ---------------------------------------------------------------------------
+
+def test_logic_gate_emits_height_group_no_yscale():
+    """A parametric gate is emitted in a local group that sets its body height
+    (so inputs land on grid without a node yscale that would oval the bubble):
+    { \\ctikzset{…/height=H}  \\draw … node[and port, number inputs=N, xscale=…]; }."""
+    # Default value (2 inputs).
+    src2 = generate(_schematic(_comp("and")))
+    assert "node[and port, number inputs=2, xscale=0.974" in src2
+    assert "anchor=out" in src2
+    assert "yscale" not in src2                                    # height, not yscale
+    assert r"\ctikzset{tripoles/american and port/height=0.7143}" in src2
+    # the height is set in a group, before the node, and reverts:
+    assert src2.index(r"\ctikzset{tripoles/american and port/height") < src2.index("node[and port")
+
+    # Explicit 4 inputs: number inputs=4 and the 4-input height (full precision).
+    c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+                  options="", params={"inputs": 4})
+    src4 = generate(_schematic(c))
+    assert "number inputs=4" in src4 and "yscale" not in src4
+    assert "tripoles/american and port/height=1.4286" in src4

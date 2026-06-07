@@ -17,8 +17,8 @@ Section → applicability map:
   OptionsSection      – plain circuit components (not DrawingComponent)
   TextContentSection  – text_node
   BipoleLabelSection  – bipole
-  DiodeSection        – diode (filled checkbox)
-  MosfetSection       – mosfet (body-diode checkbox)
+  VariantSection      – one checkbox per boolean variant the kind declares
+                        (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
   FillBorderSection   – StyledComponent (rect, bipole)
   TransformSection    – rotation (all but rect, whose rotation is a codegen no-op)
@@ -55,10 +55,8 @@ from app.canvas.scene import SchematicScene
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
-    DiodeComponent,
     DrawingComponent,
     FontedComponent,
-    MosfetComponent,
     RectComponent,
     StyledComponent,
     TextNodeComponent,
@@ -573,52 +571,106 @@ class BipoleLabelSection(InspectorSection):
             t[0].edit_component_options(t[1], options)
 
 
-class DiodeSection(InspectorSection):
-    """Filled-variant checkbox for diodes."""
+class VariantSection(InspectorSection):
+    """A checkbox per boolean variant the component's *kind* declares.
+
+    Generic over any variant in ``components/definitions.json`` (e.g. a diode's
+    ``filled``, a MOSFET's ``body_diode``).  The checkboxes are rebuilt on
+    :meth:`_load` because the set of variants depends on the component's kind.
+    """
 
     title = None
 
     def _build(self) -> None:
-        self._cb = QCheckBox("Filled")
-        self._cb.stateChanged.connect(self._on_changed)
-        self.body.addWidget(self._cb)
+        self._checks: dict[str, "QCheckBox"] = {}
+        self._container = QVBoxLayout()
+        self._container.setSpacing(6)
+        self.body.addLayout(self._container)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, DiodeComponent)
+        from app.components import library
+        return bool(library.variant_specs(comp.kind))
 
     def _load(self, comp: Component) -> None:
-        self._cb.blockSignals(True)
-        self._cb.setChecked(comp.filled)
-        self._cb.blockSignals(False)
+        from app.components import library
+        for cb in self._checks.values():
+            cb.setParent(None)
+            cb.deleteLater()
+        self._checks.clear()
+        for v in library.variant_specs(comp.kind):
+            name = v["name"]
+            cb = QCheckBox(name.replace("_", " ").capitalize())
+            cb.setChecked(bool(comp.variants.get(name)))
+            cb.stateChanged.connect(lambda state, n=name: self._on_changed(n, state))
+            self._container.addWidget(cb)
+            self._checks[name] = cb
 
-    def _on_changed(self, state: int) -> None:
+    def _on_changed(self, name: str, state: int) -> None:
         t = self._target()
         if t:
-            t[0].set_component_filled(t[1], bool(state))
+            t[0].set_component_variant(t[1], name, bool(state))
 
 
-class MosfetSection(InspectorSection):
-    """Body-diode checkbox for MOSFETs."""
+class ParamSection(InspectorSection):
+    """A spinbox for the integer parameter a *parametric* kind declares (e.g. a
+    logic gate's input count).  Generic over the ``param`` block in
+    ``components/definitions.json``; rebuilt on :meth:`_load` per kind."""
 
     title = None
 
     def _build(self) -> None:
-        self._cb = QCheckBox("Body diode")
-        self._cb.stateChanged.connect(self._on_changed)
-        self.body.addWidget(self._cb)
+        self._row: "QWidget | None" = None
+        self._spin: "QSpinBox | None" = None
+        self._param_name: str | None = None
+        self._kind: str | None = None
+        self._container = QVBoxLayout()
+        self._container.setSpacing(6)
+        self.body.addLayout(self._container)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, MosfetComponent)
+        from app.components import library
+        return library.param_spec(comp.kind) is not None
 
     def _load(self, comp: Component) -> None:
-        self._cb.blockSignals(True)
-        self._cb.setChecked(comp.body_diode)
-        self._cb.blockSignals(False)
+        from app.components import library
+        spec = library.param_spec(comp.kind)
+        if not spec:
+            self._teardown()
+            return
+        # Same kind: just refresh the value.  Rebuilding on every re-bind (which
+        # happens after each spinner step, via the SetParamCommand) would leak a
+        # duplicate label/spinbox each time.
+        if self._kind == comp.kind and self._spin is not None:
+            self._spin.blockSignals(True)
+            self._spin.setValue(library.param_value(comp))
+            self._spin.blockSignals(False)
+            return
+        self._teardown()
+        self._kind = comp.kind
+        self._param_name = spec["name"]
+        row_w = QWidget()
+        row = QHBoxLayout(row_w)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(QLabel(spec["name"].capitalize()))
+        spin = QSpinBox()
+        spin.setRange(int(spec["min"]), int(spec["max"]))
+        spin.setValue(library.param_value(comp))
+        spin.valueChanged.connect(self._on_changed)
+        row.addWidget(spin)
+        self._container.addWidget(row_w)
+        self._row, self._spin = row_w, spin
 
-    def _on_changed(self, state: int) -> None:
+    def _teardown(self) -> None:
+        if self._row is not None:
+            self._row.setParent(None)
+            self._row.deleteLater()
+        self._row = self._spin = None
+        self._param_name = self._kind = None
+
+    def _on_changed(self, value: int) -> None:
         t = self._target()
-        if t:
-            t[0].set_component_body_diode(t[1], bool(state))
+        if t and self._param_name:
+            t[0].set_component_param(t[1], self._param_name, int(value))
 
 
 class FontSection(InspectorSection):
@@ -1124,8 +1176,8 @@ class PropertiesPanel(QWidget):
             OptionsSection(),
             TextContentSection(),
             BipoleLabelSection(),
-            DiodeSection(),
-            MosfetSection(),
+            VariantSection(),
+            ParamSection(),
             FontSection(),
             FillBorderSection(),
             TransformSection(),

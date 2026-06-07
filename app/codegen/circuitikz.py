@@ -34,65 +34,23 @@ Consequence for rotation: a 90° CW rotation in Qt Y-down space maps vector
 in the model and _rotate() in this file. They must stay in sync.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MULTI-TERMINAL COMPONENT PLACEMENT — DESIGN NOTES
+MULTI-TERMINAL COMPONENT PLACEMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CircuiTikZ multi-terminal nodes (op amp, nigfete) have internal pin geometry
-that does not align with our 0.5-GU grid. The canvas uses SVG lead stubs
-(from tools/export_circuitikz_svgs.py) to extend the symbol to grid-aligned
-endpoints. The codegen must bridge the same gap in the LaTeX output.
+CircuiTikZ multi-terminal nodes (op amp, MOSFETs, BJTs) have internal pin
+anchors that do not land on the 0.25-GU grid.  Alignment is **lead-only**: the
+node is placed by its origin pin (``anchor=…``, or by centre for the op amp) and
+a short lead wire bridges every other pin's anchor to its grid coordinate, e.g.
+``(node_id.drain) -- (grid_coord)``.  There are no per-component scale
+corrections.
 
-op amp
-------
-CircuiTikZ internal pin positions from node center (measured from compiled
-output, converted to GU; 1 GU = 28.348 pt):
-
-  anchor  CTikZ Y-up from center    Qt Y-down from center
-  +       (-1.194, -0.492)          (-1.194, +0.492)
-  -       (-1.194, +0.492)          (-1.194, -0.492)
-  out     (+1.194,  0.0)            (+1.194,  0.0)
-
-Registry pins (Qt Y-down, from node center = comp.position):
-  +   (-1.5, +0.5)
-  -   (-1.5, -0.5)
-  out (+1.5,  0.0)
-
-The registry uses ±1.5 GU (from the SVG export lead stubs) rather than the
-CTikZ internal ±1.194 GU. The codegen bridges this by:
-1. Placing the node by center (comp.position).
-2. Drawing short lead wires from each named CTikZ anchor to the registry pin
-   coordinate: (node_id.+) -- (pin_coord), etc.  (_MULTI_TERMINAL_LEADS)
-
-This ensures wires drawn to registry pin coordinates connect exactly in the
-rendered output, with the short stub absorbing the internal geometry gap.
-
-nigfete
--------
-CircuiTikZ internal pin positions from node center (GU):
-
-  anchor  CTikZ Y-up from center    Qt Y-down from center
-  gate    (-0.984, -0.270)          (-0.984, +0.270)
-  drain   ( 0.0,   +0.773)         ( 0.0,   -0.773)
-  source  ( 0.0,   -0.773)         ( 0.0,   +0.773)
-
-Registry pins (Qt Y-down, from gate pin = comp.position):
-  gate   (0.0,   0.0)
-  drain  (1.0,  -1.0)
-  source (1.0,  +0.5)
-
-The registry pins were chosen to match the CTikZ anchor positions snapped to
-the nearest 0.5 GU, after placement with anchor=gate. The lead stubs in the
-SVG export (the nigfete lead routing in tools/export_circuitikz_svgs.py) draw
-to these same coordinates so the canvas symbol matches.
-
-Because the drain/source CTikZ anchors are not rectilinearly aligned with the
-registry pin positions (the leads would be diagonal), no lead wires are drawn
-for drain/source in the codegen. Instead, xscale=1.0167 is applied to the
-node to horizontally stretch it so the drain/source x aligns with the grid:
-  CTikZ drain/source x from gate: 0.984 GU
-  After xscale=1.0167:            0.984 × 1.0167 = 1.0 GU ✓
-
-The node is placed with anchor=gate at the gate pin coordinate.
+These placement/alignment tables (``_MULTI_TERMINAL_KINDS``,
+``_MULTI_TERMINAL_ANCHOR_PIN``, ``_PIN_TO_CTIKZ_ANCHOR``, ``_MULTI_TERMINAL_LEADS``)
+are **derived** from ``components/definitions.json`` via
+``app.components.library.build_codegen_tables`` — they are not hand-maintained.
+The canvas (``app/canvas/svgsym.py``) draws the same lead bridges (baked into the
+geometry by ``components/generate_components.py``), so the canvas and the LaTeX agree.
+See ``spec/component-editor.md``.
 
 Named anchor references
 -----------------------
@@ -109,12 +67,11 @@ from __future__ import annotations
 import math
 import re
 
+from app.components import library as _library
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
-    DiodeComponent,
     DrawingComponent,
-    MosfetComponent,
     RectComponent,
     TextNodeComponent,
 )
@@ -195,40 +152,37 @@ def _translate_to_origin(schematic: Schematic) -> Schematic:
 
 # ---------------------------------------------------------------------------
 # Component classification
+#
+# These tables are derived from the component data file (components/definitions.json
+# via app/components/library.py), not hand-maintained.  The library carries every
+# CircuiTikZ symbol's emission mode, pin→anchor mapping, and alignment (scale /
+# lead stubs); the two-terminal annotations open/short are bespoke (no symbol in
+# the file) so they are merged in here.  See spec/component-editor.md.
 # ---------------------------------------------------------------------------
 
-# Two-terminal components use to[] path syntax.
-_TWO_TERMINAL_KINDS: frozenset[str] = frozenset({
-    "R", "C", "L",
-    "D", "zD", "sD", "tD", "zzD", "leD",
-    "V", "I", "vsourcesin", "isourcesin",
-    "cV", "cI",
-    "open", "short",
-})
+_CODEGEN_TABLES = _library.build_codegen_tables()
+
+# Two-terminal components use to[] path syntax.  open/short are bespoke.
+_TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
+    _CODEGEN_TABLES["two_terminal_kinds"] | {"open", "short"}
+)
 
 # Diode-family bipoles.  CircuiTikZ's default diode body is visually large
 # relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
 # a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
-# exported at the same scale (see tools/export_circuitikz_svgs.py) so the canvas
+# exported at the same scale (see components/generate_components.py) so the canvas
 # and the rendered output stay in sync (§5.3 / §7.2).
-_DIODE_KINDS: frozenset[str] = frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
+_DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
+#: Must match DIODE_SCALE in components/generate_components.py.
 DIODE_SYMBOL_SCALE: float = 0.8
 
 # Multi-terminal components use node[] syntax.
-_MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
-    "npn", "pnp",
-    "op amp",
-    "nigfete", "nigfetd",
-    "pigfete", "pigfetd",
-})
+_MULTI_TERMINAL_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["multi_terminal_kinds"])
 
 # Single-terminal node components: emitted as \node[kind] at (x,y) {};
-_NODE_KINDS: frozenset[str] = frozenset({
-    "ground", "sground", "cground", "rground", "nground", "pground", "eground",
-    "vcc", "vdd", "vee", "vss",
-})
+_NODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["node_kinds"])
 
 
 # ---------------------------------------------------------------------------
@@ -352,10 +306,19 @@ def generate(
             # Absolute coords: the multi-terminal nodes aren't defined yet.
             lines.append("  " + _wire_layer_line(obj, use_refs=False))
 
+    # Height-setting gates are emitted first, each in its own local group so the
+    # \ctikzset height reverts afterward; their (global) node names then resolve
+    # for wires in the main \draw.
+    for comp in schematic.components:
+        if _gate_height_setting(comp) is not None:
+            lines.extend(_gate_group_lines(comp, _y, _rot))
+
     lines.append(r"  \draw")
 
     draw_lines: list[str] = []
     for comp in schematic.components:
+        if _gate_height_setting(comp) is not None:
+            continue  # already emitted in its own group above
         draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
 
     # Wires at the default layer (z_order == 0) share the main \draw path;
@@ -510,12 +473,36 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
-    tikz_kind = defn.tikz_keyword + ("*" if isinstance(comp, DiodeComponent) and comp.filled else "")
+    _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
+    tikz_kind = defn.tikz_keyword + _suffix
     to_arg = tikz_kind
     if label_str:
         to_arg = f"{tikz_kind}, {label_str}"
 
     return f"{coord0} to[{to_arg}] {coord1}"
+
+
+def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
+    """``(height_key, height)`` for a parametric gate that sizes its body, else
+    ``None``.  Such a gate is emitted in its own ``{ \\ctikzset{…} \\draw …; }``
+    group (so the setting reverts), before the main path so its node name resolves
+    for wires."""
+    spec = _library.param_spec(comp.kind)
+    if spec and spec.get("height_key"):
+        nd = _library.param_n_data(comp)
+        if nd and "height" in nd:
+            return spec["height_key"], nd["height"]
+    return None
+
+
+def _gate_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
+    """A height-setting gate wrapped in a local group so the height reverts after."""
+    key, height = _gate_height_setting(comp)
+    node = _multi_terminal_line(comp, y_fn, rot_fn)
+    return ["  {",
+            rf"    \ctikzset{{{key}={height:g}}}",   # full precision (grid alignment)
+            rf"    \draw {node};",
+            "  }"]
 
 
 def _multi_terminal_line(
@@ -532,10 +519,25 @@ def _multi_terminal_line(
     node_id = f"node_{comp.id[:8]}"
     pin_positions = component_pin_positions(comp)
 
-    kind_arg = comp.kind
-    if isinstance(comp, MosfetComponent) and comp.body_diode:
-        kind_arg = f"{kind_arg}, bodydiode"
-    extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
+    # The node uses the CircuiTikZ *keyword* (e.g. "and port"), which differs from
+    # the registry *kind* ("and") for parametric components; the option/anchor
+    # tables below are still keyed by kind.
+    kind_arg = defn.tikz_keyword
+    _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
+    for _opt in _variant_opts:
+        kind_arg = f"{kind_arg}, {_opt}"
+    # Parametric kinds (logic gates): append the param option (e.g. "number
+    # inputs=4") and use that value's scale; fixed kinds use the static table.
+    _param = _library.param_spec(comp.kind)
+    if _param is not None:
+        kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
+        _nd = _library.param_n_data(comp)
+        extra_opts = _library._scale_opts(_nd["scale"]) if _nd else ""
+        # A gate's body height (so inputs land on the grid without a node yscale
+        # that would oval the bubble) is set in a local group around the node by
+        # the caller — see _gate_height_setting / generate.
+    else:
+        extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)
@@ -552,8 +554,15 @@ def _multi_terminal_line(
         else:
             kind_arg = f"{kind_arg}, xscale=-1"
 
-    # Append user options to the node[] argument.
-    user_opts = _label_args(comp)
+    # Append user options to the node[] argument.  Logic-port shapes (keyword
+    # "<gate> port") don't accept the bipole-style ``l=`` quick key, so a label
+    # slot is converted to a CircuiTikZ ``label=above:{…}`` option — placed above
+    # the body, matching where the canvas draws the gate's ``l`` slot (above the
+    # lead axis; see ComponentItem._slot_direction).  Other slots pass through.
+    if defn.tikz_keyword.endswith(" port"):
+        user_opts = _gate_label_args(comp)
+    else:
+        user_opts = _label_args(comp)
     if user_opts:
         kind_arg = f"{kind_arg}, {user_opts}"
 
@@ -580,7 +589,7 @@ def _multi_terminal_line(
     # Append lead wires if defined for this kind.
     leads = _MULTI_TERMINAL_LEADS.get(comp.kind, [])
     if not leads:
-        return node_line
+        return node_line  # gates take this path (no residual leads)
 
     lines = [node_line]
     for ctikz_anchor, pin_name in leads:
@@ -595,65 +604,19 @@ def _multi_terminal_line(
     return "\n    ".join(lines)
 
 
-# Map from component kind → list of (circuitikz_anchor_name, registry_pin_name)
-# A short lead wire is drawn from each named CircuiTikZ anchor to the
-# corresponding registry pin coordinate, bridging the gap between the node's
-# internal geometry and the canvas grid.
-_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = {
-    "op amp":  [("+", "+"), ("-", "-"), ("out", "out")],
-    # BJTs: xscale/yscale corrections align C/E anchors exactly with the grid,
-    # so no bridge lead wires are needed (same strategy as MOSFETs).
-    "npn": [],
-    "pnp": [],
-    # MOSFETs: placed by anchor=gate (exact gate connection). Drain/source
-    # CTikZ anchors are not rectilinearly aligned with the registry grid pins,
-    # so no lead wires are drawn. xscale=1.0167 corrects the x offset instead.
-    "nigfete": [],
-    "nigfetd": [],
-    "pigfete": [],
-    "pigfetd": [],
-}
-
-# Components placed by a specific named anchor rather than by center.
-# Maps kind → (ctikz_anchor_name, registry_pin_name).
-# The node is placed so ctikz_anchor_name coincides with the registry pin coordinate.
-_MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = {
-    "npn": ("B", "base"),
-    "pnp": ("B", "base"),
-    "nigfete": ("gate", "gate"),
-    "nigfetd": ("gate", "gate"),
-    "pigfete": ("gate", "gate"),
-    "pigfetd": ("gate", "gate"),
-}
-
-# Extra node options injected into the node[] argument for specific kinds.
-# Used to correct geometry mismatches between CTikZ internal coords and our grid.
-# All IGFET variants: drain/source x is 0.9836 GU from gate; xscale=1.0167 stretches to 1.0 GU.
-_MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = {
-    # BJTs: actual CTikZ C/E offset from base = (0.847, ±0.777) GU (measured from
-    # the bare-node SVG export).  xscale and yscale stretch to the snapped (1.0, ±1.0)
-    # GU grid so C/E anchors land on-grid without needing bridge lead wires.
-    #   xscale = 1.0 / 0.8471 = 1.181
-    #   yscale = 1.0 / 0.7770 = 1.287
-    "npn": "xscale=1.181, yscale=1.287",
-    "pnp": "xscale=1.181, yscale=1.287",
-    "nigfete": "xscale=1.0167",
-    "nigfetd": "xscale=1.0167",
-    "pigfete": "xscale=1.0167",
-    "pigfetd": "xscale=1.0167",
-}
-
-# Maps registry pin name → CTikZ anchor name for each multi-terminal kind.
-# Used to substitute wire endpoint coordinates with named node references.
-_PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = {
-    "op amp":  {"+": "+", "-": "-", "out": "out"},
-    "npn": {"base": "B", "collector": "C", "emitter": "E"},
-    "pnp": {"base": "B", "collector": "C", "emitter": "E"},
-    "nigfete": {"gate": "gate", "drain": "drain", "source": "source"},
-    "nigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
-    "pigfete": {"gate": "gate", "drain": "drain", "source": "source"},
-    "pigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
-}
+# Alignment tables, all derived from the component data file (see classification
+# block above).  Each kind's data:
+#   _MULTI_TERMINAL_LEADS: kind → [(ctikz_anchor, registry_pin), …] bridge stubs
+#       (e.g. op amp leads each terminal out to its grid pin).
+#   _MULTI_TERMINAL_ANCHOR_PIN: kind → (ctikz_anchor, registry_pin) the node is
+#       placed by (e.g. MOSFET anchor=gate, BJT anchor=B); absent → placed by centre.
+#   _MULTI_TERMINAL_EXTRA_OPTS: kind → "xscale=…, yscale=…" stretch that lands the
+#       anchors on grid (e.g. MOSFET "xscale=1.0167", BJT "xscale=1.181, yscale=1.287").
+#   _PIN_TO_CTIKZ_ANCHOR: kind → {registry_pin: ctikz_anchor} for every pin.
+_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = _CODEGEN_TABLES["leads"]
+_MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = _CODEGEN_TABLES["anchor_pin"]
+_MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = _CODEGEN_TABLES["extra_opts"]
+_PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = _CODEGEN_TABLES["pin_to_ctikz"]
 
 
 # ---------------------------------------------------------------------------
@@ -1235,6 +1198,21 @@ def _label_args(comp: Component) -> str:
     Label values containing commas (e.g. ``v=$\\phi(0,0)$``) are brace-protected
     so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3)."""
     return protect_label_commas(comp.options)
+
+
+def _gate_label_args(comp: Component) -> str:
+    r"""Like :func:`_label_args` but for logic-port shapes, which reject the
+    bipole ``l=`` quick key.  Any ``l=`` slot is rewritten to ``label=above:{…}``
+    (the option CircuiTikZ accepts on a node), placing the label above the gate
+    body to match the canvas.  Remaining slots are passed through unchanged."""
+    out: list[str] = []
+    for seg in split_top_level(comp.options):
+        key, eq, val = seg.partition("=")
+        if eq and key.strip() == "l" and val.strip():
+            out.append(f"label=above:{{{val.strip()}}}")
+        elif seg.strip():
+            out.append(seg.strip())
+    return protect_label_commas(", ".join(out))
 
 
 def _fmt(value: float) -> str:

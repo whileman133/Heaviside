@@ -37,7 +37,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
-from app.components.model import DiodeComponent, DrawingComponent, FontedComponent, MosfetComponent, TextNodeComponent
+from app.components.model import DrawingComponent, FontedComponent, TextNodeComponent
 from app.schematic.model import (
     Component,
     Schematic,
@@ -57,8 +57,7 @@ __all__ = [
     "SetFontSizeCommand",
     "SetZOrderCommand",
     "SetTextStyleCommand",
-    "SetFilledCommand",
-    "SetBodyDiodeCommand",
+    "SetVariantCommand",
     "SetFillColorCommand",
     "SetBorderWidthCommand",
     "SetLineStyleCommand",
@@ -1221,46 +1220,57 @@ class MirrorCommand(Command):
         comp.mirror = self._old_mirror if self._old_mirror is not None else False
 
 
-class SetFilledCommand(Command):
-    """Set the filled (``*`` variant) state of a component."""
+class SetVariantCommand(Command):
+    """Toggle a named boolean variant on a component (e.g. ``filled``,
+    ``body_diode``).  Generic over any variant the component's kind declares."""
 
-    label = "Set Filled"
+    label = "Set Variant"
 
-    def __init__(self, component_id: str, new_filled: bool, old_filled: bool | None = None) -> None:
+    def __init__(self, component_id: str, name: str, new_value: bool,
+                 old_value: bool | None = None) -> None:
         self._component_id = component_id
-        self._new_filled = new_filled
-        self._old_filled: bool | None = old_filled
+        self._name = name
+        self._new_value = new_value
+        self._old_value: bool | None = old_value
 
     def do(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, DiodeComponent)
-        if self._old_filled is None:
-            self._old_filled = comp.filled
-        comp.filled = self._new_filled
+        comp = _find_component(schematic, self._component_id)
+        if self._old_value is None:
+            self._old_value = comp.variants.get(self._name, False)
+        comp.variants[self._name] = self._new_value
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, DiodeComponent)
-        comp.filled = self._old_filled if self._old_filled is not None else False
+        comp = _find_component(schematic, self._component_id)
+        comp.variants[self._name] = bool(self._old_value)
 
 
-class SetBodyDiodeCommand(Command):
-    """Set the bodydiode state of a MosfetComponent."""
+class SetParamCommand(Command):
+    """Set an integer parameter on a parametric component (e.g. a logic gate's
+    input count).  Generic over any parameter the component's kind declares."""
 
-    label = "Set Body Diode"
+    label = "Set Parameter"
 
-    def __init__(self, component_id: str, new_body_diode: bool, old_body_diode: bool | None = None) -> None:
+    def __init__(self, component_id: str, name: str, new_value: int,
+                 old_value: int | None = None, had_value: bool | None = None) -> None:
         self._component_id = component_id
-        self._new_body_diode = new_body_diode
-        self._old_body_diode: bool | None = old_body_diode
+        self._name = name
+        self._new_value = int(new_value)
+        self._old_value = old_value
+        self._had_value = had_value
 
     def do(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, MosfetComponent)
-        if self._old_body_diode is None:
-            self._old_body_diode = comp.body_diode
-        comp.body_diode = self._new_body_diode
+        comp = _find_component(schematic, self._component_id)
+        if self._had_value is None:
+            self._had_value = self._name in comp.params
+            self._old_value = comp.params.get(self._name)
+        comp.params[self._name] = self._new_value
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, MosfetComponent)
-        comp.body_diode = self._old_body_diode if self._old_body_diode is not None else False
+        comp = _find_component(schematic, self._component_id)
+        if self._had_value:
+            comp.params[self._name] = int(self._old_value)
+        else:
+            comp.params.pop(self._name, None)
 
 
 class SetFillColorCommand(Command):

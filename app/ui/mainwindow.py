@@ -253,6 +253,13 @@ class MainWindow(QMainWindow):
         act_compile.triggered.connect(self._on_compile_now)
         view_menu.addAction(act_compile)
 
+        # Tools menu.
+        tools_menu = mb.addMenu("&Tools")
+        act_comp_editor = QAction("&Component Editor…", self)
+        act_comp_editor.setToolTip("Author / align CircuiTikZ component symbols")
+        act_comp_editor.triggered.connect(self._on_component_editor)
+        tools_menu.addAction(act_comp_editor)
+
         # Help menu.
         help_menu = mb.addMenu("&Help")
         self._act_help = QAction("&Keyboard Shortcuts && Gestures", self)
@@ -875,6 +882,14 @@ class MainWindow(QMainWindow):
 
     def _on_about(self) -> None:
         _AboutDialog(self).exec()
+
+    def _on_component_editor(self) -> None:
+        """Open the standalone component editor (kept referenced so it persists)."""
+        from app.componenteditor.window import ComponentEditorWindow
+        self._component_editor = ComponentEditorWindow(self)
+        self._component_editor.setWindowFlag(Qt.Window, True)
+        self._component_editor.show()
+        self._component_editor.raise_()
 
     def _on_help_shortcuts(self) -> None:
         _HelpDialog(self).exec()

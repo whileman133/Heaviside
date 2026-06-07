@@ -46,9 +46,9 @@ from app.canvas.commands import (
     MacroCommand,
     MergeWireCommand,
     MirrorCommand,
-    SetBodyDiodeCommand,
-    SetFilledCommand,
     SetFontSizeCommand,
+    SetVariantCommand,
+    SetParamCommand,
     MoveCommand,
     MoveJunctionCommand,
     MoveOptionsLabelCommand,
@@ -785,13 +785,13 @@ class SchematicScene(QGraphicsScene):
         """Set the mirror state of a component via an undoable MirrorCommand."""
         self._push(MirrorCommand(component_id, new_mirror))
 
-    def set_component_filled(self, component_id: str, new_filled: bool) -> None:
-        """Set the filled state of a component via an undoable SetFilledCommand."""
-        self._push(SetFilledCommand(component_id, new_filled))
+    def set_component_variant(self, component_id: str, name: str, value: bool) -> None:
+        """Toggle a named boolean variant on a component (undoable, generic)."""
+        self._push(SetVariantCommand(component_id, name, value))
 
-    def set_component_body_diode(self, component_id: str, new_body_diode: bool) -> None:
-        """Set the body_diode state of a MosfetComponent via an undoable command."""
-        self._push(SetBodyDiodeCommand(component_id, new_body_diode))
+    def set_component_param(self, component_id: str, name: str, value: int) -> None:
+        """Set a named integer parameter on a component (undoable, generic)."""
+        self._push(SetParamCommand(component_id, name, value))
 
     def set_fill_color(self, component_id: str, new_fill: str) -> None:
         """Set fill_color on a StyledComponent (bipole or rect) via an undoable command."""

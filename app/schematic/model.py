@@ -13,7 +13,6 @@ from typing import Any
 
 from app.components.model import (  # re-export for backwards compat
     Component,
-    DiodeComponent,
     DrawingComponent,
     RectComponent,
     TextNodeComponent,
@@ -21,7 +20,6 @@ from app.components.model import (  # re-export for backwards compat
 
 __all__ = [
     "Component",
-    "DiodeComponent",
     "DrawingComponent",
     "RectComponent",
     "TextNodeComponent",
@@ -404,14 +402,19 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     """
     # Lazy import avoids a cycle during package construction.
     from app.components.registry import REGISTRY
+    from app.components import library
 
     defn = REGISTRY.get(component.kind)
     if defn is None:
         return []
 
+    # Parametric kinds (logic gates) resolve their pins from the instance's
+    # parameter value; fixed kinds use the static registry pins.
+    pins = library.resolved_pins(component)
+
     ox, oy = component.position
     out: list[tuple[float, float]] = []
-    for i, pin in enumerate(defn.pins):
+    for i, pin in enumerate(pins):
         dx, dy = pin.offset
         # For resizable two-terminal components, the terminal pin (index 1)
         # uses span_override when set instead of the registry default offset.

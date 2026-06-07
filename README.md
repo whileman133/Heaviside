@@ -108,7 +108,7 @@ app/
   schematic/   # data model, JSON I/O, validation
   ui/          # main window, palette, properties, source panel
 main.py        # entry point
-tools/         # build-time tooling (CircuiTikZ SVG export + manifest)
+components/     # Generated symbol data (geometry.json, definitions.json) + generator
 tests/         # pytest suite
 ```
 

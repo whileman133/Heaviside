@@ -12,7 +12,9 @@
       "rotation": 0,
       "mirror": false,
       "options": "",
-      "body_diode": true
+      "variants": {
+        "body_diode": true
+      }
     },
     {
       "id": "c1850080-08ff-46cf-8d8c-eca107701127",

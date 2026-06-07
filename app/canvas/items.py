@@ -2,7 +2,7 @@
 Canvas items — one QGraphicsItem subclass per component type.
 
 Symbols are **not** hand-drawn.  Each component's geometry is translated from
-the CircuiTikZ SVG export recorded in ``tools/circuitikz_svgs/manifest.json``
+the CircuiTikZ SVG export recorded in ``components/geometry.json``
 (see :mod:`app.canvas.svgsym`).  The base :class:`ComponentItem` strokes/fills
 the translated :class:`QPainterPath` set; subclasses exist only to provide the
 per-``kind`` identity required by :data:`ITEM_CLASSES`, plus any extra terminal
@@ -585,7 +585,7 @@ class ComponentItem(QGraphicsItem):
     Base for all component graphics items.
 
     Painting is fully data-driven: the symbol geometry comes from the SVG
-    manifest via :func:`app.canvas.svgsym.symbol_paths`.  Subclasses only set
+    geometry via :func:`app.canvas.svgsym.symbol_paths`.  Subclasses only set
     the component ``kind`` (implicitly, via the Component they wrap).
 
     A single child :class:`LabelTextItem` shows the component's raw options
@@ -633,6 +633,25 @@ class ComponentItem(QGraphicsItem):
     @property
     def component(self) -> "Component":
         return self._component
+
+    # Instance-resolved geometry/pins/bbox — identical to the registry defaults
+    # for a fixed kind, but vary with the parameter value for a parametric kind
+    # (logic gates).  Painting, hit-testing, and labels go through these.
+    def _resolved_pins(self) -> list:
+        from app.components import library
+        return library.resolved_pins(self._component)
+
+    def _instance_bbox(self) -> tuple:
+        from app.components import library
+        nd = library.param_n_data(self._component)
+        return tuple(nd["bbox"]) if nd else self._defn.bbox
+
+    def _geometry_kind(self) -> str:
+        """Geometry key for this instance: kind + parametric suffix + variant suffix."""
+        from app.components import library
+        c = self._component
+        return c.kind + library.param_geometry_suffix(c) + library.variant_geometry_suffix(
+            c.kind, c.variants)
 
     @component.setter
     def component(self, comp: "Component") -> None:
@@ -959,7 +978,7 @@ class ComponentItem(QGraphicsItem):
     # ------------------------------------------------------------------
 
     def boundingRect(self) -> QRectF:
-        x0, y0, x1, y1 = self._defn.bbox
+        x0, y0, x1, y1 = self._instance_bbox()
         margin = LINE_W_THICK
         return QRectF(
             x0 * GRID_PX - margin,
@@ -973,14 +992,7 @@ class ComponentItem(QGraphicsItem):
         color = self._body_color()
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
-        from app.components.model import DiodeComponent, MosfetComponent
-        if isinstance(self.component, DiodeComponent) and self.component.filled:
-            svg_kind = self.component.kind + "*"
-        elif isinstance(self.component, MosfetComponent) and self.component.body_diode:
-            svg_kind = self.component.kind + "_bodydiode"
-        else:
-            svg_kind = self.component.kind
-        for sym in symbol_paths(svg_kind):
+        for sym in symbol_paths(self._geometry_kind()):
             lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
             pen = _pen(color, lw)
             painter.setPen(pen)
@@ -994,7 +1006,7 @@ class ComponentItem(QGraphicsItem):
         if not self._ghost:
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
-            for pdef in self._defn.pins:
+            for pdef in self._resolved_pins():
                 dx, dy = pdef.offset
                 painter.drawEllipse(
                     QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R
@@ -1002,102 +1014,16 @@ class ComponentItem(QGraphicsItem):
 
 
 # ---------------------------------------------------------------------------
-# Passives  (SVG leads reach the pins exactly — no overrides needed)
+# Passives, diodes, amplifiers, sources, BJTs, grounds, and rails need no
+# special item behaviour — the base ``ComponentItem`` paints any kind from its
+# geometry, and ``ITEM_CLASSES.get(kind, ComponentItem)`` falls back to it.  Only
+# kinds that override behaviour (MOSFETs, resizable annotations, drawing
+# primitives) get a dedicated subclass below and an explicit ``ITEM_CLASSES`` row.
 # ---------------------------------------------------------------------------
 
-class ResistorItem(ComponentItem):
-    """American zigzag resistor (SVG: R)."""
-
-
-class CapacitorItem(ComponentItem):
-    """Parallel-plate capacitor (SVG: C)."""
-
-
-class InductorItem(ComponentItem):
-    """American hump inductor (SVG: L)."""
-
-
-class DiodeItem(ComponentItem):
-    """Diode: triangle + cathode bar (SVG: D / D*)."""
-
-
-class ZenerDiodeItem(ComponentItem):
-    """Zener diode: diode + bent cathode bar (SVG: zD / zD*)."""
-
-
-class SchottkyDiodeItem(ComponentItem):
-    """Schottky diode: diode + S-shaped cathode bar (SVG: sD / sD*)."""
-
-
-class TunnelDiodeItem(ComponentItem):
-    """Tunnel diode: diode + double bar cathode (SVG: tD / tD*)."""
-
-
-class TVSDiodeItem(ComponentItem):
-    """TVS/bidirectional Zener diode (SVG: zzD / zzD*)."""
-
-
-class LEDItem(ComponentItem):
-    """LED: diode + emission arrows (SVG: leD / leD*)."""
-
-
 # ---------------------------------------------------------------------------
-# Amplifiers
+# MOSFET (extends boundingRect when the body_diode variant is active)
 # ---------------------------------------------------------------------------
-
-class OpAmpItem(ComponentItem):
-    """Op-amp triangle (SVG: op amp).
-
-    The op-amp SVG is exported with grid-aligned terminal leads (input +/-,
-    output, and vs+/vs- power rails all routed to half-grid points — see
-    ``tools/export_circuitikz_svgs.py``), so the base ``paint`` renders every
-    terminal directly onto its registry pin.  No bridging required.
-    """
-
-
-# ---------------------------------------------------------------------------
-# Sources (fixed + AC)
-# ---------------------------------------------------------------------------
-
-class VoltageSourceItem(ComponentItem):
-    """DC voltage source circle with +/- (SVG: V)."""
-
-
-class CurrentSourceItem(ComponentItem):
-    """DC current source circle with arrow (SVG: I)."""
-
-
-class AcVoltageSourceItem(ComponentItem):
-    """AC voltage source circle (SVG: vsource)."""
-
-
-class AcCurrentSourceItem(ComponentItem):
-    """AC current source circle (SVG: isource)."""
-
-
-# ---------------------------------------------------------------------------
-# Dependent sources
-# ---------------------------------------------------------------------------
-
-class VcvsItem(ComponentItem):
-    """VCVS diamond with +/- (SVG: cV)."""
-
-
-class VccsItem(ComponentItem):
-    """VCCS diamond with arrow (SVG: cI)."""
-
-
-# ---------------------------------------------------------------------------
-# MOSFET
-# ---------------------------------------------------------------------------
-
-class NpnItem(ComponentItem):
-    """NPN BJT (SVG: npn). Base left, collector top-right, emitter bottom-right."""
-
-
-class PnpItem(ComponentItem):
-    """PNP BJT (SVG: pnp). Base left, emitter top-right, collector bottom-right."""
-
 
 # Extra x1 extent (GU) added to the bounding rect when body_diode is enabled.
 # The body diode symbol adds ~11 pt = 0.39 GU; rounded up to 0.45 GU for margin.
@@ -1108,9 +1034,8 @@ class _MosfetItem(ComponentItem):
     """Base for MOSFET items — extends boundingRect when body_diode is active."""
 
     def boundingRect(self) -> QRectF:
-        from app.components.model import MosfetComponent
         x0, y0, x1, y1 = self._defn.bbox
-        if isinstance(self.component, MosfetComponent) and self.component.body_diode:
+        if self.component.variants.get("body_diode"):
             x1 = x1 + _BODYDIODE_EXTRA_X
         margin = LINE_W_THICK
         return QRectF(
@@ -1119,22 +1044,6 @@ class _MosfetItem(ComponentItem):
             (x1 - x0) * GRID_PX + 2 * margin,
             (y1 - y0) * GRID_PX + 2 * margin,
         )
-
-
-class NigfeteItem(_MosfetItem):
-    """N-channel enhancement MOSFET (SVG: nigfete)."""
-
-
-class NigfetdItem(_MosfetItem):
-    """N-channel depletion MOSFET (SVG: nigfetd). Solid channel line."""
-
-
-class PigfeteItem(_MosfetItem):
-    """P-channel enhancement MOSFET (SVG: pigfete). Source at top."""
-
-
-class PigfetdItem(_MosfetItem):
-    """P-channel depletion MOSFET (SVG: pigfetd). Source at top, solid channel."""
 
 
 # ---------------------------------------------------------------------------
@@ -1251,53 +1160,9 @@ class ShortItem(_ResizableTwoTerminalItem):
 # Nodes (single-terminal ground symbols)
 # ---------------------------------------------------------------------------
 
-class _GroundBase(ComponentItem):
-    """Base for single-terminal node components drawn from their SVG export."""
-
-    def boundingRect(self) -> QRectF:
-        x0, y0, x1, y1 = self._defn.bbox
-        m = LINE_W_THICK
-        return QRectF(x0 * GRID_PX - m, y0 * GRID_PX - m,
-                      (x1 - x0) * GRID_PX + 2 * m, (y1 - y0) * GRID_PX + 2 * m)
-
-
-class GroundItem(_GroundBase):
-    """Standard ground node (SVG: ground)."""
-
-class RgroundItem(_GroundBase):
-    """Reference ground node (SVG: rground)."""
-
-class SgroundItem(_GroundBase):
-    """Signal ground node (SVG: sground)."""
-
-class NgroundItem(_GroundBase):
-    """Noiseless ground node (SVG: nground)."""
-
-class PgroundItem(_GroundBase):
-    """Protective earth node (SVG: pground)."""
-
-class CgroundItem(_GroundBase):
-    """Chassis/frame ground node (SVG: cground)."""
-
-class EgroundItem(_GroundBase):
-    """Earth ground node (SVG: eground)."""
-
-
-# ---------------------------------------------------------------------------
-# Power rails (single-terminal, positive supplies point up, negative down)
-# ---------------------------------------------------------------------------
-
-class VccItem(_GroundBase):
-    """VCC power rail node (SVG: vcc)."""
-
-class VddItem(_GroundBase):
-    """VDD power rail node (SVG: vdd)."""
-
-class VeeItem(_GroundBase):
-    """VEE power rail node (SVG: vee)."""
-
-class VssItem(_GroundBase):
-    """VSS power rail node (SVG: vss)."""
+# Grounds and power rails (single-terminal nodes) need no special behaviour —
+# their boundingRect is exactly the base ``ComponentItem``'s — so they fall back
+# to it via ``ITEM_CLASSES.get(kind, ComponentItem)``.
 
 
 # ---------------------------------------------------------------------------
@@ -2670,46 +2535,24 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 # ITEM_CLASSES mapping — registered into the component registry
 # ---------------------------------------------------------------------------
 
+# Only kinds whose item overrides base behaviour are listed; every other
+# registry kind (passives, diodes, sources, amplifiers, BJTs, grounds, rails)
+# resolves to the base ``ComponentItem`` via ``ITEM_CLASSES.get(kind, ComponentItem)``
+# at the lookup sites (scene.py, palette.py).  Adding a plain CircuiTikZ symbol
+# therefore needs no entry here — just a ``definitions.json`` record.
 ITEM_CLASSES: dict[str, type[ComponentItem]] = {
-    "R":        ResistorItem,
-    "C":        CapacitorItem,
-    "L":        InductorItem,
-    "D":        DiodeItem,
-    "zD":       ZenerDiodeItem,
-    "sD":       SchottkyDiodeItem,
-    "tD":       TunnelDiodeItem,
-    "zzD":      TVSDiodeItem,
-    "leD":      LEDItem,
-    "op amp":   OpAmpItem,
-    "npn":      NpnItem,
-    "pnp":      PnpItem,
-    "nigfete":  NigfeteItem,
-    "nigfetd":  NigfetdItem,
-    "pigfete":  PigfeteItem,
-    "pigfetd":  PigfetdItem,
-    "V":        VoltageSourceItem,
-    "I":        CurrentSourceItem,
-    "vsourcesin": AcVoltageSourceItem,
-    "isourcesin": AcCurrentSourceItem,
-    "cV":       VcvsItem,
-    "cI":       VccsItem,
-    "open":       OpenItem,
-    "short":      ShortItem,
-    "text_node":  TextNodeItem,
-    "rect":       RectItem,
-    "circle":     CircleItem,
-    "bipole":     BipoleItem,
-    "ground":     GroundItem,
-    "rground":  RgroundItem,
-    "sground":  SgroundItem,
-    "nground":  NgroundItem,
-    "pground":  PgroundItem,
-    "cground":  CgroundItem,
-    "eground":  EgroundItem,
-    "vcc":      VccItem,
-    "vdd":      VddItem,
-    "vee":      VeeItem,
-    "vss":      VssItem,
+    "nigfete":   _MosfetItem,   # extends boundingRect for the body_diode variant
+    "nigfetd":   _MosfetItem,
+    "pigfete":   _MosfetItem,
+    "pigfetd":   _MosfetItem,
+    "nfet":      _MosfetItem,
+    "pfet":      _MosfetItem,
+    "open":      OpenItem,      # resizable two-terminal annotations
+    "short":     ShortItem,
+    "text_node": TextNodeItem,  # drawing primitives
+    "rect":      RectItem,
+    "circle":    CircleItem,
+    "bipole":    BipoleItem,
 }
 
 # Push into the registry so other modules can look up item classes without

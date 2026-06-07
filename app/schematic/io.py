@@ -17,10 +17,8 @@ from typing import Any
 
 from app.components.model import (
     Component,
-    DiodeComponent,
     DrawingComponent,
     FontedComponent,
-    MosfetComponent,
     StyledComponent,
 )
 from app.components.registry import REGISTRY
@@ -35,6 +33,13 @@ _FORMAT_VERSION: str = "0.1"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {"0.1"}
+
+# Component-kind migration map: ``{old_kind: current_kind}``.  A ``.hv`` file
+# stores only a component's ``kind`` string (never its geometry), so the kind is
+# the stable identifier across CircuiTikZ-library re-generations.  If a future
+# re-generation renames a kind, add the old→new mapping here and old files keep
+# loading.  Applied in :func:`_dict_to_component` before the registry lookup.
+_KIND_ALIASES: dict[str, str] = {}
 
 
 class SchematicLoadError(Exception):
@@ -132,10 +137,14 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         d["span_override"] = list(c.span_override)
     if isinstance(c, DrawingComponent) and c.z_order != 0:
         d["z_order"] = c.z_order
-    if isinstance(c, DiodeComponent) and c.filled:
-        d["filled"] = True
-    if isinstance(c, MosfetComponent) and c.body_diode:
-        d["body_diode"] = True
+    # Active variants only (e.g. {"filled": true}); omitted when none are on.
+    active = {name: True for name, on in c.variants.items() if on}
+    if active:
+        d["variants"] = active
+    # Integer parameters for a parametric kind (e.g. {"inputs": 4}); omitted when
+    # none set (the kind's default applies).
+    if c.params:
+        d["params"] = {name: int(v) for name, v in c.params.items()}
     if isinstance(c, StyledComponent):
         if c.fill_color:
             d["fill_color"] = c.fill_color
@@ -261,6 +270,9 @@ def _dict_to_component(data: Any, index: int) -> Component:
         raise SchematicLoadError(f"{ctx}.id must be a string")
     if not isinstance(kind, str):
         raise SchematicLoadError(f"{ctx}.kind must be a string")
+    # Migrate a renamed kind to its current name so old files keep loading after
+    # a CircuiTikZ-library re-generation renames a symbol (see _KIND_ALIASES).
+    kind = _KIND_ALIASES.get(kind, kind)
     if not (isinstance(pos_raw, list) and len(pos_raw) == 2):
         raise SchematicLoadError(f"{ctx}.position must be a two-element array")
     if not isinstance(rot_raw, int):
@@ -307,6 +319,26 @@ def _dict_to_component(data: Any, index: int) -> Component:
     defn = REGISTRY.get(kind)
     cls = defn.component_class if defn is not None else Component
 
+    # Active variants (generic).  Read the new `variants` map, plus the legacy
+    # `filled` / `body_diode` keys for back-compat with pre-variants `.hv` files.
+    raw_variants = data.get("variants", {})
+    if not isinstance(raw_variants, dict):
+        raise SchematicLoadError(f"{ctx}.variants must be an object")
+    variants = {str(name): bool(on) for name, on in raw_variants.items() if on}
+    if data.get("filled"):
+        variants["filled"] = True
+    if data.get("body_diode"):
+        variants["body_diode"] = True
+
+    # Integer parameters for a parametric kind (e.g. logic-gate input count).
+    raw_params = data.get("params", {})
+    if not isinstance(raw_params, dict):
+        raise SchematicLoadError(f"{ctx}.params must be an object")
+    try:
+        params = {str(name): int(v) for name, v in raw_params.items()}
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.params values must be integers") from exc
+
     kwargs: dict = {
         "id": comp_id,
         "kind": kind,
@@ -316,6 +348,8 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "options": options,
         "label_offset": label_offset,
         "span_override": span_override,
+        "variants": variants,
+        "params": params,
     }
 
     if issubclass(cls, DrawingComponent):
@@ -323,12 +357,6 @@ def _dict_to_component(data: Any, index: int) -> Component:
         if not isinstance(raw_z, int):
             raise SchematicLoadError(f"{ctx}.z_order must be an integer")
         kwargs["z_order"] = raw_z
-
-    if issubclass(cls, DiodeComponent):
-        kwargs["filled"] = bool(data.get("filled", False))
-
-    if issubclass(cls, MosfetComponent):
-        kwargs["body_diode"] = bool(data.get("body_diode", False))
 
     if issubclass(cls, StyledComponent):
         kwargs["fill_color"] = str(data.get("fill_color", ""))
