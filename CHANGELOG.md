@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **The Component Editor is shown only when its toolchain is present.** It is a
+  developer tool that renders/measures CircuiTikZ symbols via `latex` + `dvisvgm`,
+  which a packaged end-user build does not ship — so the **Tools** menu now appears
+  only when that toolchain is on `PATH`, instead of offering a half-working tool.
 - **Engineer-facing palette categories.** Replaced the broad CircuiTikZ
   "Bipoles/Tripoles/Nodes" groupings with categories an EE recognises: Resistors,
   Capacitors, Inductors, Diodes, Transistors, Amplifiers, Sources, Instruments,

@@ -1641,6 +1641,9 @@ editor (`app/componenteditor/window.py`) — a developer tool for authoring/alig
 CircuiTikZ component symbols (it writes `components/definitions.json` +
 `geometry.json`; see [`spec/component-editor.md`](spec/component-editor.md)). It
 can also be launched independently with `python -m app.componenteditor`.
+Because it renders/measures symbols via `latex` + `dvisvgm`, the **Tools menu is
+shown only when that toolchain is on `PATH`** (`_component_editor_available`) — a
+packaged end-user build, which ships no toolchain, hides it.
 
 **Welcome screen.** The canvas slot is a `QStackedWidget`: page 0 is a painted
 `_WelcomeScreen`, page 1 is the live `SchematicView`. Before any document is

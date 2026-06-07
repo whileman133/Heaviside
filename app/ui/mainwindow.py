@@ -22,6 +22,7 @@ The preview occupies the lower-right of the bottom strip, beside the source.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import qtawesome as qta
@@ -77,6 +78,13 @@ from app.ui.sourcepanel import SourcePanel
 _WINDOW_TITLE = "Heaviside — CircuiTikZ Editor"
 #: GitHub issues page — opened by Help ▸ Report a Bug and the toolbar bug button.
 _ISSUES_URL = "https://github.com/whileman133/Heaviside/issues"
+
+
+def _component_editor_available() -> bool:
+    """The Component Editor is a developer tool: it renders/measures CircuiTikZ
+    symbols via ``latex`` + ``dvisvgm``, which a packaged end-user build does not
+    ship.  Surface it only when that toolchain is on PATH."""
+    return bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
 
 class MainWindow(QMainWindow):
@@ -253,12 +261,17 @@ class MainWindow(QMainWindow):
         act_compile.triggered.connect(self._on_compile_now)
         view_menu.addAction(act_compile)
 
-        # Tools menu.
-        tools_menu = mb.addMenu("&Tools")
-        act_comp_editor = QAction("&Component Editor…", self)
-        act_comp_editor.setToolTip("Author / align CircuiTikZ component symbols")
-        act_comp_editor.triggered.connect(self._on_component_editor)
-        tools_menu.addAction(act_comp_editor)
+        # Tools menu — the Component Editor authors/aligns CircuiTikZ symbols and
+        # shells out to the latex + dvisvgm developer toolchain, so it only appears
+        # when that toolchain is present (a source checkout, not a packaged
+        # end-user build).  The menu holds only this item, so skip it entirely
+        # otherwise rather than show an empty menu.
+        if _component_editor_available():
+            tools_menu = mb.addMenu("&Tools")
+            act_comp_editor = QAction("&Component Editor…", self)
+            act_comp_editor.setToolTip("Author / align CircuiTikZ component symbols")
+            act_comp_editor.triggered.connect(self._on_component_editor)
+            tools_menu.addAction(act_comp_editor)
 
         # Help menu.
         help_menu = mb.addMenu("&Help")
