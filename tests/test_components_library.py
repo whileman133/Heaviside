@@ -102,6 +102,24 @@ def test_european_and_cute_variants_present():
         assert kind in cg._TWO_TERMINAL_KINDS
 
 
+def test_european_sources_and_variable_resistors_present():
+    """European sources and variable-resistor/potentiometer are path elements in
+    the Sources / Resistors categories, using `european …` shape keywords."""
+    expected = {
+        "eV": ("Sources", "european voltage source"),
+        "eI": ("Sources", "european current source"),
+        "ecV": ("Sources", "european controlled voltage source"),
+        "ecI": ("Sources", "european controlled current source"),
+        "evR": ("Resistors", "variable european resistor"),
+        "epot": ("Resistors", "european potentiometer"),
+    }
+    for kind, (category, tikz) in expected.items():
+        defn = REGISTRY[kind]
+        assert defn.category == category
+        assert defn.tikz_keyword == tikz
+        assert kind in cg._TWO_TERMINAL_KINDS  # two-terminal to[…] path elements
+
+
 def test_european_logic_gates_present():
     """European (IEC) logic gates use the style-independent `european … port`
     keywords; the AND/OR family is parametric, NOT/buffer are fixed; all are

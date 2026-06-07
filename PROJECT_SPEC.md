@@ -615,9 +615,12 @@ the american resistor `R` and **european resistor** `eR` (Resistors); the
 american inductor `L` with the **european** `eL` and **cute** `cuteL` inductors
 (Inductors); and, for **Logic**, the american gates (`and`, `or`, `nand`, `nor`,
 `xor`, `xnor`, `not`, `buffer`) alongside their european/IEC counterparts
-(`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`). Each
+(`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`); the european
+**sources** `eV`/`eI` and controlled `ecV`/`ecI` (Sources); and the european
+**variable resistor** `evR` and **potentiometer** `epot` (Resistors). Each
 european kind uses CircuiTikZ's *style-independent* shape keyword (`european
-resistor`, `european inductor`, `cute inductor`, `european and port`, …), so its
+resistor`, `european inductor`, `cute inductor`, `european and port`, `european
+voltage source`, `variable european resistor`, …), so its
 shape is fixed in both the canvas and the output regardless of any global
 `resistor`/`inductor`/`logic ports` style. The european AND/OR-family gates are
 **parametric** (2–16 inputs) exactly like the american ones, with their own

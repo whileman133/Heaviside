@@ -5755,6 +5755,226 @@
         1.0
       ],
       "leads": []
+    },
+    "eV": {
+      "display_name": "Voltage Source (European)",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "european voltage source",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "eI": {
+      "display_name": "Current Source (European)",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "european current source",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.45,
+        0.0,
+        0.45,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ecV": {
+      "display_name": "Controlled Voltage Source (European)",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "european controlled voltage source",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ecI": {
+      "display_name": "Controlled Current Source (European)",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "european controlled current source",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.05
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "evR": {
+      "display_name": "Variable Resistor (European)",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "variable european resistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "epot": {
+      "display_name": "Potentiometer (European)",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european potentiometer",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.6,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
     }
   }
 }
