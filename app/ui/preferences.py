@@ -25,11 +25,13 @@ from PySide6.QtWidgets import (
 )
 
 # QSettings keys.
+_KEY_AUTO_TEX = "export/auto_tex_on_save"
 _KEY_AUTO_PDF = "export/auto_pdf_on_save"
 _KEY_AUTO_EPS = "export/auto_eps_on_save"
 _KEY_AUTO_SVG = "export/auto_svg_on_save"
 _KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
 _KEY_LINE_HOPS = "display/line_hops"
+_KEY_FORCE_ZIAMATH = "render/force_ziamath"
 
 
 def _to_bool(value: object, default: bool = False) -> bool:
@@ -53,6 +55,14 @@ class Preferences:
         self._settings = settings if settings is not None else QSettings()
 
     # -- Auto-export on save -------------------------------------------------
+
+    @property
+    def auto_export_tex(self) -> bool:
+        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=False)
+
+    @auto_export_tex.setter
+    def auto_export_tex(self, value: bool) -> None:
+        self._settings.setValue(_KEY_AUTO_TEX, bool(value))
 
     @property
     def auto_export_pdf(self) -> bool:
@@ -98,6 +108,18 @@ class Preferences:
     def line_hops(self, value: bool) -> None:
         self._settings.setValue(_KEY_LINE_HOPS, bool(value))
 
+    # -- Rendering -----------------------------------------------------------
+
+    @property
+    def force_ziamath(self) -> bool:
+        # Debug aid: force the pure-Python ziamath label renderer even when a
+        # LaTeX install is present (which would otherwise be preferred).
+        return _to_bool(self._settings.value(_KEY_FORCE_ZIAMATH), default=False)
+
+    @force_ziamath.setter
+    def force_ziamath(self, value: bool) -> None:
+        self._settings.setValue(_KEY_FORCE_ZIAMATH, bool(value))
+
 
 class PreferencesDialog(QDialog):
     """Modal preferences editor.
@@ -120,6 +142,10 @@ class PreferencesDialog(QDialog):
         group_layout = QVBoxLayout(group)
         group_layout.setSpacing(6)
 
+        self._chk_tex = QCheckBox("Export a TeX snippet next to the schematic file")
+        self._chk_tex.setChecked(prefs.auto_export_tex)
+        group_layout.addWidget(self._chk_tex)
+
         self._chk_pdf = QCheckBox("Export a PDF next to the schematic file")
         self._chk_pdf.setChecked(prefs.auto_export_pdf)
         group_layout.addWidget(self._chk_pdf)
@@ -133,9 +159,10 @@ class PreferencesDialog(QDialog):
         group_layout.addWidget(self._chk_svg)
 
         hint = QLabel(
-            "When saving <name>.hv, also write <name>.pdf / <name>.eps / <name>.svg "
-            "to the same folder so an \\includegraphics in your LaTeX document stays "
-            "up to date.  Requires pdflatex (and pdftocairo for EPS/SVG)."
+            "When saving <name>.hv, also write <name>.tex / <name>.pdf / <name>.eps "
+            "/ <name>.svg to the same folder so an \\input or \\includegraphics in "
+            "your LaTeX document stays up to date.  The TeX snippet needs nothing; "
+            "PDF/EPS/SVG require pdflatex (and pdftocairo for EPS/SVG)."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666; font-size: 11px;")
@@ -174,6 +201,28 @@ class PreferencesDialog(QDialog):
 
         layout.addWidget(display_group)
 
+        render_group = QGroupBox("Rendering")
+        render_layout = QVBoxLayout(render_group)
+        render_layout.setSpacing(6)
+
+        self._chk_force_ziamath = QCheckBox(
+            "Force the built-in (ziamath) label renderer"
+        )
+        self._chk_force_ziamath.setChecked(prefs.force_ziamath)
+        render_layout.addWidget(self._chk_force_ziamath)
+
+        ziamath_hint = QLabel(
+            "Typeset on-canvas equation labels with the bundled, pure-Python "
+            "renderer instead of a system LaTeX install. Used automatically when "
+            "LaTeX is unavailable; enable here to force it (e.g. for debugging) "
+            "even when LaTeX is installed."
+        )
+        ziamath_hint.setWordWrap(True)
+        ziamath_hint.setStyleSheet("color: #666; font-size: 11px;")
+        render_layout.addWidget(ziamath_hint)
+
+        layout.addWidget(render_group)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
@@ -181,9 +230,11 @@ class PreferencesDialog(QDialog):
 
     def _on_accept(self) -> None:
         """Persist the checkbox state to the Preferences store and close."""
+        self._prefs.auto_export_tex = self._chk_tex.isChecked()
         self._prefs.auto_export_pdf = self._chk_pdf.isChecked()
         self._prefs.auto_export_eps = self._chk_eps.isChecked()
         self._prefs.auto_export_svg = self._chk_svg.isChecked()
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
         self._prefs.line_hops = self._chk_line_hops.isChecked()
+        self._prefs.force_ziamath = self._chk_force_ziamath.isChecked()
         self.accept()

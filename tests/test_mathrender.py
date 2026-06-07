@@ -23,17 +23,29 @@ try:
 except Exception as exc:  # pragma: no cover - environment-dependent
     pytest.skip(f"Qt platform unavailable: {exc}", allow_module_level=True)
 
+from app.preview import mathrender as _mr  # noqa: E402
 from app.preview.mathrender import (  # noqa: E402
+    _active_engine,
     _split_top_level,
     editable_to_options,
     label_display_latex,
     options_to_editable,
     render_latex,
+    render_path,
+    set_force_ziamath,
     slot_fragments,
     slot_side,
 )
 
 _HAS_TEX = shutil.which("latex") is not None and shutil.which("dvisvgm") is not None
+
+
+@pytest.fixture(autouse=True)
+def _reset_engine():
+    """Keep the module-level force flag from leaking between tests."""
+    set_force_ziamath(False)
+    yield
+    set_force_ziamath(False)
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +170,7 @@ def test_render_latex_caches_on_disk() -> None:
     from app.preview.mathrender import _cache_dir, _cache_key
 
     frag = r"$\Phi_\mathrm{cache,test}$"
-    render_latex.cache_clear()
+    render_path.cache_clear()
     render_latex(frag)
     cache_file = _cache_dir() / f"{_cache_key(frag)}.svg"
     assert cache_file.exists() and cache_file.read_text(encoding="utf-8")
@@ -188,3 +200,60 @@ def test_render_async_delivers_on_event_loop() -> None:
     loop.exec()
     assert "path" in box and box["path"] is not None
     assert box["path"].elementCount() > 0
+
+
+# ---------------------------------------------------------------------------
+# ziamath engine + selection (no LaTeX install required)
+# ---------------------------------------------------------------------------
+
+def test_ziamath_renders_without_latex() -> None:
+    """The ziamath engine produces a non-empty, baseline-normalised path."""
+    path = render_path(r"$\bar{R}_\mathrm{dl}$", "ziamath")
+    assert path is not None and path.elementCount() > 0
+    br = path.boundingRect()
+    assert br.width() > 1 and br.height() > 1
+    assert abs(br.left()) < 1e-6        # left ink edge normalised to x=0
+    assert br.top() < 0 < br.bottom()   # ascender above baseline, subscript below
+
+
+def test_ziamath_handles_text_fraction_and_greek() -> None:
+    """Plain text, mixed text+math, fractions and Greek all render."""
+    for frag in ("Processor", r"Gain $A_v$", r"$\frac{1}{sC}$", r"$\omega_0$"):
+        p = render_path(frag, "ziamath")
+        assert p is not None and not p.isEmpty(), frag
+
+
+def test_ziamath_strips_math_delimiters() -> None:
+    r"""``$…$`` delimiters typeset as math, not literal dollar glyphs (regression).
+
+    ``ziamath.Latex`` is math-only and would draw the ``$`` as dollar signs; the
+    renderer must use ``ziamath.Text`` so ``$x$`` typesets identically to the bare
+    math ``x`` — i.e. its ink is no wider than a single glyph, not three.
+    """
+    delim = render_path(r"$x$", "ziamath")
+    plain = render_path("x", "ziamath")
+    assert delim is not None and plain is not None
+    # With literal '$' glyphs the width would roughly triple; allow a small margin.
+    assert delim.boundingRect().width() < plain.boundingRect().width() * 1.5
+
+
+def test_force_ziamath_selects_engine() -> None:
+    """The force flag overrides engine selection regardless of LaTeX presence."""
+    set_force_ziamath(True)
+    assert _active_engine() == "ziamath"
+    set_force_ziamath(False)
+    # auto: latex when present, else ziamath
+    assert _active_engine() == ("latex" if _HAS_TEX else "ziamath")
+
+
+def test_fallback_to_ziamath_when_latex_absent(monkeypatch) -> None:
+    """With no latex/dvisvgm on PATH, auto-selection falls back to ziamath."""
+    monkeypatch.setattr(_mr.shutil, "which", lambda name: None)
+    set_force_ziamath(False)
+    assert _active_engine() == "ziamath"
+
+
+def test_render_latex_uses_ziamath_when_forced() -> None:
+    """render_latex routes through the forced engine and returns a path."""
+    set_force_ziamath(True)
+    assert render_latex(r"$R_1$") is not None

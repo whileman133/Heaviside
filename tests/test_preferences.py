@@ -33,8 +33,26 @@ def prefs(tmp_path) -> Preferences:
 
 def test_defaults_are_false(prefs: Preferences) -> None:
     """A fresh settings store reports auto-export disabled."""
+    assert prefs.auto_export_tex is False
     assert prefs.auto_export_pdf is False
     assert prefs.auto_export_eps is False
+    assert prefs.force_ziamath is False  # auto engine selection by default
+
+
+def test_roundtrip_tex(prefs: Preferences) -> None:
+    assert prefs.auto_export_tex is False  # defaults off
+    prefs.auto_export_tex = True
+    assert prefs.auto_export_tex is True
+    prefs.auto_export_tex = False
+    assert prefs.auto_export_tex is False
+
+
+def test_roundtrip_force_ziamath(prefs: Preferences) -> None:
+    assert prefs.force_ziamath is False
+    prefs.force_ziamath = True
+    assert prefs.force_ziamath is True
+    prefs.force_ziamath = False
+    assert prefs.force_ziamath is False
 
 
 def test_roundtrip_pdf(prefs: Preferences) -> None:
@@ -93,15 +111,19 @@ def test_to_bool_coerces_strings() -> None:
 def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     """Accepting the dialog persists the checkbox state to Preferences."""
     dlg = PreferencesDialog(prefs)
+    dlg._chk_tex.setChecked(True)
     dlg._chk_pdf.setChecked(True)
     dlg._chk_eps.setChecked(True)
     dlg._chk_svg.setChecked(True)
     dlg._chk_open_pins.setChecked(True)
     dlg._chk_line_hops.setChecked(False)
+    dlg._chk_force_ziamath.setChecked(True)
     dlg._on_accept()
+    assert prefs.auto_export_tex is True
     assert prefs.auto_export_pdf is True
     assert prefs.auto_export_eps is True
     assert prefs.auto_export_svg is True
+    assert prefs.force_ziamath is True
     assert prefs.mark_unconnected_pins is True
     assert prefs.line_hops is False
 

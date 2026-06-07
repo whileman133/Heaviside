@@ -68,6 +68,7 @@ from app.preview.latex import (
     pdf_to_eps,
     pdf_to_svg,
 )
+from app.preview import mathrender
 from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
@@ -113,6 +114,7 @@ class MainWindow(QMainWindow):
         self._prefs = Preferences()
         self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
         self._scene.set_line_hops(self._prefs.line_hops)
+        mathrender.set_force_ziamath(self._prefs.force_ziamath)
 
         # -- Build UI -------------------------------------------------------
         self._build_menu()
@@ -727,42 +729,59 @@ class MainWindow(QMainWindow):
         self._auto_export(path)
 
     def _auto_export(self, path: Path) -> None:
-        """Write sibling PDF/EPS images next to *path* if enabled in Preferences.
+        """Write sibling TeX/PDF/EPS/SVG files next to *path* if enabled in Preferences.
 
-        Runs after a successful save so an ``\\includegraphics`` of the sibling
-        file stays in sync with the schematic (§10.8).  Compilation failures are
-        reported in the status bar only — a modal dialog on every save would be
-        intrusive — and never block the save itself.
+        Runs after a successful save so an ``\\includegraphics`` (or ``\\input``)
+        of the sibling file stays in sync with the schematic (§10.8).  The ``.tex``
+        snippet is pure Python (no compile); the image formats share a single
+        ``pdflatex`` compile.  Failures are reported in the status bar only — a
+        modal dialog on every save would be intrusive — and never block the save.
         """
+        want_tex = self._prefs.auto_export_tex
         want_pdf = self._prefs.auto_export_pdf
         want_eps = self._prefs.auto_export_eps
         want_svg = self._prefs.auto_export_svg
-        if not (want_pdf or want_eps or want_svg):
+        if not (want_tex or want_pdf or want_eps or want_svg):
             return
 
         self._status_compile.setText("Auto-exporting…")
-        pdf_bytes = self._compile_to_pdf(quiet=True)
-        if pdf_bytes is None:
-            self._status_compile.setText("Auto-export failed (see Compile)")
-            return
-
         written: list[str] = []
-        try:
-            if want_pdf:
-                pdf_path = path.with_suffix(".pdf")
-                pdf_path.write_bytes(pdf_bytes)
-                written.append(pdf_path.name)
-            if want_eps:
-                eps_path = path.with_suffix(".eps")
-                eps_path.write_bytes(pdf_to_eps(pdf_bytes))
-                written.append(eps_path.name)
-            if want_svg:
-                svg_path = path.with_suffix(".svg")
-                svg_path.write_bytes(pdf_to_svg(pdf_bytes))
-                written.append(svg_path.name)
-        except (OSError, CompileError) as exc:
-            self._status_compile.setText(f"Auto-export failed: {exc}")
-            return
+
+        # TeX snippet: generated directly, no LaTeX install needed.
+        if want_tex:
+            try:
+                source = generate(self._scene.schematic, y_flip=True,
+                                mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                                mark_line_hops=self._prefs.line_hops)
+                tex_path = path.with_suffix(".tex")
+                tex_path.write_text(build_snippet(source), encoding="utf-8")
+                written.append(tex_path.name)
+            except (OSError, ValueError) as exc:
+                self._status_compile.setText(f"Auto-export failed: {exc}")
+                return
+
+        # Image formats: one compile shared by PDF/EPS/SVG.
+        if want_pdf or want_eps or want_svg:
+            pdf_bytes = self._compile_to_pdf(quiet=True)
+            if pdf_bytes is None:
+                self._status_compile.setText("Auto-export failed (see Compile)")
+                return
+            try:
+                if want_pdf:
+                    pdf_path = path.with_suffix(".pdf")
+                    pdf_path.write_bytes(pdf_bytes)
+                    written.append(pdf_path.name)
+                if want_eps:
+                    eps_path = path.with_suffix(".eps")
+                    eps_path.write_bytes(pdf_to_eps(pdf_bytes))
+                    written.append(eps_path.name)
+                if want_svg:
+                    svg_path = path.with_suffix(".svg")
+                    svg_path.write_bytes(pdf_to_svg(pdf_bytes))
+                    written.append(svg_path.name)
+            except (OSError, CompileError) as exc:
+                self._status_compile.setText(f"Auto-export failed: {exc}")
+                return
 
         self._status_compile.setText("Auto-exported " + ", ".join(written))
 
@@ -775,6 +794,10 @@ class MainWindow(QMainWindow):
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
             self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
             self._scene.set_line_hops(self._prefs.line_hops)
+            # Apply the label-render engine choice and re-typeset existing labels
+            # so a ziamath toggle is reflected immediately (§10.8).
+            mathrender.set_force_ziamath(self._prefs.force_ziamath)
+            self._scene.retypeset_labels()
             self._source_panel.refresh()
             self._on_auto_compile()
 

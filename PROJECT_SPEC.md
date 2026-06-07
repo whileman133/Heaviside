@@ -804,12 +804,32 @@ than waiting for commit. When the preference is off, no such items exist.
 ### 5.8 On-Canvas Math Rendering (WYSIWYM labels)
 
 Component labels, `text_node` content, and `bipole` box text are shown as
-**typeset math**, rendered to vector by `app/preview/mathrender.py`. This reuses
-the exact toolchain that produces the component symbols (§5.2): a LaTeX fragment
-is wrapped in a `standalone` document and run through `latex → dvisvgm
---no-fonts → SVG`, and the SVG paths are parsed by the same
-`svgsym.parse_path()` into a `QPainterPath`. No raster step is involved, so
-labels stay crisp at every zoom.
+**typeset math**, rendered to vector by `app/preview/mathrender.py`. Two engines
+produce a `QPainterPath` from a fragment; both normalise to a shared baseline so
+they place identically (`render_path(fragment, engine)`):
+
+- **`latex`** (the reference) reuses the exact toolchain that produces the
+  component symbols (§5.2): a fragment is wrapped in a `standalone` document and
+  run through `latex → dvisvgm --no-fonts → SVG`, parsed by `svgsym.parse_path()`.
+- **`ziamath`** is a pure-Python, **no-install** fallback (a declared dependency
+  that bundles the STIX Two Math OpenType-MATH font). It uses `ziamath.Text`,
+  which renders mixed text with inline math **delimited by `$…$`** — matching the
+  fragment convention the LaTeX engine consumes (`\strut %FRAGMENT%`), so plain
+  text renders verbatim and `$…$` spans typeset as math. (`ziamath.Latex` is
+  math-only and would draw the `$` delimiters as literal dollar glyphs.) The SVG —
+  glyphs as `<symbol viewBox><path>` placed by `<use x y width height>`, rule
+  geometry as `<rect>`, baseline at y=0, coordinates in pt at the requested
+  `size` — is converted to a `QPainterPath` by `_ziamath_svg_to_path()`. This
+  renders canvas labels even with **no `latex`/`dvisvgm` installed** (a subset,
+  not pixel-exact to LaTeX).
+
+No raster step is involved either way, so labels stay crisp at every zoom.
+
+**Engine selection.** `_active_engine()` picks `latex` when `latex`+`dvisvgm`
+are on `PATH`, else `ziamath`. A debug preference (§10.8, `set_force_ziamath()`)
+forces `ziamath` even when LaTeX is present; toggling it re-typesets all existing
+labels via `SchematicScene.retypeset_labels()`. Renders are cached in-process per
+`(fragment, engine)`; the LaTeX SVG additionally caches on disk.
 
 - **Baseline normalisation.** Every fragment is typeset behind a leading
   `\strut`, which pins the baseline to a constant device-y across all fragments.
@@ -873,9 +893,10 @@ labels stay crisp at every zoom.
   cached SVGs without invoking `latex`.
 - **Async, non-blocking.** `render_async(fragment, on_done)` runs the compile on
   a bounded `QThreadPool` (2 workers) and delivers the result back on the UI
-  thread via a queued signal. Until the path arrives — or if `latex`/`dvisvgm`
-  are missing — items fall back to raw-text rendering, so the canvas never
-  blocks and degrades gracefully. Queued callbacks guard with
+  thread via a queued signal. Until the path arrives items show raw text; if the
+  active engine yields nothing (e.g. `latex`/`dvisvgm` missing *and* the fragment
+  is outside ziamath's subset) the raw-text rendering simply persists, so the
+  canvas never blocks and degrades gracefully. Queued callbacks guard with
   `shiboken6.isValid` so a render landing after its item was deleted is dropped.
 
 ### 5.9 Quarter-Grid Placement
@@ -1511,10 +1532,11 @@ suits the web and vector editors (Inkscape, Illustrator).
 
 ### 8.7 Dependencies
 
-- `pdflatex` must be on the system `PATH`. Checked at startup (`check_dependencies`); a warning dialog is shown if not found. It is the only tool required for normal use.
+- `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Checked at startup (`check_dependencies`); a warning dialog is shown if not found.
+- **On-canvas equation labels need no LaTeX.** They render via the bundled, pure-Python **ziamath** engine when `latex`/`dvisvgm` are absent (§8.4); when those are present the higher-fidelity LaTeX engine is used instead. So drawing, typeset canvas labels, CircuiTikZ source generation, and the `.tex` export all work with no LaTeX install — only the PDF preview and image exports require it.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
 - `pdftocairo` (Poppler) is required **only** for EPS and SVG export (§8.6). It is checked on demand in `pdf_to_eps`/`pdf_to_svg` (not at startup), so users who never export EPS or SVG are not warned about a missing Poppler.
-- The `circuitikz` LaTeX package must be installed in the TeX distribution.
+- The `circuitikz` LaTeX package must be installed in the TeX distribution (for the preview and image exports).
 
 ---
 
@@ -1801,23 +1823,28 @@ Current settings:
 
 | Setting | Key | Default | Effect |
 |---------|-----|---------|--------|
+| Auto-export TeX on save | `export/auto_tex_on_save` | off | After a successful save of `<name>.hv`, also write the includable `<name>.tex` snippet (§8.5) to the same directory. Pure Python — needs no LaTeX install. |
 | Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
 | Auto-export SVG on save | `export/auto_svg_on_save` | off | After a successful save, also write `<name>.svg` to the same directory. |
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
+| Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
 
-When any is enabled, `_do_save()` calls `_auto_export()`, which compiles the
-schematic **once** (reusing the §8.6 pipeline) and writes the requested sibling
-file(s) — the single PDF is converted via `pdf_to_eps()` / `pdf_to_svg()` as
-requested. This keeps an `\includegraphics{<name>.pdf}` (or `.eps`/`.svg`) in a
-LaTeX document in sync with the schematic without a manual export step.
+When any is enabled, `_do_save()` calls `_auto_export()`. The `.tex` snippet is
+generated directly (`generate()` → `build_snippet()`, pure Python — **no LaTeX
+install required**); the image formats share a **single** compile (reusing the
+§8.6 pipeline), with the one PDF converted via `pdf_to_eps()` / `pdf_to_svg()` as
+requested. This keeps an `\input{<name>.tex}` or `\includegraphics{<name>.pdf}`
+(or `.eps`/`.svg`) in a LaTeX document in sync with the schematic without a manual
+export step. Enabling only TeX auto-export therefore works with no `pdflatex` present.
 
 Auto-export never blocks or aborts the save: it runs only *after* the `.hv`
 is written, and any failure (invalid schematic, missing `pdflatex`/`pdftocairo`,
 or a `pdflatex` error) is reported in the status bar only — not as a modal
-dialog, which would be intrusive on every save. The compile is synchronous, so
-saving adds the compile latency when auto-export is enabled.
+dialog, which would be intrusive on every save. The image compile is synchronous,
+so saving adds the compile latency when PDF/EPS/SVG auto-export is enabled (the
+TeX snippet adds negligible time).
 
 ---
 
@@ -1890,9 +1917,10 @@ heaviside/
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
+    ├── test_mainwindow.py         # MainWindow auto-export + label re-typeset (offscreen Qt)
     ├── test_welcome.py            # welcome screen + Help dialog reference tables (offscreen Qt)
     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
-    ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; render gated on latex/dvisvgm)
+    ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; LaTeX render gated, ziamath/engine tests ungated)
     ├── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
     ├── test_components_library.py # definitions.json → registry/codegen reconstruction
     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
@@ -2172,7 +2200,7 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 
 #### Math Render (`test_mathrender.py`)
 
-On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. Render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop.
+On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. LaTeX render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop. The **ziamath** engine tests need no LaTeX (it is a bundled dependency): it renders text, mixed text+math, fractions and Greek to a non-empty baseline-normalised path; `$…$` delimiters typeset as math rather than literal dollar glyphs (`test_ziamath_strips_math_delimiters` — guards the `ziamath.Text` vs math-only `ziamath.Latex` choice); `_active_engine` selects `latex` when present else `ziamath`; `set_force_ziamath` forces ziamath; and auto-selection falls back to ziamath when `latex`/`dvisvgm` are absent.
 
 #### Symbol Geometry (`test_svgsym.py`)
 
@@ -2183,11 +2211,22 @@ On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests alway
 The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
 isolated `QSettings` backed by a temp INI file (never touching the real user
 store): auto-export and mark-unconnected-pins defaults are off, **line-hops
-defaults on** (`test_line_hops_default_on_and_roundtrip`); PDF/EPS/SVG and the
-display flags round-trip and persist across new `Preferences` instances over the
+defaults on** (`test_line_hops_default_on_and_roundtrip`); TeX/PDF/EPS/SVG, the
+`force_ziamath` render flag, and the display flags round-trip and persist across
+new `Preferences` instances over the
 same backing file; `_to_bool` normalizes the string booleans `QSettings` may
 return; the dialog persists all checkbox state on accept and discards it on
 cancel.
+
+#### Main window (`test_mainwindow.py`)
+
+`MainWindow` auto-export and label re-typeset, against an isolated `QSettings`
+and offscreen Qt. The TeX-snippet auto-export writes `<name>.tex` **without**
+invoking the compiler (asserted by failing the test if `_compile_to_pdf` is
+called) — confirming it needs no `pdflatex`; with every auto-export preference
+off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
+labelled component without error (used when the math engine / ziamath preference
+changes, §8.4).
 
 #### Welcome screen & Help dialog (`test_welcome.py`)
 
@@ -2321,3 +2360,52 @@ The following are explicitly deferred to future versions:
 - Dark mode
 - Collaborative editing
 - Printing directly from the application
+- Native (LaTeX-free) rendering and SVG export — see §14.1
+
+### 14.1 Native (LaTeX-free) rendering — future work
+
+**Not committed; an idea recorded for later.** Today the live preview and the
+PDF/EPS/SVG exports all require a full LaTeX/CircuiTikZ install (gigabytes via TeX
+Live / MiKTeX), which is the main install-friction point. A *native* renderer
+could produce the preview and an SVG export with no LaTeX on the user's machine,
+keeping the LaTeX→PDF path as the canonical, pixel-perfect reference and offline
+fallback. This is a "fast/offline mode," **not** a replacement for the LaTeX path.
+
+What already supports this (no new work):
+
+- **Symbols are already LaTeX-free at runtime.** `components/geometry.json` bakes
+  each symbol's SVG path data at *build* time (the one-time generator needs
+  `latex`+`dvisvgm`); the canvas renders it purely from that store via
+  `app/canvas/svgsym.py` (§5.3). Wires, junction/open dots, and label *text
+  placement* are native too.
+
+What is missing, in increasing difficulty:
+
+1. **Scene → SVG emitter** (bounded). No `canvas → SVG` serializer exists; the
+   canvas paints to Qt internally. Since the geometry is already `QPainterPath`s
+   in known coordinates, emitting `<path>` elements is mechanical. Good first
+   slice to validate fidelity against the circuitikz SVG: symbols + wires + dots +
+   plainly-placed labels, **without** voltage/current arrows yet.
+2. **CircuiTikZ annotation parity** (the real work). The canvas places `l=`/`v=`/
+   `i=` *text* but does **not** draw the voltage arcs or current arrows — those
+   live only in the codegen path (`app/codegen/circuitikz.py`), which passes
+   `comp.options` verbatim into `to[…]`. Because `comp.options` is a free-form
+   circuitikz option string, a native renderer can only support a **curated
+   subset** (the common slots and their `^`/`_` variants, basic styling) and must
+   **fall back or warn** when options exceed it — reimplementing circuitikz fully
+   is unbounded. A promising approach reuses the existing build-time measurement
+   (the same machinery that produced `geometry.json`): render sample annotated
+   components, measure circuitikz's arrow paths and label anchors, and **bake the
+   annotation geometry** so the native renderer merely *places* pre-measured
+   circuitikz geometry — high fidelity, no runtime LaTeX.
+3. **Math labels** (hardest to make truly LaTeX-free). The canvas currently shells
+   out to `latex`+`dvisvgm` (cached, optional, falls back to raw text — see
+   `app/preview/mathrender.py`). **KaTeX does not solve the export case**: it emits
+   HTML+MathML+CSS, not SVG, so it cannot be cleanly embedded in a standalone
+   `.svg`. For export, prefer **MathJax's SVG output** (bundled as a JS asset — a
+   few MB vs. gigabytes of TeX) or a font-glyph renderer.
+
+Design stance: keep LaTeX as canonical; define the supported-options subset
+explicitly; warn/fall back at its boundary rather than render silently-wrong
+output; sequence the work behind the item-1 scene→SVG spike so fidelity is
+validated before committing to the annotation-parity tail.

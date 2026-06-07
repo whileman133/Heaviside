@@ -260,6 +260,18 @@ class SchematicScene(QGraphicsScene):
     def _previewed_wire_ids(self) -> set[str]:
         return self._drag.previewed_wire_ids
 
+    def retypeset_labels(self) -> None:
+        """Re-render every on-canvas math label with the current math engine.
+
+        Used after the label-rendering engine changes (e.g. toggling the ziamath
+        debug preference, §10.8) so existing labels refresh without reopening the
+        document.  Walks all items and re-issues the render for any that expose a
+        ``retypeset`` (component slot/inline labels and wire labels)."""
+        for it in self.items():
+            fn = getattr(it, "retypeset", None)
+            if callable(fn):
+                fn()
+
     def set_schematic(self, schematic: Schematic) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
         self._schematic = schematic
