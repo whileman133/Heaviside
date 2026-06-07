@@ -9,11 +9,12 @@ symbol geometry stays in the existing ``manifest.json``.
 
 The 33 SVG-symbol kinds live in the file; the 6 bespoke kinds (the resizable
 annotations ``open``/``short`` and the drawing primitives) are not
-command-derived and keep their hand-coded ``ComponentDef``.
+command-derived and keep their hand-coded ``ComponentDef`` in ``registry.py``.
 
-`build_registry` is proven equal to today's ``REGISTRY`` by
-``tests/test_components_library.py`` — so wiring it into the live import path
-later is a behaviour-preserving step (not done here).
+``registry.py`` calls :func:`library_component_defs` to build the 33 SVG-symbol
+``ComponentDef``s, and ``app/codegen/circuitikz.py`` calls
+:func:`build_codegen_tables`; ``tests/test_components_library.py`` pins the
+expected values.
 """
 
 from __future__ import annotations
@@ -79,18 +80,13 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
     )
 
 
-def build_registry() -> dict[str, ComponentDef]:
-    """Reconstruct the full registry: library kinds + the bespoke hand-coded ones.
+def library_component_defs() -> dict[str, ComponentDef]:
+    """Build the ``ComponentDef`` for every CircuiTikZ-symbol kind in the file.
 
-    Proven equal to the current ``REGISTRY`` (see the test module); the eventual
-    switchover replaces the literal entries in ``registry.py`` with this call.
+    ``registry.py`` merges these with its hand-coded bespoke defs to form
+    ``REGISTRY``.  Qt-free and self-contained (no import of ``registry``).
     """
-    from app.components.registry import REGISTRY as _CURRENT
-
-    merged = {k: _CURRENT[k] for k in NON_LIBRARY_KINDS if k in _CURRENT}
-    for kind, entry in load_library().items():
-        merged[kind] = to_component_def(kind, entry)
-    return merged
+    return {kind: to_component_def(kind, entry) for kind, entry in load_library().items()}
 
 
 def _scale_to_opts(scale: list[float]) -> str:
@@ -112,12 +108,15 @@ def build_codegen_tables() -> dict:
     two: set[str] = set()
     multi: set[str] = set()
     node: set[str] = set()
+    diode: set[str] = set()
     anchor_pin: dict[str, tuple[str, str]] = {}
     pin_to_ctikz: dict[str, dict[str, str]] = {}
     extra_opts: dict[str, str] = {}
     leads: dict[str, list[tuple[str, str]]] = {}
 
     for kind, e in load_library().items():
+        if any(v["name"] == "filled" for v in e.get("variants", [])):
+            diode.add(kind)
         if e["emission"] == "two_terminal":
             two.add(kind)
         elif e["emission"] == "node":
@@ -140,6 +139,7 @@ def build_codegen_tables() -> dict:
         "two_terminal_kinds": two,
         "multi_terminal_kinds": multi,
         "node_kinds": node,
+        "diode_kinds": diode,
         "anchor_pin": anchor_pin,
         "pin_to_ctikz": pin_to_ctikz,
         "extra_opts": extra_opts,

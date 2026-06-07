@@ -610,13 +610,14 @@ The palette category display order is: **Bipoles → Tripoles → Nodes → Anno
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
-> **Being replaced.** The Step-1 measurement below is now automated by
-> `app/components/bake.py` (it reads each pin anchor via `\pgfpointanchor`), and
-> the resulting per-component numbers live in one generated data file,
-> `components/components.json`, instead of being hand-typed across the files this
-> section spans. See [`spec/component-editor.md`](spec/component-editor.md). The
-> data file is not yet wired into the live runtime, so until the switchover the
-> procedure here remains authoritative for the running app.
+> **Largely replaced.** The pin/alignment numbers below now live in one generated
+> data file, `components/components.json`, and `REGISTRY` + the codegen tables are
+> built from it at import time (`app/components/library.py`); the Step-1
+> measurement is automated by `app/components/bake.py` (it reads each pin anchor
+> via `\pgfpointanchor`). See [`spec/component-editor.md`](spec/component-editor.md).
+> What this section still governs for the running app is the **SVG geometry**
+> (Step 4, `manifest.json`) and the **`svgsym.py` placement anchor**, which are not
+> yet in the data file — read Steps 1–4 for those and Step 5 for the data-file flow.
 
 CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
 fall on the 0.25-GU canvas grid. This section documents the procedure for
@@ -718,32 +719,34 @@ local_x = (pin_svg_x - anchor_x) / 28.348  # should match registry offset
 local_y = (pin_svg_y - anchor_y) / 28.348
 ```
 
-#### Step 5 — Update codegen tables
+#### Step 5 — Update the component data file (no longer hand-edited code)
 
-Add entries to `app/codegen/circuitikz.py` (all four tables must have an entry
-for every multi-terminal kind registered in `REGISTRY`):
+The `REGISTRY` entry and the codegen tables for a CircuiTikZ symbol are **no
+longer hand-written**. They are built at import time from
+`components/components.json` by `app/components/library.py` (see
+[`spec/component-editor.md`](spec/component-editor.md)). Add the component's pins,
+bbox, alignment (`anchor_pin`/`scale`/`leads`), and metadata as one entry in that
+file (via `tools/generate_components.py`, using `app/components/bake.py` to
+measure the anchors), then add its `kind` to `_DISPLAY_ORDER` in `registry.py`.
+The five codegen tables (`_MULTI_TERMINAL_KINDS`, `_MULTI_TERMINAL_ANCHOR_PIN`,
+`_PIN_TO_CTIKZ_ANCHOR`, `_MULTI_TERMINAL_EXTRA_OPTS`, `_MULTI_TERMINAL_LEADS`) and
+the `REGISTRY` literal are derived from that data — they are not edited directly.
 
-| Table | Entry |
-|-------|-------|
-| `_MULTI_TERMINAL_KINDS` | add `"KIND"` to the frozenset |
-| `_MULTI_TERMINAL_ANCHOR_PIN` | `"KIND": ("ctikz_anchor", "registry_pin_name")` |
-| `_PIN_TO_CTIKZ_ANCHOR` | `"KIND": {"pin": "anchor", ...}` — every registry pin |
-| `_MULTI_TERMINAL_EXTRA_OPTS` | scale correction string, or omit if Strategy B |
-| `_MULTI_TERMINAL_LEADS` | `[]` if Strategy A (scale), or `[(pin, anchor), ...]` if Strategy B |
-
-A startup validation check fires at import time and raises `RuntimeError` if
-any registered multi-terminal kind is missing from `_PIN_TO_CTIKZ_ANCHOR` — this
-prevents silent fallback to bare coordinates.
+The SVG geometry (`manifest.json`, Step 4) and the `svgsym.py` placement anchor
+are still produced/edited as described above; folding those into the data file is
+the remaining Component-Editor step.
 
 ### 5.6 Extensibility
 
-To add a new component type:
+To add a new CircuiTikZ component type:
 
-1. Add the component to the relevant table in `tools/export_circuitikz_svgs.py` and run it to render the SVG and rebuild the self-contained `manifest.json`.
-2. Add a `ComponentDef` entry to `REGISTRY` in `app/components/registry.py`, with `bbox` and `pins` derived from the SVG `viewBox` dimensions and CircuiTikZ anchor positions.
-3. Add a `ComponentItem` subclass to `app/canvas/items.py`, translating the manifest `paths` array to `QPainterPath` calls as described in §5.2.
+1. Add the component to the relevant table in `tools/export_circuitikz_svgs.py` and run it to render the SVG and rebuild the self-contained `manifest.json`; add its `svgsym.py` placement anchor (§5.5).
+2. Add an entry to `components/components.json` (pins, `bbox`, alignment, metadata) — measure the anchors with `app/components/bake.py` and use `tools/generate_components.py`; add its `kind` to `_DISPLAY_ORDER` in `app/components/registry.py`. `REGISTRY` and the codegen tables build from this file, so no `registry.py`/`circuitikz.py` literals are edited (§5.5 Step 5, [`spec/component-editor.md`](spec/component-editor.md)).
+3. Add a `ComponentItem` subclass (or reuse the base) to `app/canvas/items.py`, translating the manifest `paths` array to `QPainterPath` calls as described in §5.2.
 4. Add the mapping entry to `ITEM_CLASSES` in `app/canvas/items.py`.
 5. No changes to the schematic model, code generator, or UI layout are required.
+
+(The bespoke non-CircuiTikZ kinds — `open`/`short`/`bipole`/`rect`/`circle`/`text_node` — instead keep a hand-written `ComponentDef` literal in `registry.py`.)
 
 ### 5.7 Component Symbol Conventions
 

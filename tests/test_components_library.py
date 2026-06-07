@@ -1,9 +1,12 @@
 """
 Tests for the component library (spec: ``spec/component-editor.md``).
 
-Proves the one flat data file ``components/components.json`` reconstructs today's
-hand-maintained registry and codegen tables exactly — so it can replace the
-scattered magic numbers without changing behaviour.
+``REGISTRY`` and the ``circuitikz`` codegen tables are now built from
+``components/components.json`` (via ``app/components/library.py``).  These tests
+pin the expected values as golden constants — independent of the source — so a
+drift in the data file is caught here, and verify the registry/codegen are wired
+from the library.  End-to-end behaviour is covered by ``test_registry``,
+``test_codegen``, and ``test_examples``.
 
 Regenerate the file with ``python tools/generate_components.py`` after changing a
 component.
@@ -13,60 +16,120 @@ from __future__ import annotations
 
 from app.codegen import circuitikz as cg
 from app.components import library
+from app.components.model import Component, DiodeComponent, MosfetComponent, PinDef
 from app.components.registry import REGISTRY
 
-# The 33 SVG-symbol kinds the library covers (everything but the bespoke ones).
 _LIBRARY_KINDS = set(REGISTRY) - library.NON_LIBRARY_KINDS
 
+
+# ---------------------------------------------------------------------------
+# The library covers the right kinds and the registry is wired from it
+# ---------------------------------------------------------------------------
 
 def test_library_covers_the_svg_symbol_kinds():
     assert set(library.load_library()) == _LIBRARY_KINDS
 
 
-def test_build_registry_equals_current_registry():
-    assert library.build_registry() == REGISTRY
+def test_registry_is_sourced_from_library():
+    defs = library.library_component_defs()
+    for kind in _LIBRARY_KINDS:
+        assert REGISTRY[kind] == defs[kind]
 
 
-def test_build_registry_covers_all_kinds():
-    assert set(library.build_registry()) == set(REGISTRY)
+def test_registry_has_all_kinds():
+    assert set(REGISTRY) == _LIBRARY_KINDS | library.NON_LIBRARY_KINDS
 
 
-# --- the codegen tables reconstruct exactly (restricted to library kinds) ----
+# ---------------------------------------------------------------------------
+# Golden ComponentDef values (independent of the data file)
+# ---------------------------------------------------------------------------
 
-def test_codegen_emission_sets_match():
-    t = library.build_codegen_tables()
-    assert t["two_terminal_kinds"] == set(cg._TWO_TERMINAL_KINDS) - {"open", "short"}
-    assert t["multi_terminal_kinds"] == set(cg._MULTI_TERMINAL_KINDS)
-    assert t["node_kinds"] == set(cg._NODE_KINDS)
-
-
-def test_codegen_anchor_pin_matches():
-    assert library.build_codegen_tables()["anchor_pin"] == cg._MULTI_TERMINAL_ANCHOR_PIN
+def test_resistor_def():
+    r = REGISTRY["R"]
+    assert r.pins == [PinDef("in", (0.0, 0.0)), PinDef("out", (2.0, 0.0))]
+    assert r.default_span == (2.0, 0.0)
+    assert r.component_class is Component
 
 
-def test_codegen_pin_to_ctikz_matches():
-    assert library.build_codegen_tables()["pin_to_ctikz"] == cg._PIN_TO_CTIKZ_ANCHOR
+def test_op_amp_def():
+    a = REGISTRY["op amp"]
+    assert a.pins == [
+        PinDef("+", (-1.5, 0.5)), PinDef("-", (-1.5, -0.5)), PinDef("out", (1.5, 0.0)),
+    ]
+    assert a.bbox == (-1.5, -1.0, 1.5, 1.0)
+    assert a.label_slots == ["l"]
 
 
-def test_codegen_extra_opts_matches():
-    assert library.build_codegen_tables()["extra_opts"] == cg._MULTI_TERMINAL_EXTRA_OPTS
+def test_nigfete_def_is_mosfet():
+    m = REGISTRY["nigfete"]
+    assert m.pins == [
+        PinDef("gate", (0.0, 0.0)), PinDef("drain", (1.0, -1.0)), PinDef("source", (1.0, 0.5)),
+    ]
+    assert m.component_class is MosfetComponent
 
 
-def test_codegen_leads_match():
-    assert library.build_codegen_tables()["leads"] == cg._MULTI_TERMINAL_LEADS
+def test_diode_def_is_diode():
+    assert REGISTRY["D"].component_class is DiodeComponent
 
 
-# --- variants reflect filled / body_diode -----------------------------------
+# ---------------------------------------------------------------------------
+# Golden codegen-table values (now sourced from the library)
+# ---------------------------------------------------------------------------
+
+def test_two_terminal_kinds_include_bespoke():
+    # Library two-terminal kinds plus the bespoke open/short annotations.
+    assert {"R", "C", "L", "D", "V", "open", "short"} <= cg._TWO_TERMINAL_KINDS
+    assert "op amp" not in cg._TWO_TERMINAL_KINDS
+
+
+def test_multi_terminal_kinds():
+    assert cg._MULTI_TERMINAL_KINDS == frozenset(
+        {"op amp", "nigfete", "nigfetd", "pigfete", "pigfetd", "npn", "pnp"}
+    )
+
+
+def test_extra_opts_golden():
+    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {
+        "npn": "xscale=1.181, yscale=1.287",
+        "pnp": "xscale=1.181, yscale=1.287",
+        "nigfete": "xscale=1.0167",
+        "nigfetd": "xscale=1.0167",
+        "pigfete": "xscale=1.0167",
+        "pigfetd": "xscale=1.0167",
+    }
+
+
+def test_leads_golden():
+    assert cg._MULTI_TERMINAL_LEADS["op amp"] == [("+", "+"), ("-", "-"), ("out", "out")]
+    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == []
+
+
+def test_anchor_pin_golden():
+    assert cg._MULTI_TERMINAL_ANCHOR_PIN["nigfete"] == ("gate", "gate")
+    assert cg._MULTI_TERMINAL_ANCHOR_PIN["npn"] == ("B", "base")
+    assert "op amp" not in cg._MULTI_TERMINAL_ANCHOR_PIN  # placed by centre
+
+
+def test_pin_to_ctikz_golden():
+    assert cg._PIN_TO_CTIKZ_ANCHOR["npn"] == {"base": "B", "collector": "C", "emitter": "E"}
+    assert cg._PIN_TO_CTIKZ_ANCHOR["op amp"] == {"+": "+", "-": "-", "out": "out"}
+
+
+def test_diode_kinds_golden():
+    assert cg._DIODE_KINDS == frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
+
+
+# ---------------------------------------------------------------------------
+# Variants reflect filled / body_diode
+# ---------------------------------------------------------------------------
 
 def test_diodes_have_filled_variant():
     lib = library.load_library()
-    for kind in cg._DIODE_KINDS:
-        variants = {v["name"] for v in lib[kind].get("variants", [])}
-        assert "filled" in variants
+    for kind in ("D", "zD", "sD", "tD", "zzD", "leD"):
+        assert "filled" in {v["name"] for v in lib[kind].get("variants", [])}
 
 
 def test_mosfets_have_body_diode_variant():
     lib = library.load_library()
     for kind in ("nigfete", "nigfetd", "pigfete", "pigfetd"):
-        variants = {v["name"] for v in lib[kind].get("variants", [])}
-        assert "body_diode" in variants
+        assert "body_diode" in {v["name"] for v in lib[kind].get("variants", [])}

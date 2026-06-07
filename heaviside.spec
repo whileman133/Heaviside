@@ -65,6 +65,10 @@ datas = [
     # reads ONLY the manifest at runtime. The intermediate .svg files are build
     # artifacts and are not bundled.
     ("tools/circuitikz_svgs/manifest.json", "tools/circuitikz_svgs"),
+    # Per-component registry/codegen data (pins, bbox, alignment, metadata) for
+    # every CircuiTikZ symbol — read at runtime by app/components/library.py to
+    # build REGISTRY and the codegen tables (see spec/component-editor.md).
+    ("components/components.json", "components"),
 ]
 # Example schematics for the File → Open Example menu. Only the .hv sources are
 # bundled — the co-located .pdf/.eps are regenerable and intentionally skipped.

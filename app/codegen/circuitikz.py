@@ -109,6 +109,7 @@ from __future__ import annotations
 import math
 import re
 
+from app.components import library as _library
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
@@ -195,40 +196,37 @@ def _translate_to_origin(schematic: Schematic) -> Schematic:
 
 # ---------------------------------------------------------------------------
 # Component classification
+#
+# These tables are derived from the component data file (components/components.json
+# via app/components/library.py), not hand-maintained.  The library carries every
+# CircuiTikZ symbol's emission mode, pin→anchor mapping, and alignment (scale /
+# lead stubs); the two-terminal annotations open/short are bespoke (no symbol in
+# the file) so they are merged in here.  See spec/component-editor.md.
 # ---------------------------------------------------------------------------
 
-# Two-terminal components use to[] path syntax.
-_TWO_TERMINAL_KINDS: frozenset[str] = frozenset({
-    "R", "C", "L",
-    "D", "zD", "sD", "tD", "zzD", "leD",
-    "V", "I", "vsourcesin", "isourcesin",
-    "cV", "cI",
-    "open", "short",
-})
+_CODEGEN_TABLES = _library.build_codegen_tables()
+
+# Two-terminal components use to[] path syntax.  open/short are bespoke.
+_TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
+    _CODEGEN_TABLES["two_terminal_kinds"] | {"open", "short"}
+)
 
 # Diode-family bipoles.  CircuiTikZ's default diode body is visually large
 # relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
 # a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
 # exported at the same scale (see tools/export_circuitikz_svgs.py) so the canvas
 # and the rendered output stay in sync (§5.3 / §7.2).
-_DIODE_KINDS: frozenset[str] = frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
+_DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
+#: Must match DIODE_SCALE in tools/export_circuitikz_svgs.py.
 DIODE_SYMBOL_SCALE: float = 0.8
 
 # Multi-terminal components use node[] syntax.
-_MULTI_TERMINAL_KINDS: frozenset[str] = frozenset({
-    "npn", "pnp",
-    "op amp",
-    "nigfete", "nigfetd",
-    "pigfete", "pigfetd",
-})
+_MULTI_TERMINAL_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["multi_terminal_kinds"])
 
 # Single-terminal node components: emitted as \node[kind] at (x,y) {};
-_NODE_KINDS: frozenset[str] = frozenset({
-    "ground", "sground", "cground", "rground", "nground", "pground", "eground",
-    "vcc", "vdd", "vee", "vss",
-})
+_NODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["node_kinds"])
 
 
 # ---------------------------------------------------------------------------
@@ -595,65 +593,19 @@ def _multi_terminal_line(
     return "\n    ".join(lines)
 
 
-# Map from component kind → list of (circuitikz_anchor_name, registry_pin_name)
-# A short lead wire is drawn from each named CircuiTikZ anchor to the
-# corresponding registry pin coordinate, bridging the gap between the node's
-# internal geometry and the canvas grid.
-_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = {
-    "op amp":  [("+", "+"), ("-", "-"), ("out", "out")],
-    # BJTs: xscale/yscale corrections align C/E anchors exactly with the grid,
-    # so no bridge lead wires are needed (same strategy as MOSFETs).
-    "npn": [],
-    "pnp": [],
-    # MOSFETs: placed by anchor=gate (exact gate connection). Drain/source
-    # CTikZ anchors are not rectilinearly aligned with the registry grid pins,
-    # so no lead wires are drawn. xscale=1.0167 corrects the x offset instead.
-    "nigfete": [],
-    "nigfetd": [],
-    "pigfete": [],
-    "pigfetd": [],
-}
-
-# Components placed by a specific named anchor rather than by center.
-# Maps kind → (ctikz_anchor_name, registry_pin_name).
-# The node is placed so ctikz_anchor_name coincides with the registry pin coordinate.
-_MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = {
-    "npn": ("B", "base"),
-    "pnp": ("B", "base"),
-    "nigfete": ("gate", "gate"),
-    "nigfetd": ("gate", "gate"),
-    "pigfete": ("gate", "gate"),
-    "pigfetd": ("gate", "gate"),
-}
-
-# Extra node options injected into the node[] argument for specific kinds.
-# Used to correct geometry mismatches between CTikZ internal coords and our grid.
-# All IGFET variants: drain/source x is 0.9836 GU from gate; xscale=1.0167 stretches to 1.0 GU.
-_MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = {
-    # BJTs: actual CTikZ C/E offset from base = (0.847, ±0.777) GU (measured from
-    # the bare-node SVG export).  xscale and yscale stretch to the snapped (1.0, ±1.0)
-    # GU grid so C/E anchors land on-grid without needing bridge lead wires.
-    #   xscale = 1.0 / 0.8471 = 1.181
-    #   yscale = 1.0 / 0.7770 = 1.287
-    "npn": "xscale=1.181, yscale=1.287",
-    "pnp": "xscale=1.181, yscale=1.287",
-    "nigfete": "xscale=1.0167",
-    "nigfetd": "xscale=1.0167",
-    "pigfete": "xscale=1.0167",
-    "pigfetd": "xscale=1.0167",
-}
-
-# Maps registry pin name → CTikZ anchor name for each multi-terminal kind.
-# Used to substitute wire endpoint coordinates with named node references.
-_PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = {
-    "op amp":  {"+": "+", "-": "-", "out": "out"},
-    "npn": {"base": "B", "collector": "C", "emitter": "E"},
-    "pnp": {"base": "B", "collector": "C", "emitter": "E"},
-    "nigfete": {"gate": "gate", "drain": "drain", "source": "source"},
-    "nigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
-    "pigfete": {"gate": "gate", "drain": "drain", "source": "source"},
-    "pigfetd": {"gate": "gate", "drain": "drain", "source": "source"},
-}
+# Alignment tables, all derived from the component data file (see classification
+# block above).  Each kind's data:
+#   _MULTI_TERMINAL_LEADS: kind → [(ctikz_anchor, registry_pin), …] bridge stubs
+#       (e.g. op amp leads each terminal out to its grid pin).
+#   _MULTI_TERMINAL_ANCHOR_PIN: kind → (ctikz_anchor, registry_pin) the node is
+#       placed by (e.g. MOSFET anchor=gate, BJT anchor=B); absent → placed by centre.
+#   _MULTI_TERMINAL_EXTRA_OPTS: kind → "xscale=…, yscale=…" stretch that lands the
+#       anchors on grid (e.g. MOSFET "xscale=1.0167", BJT "xscale=1.181, yscale=1.287").
+#   _PIN_TO_CTIKZ_ANCHOR: kind → {registry_pin: ctikz_anchor} for every pin.
+_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = _CODEGEN_TABLES["leads"]
+_MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = _CODEGEN_TABLES["anchor_pin"]
+_MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = _CODEGEN_TABLES["extra_opts"]
+_PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = _CODEGEN_TABLES["pin_to_ctikz"]
 
 
 # ---------------------------------------------------------------------------

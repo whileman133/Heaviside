@@ -17,9 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generating command, automates grid alignment, and emits one declarative
   Component Definition as the single source of truth — replacing the
   five-hand-maintained-files procedure documented in `PROJECT_SPEC.md` §5.5.
-- **Component Editor foundation** (developer-facing; not yet wired into the
-  running app — no behaviour change). Lets grid-aligned CircuiTikZ components be
-  generated without hand-stored magic numbers:
+- **Component Editor foundation** (no behaviour change). Lets grid-aligned
+  CircuiTikZ components be generated without hand-stored magic numbers:
   - A **measurement tool** (`app/components/bake.py`) that renders a symbol and
     reads its pin anchors automatically (the manual `PROJECT_SPEC.md` §5.5
     measurement, mechanised).
@@ -30,6 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A **loader** (`app/components/library.py`) that rebuilds the current
     `REGISTRY` and codegen tables from that file, with tests proving they match
     exactly.
+  - The registry and CircuiTikZ code generator now **build their per-component
+    data from this file** instead of hand-written literals: `registry.py` derives
+    the 33 CircuiTikZ-symbol `ComponentDef`s from it (keeping the 6 bespoke kinds
+    as literals), and `circuitikz.py` derives its classification and alignment
+    tables from it. The five hand-maintained codegen tables and the registry
+    literals are removed. Output is byte-for-byte unchanged (verified by the full
+    test suite, including the bundled-example renders). `svgsym.py` still paints
+    from `manifest.json` with its own placement constants — folding those into the
+    data file is the remaining step.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

@@ -1,7 +1,7 @@
 # Heaviside — Component Editor Specification
 
-**Version:** 0.2
-**Status:** Draft — measurement tool + data file built; runtime switchover and GUI pending.
+**Version:** 0.3
+**Status:** Draft — measurement tool + data file built; the registry and codegen now read from it; svgsym placement, generic variants, and a GUI pending.
 **Author:** Wes H.
 
 This document is governed by the living-document rule in [`PROJECT_SPEC.md`](../PROJECT_SPEC.md) §0.
@@ -135,24 +135,26 @@ pipeline (add the keyword to its table and re-run), unchanged.
 
 ## 6. Implementation status
 
-**Built** (additive; the live runtime is unchanged and all existing tests pass):
+**Built** (behaviour unchanged; all existing tests pass):
 
 | Piece | File |
 |-------|------|
 | Measurement tool (render, parse geometry, **measure anchors**) | `app/components/bake.py` |
 | Data file for all 33 CircuiTikZ symbols | `components/components.json` |
 | Generator (consolidates today's values; for new components use the bake) | `tools/generate_components.py` |
-| Loader → registry + codegen tables, **proven equal to today's `REGISTRY`** | `app/components/library.py`, `tests/test_components_library.py` |
+| Loader → registry `ComponentDef` + codegen tables | `app/components/library.py` |
+| **Runtime wired to the file** — `registry.py` builds the 33 SVG-symbol kinds from the library (keeping the 6 bespoke literals); `circuitikz.py` derives its classification + alignment tables from it; the magic-number tables are deleted; `heaviside.spec` bundles the file | `app/components/registry.py`, `app/codegen/circuitikz.py`, `heaviside.spec` |
+
+`svgsym.py` is intentionally untouched: it still paints from `manifest.json` with
+its own placement constants. So the registry/codegen magic numbers are gone, but
+the SVG placement anchors remain — see Pending.
 
 **Pending** (each its own reviewed step):
 
-- **Runtime switchover** — have `registry.py` and the `circuitikz` codegen read
-  from `library.py` instead of their literals (the tests prove this is
-  behaviour-preserving), then delete the magic-number tables. Bundle
-  `components/components.json` in `heaviside.spec`.
 - **Auto-measured geometry & placement** — let the bake also write the SVG
-  geometry and SVG placement anchor, removing the last hand-copied constants in
-  `svgsym.py` and folding the export script and the bake into one renderer.
+  geometry and SVG placement anchor into the file, removing the last hand-copied
+  constants in `svgsym.py` and folding the export script and the bake into one
+  renderer.
 - **Generic per-instance variants** — store a placed component's active variants
   as a map (with back-compat for the current `filled`/`body_diode` fields); this
   touches the `.hv` format (PROJECT_SPEC §9).
