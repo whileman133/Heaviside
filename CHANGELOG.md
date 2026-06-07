@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assert is gone.
 
 ### Fixed
+- **Logic-gate labels now render in exported output.** A gate's label slot was
+  emitted as the bipole `l=` quick key, which CircuiTikZ's logic-port shapes
+  reject (pdflatex warned and dropped the label). It is now emitted as
+  `label=above:{…}`, placed above the body to match the canvas.
 - **Old schematics survive a CircuiTikZ-library re-generation.** A `.hv` file
   stores only a component's `kind` (never its geometry), so regenerating against a
   new CircuiTikZ release flows appearance/alignment changes into existing files
@@ -52,13 +56,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NAND, NOR, XOR, XNOR (each **2–16 inputs**), plus NOT and Buffer — under a new
   **Logic** palette category. The multi-input gates are *parametric*: the input
   count is a per-instance integer you set in the inspector (a spinbox, undoable),
-  and the symbol resizes live while every input pin stays grid-aligned (the gate
-  is scaled per count to a constant 0.5 GU input pitch). Built on a new generic
-  parametric-component mechanism: a kind declares a `param` block in
-  `definitions.json`; the generator renders one geometry per value (keyed
-  `kind:N`) with per-N scale/bbox; the runtime resolves an instance's pins,
-  geometry, bbox, and codegen (`number inputs=N`) from its value. The count is
-  stored in the `.hv` file (`Component.params`).
+  and the symbol resizes live while every input pin stays grid-aligned. Each
+  input count sets the CircuiTikZ gate **`height`** (so inputs reach the constant
+  0.5 GU pitch as the body grows *natively*) rather than a node `yscale` — which
+  keeps the inverting gates' round inversion bubble round and the proportions
+  sensible. Built on a new generic parametric-component mechanism: a kind declares
+  a `param` block in `definitions.json`; the generator renders one geometry per
+  value (keyed `kind:N`) with per-N height/scale/bbox; the runtime resolves an
+  instance's pins, geometry, bbox, and codegen from its value, and each
+  height-setting gate is emitted in its own local `{ \ctikzset{…/height=H} \draw
+  … }` group so the height reverts. The count is stored in the `.hv` file
+  (`Component.params`).
 - **19 new CircuiTikZ components**, bulk-imported via `components/import_family.py`
   with no per-component code (the registry/codegen/canvas derive everything from
   the data): bipoles `vR`, `eC`, `pC`, `fuse`, `lamp`, `ammeter`, `voltmeter`,

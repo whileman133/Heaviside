@@ -278,28 +278,44 @@ instance carries an integer in `Component.params` (e.g. `{"inputs": 4}`).
     "option": "number inputs={n}",                 // appended to tikz per instance
     "input":  {"name": "in{i}", "anchor": "in {i}", "x": -1.5, "pitch": 0.5},
     "output": {"name": "out", "anchor": "out", "offset": [0, 0]},
-    "n_data": {"2": {"scale": […], "leads": […], "bbox": […]}, …, "16": {…}}
+    "height_key": "tripoles/american and port/height",   // set body height (round bubble)
+    "n_data": {"2": {"scale": […], "leads": […], "bbox": […], "height": …}, …, "16": {…}}
   },
   // plus the ordinary default-value fields: bbox, pins, scale, leads
 }
 ```
 
-**Grid alignment.** CircuiTikZ lays the inputs in one vertical column, symmetric
-about the output, but with a pitch that *shrinks* as inputs grow. Imposing a
-constant grid pitch (0.5 GU), a single per-value `[xscale, yscale]` lands every
-input and the output exactly on the grid — no leads (verified for 2–16; the
-ordinary `fit_alignment` machinery, §4). The gate body just grows taller with
-more inputs.
+**Grid alignment (round bubbles).** CircuiTikZ lays the inputs in one vertical
+column, symmetric about the output, in a **fixed-size body** — so the pitch
+*shrinks* as inputs grow. A non-uniform node `yscale` would land them on a
+constant 0.5 GU grid pitch but would also stretch the inverting gates' round
+inversion bubble into an ellipse. Instead, each value sets the CircuiTikZ gate
+**`height`** (a shape setting, `param.height_key`) so the body grows *natively*
+and the inputs reach the grid pitch with **no `yscale`** — only a small constant
+`xscale` for x-alignment, so the bubble stays round. The per-value height is
+solved from a measurement (the native pitch is linear in height;
+`renderer._gate_height`) and stored in `n_data`.
 
 **Generation.** `render_parametric` renders one geometry per value (keyed
-`kind:N`), derives per-N `scale`/`leads`/`bbox`, and computes the pins from the
-value. At its **default** value the entry is an ordinary `multi_terminal` record
-(`pins`/`bbox`/`scale`), so the registry, palette, and codegen need no special
-handling — only the variable-N runtime consults the `param` block.
+`kind:N`), derives per-N `scale`/`leads`/`bbox` (and `height` for gates), and
+computes the pins from the value. At its **default** value the entry is an
+ordinary `multi_terminal` record (`pins`/`bbox`/`scale`), so the registry,
+palette, and codegen need no special handling — only the variable-N runtime
+consults the `param` block.
 
 **Runtime.** `library.resolved_pins` / `param_value` / `param_geometry_suffix` /
-`param_n_data` resolve an instance's pins, geometry key, scale, and bbox from its
-value. `component_pin_positions` (connectivity), `ComponentItem` (paint/bbox/pin
-dots), and the codegen (`number inputs=N` + that value's scale) all go through
-these. The inspector's `ParamSection` is a spinbox per declared parameter, undoable
-via `SetParamCommand`; the value is persisted in `Component.params` (`schematic/io.py`).
+`param_n_data` resolve an instance's pins, geometry key, scale, bbox, and height
+from its value. `component_pin_positions` (connectivity), `ComponentItem`
+(paint/bbox/pin dots), and the codegen all go through these. A height-setting gate
+is emitted in its **own local group** so the height reverts:
+`{ \ctikzset{…/height=H}  \draw … node[and port, number inputs=N, xscale=…]; }`,
+before the main `\draw` so its node name resolves for wires. The inspector's
+`ParamSection` is a spinbox per declared parameter, undoable via `SetParamCommand`;
+the value is persisted in `Component.params` (`schematic/io.py`).
+
+**Labelling.** Logic-port shapes (CircuiTikZ keyword `<gate> port`) do **not**
+accept the bipole-style `l=` quick key — pdflatex would warn and drop the label.
+The codegen therefore rewrites a gate's `l=` slot to `label=above:{…}` (a node
+option CircuiTikZ accepts), placing the label above the body to match where the
+canvas draws the gate's `l` slot (above the lead axis; `ComponentItem._slot_direction`).
+Other slots pass through unchanged. See `_gate_label_args` in `app/codegen/circuitikz.py`.

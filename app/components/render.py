@@ -117,14 +117,17 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
 _ANCHOR_RE = re.compile(r"HVANCHOR (.+?) = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt")
 
 
-def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 10) -> dict[str, tuple[float, float]]:
+def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 10,
+                    ctikzset: list[str] | None = None) -> dict[str, tuple[float, float]]:
     """Render ``\\node[tikz_keyword] (X) ...`` and measure each anchor (GU, y-down).
 
     The returned offsets are relative to the node's own origin; negate-y converts
-    CircuiTikZ's y-up to the canvas y-down convention.
+    CircuiTikZ's y-up to the canvas y-down convention.  *ctikzset* applies shape
+    settings (e.g. a logic-gate ``…/height`` that must be set before the node).
     """
     body = rf"\node[{tikz_keyword}] (X) at (0,0) {{}};"
-    _svg, log = render_svg(body, border_pt=border_pt, node_id="X", anchors=anchors)
+    _svg, log = render_svg(body, border_pt=border_pt, node_id="X", anchors=anchors,
+                           ctikzset=ctikzset or [])
     out: dict[str, tuple[float, float]] = {}
     for name, xs, ys in _ANCHOR_RE.findall(log):
         out[name] = (round(float(xs) / TEXPT_PER_GU, 4), round(-float(ys) / TEXPT_PER_GU, 4))

@@ -50,7 +50,12 @@ def is_diode(entry: dict) -> bool:
 
 
 def ctikzset(entry: dict) -> list[str]:
-    return [f"diodes/scale={DIODE_SCALE:g}"] if is_diode(entry) else []
+    """Shape settings applied before the node — the diode body scale, plus any
+    explicit ``ctikzset`` on the entry (e.g. a logic-gate ``…/height``)."""
+    cs = list(entry.get("ctikzset", []))
+    if is_diode(entry):
+        cs.append(f"diodes/scale={DIODE_SCALE:g}")
+    return cs
 
 
 def lead_pins(entry: dict) -> list[dict]:
@@ -212,7 +217,7 @@ def fit_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
 
     # Anchor-pinned: stretch the symbol so its anchors land on the grid pins, and
     # bridge whatever residual a single scale can't remove (e.g. the MOSFET source).
-    measured = render.measure_anchors(entry["tikz"], anchors)
+    measured = render.measure_anchors(entry["tikz"], anchors, ctikzset=ctikzset(entry))
     ox, oy = measured[anchor_of[ap]]
     other = [p for p in pins if p["name"] != ap]
     rel = {p["name"]: (round(measured[p["anchor"]][0] - ox, 4),
@@ -401,6 +406,18 @@ def _param_entry_at(entry: dict, n: int) -> dict:
             "anchor_pin": p["output"]["name"]}
 
 
+def _gate_height(entry: dict, n: int, height_key: str, target_pitch: float) -> float:
+    """The CircuiTikZ gate ``height`` that spaces *n* inputs at *target_pitch* GU.
+
+    The native input pitch is linear in the gate height, so measure it at height 1
+    and solve.  Setting the height (instead of a node yscale) keeps the inversion
+    bubble round and the generated code idiomatic."""
+    kw = entry["tikz"] + ", " + entry["param"]["option"].format(n=n)
+    m = render.measure_anchors(kw, ["in 1", "in 2"], ctikzset=[f"{height_key}=1.0"])
+    pitch_at_1 = abs(m["in 1"][1] - m["in 2"][1])
+    return round(target_pitch / pitch_at_1, 4)
+
+
 def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     """Render every value of a parametric component.
 
@@ -409,15 +426,25 @@ def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     declaration and per-N ``scale``/``leads``/``bbox`` (geometry keyed ``kind:N``,
     with the default also aliased under the plain key for static lookups)."""
     p = entry["param"]
+    height_key = p.get("height_key")            # gates: set body height (round bubble)
+    target_pitch = p["input"]["pitch"]
     geoms: dict[str, dict] = {}
     n_data: dict[str, dict] = {}
     for n in range(int(p["min"]), int(p["max"]) + 1):
         e_n = _param_entry_at(entry, n)
+        height = None
+        if height_key:
+            # Size the body so inputs land at the grid pitch — no node yscale, so
+            # the inversion bubble stays round and the code stays idiomatic.
+            height = _gate_height(entry, n, height_key, target_pitch)
+            e_n = {**e_n, "ctikzset": [f"{height_key}={height}"]}
         scale, leads = fit_alignment(e_n)
         g = geometry({**e_n, "scale": scale, "leads": leads})
         geoms[param_geometry_key(kind, n)] = g
-        n_data[str(n)] = {"scale": scale, "leads": leads,
-                          "bbox": compute_bbox(g, origin, e_n["pins"])}
+        nd = {"scale": scale, "leads": leads, "bbox": compute_bbox(g, origin, e_n["pins"])}
+        if height is not None:
+            nd["height"] = height
+        n_data[str(n)] = nd
     default = int(p["default"])
     geoms[geometry_key(kind)] = geoms[param_geometry_key(kind, default)]  # static alias
     e_def = _param_entry_at(entry, default)

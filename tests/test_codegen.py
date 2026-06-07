@@ -284,6 +284,24 @@ def test_npn_no_bridge_leads() -> None:
     assert ".E) -- " not in src
 
 
+def test_gate_label_emitted_as_label_above() -> None:
+    """Logic-port shapes reject the bipole ``l=`` quick key, so a gate's label
+    slot is emitted as ``label=above:{…}`` (which CircuiTikZ accepts), not ``l=``.
+    Above matches where the canvas draws the gate's ``l`` slot."""
+    comp = _comp("nand", options=r"l=$U$")
+    src = generate(_schematic(comp))
+    assert "label=above:{$U$}" in src
+    assert "l=$U$" not in src
+
+
+def test_not_gate_label_emitted_as_label_above() -> None:
+    """Non-parametric gates (not/buffer) take the same label path."""
+    comp = _comp("not", options=r"l=$Y$")
+    src = generate(_schematic(comp))
+    assert "label=above:{$Y$}" in src
+    assert "l=$Y$" not in src
+
+
 def test_npn_pin_offsets() -> None:
     """NPN: base (0,0), collector (1,-1) [top], emitter (1,1) [bottom]."""
     from app.components.registry import REGISTRY
@@ -1496,17 +1514,22 @@ def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
 # Parametric logic gates (variable input count)
 # ---------------------------------------------------------------------------
 
-def test_logic_gate_emits_number_inputs_and_per_n_scale():
-    """A parametric gate generates node[and port, number inputs=N, xscale, yscale,
-    anchor=out] with the value's own scale (default and an explicit value)."""
-    # Default value (2 inputs): CircuiTikZ default, base 2-input scale.
-    d2 = _schematic(_comp("and", options="l=$U_1$"))
-    line2 = [l for l in generate(d2).splitlines() if "and port" in l][0]
-    assert "and port, number inputs=2" in line2
-    assert "yscale=0.8929" in line2 and "anchor=out" in line2
+def test_logic_gate_emits_height_group_no_yscale():
+    """A parametric gate is emitted in a local group that sets its body height
+    (so inputs land on grid without a node yscale that would oval the bubble):
+    { \\ctikzset{…/height=H}  \\draw … node[and port, number inputs=N, xscale=…]; }."""
+    # Default value (2 inputs).
+    src2 = generate(_schematic(_comp("and")))
+    assert "node[and port, number inputs=2, xscale=0.974" in src2
+    assert "anchor=out" in src2
+    assert "yscale" not in src2                                    # height, not yscale
+    assert r"\ctikzset{tripoles/american and port/height=0.7143}" in src2
+    # the height is set in a group, before the node, and reverts:
+    assert src2.index(r"\ctikzset{tripoles/american and port/height") < src2.index("node[and port")
 
-    # Explicit 4 inputs: number inputs=4 and the 4-input yscale.
+    # Explicit 4 inputs: number inputs=4 and the 4-input height (full precision).
     c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
-                  options="l=$U_2$", params={"inputs": 4})
-    line4 = [l for l in generate(_schematic(c)).splitlines() if "and port" in l][0]
-    assert "number inputs=4" in line4 and "yscale=1.7857" in line4
+                  options="", params={"inputs": 4})
+    src4 = generate(_schematic(c))
+    assert "number inputs=4" in src4 and "yscale" not in src4
+    assert "tripoles/american and port/height=1.4286" in src4

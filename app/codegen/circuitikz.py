@@ -306,10 +306,19 @@ def generate(
             # Absolute coords: the multi-terminal nodes aren't defined yet.
             lines.append("  " + _wire_layer_line(obj, use_refs=False))
 
+    # Height-setting gates are emitted first, each in its own local group so the
+    # \ctikzset height reverts afterward; their (global) node names then resolve
+    # for wires in the main \draw.
+    for comp in schematic.components:
+        if _gate_height_setting(comp) is not None:
+            lines.extend(_gate_group_lines(comp, _y, _rot))
+
     lines.append(r"  \draw")
 
     draw_lines: list[str] = []
     for comp in schematic.components:
+        if _gate_height_setting(comp) is not None:
+            continue  # already emitted in its own group above
         draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
 
     # Wires at the default layer (z_order == 0) share the main \draw path;
@@ -473,6 +482,29 @@ def _two_terminal_line(
     return f"{coord0} to[{to_arg}] {coord1}"
 
 
+def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
+    """``(height_key, height)`` for a parametric gate that sizes its body, else
+    ``None``.  Such a gate is emitted in its own ``{ \\ctikzset{…} \\draw …; }``
+    group (so the setting reverts), before the main path so its node name resolves
+    for wires."""
+    spec = _library.param_spec(comp.kind)
+    if spec and spec.get("height_key"):
+        nd = _library.param_n_data(comp)
+        if nd and "height" in nd:
+            return spec["height_key"], nd["height"]
+    return None
+
+
+def _gate_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
+    """A height-setting gate wrapped in a local group so the height reverts after."""
+    key, height = _gate_height_setting(comp)
+    node = _multi_terminal_line(comp, y_fn, rot_fn)
+    return ["  {",
+            rf"    \ctikzset{{{key}={height:g}}}",   # full precision (grid alignment)
+            rf"    \draw {node};",
+            "  }"]
+
+
 def _multi_terminal_line(
     comp: Component,
     y_fn=lambda y: y,
@@ -501,6 +533,9 @@ def _multi_terminal_line(
         kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
         _nd = _library.param_n_data(comp)
         extra_opts = _library._scale_opts(_nd["scale"]) if _nd else ""
+        # A gate's body height (so inputs land on the grid without a node yscale
+        # that would oval the bubble) is set in a local group around the node by
+        # the caller — see _gate_height_setting / generate.
     else:
         extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
     if extra_opts:
@@ -519,8 +554,15 @@ def _multi_terminal_line(
         else:
             kind_arg = f"{kind_arg}, xscale=-1"
 
-    # Append user options to the node[] argument.
-    user_opts = _label_args(comp)
+    # Append user options to the node[] argument.  Logic-port shapes (keyword
+    # "<gate> port") don't accept the bipole-style ``l=`` quick key, so a label
+    # slot is converted to a CircuiTikZ ``label=above:{…}`` option — placed above
+    # the body, matching where the canvas draws the gate's ``l`` slot (above the
+    # lead axis; see ComponentItem._slot_direction).  Other slots pass through.
+    if defn.tikz_keyword.endswith(" port"):
+        user_opts = _gate_label_args(comp)
+    else:
+        user_opts = _label_args(comp)
     if user_opts:
         kind_arg = f"{kind_arg}, {user_opts}"
 
@@ -547,7 +589,7 @@ def _multi_terminal_line(
     # Append lead wires if defined for this kind.
     leads = _MULTI_TERMINAL_LEADS.get(comp.kind, [])
     if not leads:
-        return node_line
+        return node_line  # gates take this path (no residual leads)
 
     lines = [node_line]
     for ctikz_anchor, pin_name in leads:
@@ -1156,6 +1198,21 @@ def _label_args(comp: Component) -> str:
     Label values containing commas (e.g. ``v=$\\phi(0,0)$``) are brace-protected
     so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3)."""
     return protect_label_commas(comp.options)
+
+
+def _gate_label_args(comp: Component) -> str:
+    r"""Like :func:`_label_args` but for logic-port shapes, which reject the
+    bipole ``l=`` quick key.  Any ``l=`` slot is rewritten to ``label=above:{…}``
+    (the option CircuiTikZ accepts on a node), placing the label above the gate
+    body to match the canvas.  Remaining slots are passed through unchanged."""
+    out: list[str] = []
+    for seg in split_top_level(comp.options):
+        key, eq, val = seg.partition("=")
+        if eq and key.strip() == "l" and val.strip():
+            out.append(f"label=above:{{{val.strip()}}}")
+        elif seg.strip():
+            out.append(seg.strip())
+    return protect_label_commas(", ".join(out))
 
 
 def _fmt(value: float) -> str:
