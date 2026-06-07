@@ -235,6 +235,82 @@
         }
       ]
     },
+    "ammeter": {
+      "display_name": "Ammeter",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "ammeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "battery1": {
+      "display_name": "Battery",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "battery1",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
     "cI": {
       "display_name": "VCCS",
       "category": "Bipoles",
@@ -330,6 +406,44 @@
         }
       ]
     },
+    "eC": {
+      "display_name": "Polarized Capacitor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "eC",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
     "eground": {
       "display_name": "Earth Ground",
       "category": "Nodes",
@@ -348,6 +462,44 @@
           "offset": [
             0.0,
             0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "fuse": {
+      "display_name": "Fuse",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "fuse",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.15,
+        2.05,
+        0.15
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
           ],
           "anchor": null
         }
@@ -412,6 +564,82 @@
         }
       ]
     },
+    "jumper": {
+      "display_name": "Jumper",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "jumper",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        0.0,
+        2.05,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "lamp": {
+      "display_name": "Lamp",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "lamp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
     "leD": {
       "display_name": "LED",
       "category": "Bipoles",
@@ -456,6 +684,91 @@
           "mode": "suffix"
         }
       ]
+    },
+    "memristor": {
+      "display_name": "Memristor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "memristor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "nfet": {
+      "display_name": "N-MOSFET",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "nfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.8,
+        1.05,
+        0.8
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -0.75
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.75
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.974
+      ],
+      "leads": []
     },
     "nground": {
       "display_name": "Noiseless Ground",
@@ -604,6 +917,61 @@
         }
       ]
     },
+    "njfet": {
+      "display_name": "N-JFET",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "njfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -1.05,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ]
+    },
     "npn": {
       "display_name": "NPN BJT",
       "category": "Tripoles",
@@ -650,6 +1018,44 @@
         1.2987
       ],
       "leads": []
+    },
+    "ohmmeter": {
+      "display_name": "Ohmmeter",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "ohmmeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
     },
     "op amp": {
       "display_name": "Op-Amp",
@@ -716,6 +1122,91 @@
         }
       ]
     },
+    "pC": {
+      "display_name": "Polar Capacitor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "pC",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pfet": {
+      "display_name": "P-MOSFET",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "pfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.8,
+        1.05,
+        0.8
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            0.75
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.75
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.974
+      ],
+      "leads": []
+    },
     "pground": {
       "display_name": "Protective Earth",
       "category": "Nodes",
@@ -734,6 +1225,44 @@
           "offset": [
             0.0,
             0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "photodiode": {
+      "display_name": "Photodiode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "photodiode",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.75,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
           ],
           "anchor": null
         }
@@ -860,6 +1389,61 @@
           "name": "body_diode",
           "token": "bodydiode",
           "mode": "option"
+        }
+      ]
+    },
+    "pjfet": {
+      "display_name": "P-JFET",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "pjfet",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        1.05,
+        1.05
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "scale": [
+        1.0204,
+        0.962
+      ],
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
         }
       ]
     },
@@ -1046,6 +1630,158 @@
         }
       ]
     },
+    "thermistor": {
+      "display_name": "Thermistor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "thermistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "tline": {
+      "display_name": "Transmission Line",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "tline",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vR": {
+      "display_name": "Variable Resistor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "vR",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "varcap": {
+      "display_name": "Varactor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "varcap",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
     "vcc": {
       "display_name": "VCC",
       "category": "Nodes",
@@ -1116,6 +1852,44 @@
           "offset": [
             0.0,
             0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "voltmeter": {
+      "display_name": "Voltmeter",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "voltmeter",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
           ],
           "anchor": null
         }

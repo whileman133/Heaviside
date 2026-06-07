@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *renamed* kind on load, so a future symbol rename won't break old files.
 
 ### Added
+- **19 new CircuiTikZ components**, bulk-imported via `components/import_family.py`
+  with no per-component code (the registry/codegen/canvas derive everything from
+  the data): bipoles `vR`, `eC`, `pC`, `fuse`, `lamp`, `ammeter`, `voltmeter`,
+  `ohmmeter`, `battery1`, `varcap`, `memristor`, `thermistor`, `photodiode`,
+  `tline`, `jumper`; and transistors `nfet`, `pfet`, `njfet`, `pjfet` (terminals
+  auto-discovered, grid-snapped, and alignment auto-derived).
 - Linux (x64) build: the release workflow now produces a
   `Heaviside-linux-x64.tar.gz` alongside the macOS and Windows binaries.
 - Design spec for a **Component Editor** (`spec/component-editor.md`) and a new
@@ -57,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `origin_svg` placement constant). Replaces the old
     `tools/export_circuitikz_svgs.py`, which is removed.
   - **The registry, code generator, and canvas all build from this data**
-    (`app/components/library.py`): `registry.py` derives the 33 CircuiTikZ-symbol
-    `ComponentDef`s (keeping the 6 bespoke kinds as literals); `circuitikz.py`
+    (`app/components/library.py`): `registry.py` derives every CircuiTikZ-symbol
+    `ComponentDef` (keeping the 6 bespoke kinds as literals); `circuitikz.py`
     derives its classification + alignment tables; and `svgsym.py`'s canvas
     transform is just `translate(-origin_svg)` + a uniform pixel scale. The removed
     magic numbers: the registry literals, the five hand-maintained codegen tables,

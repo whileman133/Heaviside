@@ -108,6 +108,7 @@ def verify(entry: dict) -> tuple[dict | None, str | None]:
 
 
 def main() -> int:
+    write = "--write" in sys.argv
     have = set(library.load_library())               # already in the library
     accepted: dict[str, dict] = {}
     clean = curate = failed = 0
@@ -137,12 +138,27 @@ def main() -> int:
         print(f"  {kw:12} ok   scale={entry.get('scale')} leads={len(entry['leads'])}  pins: {pin_str}")
         accepted[kw] = entry; curate += 1
 
-    print(f"\n=== Summary ===")
+    print("\n=== Summary ===")
     print(f"  bipoles auto-imported clean (zero curation): {clean}")
     print(f"  transistors needing a naming convention + grid review: {curate}")
     print(f"  failed to compile (need manual modelling): {failed}")
-    print(f"\n=== Candidate JSON (review, then paste into definitions.json) ===")
-    print(json.dumps(accepted, indent=2, ensure_ascii=False))
+
+    if not write:
+        print("\n=== Candidate JSON (review) ===")
+        print(json.dumps(accepted, indent=2, ensure_ascii=False))
+        print("\nRe-run with --write to merge these into definitions.json and regenerate.")
+        return 0
+
+    # --write: merge the accepted candidates into definitions.json (the authored
+    # input) and regenerate everything.  render_store re-derives bbox + alignment
+    # for every component, so the new kinds get the same treatment as the rest.
+    authored = renderer.load_authored()
+    new = {kw: entry for kw, entry in accepted.items() if kw not in authored}
+    authored.update(new)
+    geometry, components, origin = renderer.render_store(authored)
+    renderer.write_store(geometry, components, origin)
+    print(f"\nWrote {len(new)} new components; definitions.json now has {len(components)}.")
+    print("Added:", ", ".join(sorted(new)))
     return 0
 
 

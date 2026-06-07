@@ -8,7 +8,7 @@ metadata) plus a single ``origin_svg`` placement constant.  It replaces the
 per-component magic numbers that used to live in ``registry.py``, the
 ``circuitikz`` codegen tables, and ``svgsym.py``.
 
-The 33 SVG-symbol kinds live in the file; the 6 bespoke kinds (the resizable
+The CircuiTikZ-symbol kinds live in the file; the 6 bespoke kinds (the resizable
 annotations ``open``/``short`` and the drawing primitives) are not
 command-derived and keep their hand-coded ``ComponentDef`` in ``registry.py``.
 

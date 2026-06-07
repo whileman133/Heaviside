@@ -86,15 +86,19 @@ def test_two_terminal_kinds_include_bespoke():
 
 
 def test_multi_terminal_kinds():
-    assert cg._MULTI_TERMINAL_KINDS == frozenset(
-        {"op amp", "nigfete", "nigfetd", "pigfete", "pigfetd", "npn", "pnp"}
+    # The curated multi-terminal kinds must stay classified as such.  This is a
+    # subset check, not an exact inventory: importing more components (e.g. extra
+    # transistor families) should not break it — only a regression in these will.
+    assert {"op amp", "nigfete", "nigfetd", "pigfete", "pigfetd", "npn", "pnp"} <= (
+        cg._MULTI_TERMINAL_KINDS
     )
 
 
 def test_scale_corrections_golden():
     # BJT/MOSFET are scaled so their pins land on the grid (no diagonal stubs);
-    # the op amp uses leads instead (it is absent here).
-    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {
+    # the op amp uses leads instead (it is absent here).  Checked per-kind so that
+    # newly imported scaled components don't break the curated values.
+    expected = {
         "npn": "xscale=1.1905, yscale=1.2987",
         "pnp": "xscale=1.1905, yscale=1.2987",
         "nigfete": "xscale=1.0204, yscale=0.962",
@@ -102,6 +106,8 @@ def test_scale_corrections_golden():
         "pigfete": "xscale=1.0204, yscale=0.962",
         "pigfetd": "xscale=1.0204, yscale=0.962",
     }
+    for kind, opts in expected.items():
+        assert cg._MULTI_TERMINAL_EXTRA_OPTS[kind] == opts
     assert "op amp" not in cg._MULTI_TERMINAL_EXTRA_OPTS
 
 

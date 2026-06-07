@@ -181,7 +181,7 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
 | Measurement / render / parse core | `app/components/render.py` |
 | Unified renderer → `geometry.json` (geometry) + `definitions.json` (data) | `components/generate_components.py` |
 | Loader → registry `ComponentDef`s, codegen tables, `origin_svg` | `app/components/library.py` |
-| Registry built from the data (33 SVG kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
+| Registry built from the data (all CircuiTikZ symbol kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
 | Codegen classification + scale/lead alignment derived from the data | `app/codegen/circuitikz.py` |
 | Canvas placement = `translate(-origin_svg)` + uniform scale (no per-component anchors) | `app/canvas/svgsym.py` |
 | Render/save core (shared by the CLI and the GUI) | `app/componenteditor/renderer.py` |
