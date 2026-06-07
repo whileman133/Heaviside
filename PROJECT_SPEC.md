@@ -2100,6 +2100,8 @@ Tests are organized into three tiers: **unit tests** covering pure logic with no
 
 All unit tests live in `tests/` and are run with `pytest`. They must pass with no network access, no display server, and no LaTeX installation.
 
+**Slow tests (`--run-slow`).** A test marked `@pytest.mark.slow` is **skipped by default** and runs only with `pytest --run-slow` (see `tests/conftest.py`). The one slow test is `test_render_store_reproduces_committed_files`, which re-renders every symbol through `latex`/`dvisvgm` (~3 min) to verify the committed `components/*.json` are reproducible — so the default local run stays fast (~15 s) while CI runs `pytest --run-slow` to keep the guarantee enforced.
+
 The individual test functions are the authoritative, self-documenting list of
 unit-level behavior; this section summarises what each test file covers rather
 than enumerating every function (which would duplicate the suite and inevitably
