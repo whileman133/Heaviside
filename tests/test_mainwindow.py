@@ -95,35 +95,52 @@ def test_document_settings_dialog_writes_styles():
     assert dlg2.changed() is False
 
 
+class _FakeClipboard:
+    """Records what the handler sets, so tests never touch the real platform
+    clipboard — which segfaults under the offscreen QPA plugin on CI."""
+
+    def __init__(self):
+        self.image = None
+        self.mime = None
+
+    def setImage(self, image):  # noqa: N802
+        self.image = image
+
+    def setMimeData(self, mime):  # noqa: N802
+        self.mime = mime
+
+
 def test_copy_png_puts_image_on_clipboard(tmp_path, monkeypatch):
     """Copy-as-PNG renders the compiled figure to a QImage and sets the clipboard
-    image (compile/render stubbed so no LaTeX is needed)."""
-    from PySide6.QtGui import QGuiApplication, QImage
+    image (compile/render and the clipboard itself stubbed — no LaTeX, no real
+    clipboard)."""
+    from PySide6.QtGui import QImage
 
     win = _win(tmp_path)
     monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
     img = QImage(8, 8, QImage.Format_ARGB32)
     img.fill(0xFF112233)
     monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
+    fake = _FakeClipboard()
+    monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
 
-    QGuiApplication.clipboard().clear()
     win._on_copy_png()
-    assert not QGuiApplication.clipboard().image().isNull()
+    assert fake.image is img and not fake.image.isNull()
 
 
 def test_copy_svg_puts_svg_mime_on_clipboard(tmp_path, monkeypatch):
     """Copy-as-SVG sets an image/svg+xml clipboard payload (+ text fallback)."""
-    from PySide6.QtGui import QGuiApplication
-
     win = _win(tmp_path)
     monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
     monkeypatch.setattr(mw, "pdf_to_svg", lambda *a, **k: b"<svg xmlns='...'/>")
+    fake = _FakeClipboard()
+    monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
 
-    QGuiApplication.clipboard().clear()
     win._on_copy_svg()
-    md = QGuiApplication.clipboard().mimeData()
-    assert md.hasFormat("image/svg+xml")
-    assert bytes(md.data("image/svg+xml")).startswith(b"<svg")
+    assert fake.mime is not None
+    assert fake.mime.hasFormat("image/svg+xml")
+    assert bytes(fake.mime.data("image/svg+xml")).startswith(b"<svg")
+    assert fake.mime.text().startswith("<svg")
 
 
 def test_retypeset_labels_runs_on_populated_scene(tmp_path):
