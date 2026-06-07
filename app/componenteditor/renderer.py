@@ -367,6 +367,79 @@ def realigned(entry: dict) -> dict:
     return out
 
 
+# ---------------------------------------------------------------------------
+# Parametric components (variable pin count — e.g. logic gates).  A parametric
+# entry declares a ``param`` block; the generator renders one geometry per value
+# (keyed ``kind:N``), derives per-N scale/bbox, and computes the pins from the
+# value.  At its *default* value it is an ordinary ``multi_terminal`` record, so
+# static consumers (registry, palette, codegen) need no special handling — only
+# the canvas/codegen/inspector consult the parameter to vary N.
+# ---------------------------------------------------------------------------
+
+def is_parametric(entry: dict) -> bool:
+    return "param" in entry
+
+
+def param_geometry_key(kind: str, n: int) -> str:
+    return f"{geometry_key(kind)}:{n}"
+
+
+def param_pins(entry: dict, n: int) -> list[dict]:
+    """Pins for a parametric instance with value *n*: the output plus *n* inputs
+    spaced at the declared pitch, symmetric about the output's y."""
+    p = entry["param"]
+    o = p["output"]
+    pins = [{"name": o["name"], "offset": list(o["offset"]), "anchor": o["anchor"]}]
+    inp = p["input"]
+    for i in range(n):
+        y = round((i - (n - 1) / 2) * inp["pitch"], 4)
+        pins.append({"name": inp["name"].format(i=i + 1),
+                     "offset": [inp["x"], y],
+                     "anchor": inp["anchor"].format(i=i + 1)})
+    return pins
+
+
+def _param_entry_at(entry: dict, n: int) -> dict:
+    """A concrete (non-parametric) entry for value *n* — param tikz + computed pins."""
+    p = entry["param"]
+    base = {k: v for k, v in entry.items() if k != "param"}
+    return {**base,
+            "tikz": entry["tikz"] + ", " + p["option"].format(n=n),
+            "pins": param_pins(entry, n),
+            "anchor_pin": p["output"]["name"]}
+
+
+def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
+    """Render every value of a parametric component.
+
+    Returns ``(geometry_by_key, data_entry)``.  The data entry is an ordinary
+    multi_terminal record at the default value plus a ``param`` block carrying the
+    declaration and per-N ``scale``/``leads``/``bbox`` (geometry keyed ``kind:N``,
+    with the default also aliased under the plain key for static lookups)."""
+    p = entry["param"]
+    geoms: dict[str, dict] = {}
+    n_data: dict[str, dict] = {}
+    for n in range(int(p["min"]), int(p["max"]) + 1):
+        e_n = _param_entry_at(entry, n)
+        scale, leads = fit_alignment(e_n)
+        g = geometry({**e_n, "scale": scale, "leads": leads})
+        geoms[param_geometry_key(kind, n)] = g
+        n_data[str(n)] = {"scale": scale, "leads": leads,
+                          "bbox": compute_bbox(g, origin, e_n["pins"])}
+    default = int(p["default"])
+    geoms[geometry_key(kind)] = geoms[param_geometry_key(kind, default)]  # static alias
+    e_def = _param_entry_at(entry, default)
+    # Store the *base* tikz keyword (not the concrete "…, number inputs=2"); codegen
+    # re-appends the param option per instance, so storing the concrete form would
+    # double it on the next regeneration.
+    de = data_entry(kind, {**e_def, "tikz": entry["tikz"],
+                           "scale": n_data[str(default)]["scale"],
+                           "leads": n_data[str(default)]["leads"]})
+    de["bbox"] = n_data[str(default)]["bbox"]
+    de["param"] = {**{k: v for k, v in p.items() if k != "n_data"}, "n_data": n_data}
+    return geoms, de
+
+
 def render_store(authored: dict[str, dict]) -> tuple[dict, dict, tuple[float, float]]:
     """Render every component: returns (geometry, components_data, origin_svg).
 
@@ -378,6 +451,11 @@ def render_store(authored: dict[str, dict]) -> tuple[dict, dict, tuple[float, fl
     geometry: dict[str, dict] = {}
     components: dict[str, dict] = {}
     for kind in sorted(authored):
+        if is_parametric(authored[kind]):
+            geoms, de = render_parametric(kind, authored[kind], origin)
+            geometry.update(geoms)
+            components[kind] = de
+            continue
         entry = realigned(authored[kind])
         mes = geometry_entries(kind, entry)
         geometry.update(mes)

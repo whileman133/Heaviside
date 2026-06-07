@@ -106,6 +106,31 @@ def test_compute_bbox_handles_hv_and_curves():
     assert renderer.compute_bbox(geom, (ox, oy), pins) == [0.0, -0.3, 1.0, 0.0]
 
 
+def test_param_pins_computes_symmetric_inputs():
+    """A parametric component's pins: output + N inputs at the declared pitch,
+    symmetric about the output's y, named/anchored by the templates."""
+    entry = {"param": {
+        "input": {"name": "in{i}", "anchor": "in {i}", "x": -1.5, "pitch": 0.5},
+        "output": {"name": "out", "anchor": "out", "offset": [0, 0]}}}
+    got = [(p["name"], tuple(p["offset"]), p["anchor"]) for p in renderer.param_pins(entry, 3)]
+    assert got == [
+        ("out", (0, 0), "out"),
+        ("in1", (-1.5, -0.5), "in 1"),
+        ("in2", (-1.5, 0.0), "in 2"),
+        ("in3", (-1.5, 0.5), "in 3"),
+    ]
+    assert len(renderer.param_pins(entry, 7)) == 8   # output + 7 inputs
+
+
+def test_and_gate_is_parametric_in_the_data():
+    d = json.loads(renderer.DEFINITIONS_PATH.read_text())["components"]["and"]
+    assert d["param"]["min"] == 2 and d["param"]["max"] == 16
+    assert set(d["param"]["n_data"]) == {str(n) for n in range(2, 17)}
+    # At its default value it is an ordinary 2-input multi_terminal record.
+    assert [p["name"] for p in d["pins"]] == ["out", "in1", "in2"]
+    assert d["tikz"] == "and port"  # base keyword, not the concrete "…, number inputs=2"
+
+
 def test_variant_key():
     assert renderer.variant_key("D", {"name": "filled", "token": "*", "mode": "suffix"}) == "D*"
     assert renderer.variant_key("nigfete", {"name": "body_diode", "token": "bodydiode",

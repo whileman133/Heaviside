@@ -487,7 +487,10 @@ def _multi_terminal_line(
     node_id = f"node_{comp.id[:8]}"
     pin_positions = component_pin_positions(comp)
 
-    kind_arg = comp.kind
+    # The node uses the CircuiTikZ *keyword* (e.g. "and port"), which differs from
+    # the registry *kind* ("and") for parametric components; the option/anchor
+    # tables below are still keyed by kind.
+    kind_arg = defn.tikz_keyword
     _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
     for _opt in _variant_opts:
         kind_arg = f"{kind_arg}, {_opt}"

@@ -186,7 +186,7 @@ class ComponentPalette(QWidget):
         # than the CircuiTikZ "bipole/tripole" classifications.
         category_order = [
             "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors",
-            "Amplifiers", "Sources", "Instruments", "Grounds", "Supplies",
+            "Amplifiers", "Logic", "Sources", "Instruments", "Grounds", "Supplies",
             "Misc", "Annotations", "Drawing",
         ]
 
