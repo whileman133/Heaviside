@@ -1,1232 +1,1310 @@
 {
-  "C": {
-    "display_name": "Capacitor",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "C",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "out",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "D": {
-    "display_name": "Diode",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "D",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
-  },
-  "I": {
-    "display_name": "Current Source",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "I",
-    "labels": [
-      "l",
-      "l_",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "L": {
-    "display_name": "Inductor",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "L",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.25,
-      2.0,
-      0.25
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "out",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "R": {
-    "display_name": "Resistor",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "R",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.25,
-      2.0,
-      0.25
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "out",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "V": {
-    "display_name": "Voltage Source",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "V",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "cI": {
-    "display_name": "VCCS",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "cI",
-    "labels": [
-      "l",
-      "l_",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "cV": {
-    "display_name": "VCVS",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "cV",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "cground": {
-    "display_name": "Chassis Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "cground",
-    "labels": [],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "eground": {
-    "display_name": "Earth Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "eground",
-    "labels": [],
-    "bbox": [
-      -0.75,
-      0.0,
-      0.75,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "ground": {
-    "display_name": "Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "ground",
-    "labels": [],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "isourcesin": {
-    "display_name": "AC Current Source",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "isourcesin",
-    "labels": [
-      "l",
-      "l_",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "leD": {
-    "display_name": "LED",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "leD",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.75,
-      2.0,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
-  },
-  "nground": {
-    "display_name": "Noiseless Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "nground",
-    "labels": [],
-    "bbox": [
-      -0.75,
-      0.0,
-      0.75,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "nigfetd": {
-    "display_name": "NMOS (depletion)",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "nigfetd",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.05,
-      -1.1,
-      1.05,
-      0.55
-    ],
-    "pins": [
-      {
-        "name": "gate",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "gate"
-      },
-      {
-        "name": "drain",
-        "offset": [
-          1.0,
-          -1.0
-        ],
-        "anchor": "drain"
-      },
-      {
-        "name": "source",
-        "offset": [
-          1.0,
-          0.5
-        ],
-        "anchor": "source"
-      }
-    ],
-    "anchor_pin": "gate",
-    "scale": [
-      1.0167,
-      1.0
-    ],
-    "variants": [
-      {
-        "name": "body_diode",
-        "token": "bodydiode",
-        "mode": "option"
-      }
-    ]
-  },
-  "nigfete": {
-    "display_name": "NMOS",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "nigfete",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.05,
-      -1.1,
-      1.05,
-      0.55
-    ],
-    "pins": [
-      {
-        "name": "gate",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "gate"
-      },
-      {
-        "name": "drain",
-        "offset": [
-          1.0,
-          -1.0
-        ],
-        "anchor": "drain"
-      },
-      {
-        "name": "source",
-        "offset": [
-          1.0,
-          0.5
-        ],
-        "anchor": "source"
-      }
-    ],
-    "anchor_pin": "gate",
-    "scale": [
-      1.0167,
-      1.0
-    ],
-    "variants": [
-      {
-        "name": "body_diode",
-        "token": "bodydiode",
-        "mode": "option"
-      }
-    ]
-  },
-  "npn": {
-    "display_name": "NPN BJT",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "npn",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      0.0,
-      -1.1,
-      1.1,
-      1.1
-    ],
-    "pins": [
-      {
-        "name": "base",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "B"
-      },
-      {
-        "name": "collector",
-        "offset": [
-          1.0,
-          -1.0
-        ],
-        "anchor": "C"
-      },
-      {
-        "name": "emitter",
-        "offset": [
-          1.0,
-          1.0
-        ],
-        "anchor": "E"
-      }
-    ],
-    "anchor_pin": "base",
-    "scale": [
-      1.181,
-      1.287
-    ]
-  },
-  "op amp": {
-    "display_name": "Op-Amp",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "op amp",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -1.5,
-      -1.0,
-      1.5,
-      1.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          -1.5,
-          0.5
-        ],
-        "anchor": "+"
-      },
-      {
-        "name": "-",
-        "offset": [
-          -1.5,
-          -0.5
-        ],
-        "anchor": "-"
-      },
-      {
-        "name": "out",
-        "offset": [
-          1.5,
-          0.0
-        ],
-        "anchor": "out"
-      }
-    ],
-    "anchor_pin": null,
-    "leads": [
-      {
-        "anchor": "+",
-        "to": [
-          -1.5,
-          0.5
-        ]
-      },
-      {
-        "anchor": "-",
-        "to": [
-          -1.5,
-          -0.5
-        ]
-      },
-      {
-        "anchor": "out",
-        "to": [
-          1.5,
-          0.0
-        ]
-      }
-    ]
-  },
-  "pground": {
-    "display_name": "Protective Earth",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "pground",
-    "labels": [],
-    "bbox": [
-      -0.75,
-      0.0,
-      0.75,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "pigfetd": {
-    "display_name": "PMOS (depletion)",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "pigfetd",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.05,
-      -0.55,
-      1.05,
-      1.1
-    ],
-    "pins": [
-      {
-        "name": "gate",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "gate"
-      },
-      {
-        "name": "source",
-        "offset": [
-          1.0,
-          -0.5
-        ],
-        "anchor": "source"
-      },
-      {
-        "name": "drain",
-        "offset": [
-          1.0,
-          1.0
-        ],
-        "anchor": "drain"
-      }
-    ],
-    "anchor_pin": "gate",
-    "scale": [
-      1.0167,
-      1.0
-    ],
-    "variants": [
-      {
-        "name": "body_diode",
-        "token": "bodydiode",
-        "mode": "option"
-      }
-    ]
-  },
-  "pigfete": {
-    "display_name": "PMOS",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "pigfete",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.05,
-      -0.55,
-      1.05,
-      1.1
-    ],
-    "pins": [
-      {
-        "name": "gate",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "gate"
-      },
-      {
-        "name": "source",
-        "offset": [
-          1.0,
-          -0.5
-        ],
-        "anchor": "source"
-      },
-      {
-        "name": "drain",
-        "offset": [
-          1.0,
-          1.0
-        ],
-        "anchor": "drain"
-      }
-    ],
-    "anchor_pin": "gate",
-    "scale": [
-      1.0167,
-      1.0
-    ],
-    "variants": [
-      {
-        "name": "body_diode",
-        "token": "bodydiode",
-        "mode": "option"
-      }
-    ]
-  },
-  "pnp": {
-    "display_name": "PNP BJT",
-    "category": "Tripoles",
-    "emission": "multi_terminal",
-    "tikz": "pnp",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      0.0,
-      -1.1,
-      1.1,
-      1.1
-    ],
-    "pins": [
-      {
-        "name": "base",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": "B"
-      },
-      {
-        "name": "emitter",
-        "offset": [
-          1.0,
-          -1.0
-        ],
-        "anchor": "E"
-      },
-      {
-        "name": "collector",
-        "offset": [
-          1.0,
-          1.0
-        ],
-        "anchor": "C"
-      }
-    ],
-    "anchor_pin": "base",
-    "scale": [
-      1.181,
-      1.287
-    ]
-  },
-  "rground": {
-    "display_name": "Reference Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "rground",
-    "labels": [],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "sD": {
-    "display_name": "Schottky Diode",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "sD",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
-  },
-  "sground": {
-    "display_name": "Signal Ground",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "sground",
-    "labels": [],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "tD": {
-    "display_name": "Tunnel Diode",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "tD",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
-  },
-  "vcc": {
-    "display_name": "VCC",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "vcc",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.5,
-      -0.75,
-      0.5,
-      0.0
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "vdd": {
-    "display_name": "VDD",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "vdd",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.5,
-      -0.75,
-      0.5,
-      0.0
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "vee": {
-    "display_name": "VEE",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "vee",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "vsourcesin": {
-    "display_name": "AC Voltage Source",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "vsourcesin",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      2.0
-    ],
-    "pins": [
-      {
-        "name": "+",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "-",
-        "offset": [
-          0.0,
-          2.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "vss": {
-    "display_name": "VSS",
-    "category": "Nodes",
-    "emission": "node",
-    "tikz": "vss",
-    "labels": [
-      "l"
-    ],
-    "bbox": [
-      -0.5,
-      0.0,
-      0.5,
-      0.75
-    ],
-    "pins": [
-      {
-        "name": "in",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ]
-  },
-  "zD": {
-    "display_name": "Zener Diode",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "zD",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
-  },
-  "zzD": {
-    "display_name": "TVS Diode",
-    "category": "Bipoles",
-    "emission": "two_terminal",
-    "tikz": "zzD",
-    "labels": [
-      "l",
-      "l_",
-      "v",
-      "v^",
-      "i",
-      "i_"
-    ],
-    "bbox": [
-      0.0,
-      -0.5,
-      2.0,
-      0.5
-    ],
-    "pins": [
-      {
-        "name": "anode",
-        "offset": [
-          0.0,
-          0.0
-        ],
-        "anchor": null
-      },
-      {
-        "name": "cathode",
-        "offset": [
-          2.0,
-          0.0
-        ],
-        "anchor": null
-      }
-    ],
-    "variants": [
-      {
-        "name": "filled",
-        "token": "*",
-        "mode": "suffix"
-      }
-    ]
+  "origin_svg": [
+    15.0312,
+    15.0312
+  ],
+  "components": {
+    "C": {
+      "display_name": "Capacitor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "C",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "D": {
+      "display_name": "Diode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "D",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "I": {
+      "display_name": "Current Source",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "I",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "L": {
+      "display_name": "Inductor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "L",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.0,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "R": {
+      "display_name": "Resistor",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "R",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.0,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "V": {
+      "display_name": "Voltage Source",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "V",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cI": {
+      "display_name": "VCCS",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "cI",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cV": {
+      "display_name": "VCVS",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "cV",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "cground": {
+      "display_name": "Chassis Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "cground",
+      "labels": [],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "eground": {
+      "display_name": "Earth Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "eground",
+      "labels": [],
+      "bbox": [
+        -0.75,
+        0.0,
+        0.75,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ground": {
+      "display_name": "Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "ground",
+      "labels": [],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "isourcesin": {
+      "display_name": "AC Current Source",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "isourcesin",
+      "labels": [
+        "l",
+        "l_",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "leD": {
+      "display_name": "LED",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "leD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.75,
+        2.0,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "nground": {
+      "display_name": "Noiseless Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "nground",
+      "labels": [],
+      "bbox": [
+        -0.75,
+        0.0,
+        0.75,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "nigfetd": {
+      "display_name": "NMOS (depletion)",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "nigfetd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.1,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "leads": [
+        {
+          "anchor": "drain",
+          "to": [
+            1.0,
+            -1.0
+          ]
+        },
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "nigfete": {
+      "display_name": "NMOS",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "nigfete",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -1.1,
+        1.05,
+        0.55
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "drain"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            0.5
+          ],
+          "anchor": "source"
+        }
+      ],
+      "anchor_pin": "gate",
+      "leads": [
+        {
+          "anchor": "drain",
+          "to": [
+            1.0,
+            -1.0
+          ]
+        },
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            0.5
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "npn": {
+      "display_name": "NPN BJT",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "npn",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -1.1,
+        1.1,
+        1.1
+      ],
+      "pins": [
+        {
+          "name": "base",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "B"
+        },
+        {
+          "name": "collector",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "C"
+        },
+        {
+          "name": "emitter",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "E"
+        }
+      ],
+      "anchor_pin": "base",
+      "leads": [
+        {
+          "anchor": "C",
+          "to": [
+            1.0,
+            -1.0
+          ]
+        },
+        {
+          "anchor": "E",
+          "to": [
+            1.0,
+            1.0
+          ]
+        }
+      ]
+    },
+    "op amp": {
+      "display_name": "Op-Amp",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "op amp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -1.0,
+        1.5,
+        1.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            -1.5,
+            0.5
+          ],
+          "anchor": "+"
+        },
+        {
+          "name": "-",
+          "offset": [
+            -1.5,
+            -0.5
+          ],
+          "anchor": "-"
+        },
+        {
+          "name": "out",
+          "offset": [
+            1.5,
+            0.0
+          ],
+          "anchor": "out"
+        }
+      ],
+      "anchor_pin": null,
+      "leads": [
+        {
+          "anchor": "+",
+          "to": [
+            -1.5,
+            0.5
+          ]
+        },
+        {
+          "anchor": "-",
+          "to": [
+            -1.5,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "out",
+          "to": [
+            1.5,
+            0.0
+          ]
+        }
+      ]
+    },
+    "pground": {
+      "display_name": "Protective Earth",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "pground",
+      "labels": [],
+      "bbox": [
+        -0.75,
+        0.0,
+        0.75,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pigfetd": {
+      "display_name": "PMOS (depletion)",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "pigfetd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.55,
+        1.05,
+        1.1
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        }
+      ],
+      "anchor_pin": "gate",
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "drain",
+          "to": [
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "pigfete": {
+      "display_name": "PMOS",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "pigfete",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.05,
+        -0.55,
+        1.05,
+        1.1
+      ],
+      "pins": [
+        {
+          "name": "gate",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "gate"
+        },
+        {
+          "name": "source",
+          "offset": [
+            1.0,
+            -0.5
+          ],
+          "anchor": "source"
+        },
+        {
+          "name": "drain",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "drain"
+        }
+      ],
+      "anchor_pin": "gate",
+      "leads": [
+        {
+          "anchor": "source",
+          "to": [
+            1.0,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "drain",
+          "to": [
+            1.0,
+            1.0
+          ]
+        }
+      ],
+      "variants": [
+        {
+          "name": "body_diode",
+          "token": "bodydiode",
+          "mode": "option"
+        }
+      ]
+    },
+    "pnp": {
+      "display_name": "PNP BJT",
+      "category": "Tripoles",
+      "emission": "multi_terminal",
+      "tikz": "pnp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        0.0,
+        -1.1,
+        1.1,
+        1.1
+      ],
+      "pins": [
+        {
+          "name": "base",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": "B"
+        },
+        {
+          "name": "emitter",
+          "offset": [
+            1.0,
+            -1.0
+          ],
+          "anchor": "E"
+        },
+        {
+          "name": "collector",
+          "offset": [
+            1.0,
+            1.0
+          ],
+          "anchor": "C"
+        }
+      ],
+      "anchor_pin": "base",
+      "leads": [
+        {
+          "anchor": "E",
+          "to": [
+            1.0,
+            -1.0
+          ]
+        },
+        {
+          "anchor": "C",
+          "to": [
+            1.0,
+            1.0
+          ]
+        }
+      ]
+    },
+    "rground": {
+      "display_name": "Reference Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "rground",
+      "labels": [],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "sD": {
+      "display_name": "Schottky Diode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "sD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "sground": {
+      "display_name": "Signal Ground",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "sground",
+      "labels": [],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "tD": {
+      "display_name": "Tunnel Diode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "tD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "vcc": {
+      "display_name": "VCC",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "vcc",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.5,
+        -0.75,
+        0.5,
+        0.0
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vdd": {
+      "display_name": "VDD",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "vdd",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.5,
+        -0.75,
+        0.5,
+        0.0
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vee": {
+      "display_name": "VEE",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "vee",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vsourcesin": {
+      "display_name": "AC Voltage Source",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "vsourcesin",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        2.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "-",
+          "offset": [
+            0.0,
+            2.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "vss": {
+      "display_name": "VSS",
+      "category": "Nodes",
+      "emission": "node",
+      "tikz": "vss",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.5,
+        0.0,
+        0.5,
+        0.75
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "zD": {
+      "display_name": "Zener Diode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "zD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    },
+    "zzD": {
+      "display_name": "TVS Diode",
+      "category": "Bipoles",
+      "emission": "two_terminal",
+      "tikz": "zzD",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.0,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "anode",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "filled",
+          "token": "*",
+          "mode": "suffix"
+        }
+      ]
+    }
   }
 }

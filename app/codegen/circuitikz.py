@@ -34,65 +34,23 @@ Consequence for rotation: a 90° CW rotation in Qt Y-down space maps vector
 in the model and _rotate() in this file. They must stay in sync.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-MULTI-TERMINAL COMPONENT PLACEMENT — DESIGN NOTES
+MULTI-TERMINAL COMPONENT PLACEMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-CircuiTikZ multi-terminal nodes (op amp, nigfete) have internal pin geometry
-that does not align with our 0.25-GU grid. The canvas uses SVG lead stubs
-(from tools/export_circuitikz_svgs.py) to extend the symbol to grid-aligned
-endpoints. The codegen must bridge the same gap in the LaTeX output.
+CircuiTikZ multi-terminal nodes (op amp, MOSFETs, BJTs) have internal pin
+anchors that do not land on the 0.25-GU grid.  Alignment is **lead-only**: the
+node is placed by its origin pin (``anchor=…``, or by centre for the op amp) and
+a short lead wire bridges every other pin's anchor to its grid coordinate, e.g.
+``(node_id.drain) -- (grid_coord)``.  There are no per-component scale
+corrections.
 
-op amp
-------
-CircuiTikZ internal pin positions from node center (measured from compiled
-output, converted to GU; 1 GU = 28.348 pt):
-
-  anchor  CTikZ Y-up from center    Qt Y-down from center
-  +       (-1.194, -0.492)          (-1.194, +0.492)
-  -       (-1.194, +0.492)          (-1.194, -0.492)
-  out     (+1.194,  0.0)            (+1.194,  0.0)
-
-Registry pins (Qt Y-down, from node center = comp.position):
-  +   (-1.5, +0.5)
-  -   (-1.5, -0.5)
-  out (+1.5,  0.0)
-
-The registry uses ±1.5 GU (from the SVG export lead stubs) rather than the
-CTikZ internal ±1.194 GU. The codegen bridges this by:
-1. Placing the node by center (comp.position).
-2. Drawing short lead wires from each named CTikZ anchor to the registry pin
-   coordinate: (node_id.+) -- (pin_coord), etc.  (_MULTI_TERMINAL_LEADS)
-
-This ensures wires drawn to registry pin coordinates connect exactly in the
-rendered output, with the short stub absorbing the internal geometry gap.
-
-nigfete
--------
-CircuiTikZ internal pin positions from node center (GU):
-
-  anchor  CTikZ Y-up from center    Qt Y-down from center
-  gate    (-0.984, -0.270)          (-0.984, +0.270)
-  drain   ( 0.0,   +0.773)         ( 0.0,   -0.773)
-  source  ( 0.0,   -0.773)         ( 0.0,   +0.773)
-
-Registry pins (Qt Y-down, from gate pin = comp.position):
-  gate   (0.0,   0.0)
-  drain  (1.0,  -1.0)
-  source (1.0,  +0.5)
-
-The registry pins were chosen to match the CTikZ anchor positions snapped to
-the nearest 0.25 GU, after placement with anchor=gate. The lead stubs in the
-SVG export (the nigfete lead routing in tools/export_circuitikz_svgs.py) draw
-to these same coordinates so the canvas symbol matches.
-
-Because the drain/source CTikZ anchors are not rectilinearly aligned with the
-registry pin positions (the leads would be diagonal), no lead wires are drawn
-for drain/source in the codegen. Instead, xscale=1.0167 is applied to the
-node to horizontally stretch it so the drain/source x aligns with the grid:
-  CTikZ drain/source x from gate: 0.984 GU
-  After xscale=1.0167:            0.984 × 1.0167 = 1.0 GU ✓
-
-The node is placed with anchor=gate at the gate pin coordinate.
+These placement/alignment tables (``_MULTI_TERMINAL_KINDS``,
+``_MULTI_TERMINAL_ANCHOR_PIN``, ``_PIN_TO_CTIKZ_ANCHOR``, ``_MULTI_TERMINAL_LEADS``)
+are **derived** from ``components/components.json`` via
+``app.components.library.build_codegen_tables`` — they are not hand-maintained.
+The canvas (``app/canvas/svgsym.py``) draws the same lead bridges (baked into the
+geometry by ``tools/generate_components.py``), so the canvas and the LaTeX agree.
+See ``spec/component-editor.md``.
 
 Named anchor references
 -----------------------
@@ -214,12 +172,12 @@ _TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
 # Diode-family bipoles.  CircuiTikZ's default diode body is visually large
 # relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
 # a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
-# exported at the same scale (see tools/export_circuitikz_svgs.py) so the canvas
+# exported at the same scale (see tools/generate_components.py) so the canvas
 # and the rendered output stay in sync (§5.3 / §7.2).
 _DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
-#: Must match DIODE_SCALE in tools/export_circuitikz_svgs.py.
+#: Must match DIODE_SCALE in tools/generate_components.py.
 DIODE_SYMBOL_SCALE: float = 0.8
 
 # Multi-terminal components use node[] syntax.

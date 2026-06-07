@@ -61,7 +61,7 @@ else:
 datas = [
     ("assets/icon.png", "assets"),
     # The manifest is self-contained — it bakes in all symbol geometry including
-    # resolved +/- glyph marks (see tools/export_circuitikz_svgs.py), so svgsym.py
+    # resolved +/- glyph marks (see tools/generate_components.py), so svgsym.py
     # reads ONLY the manifest at runtime. The intermediate .svg files are build
     # artifacts and are not bundled.
     ("tools/circuitikz_svgs/manifest.json", "tools/circuitikz_svgs"),

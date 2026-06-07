@@ -88,20 +88,17 @@ def test_multi_terminal_kinds():
     )
 
 
-def test_extra_opts_golden():
-    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {
-        "npn": "xscale=1.181, yscale=1.287",
-        "pnp": "xscale=1.181, yscale=1.287",
-        "nigfete": "xscale=1.0167",
-        "nigfetd": "xscale=1.0167",
-        "pigfete": "xscale=1.0167",
-        "pigfetd": "xscale=1.0167",
-    }
+def test_no_scale_corrections():
+    # Lead-only alignment — every pin is bridged to the grid with a lead, so there
+    # are no per-component xscale/yscale corrections.
+    assert cg._MULTI_TERMINAL_EXTRA_OPTS == {}
 
 
 def test_leads_golden():
+    # Every non-origin pin gets a bridge lead to its grid offset.
     assert cg._MULTI_TERMINAL_LEADS["op amp"] == [("+", "+"), ("-", "-"), ("out", "out")]
-    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == []
+    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == [("drain", "drain"), ("source", "source")]
+    assert cg._MULTI_TERMINAL_LEADS["npn"] == [("C", "collector"), ("E", "emitter")]
 
 
 def test_anchor_pin_golden():

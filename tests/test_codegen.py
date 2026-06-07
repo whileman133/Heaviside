@@ -261,31 +261,31 @@ def test_opamp_node() -> None:
 # ---------------------------------------------------------------------------
 
 def test_npn_node() -> None:
-    """NPN BJT is placed with xscale/yscale correction and anchor=B (spec §7.2)."""
+    """NPN BJT is placed anchor=B; collector/emitter are bridged to the grid with
+    lead wires (lead-only alignment, no scale — spec/component-editor.md)."""
     comp = _comp("npn", position=(2.0, 3.0))
     src = generate(_schematic(comp))
-    assert "node[npn, xscale=1.181, yscale=1.287, anchor=B]" in src
-    # Normalised toward origin; the BJT's collector/emitter extend right/below, so
-    # the base anchor lands at (0,1).
-    assert "(0,1)" in src
+    assert "node[npn, anchor=B]" in src
+    assert "xscale" not in src and "yscale" not in src
+    assert ".C) -- " in src
+    assert ".E) -- " in src
 
 
 def test_pnp_node() -> None:
-    """PNP BJT is placed with xscale/yscale correction and anchor=B."""
+    """PNP BJT is placed anchor=B with lead-bridged collector/emitter."""
     comp = _comp("pnp", position=(1.0, 1.0))
     src = generate(_schematic(comp))
-    assert "node[pnp, xscale=1.181, yscale=1.287, anchor=B]" in src
+    assert "node[pnp, anchor=B]" in src
+    assert "xscale" not in src
 
 
-def test_npn_no_bridge_leads() -> None:
-    """NPN uses scale correction — no bridge lead wires should appear."""
+def test_npn_uses_bridge_leads() -> None:
+    """NPN bridges collector/emitter to the grid with lead wires (no scale)."""
     comp = _comp("npn", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    # The only reference to .C/.E should be in named anchor wire refs, not
-    # standalone bridge lines (which would look like "(node_X.C) --").
-    # With scale correction the C/E anchors land on-grid; no bridge needed.
-    assert "xscale=1.181" in src
-    assert "yscale=1.287" in src
+    assert ".C) -- " in src
+    assert ".E) -- " in src
+    assert "xscale" not in src
 
 
 def test_npn_pin_offsets() -> None:
@@ -309,46 +309,46 @@ def test_pnp_pin_offsets() -> None:
 
 
 def test_nmos_node() -> None:
-    """nigfete is placed as node[nigfete] with its geometry correction (spec §7.2).
-
-    The symbol is anchored at the gate pin and stretched horizontally by
-    xscale=1.0167 to align the drain/source pins to the 0.25-GU grid.
-    """
+    """nigfete is placed anchor=gate; drain/source are bridged to the grid with
+    lead wires (lead-only alignment, no scale correction)."""
     comp = _comp("nigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfete, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfete, anchor=gate]" in src
+    assert "xscale" not in src
+    assert ".drain) -- " in src
+    assert ".source) -- " in src
 
 
 def test_nmos_depletion_node() -> None:
-    """nigfetd uses the same xscale geometry correction as nigfete (spec §5.5)."""
+    """nigfetd is placed anchor=gate with lead-bridged drain/source."""
     comp = _comp("nigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfetd, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfetd, anchor=gate]" in src
 
 
 def test_pmos_node() -> None:
-    """pigfete is placed with xscale=1.0167 and anchor=gate (spec §7.2).
+    """pigfete is placed anchor=gate with lead-bridged drain/source.
 
     PMOS has source at top (Qt offset (1.0,-0.5)) and drain at bottom
     (Qt offset (1.0,+1.0)) — the y-mirror of nigfete.
     """
     comp = _comp("pigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfete, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfete, anchor=gate]" in src
 
 
 def test_pmos_depletion_node() -> None:
-    """pigfetd uses the same geometry correction as pigfete (spec §5.5)."""
+    """pigfetd is placed anchor=gate with lead-bridged drain/source."""
     comp = _comp("pigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfetd, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfetd, anchor=gate]" in src
 
 
 def test_nmos_bodydiode() -> None:
     """nigfete with body_diode=True emits the bodydiode option."""
     comp = MosfetComponent(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
     src = generate(_schematic(comp))
-    assert "node[nigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
+    assert "node[nigfete, bodydiode, anchor=gate]" in src
 
 
 def test_nmos_no_bodydiode() -> None:
@@ -362,7 +362,7 @@ def test_pmos_bodydiode() -> None:
     """pigfete with body_diode=True emits the bodydiode option."""
     comp = MosfetComponent(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", body_diode=True)
     src = generate(_schematic(comp))
-    assert "node[pigfete, bodydiode, xscale=1.0167, anchor=gate]" in src
+    assert "node[pigfete, bodydiode, anchor=gate]" in src
 
 
 def test_pmos_pin_offsets() -> None:

@@ -22,22 +22,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A **measurement tool** (`app/components/bake.py`) that renders a symbol and
     reads its pin anchors automatically (the manual `PROJECT_SPEC.md` §5.5
     measurement, mechanised).
-  - One flat **data file** (`components/components.json`, built by
-    `tools/generate_components.py`) holding every CircuiTikZ symbol's pins, bbox,
-    alignment, and metadata — the per-component numbers that were previously
-    hand-maintained across `registry.py` and the `circuitikz` codegen tables.
-  - A **loader** (`app/components/library.py`) that rebuilds the current
-    `REGISTRY` and codegen tables from that file, with tests proving they match
-    exactly.
-  - The registry and CircuiTikZ code generator now **build their per-component
-    data from this file** instead of hand-written literals: `registry.py` derives
-    the 33 CircuiTikZ-symbol `ComponentDef`s from it (keeping the 6 bespoke kinds
-    as literals), and `circuitikz.py` derives its classification and alignment
-    tables from it. The five hand-maintained codegen tables and the registry
-    literals are removed. Output is byte-for-byte unchanged (verified by the full
-    test suite, including the bundled-example renders). `svgsym.py` still paints
-    from `manifest.json` with its own placement constants — folding those into the
-    data file is the remaining step.
+  - A **unified renderer** (`tools/generate_components.py`) that renders every
+    symbol in a fixed bounding box (origin pin at the centre, leads bridging each
+    pin to the grid) and writes both `tools/circuitikz_svgs/manifest.json`
+    (geometry) and `components/components.json` (pins, bbox, leads, metadata, plus
+    one `origin_svg` placement constant). Replaces the old
+    `tools/export_circuitikz_svgs.py`, which is removed.
+  - **The registry, code generator, and canvas all build from this data**
+    (`app/components/library.py`): `registry.py` derives the 33 CircuiTikZ-symbol
+    `ComponentDef`s (keeping the 6 bespoke kinds as literals); `circuitikz.py`
+    derives its classification + lead-only alignment tables; and `svgsym.py`'s
+    canvas transform is now just `translate(-origin_svg)` + a uniform scale. The
+    removed magic numbers: the registry literals, the five codegen tables, and
+    `svgsym`'s per-component placement anchors and scale corrections.
+  - Alignment is now **lead-only** (one mechanism, no per-component
+    `xscale`/`yscale`). As a result MOSFET/BJT symbols render with a short lead
+    stub instead of a stretched body — a small visual change in both the canvas
+    and the LaTeX output. Everything else is unchanged; the bundled examples still
+    compile and the full suite passes.
 
 ### Fixed
 - Canvas label overlap: when a component carries both a label and a current

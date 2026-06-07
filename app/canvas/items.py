@@ -1048,10 +1048,10 @@ class LEDItem(ComponentItem):
 class OpAmpItem(ComponentItem):
     """Op-amp triangle (SVG: op amp).
 
-    The op-amp SVG is exported with grid-aligned terminal leads (input +/-,
-    output, and vs+/vs- power rails all routed to half-grid points — see
-    ``tools/export_circuitikz_svgs.py``), so the base ``paint`` renders every
-    terminal directly onto its registry pin.  No bridging required.
+    The op-amp SVG is rendered with grid-aligned terminal leads (input +/- and
+    output routed to their registry pins — see ``tools/generate_components.py``),
+    so the base ``paint`` renders every terminal directly onto its registry pin.
+    No bridging required.
     """
 
 

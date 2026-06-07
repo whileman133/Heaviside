@@ -333,7 +333,7 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 **All component symbols must be derived from CircuiTikZ SVG exports.** Hand-drawn symbols are prohibited — they will inevitably diverge from what CircuiTikZ actually renders and produce previews that don't match the canvas.
 
-Symbols come from **CircuiTikZ SVG exports** produced by the single deterministic Python pipeline `tools/export_circuitikz_svgs.py`. One run (1) renders each component with `latex` + `dvisvgm` (`[american]` option) to a normalised `.svg` on disk, then (2) compiles those SVGs into a **self-contained** `tools/circuitikz_svgs/manifest.json`. **The application reads only the manifest at run time** (`app/canvas/svgsym.py`) — it never touches the `.svg` files; the SVGs are intermediate build artifacts. `python tools/export_circuitikz_svgs.py` rebuilds both; `--no-render` rebuilds just the manifest from the existing SVGs. Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
+Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `tools/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `tools/circuitikz_svgs/manifest.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/components.json` (registry/codegen data + the single `origin_svg` placement constant; see [`spec/component-editor.md`](spec/component-editor.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
 The pipeline supports three component categories, each with an output subdirectory:
 
@@ -352,7 +352,7 @@ The component set is exactly what the registry uses (defined in the `BIPOLES`/`N
 
 **Diode body scale.** CircuiTikZ's default diode body is visually large next to the other bipoles, so every diode-family symbol (`D`/`zD`/`sD`/`tD`/`zzD`/`leD` and their filled `*` variants) is rendered with `\ctikzset{diodes/scale=0.8}` and the code generator emits the **same** picture-scoped `\ctikzset{diodes/scale=0.8}` for any schematic containing a diode (see §7.2). `DIODE_SYMBOL_SCALE` in `app/codegen/circuitikz.py` and `DIODE_SCALE` in the export script are the two sources of truth and **must match**. The scale shrinks only the body (the 2-GU span and pin positions are unchanged — leads auto-extend), and it does not affect the MOSFET body-diode (a tripole shape), so the canvas and the rendered output stay in sync.
 
-To add a new component: add it to the relevant table in `tools/export_circuitikz_svgs.py` and re-run it, then add the `Placement` anchor in `svgsym.py` (see §5.5 for the measurement procedure) and an `ITEM_CLASSES` entry in `items.py`.
+To add a new component: add an entry to `components/components.json` (measure its pins with `app/components/bake.py`), re-run `tools/generate_components.py`, then add an `ITEM_CLASSES` entry in `items.py` and the `kind` to `_DISPLAY_ORDER` in `registry.py` (see [`spec/component-editor.md`](spec/component-editor.md)). No `svgsym.py` placement anchor is needed — placement is the single `origin_svg` constant.
 
 To implement a new `ComponentItem`, look up the component in `manifest.json`, read the `paths` (and `glyphs`) arrays, and translate each path `d` string into `QPainterPath` calls:
 
@@ -452,7 +452,7 @@ The LED bbox is slightly taller (y0=−0.75, y1=0.75) to accommodate the emissio
 
 The **Filled** checkbox appears in the Properties panel for any component that is an instance of `DiodeComponent`. It is backed by an undoable `SetFilledCommand`.
 
-The **Body diode** checkbox appears in the Properties panel for any component that is an instance of `MosfetComponent` (nigfete, nigfetd, pigfete, pigfetd). When checked, the canvas uses the `*_bodydiode` SVG variant and the codegen emits `bodydiode` as an additional node option (e.g. `node[nigfete, bodydiode, xscale=1.0167, anchor=gate]`). It is backed by an undoable `SetBodyDiodeCommand`.
+The **Body diode** checkbox appears in the Properties panel for any component that is an instance of `MosfetComponent` (nigfete, nigfetd, pigfete, pigfetd). When checked, the canvas uses the `*_bodydiode` SVG variant and the codegen emits `bodydiode` as an additional node option (e.g. `node[nigfete, bodydiode, anchor=gate]`). It is backed by an undoable `SetBodyDiodeCommand`.
 
 #### Tripoles
 
@@ -471,7 +471,7 @@ The **Body diode** checkbox appears in the Properties panel for any component th
 | `pigfete` | PMOS | `gate` (0,0), `source` (1.0,-0.5), `drain` (1.0,1.0) | `l` |
 | `pigfetd` | PMOS (depletion) | `gate` (0,0), `source` (1.0,-0.5), `drain` (1.0,1.0) | `l` |
 
-All four MOSFET variants share the same pin x-offset (0.9836 GU from gate, corrected to 1.0 GU via `xscale=1.0167`). N-channel symbols have `drain` at the top (`-1.0` Qt y) and `source` at the bottom (`+0.5` Qt y); P-channel symbols are mirrored with `source` at top (`-0.5` Qt y) and `drain` at bottom (`+1.0` Qt y). Enhancement mode = three channel dashes; depletion mode = solid channel line.
+All four MOSFET variants share the same pin x-offset (≈0.98 GU from gate, bridged to the 1.0 GU registry pin with a lead wire). N-channel symbols have `drain` at the top (`-1.0` Qt y) and `source` at the bottom (`+0.5` Qt y); P-channel symbols are mirrored with `source` at top (`-0.5` Qt y) and `drain` at bottom (`+1.0` Qt y). Enhancement mode = three channel dashes; depletion mode = solid channel line.
 
 **BJTs:**
 
@@ -480,7 +480,7 @@ All four MOSFET variants share the same pin x-offset (0.9836 GU from gate, corre
 | `npn` | NPN BJT | `base` (0,0), `collector` (1.0,−1.0), `emitter` (1.0,1.0) | `l` |
 | `pnp` | PNP BJT | `base` (0,0), `emitter` (1.0,−1.0), `collector` (1.0,1.0) | `l` |
 
-Both BJTs are placed with `anchor=B` (base pin) at `Component.position`. SVG symbols are exported with TRIPOLE_LEADS (`\draw (X.C) -- (0.0129,1)` etc.) that extend the collector/emitter leads to grid-aligned endpoints so the canvas preview is correct. For the LaTeX output, codegen applies `xscale=1.181, yscale=1.287` (same strategy as MOSFETs) to stretch the symbol so the C/E anchors land exactly on the (1.0, ±1.0) GU grid — no bridge lead wires needed. The scale factors are derived from the unextended CTikZ pin offsets: actual (0.847, 0.777) GU → snapped (1.0, 1.0) GU. For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
+Both BJTs are placed with `anchor=B` (base pin) at `Component.position`; the collector/emitter anchors (≈0.85/0.78 GU from base) are bridged to the (1.0, ±1.0) GU registry pins with lead wires, in both the canvas geometry and the LaTeX output (lead-only alignment, no scale — see [`spec/component-editor.md`](spec/component-editor.md)). For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
 
 #### Nodes (single-terminal)
 
@@ -610,14 +610,17 @@ The palette category display order is: **Bipoles → Tripoles → Nodes → Anno
 
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
-> **Largely replaced.** The pin/alignment numbers below now live in one generated
-> data file, `components/components.json`, and `REGISTRY` + the codegen tables are
-> built from it at import time (`app/components/library.py`); the Step-1
-> measurement is automated by `app/components/bake.py` (it reads each pin anchor
-> via `\pgfpointanchor`). See [`spec/component-editor.md`](spec/component-editor.md).
-> What this section still governs for the running app is the **SVG geometry**
-> (Step 4, `manifest.json`) and the **`svgsym.py` placement anchor**, which are not
-> yet in the data file — read Steps 1–4 for those and Step 5 for the data-file flow.
+> **Superseded.** This manual procedure no longer applies to the running app.
+> Every CircuiTikZ symbol's pins, alignment, geometry, and placement are now
+> generated by `tools/generate_components.py` (which renders each symbol in a
+> fixed bounding box with **lead-only** alignment) into
+> `components/components.json` + `manifest.json`, and `REGISTRY`, the codegen
+> tables, and the `svgsym` canvas transform are all built from that data. There
+> are no hand-measured per-component anchors or scale corrections, and no
+> two-mechanism choice. See [`spec/component-editor.md`](spec/component-editor.md)
+> — that is the authoritative procedure for adding/aligning a component. The
+> detailed steps below are retained only as historical background on the geometry
+> the generator now produces automatically.
 
 CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
 fall on the 0.25-GU canvas grid. This section documents the procedure for
@@ -740,11 +743,10 @@ the remaining Component-Editor step.
 
 To add a new CircuiTikZ component type:
 
-1. Add the component to the relevant table in `tools/export_circuitikz_svgs.py` and run it to render the SVG and rebuild the self-contained `manifest.json`; add its `svgsym.py` placement anchor (§5.5).
-2. Add an entry to `components/components.json` (pins, `bbox`, alignment, metadata) — measure the anchors with `app/components/bake.py` and use `tools/generate_components.py`; add its `kind` to `_DISPLAY_ORDER` in `app/components/registry.py`. `REGISTRY` and the codegen tables build from this file, so no `registry.py`/`circuitikz.py` literals are edited (§5.5 Step 5, [`spec/component-editor.md`](spec/component-editor.md)).
-3. Add a `ComponentItem` subclass (or reuse the base) to `app/canvas/items.py`, translating the manifest `paths` array to `QPainterPath` calls as described in §5.2.
-4. Add the mapping entry to `ITEM_CLASSES` in `app/canvas/items.py`.
-5. No changes to the schematic model, code generator, or UI layout are required.
+1. Add an entry to `components/components.json` (emission, `tikz`, pins with their measured offsets/anchors, `anchor_pin`, `bbox`, labels, variants) — measure the pin anchors with `app/components/bake.py`. The leads are computed automatically.
+2. Run `tools/generate_components.py` to render the geometry into `manifest.json` and rebuild `components.json`. `REGISTRY`, the codegen tables, and the `svgsym` placement all build from this data — no `registry.py`/`circuitikz.py`/`svgsym.py` constants are edited (see [`spec/component-editor.md`](spec/component-editor.md)).
+3. Add a `ComponentItem` mapping to `ITEM_CLASSES` in `app/canvas/items.py` (the base class paints any kind from the manifest; a subclass is only needed for special hit-testing/bbox) and add the `kind` to `_DISPLAY_ORDER` in `app/components/registry.py`.
+4. No changes to the schematic model, code generator, or UI layout are required.
 
 (The bespoke non-CircuiTikZ kinds — `open`/`short`/`bipole`/`rect`/`circle`/`text_node` — instead keep a hand-written `ComponentDef` literal in `registry.py`.)
 
@@ -1202,27 +1204,23 @@ the node center:
 Where `(pin_x, pin_y)` is the absolute coordinate of the registry pin
 corresponding to `ANCHOR`, and `NODEID` is `node_<first8charsofUUID>`.
 
-Because CircuiTikZ's internal pin geometry does not align with the 0.25-GU
-canvas grid, two strategies are used to make wire connections exact:
-
-**op amp** — placed by center (`comp.position`). Short lead wires are drawn
-from each named CTikZ anchor to the registry pin coordinate:
+CircuiTikZ's internal pin anchors do not land on the 0.25-GU grid, so alignment
+is **lead-only**: the node is placed by its origin pin (`anchor=…`, or by centre
+for the op amp), and a short lead wire bridges every other pin's anchor to its
+registry grid coordinate. There are no per-component scale corrections, and the
+canvas geometry carries the same leads, so the two agree. The placement/alignment
+tables are derived from `components/components.json` (see
+[`spec/component-editor.md`](spec/component-editor.md)).
 
 ```latex
+% op amp (placed by centre): bridge every terminal to its grid pin
 (node_id.+) -- (pin_plus_coord)
 (node_id.-) -- (pin_minus_coord)
 (node_id.out) -- (pin_out_coord)
+% nigfete (placed anchor=gate): bridge drain/source to their grid pins
+(node_id.drain) -- (drain_coord)
+(node_id.source) -- (source_coord)
 ```
-
-This bridges the gap between CircuiTikZ's internal ±1.194 GU geometry and
-the canvas's ±1.5 GU lead-stub positions.
-
-**nigfete** — placed with `anchor=gate` at the gate pin coordinate. An
-`xscale=1.0167` is applied to stretch the symbol horizontally so that
-drain/source x aligns with the 1.0 GU grid position (CTikZ internal x is
-0.984 GU from gate; 0.984 × 1.0167 = 1.0 GU). No lead wires are drawn for
-drain/source because their CTikZ anchors are not rectilinearly aligned with
-the registry pin positions.
 
 #### Named Anchor References
 
@@ -1334,7 +1332,7 @@ canvas mirrors the same markers — see §10.5.
 
 **Line-hops** (optional) — when `generate()` is called with `mark_line_hops=True`, the hopping wire's `--` path is split at each crossing returned by `wire_crossings()` (§6.4) and a small semicircular bump is inserted there as a single cubic Bézier — `… -- (p0) .. controls (c1) and (c2) .. (p3) -- …` — sized by `HOP_RADIUS_GU` (the same GU constant the canvas uses, so the exported and on-screen arcs match). All bump coordinates pass through the same `_y` Y-flip as the rest of the figure, so the bump flips with it (no arc-angle sign juggling). The flag is driven by the **Draw line-hops** display preference (§10.8), defaults to `False` at the `generate()` layer (the app passes the preference, which defaults on), so output is unchanged unless requested.
 
-**Wire z-layering** — wires participate in the same z-order layering as drawing annotations (§7.7): a wire with `z_order < 0` is emitted as its own `\draw` statement in the **background** block (before the shared path, interleaved with `DrawingComponent`s by ascending z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays in the shared `\draw` path / per-wire styled statement as before — so default wires' output is unchanged. **Background wires use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) is defined in the main `\draw` block, so a background wire ending on one of its pins must **not** emit the named-anchor reference (e.g. `(node_abc.gate)`) — that would point at a node defined *later*, a LaTeX compile error. The background-layer emit therefore passes `pin_coord_to_ref=None` so those endpoints fall back to bare coordinates; the registry pin coords already connect exactly via the leads / `xscale` (see the codegen module docstring), so there is no geometric loss. Foreground wires come after the node definitions and keep named anchors.
+**Wire z-layering** — wires participate in the same z-order layering as drawing annotations (§7.7): a wire with `z_order < 0` is emitted as its own `\draw` statement in the **background** block (before the shared path, interleaved with `DrawingComponent`s by ascending z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays in the shared `\draw` path / per-wire styled statement as before — so default wires' output is unchanged. **Background wires use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) is defined in the main `\draw` block, so a background wire ending on one of its pins must **not** emit the named-anchor reference (e.g. `(node_abc.gate)`) — that would point at a node defined *later*, a LaTeX compile error. The background-layer emit therefore passes `pin_coord_to_ref=None` so those endpoints fall back to bare coordinates; the registry pin coords already connect exactly via the bridge leads (see the codegen module docstring), so there is no geometric loss. Foreground wires come after the node definitions and keep named anchors.
 
 ### 7.7 Drawing Annotation Commands
 
@@ -1879,15 +1877,17 @@ is padded onto a transparent square canvas first, so the icon is never distorted
 Dock on macOS, or note Windows caches `.exe` icons — to see the change on an
 already-seen bundle.)
 
-**Runtime resources.** Two resources are read at runtime and must be bundled:
-`assets/icon.png`, and `tools/circuitikz_svgs/manifest.json`. The manifest is
-**self-contained** — it bakes in every symbol's geometry, including the resolved
-`+`/`−` glyph marks (as `glyphs` entries with a baked affine matrix; see §5.3),
-so `svgsym.py` reads only the manifest and never touches the `.svg` files. The
-intermediate `.svg` files are build artifacts and are **not** bundled. Because a
-frozen app cannot resolve `__file__`-relative paths the way a source checkout
-does, all call sites (`main.py`, `app/ui/mainwindow.py`, `app/canvas/style.py`)
-go through `resource_path()` in `app/resources.py`, which roots paths at
+**Runtime resources.** Three resources are read at runtime and must be bundled:
+`assets/icon.png`, `tools/circuitikz_svgs/manifest.json` (symbol geometry), and
+`components/components.json` (per-component registry/codegen data + the
+`origin_svg` placement constant — read by `app/components/library.py`). The
+manifest is **self-contained** — it bakes in every symbol's geometry, including
+the resolved `+`/`−` glyph marks (as `glyphs` entries with a baked affine matrix;
+see §5.3), so `svgsym.py` reads only the manifest geometry plus the single
+`origin_svg` constant. Because a frozen app cannot resolve `__file__`-relative
+paths the way a source checkout does, all call sites (`main.py`,
+`app/ui/mainwindow.py`, `app/canvas/style.py`, `app/components/library.py`) go
+through `resource_path()` in `app/resources.py`, which roots paths at
 `sys._MEIPASS` when frozen and at the project root otherwise.
 
 **Not bundled.** `pdflatex` (with `circuitikz`) remains an external
@@ -2042,9 +2042,9 @@ ending on a rect edge or circle cardinal point counts as connected.
 The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end.
 This includes the `to[…]` syntax for every two-terminal kind (R, C, L, the diode
 family with filled/`*` variants and the picture-scoped `diodes/scale`), the
-`node[…]` syntax and geometry corrections for multi-terminal kinds (op amp, the
-IGFET family's `xscale`/`anchor=gate`, BJTs, body-diode option), single-terminal
-nodes, and wires. It covers the determinism guarantee (`generate()` is pure),
+`node[…]` syntax and lead-only alignment for multi-terminal kinds (op amp, the
+IGFET family's `anchor=gate` + bridge leads, BJTs, body-diode option),
+single-terminal nodes, and wires. It covers the determinism guarantee (`generate()` is pure),
 coordinate formatting (`_fmt`'s integer/half-integer/2-decimal rules),
 origin normalisation (§7.3 — a far-from-origin schematic emits source near `(0,0)`,
 relative geometry and grid alignment preserved, already-at-origin unchanged), the

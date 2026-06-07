@@ -1,7 +1,7 @@
 # Heaviside — Component Editor Specification
 
-**Version:** 0.3
-**Status:** Draft — measurement tool + data file built; the registry and codegen now read from it; svgsym placement, generic variants, and a GUI pending.
+**Version:** 0.4
+**Status:** Implemented — the registry, codegen, and canvas all build from the generated data file, with no hand-stored geometry magic numbers. Generic per-instance variants and a GUI remain optional follow-ups.
 **Author:** Wes H.
 
 This document is governed by the living-document rule in [`PROJECT_SPEC.md`](../PROJECT_SPEC.md) §0.
@@ -39,42 +39,46 @@ Two pieces, both small:
    coordinate off a figure. (`latex`/`dvisvgm` are a developer-tool dependency,
    not a shipped-app one.)
 
-2. **One data file** (`components/components.json`). It holds the registry +
-   code-generation data for every CircuiTikZ symbol: pins, bbox, alignment, and
-   palette metadata. Symbol *geometry* (the drawn paths) stays where it already
-   is — the generated `tools/circuitikz_svgs/manifest.json` — so this file is just
-   the registry/codegen layer that used to be magic numbers in code.
+2. **One renderer, two outputs** (`tools/generate_components.py`). It renders
+   every symbol (and variant) and writes:
+   - `tools/circuitikz_svgs/manifest.json` — the symbol *geometry* (paths/glyphs,
+     read by `svgsym.py`); and
+   - `components/components.json` — the registry + codegen data (pins, bbox,
+     leads, metadata) plus one `origin_svg` placement constant.
 
-The app builds its registry and codegen tables from this file
-(`app/components/library.py`). Adding or re-aligning a component is: measure →
-add an entry → done. No editing of five files.
+The app builds its registry (`registry.py`), codegen tables (`circuitikz.py`),
+and canvas placement (`svgsym.py`) from this data. Adding or re-aligning a
+component is: measure → add an entry → re-run the renderer. No editing of the
+registry, the codegen tables, or `svgsym`'s placement.
 
 ---
 
 ## 3. The data file
 
-`components/components.json` maps each `kind` to a flat record. Example (an op-amp
-and a resistor):
+`components/components.json` is `{origin_svg, components}`, where `components`
+maps each `kind` to a flat record. Example (a resistor and an op-amp):
 
 ```jsonc
 {
-  "R": {
-    "display_name": "Resistor", "category": "Bipoles",
-    "emission": "two_terminal", "tikz": "R",
-    "labels": ["l", "l_", "v", "v^", "i", "i_"],
-    "bbox": [0.0, -0.25, 2.0, 0.25],
-    "pins": [{"name": "in", "offset": [0,0], "anchor": null},
-             {"name": "out", "offset": [2,0], "anchor": null}]
-  },
-  "op amp": {
-    "display_name": "Op-Amp", "category": "Tripoles",
-    "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
-    "bbox": [-1.5,-1.0,1.5,1.0],
-    "pins": [{"name":"+","offset":[-1.5,0.5],"anchor":"+"}, ...],
-    "anchor_pin": null,                       // pin used to place the node (null = by centre)
-    "scale": [1.0167, 1.0],                   // optional; default [1,1]
-    "leads": [{"anchor":"out","to":[1.5,0]}], // optional; bridge stubs to the grid
-    "variants": [{"name":"filled","token":"*","mode":"suffix"}]  // optional
+  "origin_svg": [15.0312, 15.0312],   // SVG point that every symbol's origin pin maps to
+  "components": {
+    "R": {
+      "display_name": "Resistor", "category": "Bipoles",
+      "emission": "two_terminal", "tikz": "R",
+      "labels": ["l", "l_", "v", "v^", "i", "i_"],
+      "bbox": [0.0, -0.25, 2.0, 0.25],
+      "pins": [{"name": "in", "offset": [0,0], "anchor": null},
+               {"name": "out", "offset": [2,0], "anchor": null}]
+    },
+    "op amp": {
+      "display_name": "Op-Amp", "category": "Tripoles",
+      "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
+      "bbox": [-1.5,-1.0,1.5,1.0],
+      "pins": [{"name":"+","offset":[-1.5,0.5],"anchor":"+"}, ...],
+      "anchor_pin": null,             // pin the node is placed by (null = by centre)
+      "leads": [{"anchor":"+","to":[-1.5,0.5]}, ...],  // bridge each pin to the grid
+      "variants": [{"name":"filled","token":"*","mode":"suffix"}]  // optional
+    }
   }
 }
 ```
@@ -83,12 +87,13 @@ Fields:
 
 | Field | Meaning |
 |-------|---------|
+| `origin_svg` (top level) | The single SVG point that every symbol's origin pin maps to — see §4. |
 | `display_name`, `category`, `labels` | Palette metadata + valid options-string slots. |
 | `emission` | `two_terminal` (`to[…]`), `node` (single-terminal `node[…]`), or `multi_terminal` (`node[…, anchor=…]` + leads). |
 | `tikz` | The CircuiTikZ keyword. |
 | `bbox` | Bounding box `(x0,y0,x1,y1)` in GU (a design choice, kept snug for label placement). |
 | `pins` | Each pin: `name`, grid `offset` (GU, multiple of 0.25), and the CircuiTikZ `anchor` it maps to (`null` for two-terminal/node, whose pins are the draw endpoints). |
-| `anchor_pin`, `scale`, `leads` | **Alignment** for multi-terminal symbols — see §4. All computed, never hand-typed. Omitted when trivial. |
+| `anchor_pin`, `leads` | **Alignment** for multi-terminal symbols — see §4. Computed, never hand-typed. |
 | `variants` | Boolean modifiers: `{name, token, mode}` where `mode` is `suffix` (`D`→`D*`) or `option` (append `, bodydiode`). Generalises the diode `filled` and MOSFET `body_diode` flags. |
 
 `default_span` and `resizable` are derived (terminal-minus-origin for a two-pin
@@ -98,20 +103,25 @@ device; library kinds are never resizable), so they are not stored.
 
 ## 4. Alignment
 
-A CircuiTikZ multi-terminal node's internal anchors do not land on the grid. Two
-computed corrections bridge them to the pins' chosen grid positions:
+Alignment is **lead-only** — one mechanism, no per-component scale. Every symbol
+is rendered inside a **fixed bounding box** with its origin pin placed at TeX
+`(0,0)`; a short `\draw (node.anchor) -- (grid)` lead then bridges every other
+pin to its registry grid offset. Two consequences:
 
-- **`scale`** `[sx, sy]` — stretches the node so its anchors land on grid
-  (emitted as `xscale=`/`yscale=` on the node).
-- **`leads`** — short `\draw (node.anchor) -- (grid)` stubs from an anchor to its
-  pin offset.
+- **Placement is one constant.** Because the origin pin is always at TeX `(0,0)`
+  and the bounding box is fixed, TeX origin maps to a single SVG point —
+  `origin_svg` — for *every* symbol. The canvas transform (`svgsym.py`) is just
+  `translate(-origin_svg)` then a uniform scale: no per-component anchors,
+  rotation, or scale corrections.
+- **The same leads drive canvas and LaTeX.** The leads are baked into the
+  manifest geometry (canvas) and emitted by the codegen (LaTeX) from the same
+  data, so the two agree by construction.
 
-Both are **computed from the measurement** (`scale = grid ÷ measured`; a `lead`
-just targets the pin's offset), so neither is a hand-entered constant. The bake
-tool measures the anchors; the generator records whichever correction the
-component uses. (Historically these lived in separate tables in `svgsym.py` and
-the codegen with the well-known footgun that they could be combined by mistake;
-as generated data the choice is mechanical, not a manual trap.)
+This replaces the former design, which used hand-measured per-component SVG
+anchors plus a confusable mix of `xscale`/`yscale` corrections and bridge leads
+(PROJECT_SPEC §5.5). Lead-only is simpler and fully derived from the measurements;
+the trade-off is that symbols whose CircuiTikZ body is smaller than its grid span
+(MOSFETs, BJTs) show a short lead stub instead of a stretched body.
 
 ---
 
@@ -122,41 +132,43 @@ This replaces the manual PROJECT_SPEC §5.5 procedure:
 1. **Measure.** `bake.measure_anchors("<tikz keyword>", ["<anchor>", …])` prints
    each anchor's grid offset.
 2. **Choose pin grid positions.** Snap each measured offset to the nearest 0.25
-   GU (or pick a clean outward position, as the op-amp's ±1.5 does). Record
-   `scale`/`leads` to bridge — the bake/generator computes these.
-3. **Add the entry** to `components/components.json` (or its generator input).
-4. **Rebuild & verify.** `python tools/generate_components.py`; the tests in
-   `tests/test_components_library.py` check the registry/codegen reconstruct.
-
-Symbol geometry comes from the existing `tools/export_circuitikz_svgs.py`
-pipeline (add the keyword to its table and re-run), unchanged.
+   GU (or pick a clean outward position, as the op-amp's ±1.5 does).
+3. **Add the entry** to `components/components.json` (`components` map): emission,
+   tikz, pins (name/offset/anchor), `anchor_pin`, labels, bbox, variants. The
+   leads are computed (each non-origin pin → its offset).
+4. **Render & verify.** `python tools/generate_components.py` rebuilds the
+   manifest geometry and the data file; `tests/test_components_library.py` checks
+   the registry/codegen, and the suite checks the canvas geometry and that the
+   examples compile.
+5. Add a `ComponentItem` mapping in `app/canvas/items.py` and the `kind` to
+   `_DISPLAY_ORDER` in `registry.py`.
 
 ---
 
 ## 6. Implementation status
 
-**Built** (behaviour unchanged; all existing tests pass):
+**Built** (all existing tests pass; examples compile; canvas geometry verified):
 
 | Piece | File |
 |-------|------|
-| Measurement tool (render, parse geometry, **measure anchors**) | `app/components/bake.py` |
-| Data file for all 33 CircuiTikZ symbols | `components/components.json` |
-| Generator (consolidates today's values; for new components use the bake) | `tools/generate_components.py` |
-| Loader → registry `ComponentDef` + codegen tables | `app/components/library.py` |
-| **Runtime wired to the file** — `registry.py` builds the 33 SVG-symbol kinds from the library (keeping the 6 bespoke literals); `circuitikz.py` derives its classification + alignment tables from it; the magic-number tables are deleted; `heaviside.spec` bundles the file | `app/components/registry.py`, `app/codegen/circuitikz.py`, `heaviside.spec` |
+| Measurement / render / parse core | `app/components/bake.py` |
+| Unified renderer → `manifest.json` (geometry) + `components.json` (data) | `tools/generate_components.py` |
+| Loader → registry `ComponentDef`s, codegen tables, `origin_svg` | `app/components/library.py` |
+| Registry built from the data (33 SVG kinds derived; 6 bespoke literals kept) | `app/components/registry.py` |
+| Codegen classification + lead-only alignment derived from the data | `app/codegen/circuitikz.py` |
+| Canvas placement = `translate(-origin_svg)` + uniform scale (no per-component anchors) | `app/canvas/svgsym.py` |
+| Bundles the data file | `heaviside.spec` |
 
-`svgsym.py` is intentionally untouched: it still paints from `manifest.json` with
-its own placement constants. So the registry/codegen magic numbers are gone, but
-the SVG placement anchors remain — see Pending.
+The former hand-maintained magic numbers — registry `ComponentDef` literals, the
+five codegen tables, and `svgsym`'s `_MULTI_ANCHORS` / bipole anchors / per-kind
+scale — are all **removed**. The old `tools/export_circuitikz_svgs.py` is deleted
+(the unified renderer supersedes it). MOSFET/BJT rendering changed slightly (a
+short lead stub instead of a stretched body), in both canvas and LaTeX.
 
-**Pending** (each its own reviewed step):
+**Optional follow-ups** (not required; no remaining magic numbers):
 
-- **Auto-measured geometry & placement** — let the bake also write the SVG
-  geometry and SVG placement anchor into the file, removing the last hand-copied
-  constants in `svgsym.py` and folding the export script and the bake into one
-  renderer.
 - **Generic per-instance variants** — store a placed component's active variants
   as a map (with back-compat for the current `filled`/`body_diode` fields); this
   touches the `.hv` format (PROJECT_SPEC §9).
-- **A GUI** over the bake + data file, if interactive authoring is wanted; the
+- **A GUI** over the renderer + data file, if interactive authoring is wanted; the
   tool/data design above does not require one.
