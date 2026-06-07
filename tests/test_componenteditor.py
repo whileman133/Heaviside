@@ -177,6 +177,7 @@ def test_derived_component_def():
 # Render paths (gated on toolchain)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow  # re-renders every symbol through latex/dvisvgm (~3 min); --run-slow
 @pytest.mark.skipif(not _HAVE_TOOLCHAIN, reason="latex/dvisvgm not installed")
 def test_render_store_reproduces_committed_files():
     authored = renderer.load_authored()

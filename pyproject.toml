@@ -25,6 +25,9 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=app --cov-report=term-missing"
+markers = [
+    "slow: a slow test, skipped unless --run-slow is passed (see tests/conftest.py)",
+]
 
 [tool.coverage.run]
 omit = [

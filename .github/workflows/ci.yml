@@ -53,4 +53,6 @@ jobs:
         run: uv sync --frozen --python ${{ matrix.python-version }}
 
       - name: Run test suite
-        run: uv run --frozen --python ${{ matrix.python-version }} pytest
+        # --run-slow includes the full component-store reproducibility test, which
+        # is skipped in the default (fast) local run. See tests/conftest.py.
+        run: uv run --frozen --python ${{ matrix.python-version }} pytest --run-slow
