@@ -22,6 +22,11 @@ pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes
     Convert a PDF (given as bytes) to an EPS with a tight bounding box using
     pdftocairo.  Raises CompileError if pdftocairo is missing or fails (§8.6).
 
+pdf_to_svg(pdf_bytes: bytes, *, timeout: int = 30) -> bytes
+    Convert a PDF (given as bytes) to an SVG using pdftocairo (the same Poppler
+    tool used for EPS — no extra dependency).  Raises CompileError if pdftocairo
+    is missing or fails (§8.6).
+
 check_dependencies() -> list[str]
     Return human-readable warnings for missing *required* tools (just pdflatex;
     the preview no longer needs Poppler).  Empty list means all present.
@@ -211,16 +216,15 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
 # PDF → EPS
 # ---------------------------------------------------------------------------
 
-def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
-    """
-    Convert *pdf_bytes* to an EPS document and return the EPS as bytes.
+def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout: int) -> bytes:
+    """Convert *pdf_bytes* to a vector format with ``pdftocairo`` (Poppler).
 
-    Uses ``pdftocairo -eps`` (from Poppler).  ``-eps`` emits Encapsulated
-    PostScript with a tight bounding box derived from the PDF's crop box, which
-    is exactly what ``\\includegraphics`` expects.  This is the *only* feature
-    that still needs Poppler — the preview is rendered by Qt (see
-    :func:`pdf_to_qimage`).  A clear error is raised on demand if ``pdftocairo``
-    is missing, so users who never export EPS are unaffected.
+    *flag* is the pdftocairo output flag (``-eps`` / ``-svg``), *ext* the output
+    file extension, and *label* the human-readable format name used in error
+    messages.  Both EPS and SVG export use the same Poppler tool — SVG adds no
+    dependency beyond what EPS already requires.  The preview itself is rendered
+    by Qt (see :func:`pdf_to_qimage`), so a missing Poppler only affects these
+    on-demand exports and is reported clearly here.
 
     The conversion happens in a fresh temporary directory that is removed
     afterward regardless of outcome.
@@ -229,24 +233,24 @@ def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
     ------
     CompileError
         If ``pdftocairo`` is not found on PATH, exits non-zero, times out, or
-        produces no EPS output.
+        produces no output.
     """
     _ensure_tool_dirs_on_path()
     if shutil.which("pdftocairo") is None:
         raise CompileError(
             "pdftocairo not found on PATH. "
-            "Install Poppler (poppler-utils) to enable EPS export."
+            f"Install Poppler (poppler-utils) to enable {label} export."
         )
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         pdf_file = tmp_path / "schematic.pdf"
-        eps_file = tmp_path / "schematic.eps"
+        out_file = tmp_path / f"schematic.{ext}"
         pdf_file.write_bytes(pdf_bytes)
 
         try:
             result = subprocess.run(
-                ["pdftocairo", "-eps", str(pdf_file), str(eps_file)],
+                ["pdftocairo", flag, str(pdf_file), str(out_file)],
                 cwd=tmp,
                 capture_output=True,
                 timeout=timeout,
@@ -260,10 +264,33 @@ def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
                 f"pdftocairo exited with code {result.returncode}.", log=log
             )
 
-        if not eps_file.exists():
-            raise CompileError("pdftocairo produced no EPS output.")
+        if not out_file.exists():
+            raise CompileError(f"pdftocairo produced no {label} output.")
 
-        return eps_file.read_bytes()
+        return out_file.read_bytes()
+
+
+def pdf_to_eps(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
+    """
+    Convert *pdf_bytes* to an EPS document and return the EPS as bytes.
+
+    Uses ``pdftocairo -eps`` (from Poppler).  ``-eps`` emits Encapsulated
+    PostScript with a tight bounding box derived from the PDF's crop box, which
+    is exactly what ``\\includegraphics`` expects (§8.6).
+    """
+    return _pdf_to_vector(pdf_bytes, flag="-eps", ext="eps", label="EPS", timeout=timeout)
+
+
+def pdf_to_svg(pdf_bytes: bytes, *, timeout: int = 30) -> bytes:
+    """
+    Convert *pdf_bytes* to an SVG document and return the SVG as bytes.
+
+    Uses ``pdftocairo -svg`` (from Poppler) — the same tool as :func:`pdf_to_eps`,
+    so SVG export needs no dependency beyond the one EPS already requires.  The
+    standalone PDF is already cropped tight (``standalone`` class), so the SVG
+    inherits that tight extent (§8.6).
+    """
+    return _pdf_to_vector(pdf_bytes, flag="-svg", ext="svg", label="SVG", timeout=timeout)
 
 
 # ---------------------------------------------------------------------------

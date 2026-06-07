@@ -64,7 +64,7 @@ maps each `kind` to a flat record. Example (a resistor and an op-amp):
   "components": {
     "R": {
       "display_name": "Resistor", "category": "Resistors",
-      "emission": "two_terminal", "tikz": "R",
+      "emission": "path", "tikz": "R",
       "labels": ["l", "l_", "v", "v^", "i", "i_"],
       "bbox": [0.0, -0.25, 2.0, 0.25],
       "pins": [{"name": "in", "offset": [0,0], "anchor": null},
@@ -72,7 +72,7 @@ maps each `kind` to a flat record. Example (a resistor and an op-amp):
     },
     "op amp": {
       "display_name": "Op-Amp", "category": "Amplifiers",
-      "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
+      "emission": "node", "tikz": "op amp", "labels": ["l"],   // node element with anchored pins → multi-terminal
       "bbox": [-1.5,-1.0,1.5,1.0],
       "pins": [{"name":"+","offset":[-1.5,0.5],"anchor":"+"}, ...],
       "anchor_pin": null,             // pin the node is placed by (null = by centre)
@@ -89,7 +89,7 @@ Fields:
 |-------|---------|
 | `origin_svg` (top level) | The single SVG point that every symbol's origin pin maps to — see §4. |
 | `display_name`, `category`, `labels` | Palette metadata + valid options-string slots. |
-| `emission` | `two_terminal` (`to[…]`), `node` (single-terminal `node[…]`), or `multi_terminal` (`node[…, anchor=…]` + leads). |
+| `emission` | One of two LaTeX-syntax groups: `path` (`to[…]`) or `node` (`node[…]`). A `node` element with no anchored pins is a **single-terminal** node (`node[kind]`); one with anchored pins (or an `anchor_pin`) is a **multi-terminal** node (`node[…, anchor=…]` + leads). Multi-terminal-ness is derived from the data by `library.is_multi_terminal_entry`, not a separate emission value. |
 | `tikz` | The CircuiTikZ keyword. |
 | `bbox` | Bounding box `(x0,y0,x1,y1)` in GU. **Computed**, not authored: the rendered ink extent (paths + glyphs) ∪ pin positions, rounded outward to 0.05 GU (`renderer.compute_bbox`). Drives label clearance and the hit/selection region; tracks the drawn symbol. |
 | `pins` | Each pin: `name`, grid `offset` (GU, multiple of 0.25), and the CircuiTikZ `anchor` it maps to (`null` for two-terminal/node, whose pins are the draw endpoints). |
@@ -257,7 +257,7 @@ It shows the real curation cost: **two-terminal bipoles** import with zero curat
 (input = keyword + display name; pins are the draw endpoints, everything else
 derived), while **multi-terminal** families need only a naming convention and a
 quick grid review. What does *not* generalise: components that don't fit the
-`two_terminal`/`node`/`multi_terminal` model with simple point terminals
+`path`/`node` (single- or multi-terminal) model with simple point terminals
 (multi-pin ICs, logic with configurable pins, buses) — those need model work, not
 just a data entry.
 
@@ -271,7 +271,7 @@ instance carries an integer in `Component.params` (e.g. `{"inputs": 4}`).
 
 ```jsonc
 "and": {
-  "display_name": "AND Gate", "category": "Logic", "emission": "multi_terminal",
+  "display_name": "AND Gate", "category": "Logic", "emission": "node",
   "tikz": "and port", "anchor_pin": "out",
   "param": {
     "name": "inputs", "min": 2, "max": 16, "default": 2,
@@ -299,7 +299,7 @@ solved from a measurement (the native pitch is linear in height;
 **Generation.** `render_parametric` renders one geometry per value (keyed
 `kind:N`), derives per-N `scale`/`leads`/`bbox` (and `height` for gates), and
 computes the pins from the value. At its **default** value the entry is an
-ordinary `multi_terminal` record (`pins`/`bbox`/`scale`), so the registry,
+ordinary multi-terminal `node` record (`pins`/`bbox`/`scale`), so the registry,
 palette, and codegen need no special handling — only the variable-N runtime
 consults the `param` block.
 

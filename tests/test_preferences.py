@@ -49,6 +49,14 @@ def test_roundtrip_eps(prefs: Preferences) -> None:
     assert prefs.auto_export_eps is True
 
 
+def test_roundtrip_svg(prefs: Preferences) -> None:
+    assert prefs.auto_export_svg is False  # defaults off
+    prefs.auto_export_svg = True
+    assert prefs.auto_export_svg is True
+    prefs.auto_export_svg = False
+    assert prefs.auto_export_svg is False
+
+
 def test_persists_across_instances(tmp_path) -> None:
     """Values survive a new Preferences/QSettings over the same backing file."""
     ini = str(tmp_path / "settings.ini")
@@ -87,11 +95,13 @@ def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     dlg = PreferencesDialog(prefs)
     dlg._chk_pdf.setChecked(True)
     dlg._chk_eps.setChecked(True)
+    dlg._chk_svg.setChecked(True)
     dlg._chk_open_pins.setChecked(True)
     dlg._chk_line_hops.setChecked(False)
     dlg._on_accept()
     assert prefs.auto_export_pdf is True
     assert prefs.auto_export_eps is True
+    assert prefs.auto_export_svg is True
     assert prefs.mark_unconnected_pins is True
     assert prefs.line_hops is False
 

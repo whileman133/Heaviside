@@ -191,6 +191,24 @@ def library_component_defs() -> dict[str, ComponentDef]:
     return {kind: to_component_def(kind, entry) for kind, entry in load_library().items()}
 
 
+def is_multi_terminal_entry(entry: dict) -> bool:
+    """True for a *node*-emission element placed by CircuiTikZ anchors.
+
+    Emission classifies a component by its LaTeX syntax: ``path`` (``to[…]``) or
+    ``node`` (``node[…]``).  Within ``node`` there are two flavours, distinguished
+    by the *data* rather than a third emission type: a single-point node (grounds,
+    power rails — no anchored pins) and a multi-terminal node (op amps,
+    transistors, logic gates) that is placed by a CircuiTikZ anchor and leads its
+    other pins out to the grid.  A node element is multi-terminal when it carries
+    an ``anchor_pin`` or any pin maps to a CircuiTikZ anchor.
+    """
+    if entry.get("emission") != "node":
+        return False
+    if entry.get("anchor_pin"):
+        return True
+    return any((p.get("anchor") or "").strip() for p in entry.get("pins", []))
+
+
 def _scale_opts(scale) -> str:
     """Format a ``[sx, sy]`` scale as a ``xscale=…, yscale=…`` node-option string."""
     if not scale:
@@ -223,9 +241,9 @@ def build_codegen_tables() -> dict:
     for kind, e in load_library().items():
         if any(v["name"] == "filled" for v in e.get("variants", [])):
             diode.add(kind)
-        if e["emission"] == "two_terminal":
+        if e["emission"] == "path":
             two.add(kind)
-        elif e["emission"] == "node":
+        elif not is_multi_terminal_entry(e):
             node.add(kind)
         else:
             multi.add(kind)

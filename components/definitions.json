@@ -7,7 +7,7 @@
     "C": {
       "display_name": "Capacitor",
       "category": "Capacitors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "C",
       "labels": [
         "l",
@@ -45,7 +45,7 @@
     "D": {
       "display_name": "Diode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "D",
       "labels": [
         "l",
@@ -90,7 +90,7 @@
     "I": {
       "display_name": "Current Source",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "I",
       "labels": [
         "l",
@@ -126,7 +126,7 @@
     "L": {
       "display_name": "Inductor",
       "category": "Inductors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "L",
       "labels": [
         "l",
@@ -164,7 +164,7 @@
     "R": {
       "display_name": "Resistor",
       "category": "Resistors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "R",
       "labels": [
         "l",
@@ -202,7 +202,7 @@
     "V": {
       "display_name": "Voltage Source",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "V",
       "labels": [
         "l",
@@ -238,7 +238,7 @@
     "ammeter": {
       "display_name": "Ammeter",
       "category": "Instruments",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "ammeter",
       "labels": [
         "l",
@@ -276,7 +276,7 @@
     "and": {
       "display_name": "AND Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "and port",
       "labels": [
         "l"
@@ -557,7 +557,7 @@
     "battery1": {
       "display_name": "Battery",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "battery1",
       "labels": [
         "l",
@@ -595,7 +595,7 @@
     "buffer": {
       "display_name": "Buffer",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "buffer port",
       "labels": [
         "l"
@@ -634,7 +634,7 @@
     "cI": {
       "display_name": "VCCS",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "cI",
       "labels": [
         "l",
@@ -670,7 +670,7 @@
     "cV": {
       "display_name": "VCVS",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "cV",
       "labels": [
         "l",
@@ -729,7 +729,7 @@
     "eC": {
       "display_name": "Electrolytic Capacitor",
       "category": "Capacitors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "eC",
       "labels": [
         "l",
@@ -790,7 +790,7 @@
     "fuse": {
       "display_name": "Fuse",
       "category": "Misc",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "fuse",
       "labels": [
         "l",
@@ -851,7 +851,7 @@
     "isourcesin": {
       "display_name": "AC Current Source",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "isourcesin",
       "labels": [
         "l",
@@ -887,7 +887,7 @@
     "jumper": {
       "display_name": "Jumper",
       "category": "Misc",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "jumper",
       "labels": [
         "l",
@@ -925,7 +925,7 @@
     "lamp": {
       "display_name": "Lamp",
       "category": "Misc",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "lamp",
       "labels": [
         "l",
@@ -963,7 +963,7 @@
     "leD": {
       "display_name": "LED",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "leD",
       "labels": [
         "l",
@@ -1008,7 +1008,7 @@
     "memristor": {
       "display_name": "Memristor",
       "category": "Resistors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "memristor",
       "labels": [
         "l",
@@ -1046,7 +1046,7 @@
     "nand": {
       "display_name": "NAND Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "nand port",
       "labels": [
         "l"
@@ -1327,7 +1327,7 @@
     "nfet": {
       "display_name": "N-MOSFET (4-terminal)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "nfet",
       "labels": [
         "l"
@@ -1412,7 +1412,7 @@
     "nigfetd": {
       "display_name": "N-MOSFET (depl.)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "nigfetd",
       "labels": [
         "l"
@@ -1474,7 +1474,7 @@
     "nigfete": {
       "display_name": "N-MOSFET (enh.)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "nigfete",
       "labels": [
         "l"
@@ -1536,7 +1536,7 @@
     "njfet": {
       "display_name": "N-JFET",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "njfet",
       "labels": [
         "l"
@@ -1591,7 +1591,7 @@
     "nor": {
       "display_name": "NOR Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "nor port",
       "labels": [
         "l"
@@ -1872,7 +1872,7 @@
     "not": {
       "display_name": "NOT Gate (Inverter)",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "not port",
       "labels": [
         "l"
@@ -1911,7 +1911,7 @@
     "npn": {
       "display_name": "NPN BJT",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "npn",
       "labels": [
         "l"
@@ -1958,7 +1958,7 @@
     "ohmmeter": {
       "display_name": "Ohmmeter",
       "category": "Instruments",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "ohmmeter",
       "labels": [
         "l",
@@ -1996,7 +1996,7 @@
     "op amp": {
       "display_name": "Op-Amp",
       "category": "Amplifiers",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "op amp",
       "labels": [
         "l"
@@ -2061,7 +2061,7 @@
     "or": {
       "display_name": "OR Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "or port",
       "labels": [
         "l"
@@ -2342,7 +2342,7 @@
     "pC": {
       "display_name": "Polarized Capacitor",
       "category": "Capacitors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "pC",
       "labels": [
         "l",
@@ -2380,7 +2380,7 @@
     "pfet": {
       "display_name": "P-MOSFET (4-terminal)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "pfet",
       "labels": [
         "l"
@@ -2465,7 +2465,7 @@
     "photodiode": {
       "display_name": "Photodiode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "photodiode",
       "labels": [
         "l",
@@ -2503,7 +2503,7 @@
     "pigfetd": {
       "display_name": "P-MOSFET (depl.)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "pigfetd",
       "labels": [
         "l"
@@ -2565,7 +2565,7 @@
     "pigfete": {
       "display_name": "P-MOSFET (enh.)",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "pigfete",
       "labels": [
         "l"
@@ -2627,7 +2627,7 @@
     "pjfet": {
       "display_name": "P-JFET",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "pjfet",
       "labels": [
         "l"
@@ -2682,7 +2682,7 @@
     "pnp": {
       "display_name": "PNP BJT",
       "category": "Transistors",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "pnp",
       "labels": [
         "l"
@@ -2752,7 +2752,7 @@
     "sD": {
       "display_name": "Schottky Diode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "sD",
       "labels": [
         "l",
@@ -2820,7 +2820,7 @@
     "tD": {
       "display_name": "Tunnel Diode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "tD",
       "labels": [
         "l",
@@ -2865,7 +2865,7 @@
     "thermistor": {
       "display_name": "Thermistor",
       "category": "Resistors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "thermistor",
       "labels": [
         "l",
@@ -2903,7 +2903,7 @@
     "tline": {
       "display_name": "Transmission Line",
       "category": "Misc",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "tline",
       "labels": [
         "l",
@@ -2941,7 +2941,7 @@
     "vR": {
       "display_name": "Variable Resistor",
       "category": "Resistors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "vR",
       "labels": [
         "l",
@@ -2979,7 +2979,7 @@
     "varcap": {
       "display_name": "Varactor",
       "category": "Capacitors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "varcap",
       "labels": [
         "l",
@@ -3092,7 +3092,7 @@
     "voltmeter": {
       "display_name": "Voltmeter",
       "category": "Instruments",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "voltmeter",
       "labels": [
         "l",
@@ -3130,7 +3130,7 @@
     "vsourcesin": {
       "display_name": "AC Voltage Source",
       "category": "Sources",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "vsourcesin",
       "labels": [
         "l",
@@ -3191,7 +3191,7 @@
     "xnor": {
       "display_name": "XNOR Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "xnor port",
       "labels": [
         "l"
@@ -3472,7 +3472,7 @@
     "xor": {
       "display_name": "XOR Gate",
       "category": "Logic",
-      "emission": "multi_terminal",
+      "emission": "node",
       "tikz": "xor port",
       "labels": [
         "l"
@@ -3753,7 +3753,7 @@
     "zD": {
       "display_name": "Zener Diode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "zD",
       "labels": [
         "l",
@@ -3798,7 +3798,7 @@
     "zzD": {
       "display_name": "TVS Diode",
       "category": "Diodes",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "zzD",
       "labels": [
         "l",
@@ -3843,7 +3843,7 @@
     "cpe": {
       "display_name": "Constant Phase Element",
       "category": "Capacitors",
-      "emission": "two_terminal",
+      "emission": "path",
       "tikz": "cpe",
       "labels": [
         "l",

@@ -12,7 +12,7 @@ from app.componenteditor import renderer
 from app.components import library
 from app.components.model import ComponentDef
 
-EMISSIONS = ("two_terminal", "node", "multi_terminal")
+EMISSIONS = ("path", "node")
 CATEGORIES = ("Bipoles", "Tripoles", "Nodes", "Annotations", "Drawing")
 PIN_GRID = 0.25
 
@@ -49,7 +49,7 @@ def validate_entry(kind: str, entry: dict) -> list[str]:
     if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
         errs.append("bbox must be four numbers (x0, y0, x1, y1).")
 
-    if entry.get("emission") == "multi_terminal":
+    if library.is_multi_terminal_entry(entry):
         for p in pins:
             if not (p.get("anchor") or "").strip():
                 errs.append(f"Multi-terminal pin {p['name']!r} needs a CircuiTikZ anchor.")
@@ -67,7 +67,7 @@ def derived_component_def(kind: str, entry: dict) -> ComponentDef:
 def measured_anchors(entry: dict) -> dict[str, tuple[float, float]]:
     """Measure the CircuiTikZ anchors named by the draft's pins (GU, Qt y-down)."""
     from app.components import render
-    if entry.get("emission") == "node" or not entry.get("tikz", "").strip():
+    if not entry.get("tikz", "").strip():
         return {}
     anchors = [p["anchor"] for p in entry.get("pins", []) if p.get("anchor")]
     if not anchors:

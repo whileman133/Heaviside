@@ -23,7 +23,7 @@ _HAVE_TOOLCHAIN = bool(shutil.which("latex") and shutil.which("dvisvgm"))
 def _opamp_entry() -> dict:
     return {
         "display_name": "Op-Amp", "category": "Amplifiers",
-        "emission": "multi_terminal", "tikz": "op amp", "labels": ["l"],
+        "emission": "node", "tikz": "op amp", "labels": ["l"],
         "bbox": [-1.5, -1.0, 1.5, 1.0],
         "pins": [
             {"name": "+", "offset": [-1.5, 0.5], "anchor": "+"},
@@ -37,7 +37,7 @@ def _opamp_entry() -> dict:
 def _resistor_entry() -> dict:
     return {
         "display_name": "Resistor", "category": "Resistors",
-        "emission": "two_terminal", "tikz": "R", "labels": ["l"],
+        "emission": "path", "tikz": "R", "labels": ["l"],
         "bbox": [0.0, -0.25, 2.0, 0.25],
         "pins": [
             {"name": "in", "offset": [0.0, 0.0], "anchor": None},
@@ -63,7 +63,7 @@ def test_data_entry_computes_leads_for_centre_placed():
 
 def test_data_entry_anchor_pin_excluded_from_leads():
     nigfete = {
-        "display_name": "NMOS", "category": "Transistors", "emission": "multi_terminal",
+        "display_name": "NMOS", "category": "Transistors", "emission": "node",
         "tikz": "nigfete", "labels": ["l"], "bbox": [-0.05, -1.1, 1.05, 0.55],
         "anchor_pin": "gate",
         "pins": [
@@ -126,7 +126,7 @@ def test_and_gate_is_parametric_in_the_data():
     d = json.loads(renderer.DEFINITIONS_PATH.read_text())["components"]["and"]
     assert d["param"]["min"] == 2 and d["param"]["max"] == 16
     assert set(d["param"]["n_data"]) == {str(n) for n in range(2, 17)}
-    # At its default value it is an ordinary 2-input multi_terminal record.
+    # At its default value it is an ordinary 2-input multi-terminal (node) record.
     assert [p["name"] for p in d["pins"]] == ["out", "in1", "in2"]
     assert d["tikz"] == "and port"  # base keyword, not the concrete "…, number inputs=2"
 
@@ -263,7 +263,7 @@ def test_window_constructs_and_round_trips_form():
     win._entry_to_form("op amp", _opamp_entry())
     kind, entry = win._form_to_entry()
     assert kind == "op amp"
-    assert entry["emission"] == "multi_terminal"
+    assert entry["emission"] == "node"
     assert [p["name"] for p in entry["pins"]] == ["+", "-", "out"]
     assert "scale" not in entry  # op amp has no scale (it uses leads)
     assert draft.validate_entry(kind, entry) == []

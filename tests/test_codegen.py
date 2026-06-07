@@ -1358,6 +1358,34 @@ def test_pdf_to_eps_roundtrip() -> None:
 
 
 # ---------------------------------------------------------------------------
+# pdf_to_svg — SVG image export (§8.6), shares Poppler with EPS (no new dep)
+# ---------------------------------------------------------------------------
+
+def test_pdf_to_svg_missing_tool(monkeypatch) -> None:
+    """pdf_to_svg raises CompileError when pdftocairo is absent."""
+    from app.preview import latex
+
+    monkeypatch.setattr(latex.shutil, "which", lambda name: None)
+    with pytest.raises(latex.CompileError, match="pdftocairo"):
+        latex.pdf_to_svg(b"%PDF-1.4")
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("pdflatex") is None
+    or __import__("shutil").which("pdftocairo") is None,
+    reason="requires pdflatex and pdftocairo",
+)
+def test_pdf_to_svg_roundtrip() -> None:
+    """A compiled schematic PDF converts to a valid SVG document."""
+    from app.preview.latex import build_tex, compile_tex, pdf_to_svg
+
+    src = generate(_schematic(_comp("R")), y_flip=True)
+    pdf_bytes = compile_tex(build_tex(src))
+    svg_bytes = pdf_to_svg(pdf_bytes)
+    assert b"<svg" in svg_bytes[:512]
+
+
+# ---------------------------------------------------------------------------
 # _ensure_tool_dirs_on_path — macOS GUI PATH augmentation (packaging)
 # ---------------------------------------------------------------------------
 

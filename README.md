@@ -8,14 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A graphical [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for producing publication-quality circuit diagrams using [CircuiTikZ](https://github.com/circuitikz/circuitikz) LaTeX.
-It is designed for researchers, engineers, and educators who author schematics with typeset mathematical annotations.
-
-> ⚠️ **Alpha — early release.** Heaviside is usable but young. The architecture,
-> the user interface, and the `.hv` file format may change between releases, and
-> there are **no backward-compatibility guarantees yet** — a schematic saved now
-> is not promised to open in a future version. Please try it, file issues, and
-> share feedback; just don't rely on format stability until a `1.0` release.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. It's a streamlined, local-first desktop tool designed for researchers, engineers, and educators that integrates into LyX and Overleaf workflows.
 
 ![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
 
@@ -31,7 +24,7 @@ It is designed for researchers, engineers, and educators who author schematics w
 - 90° rotation, mirroring, resizing, copy/paste, and full undo/redo
 - Grid-disciplined canvas with quarter-grid CircuiTikZ snapping
 - Clean, human-readable CircuiTikZ source as the primary output
-- Parallel PDF and EPS export for inclusion in LaTeX or LyX documents
+- Parallel PDF, EPS, and SVG export for inclusion in LaTeX, LyX, or web documents
 - Live, rendered PDF preview of the current schematic
 - Save/load via a JSON `.hv` file format
 
@@ -56,14 +49,14 @@ Or browse all releases (with checksums and release notes) on the
 > **Required: `pdflatex`.** The downloaded app bundles everything **except** a
 > LaTeX installation. You must have `pdflatex` (from [TeX Live](https://tug.org/texlive/)
 > or [MiKTeX](https://miktex.org/)), with the `circuitikz` package, on your
-> `PATH` — it compiles the live preview and the PDF/`.tex`/EPS exports. The app
+> `PATH` — it compiles the live preview and the PDF/`.tex`/EPS/SVG exports. The app
 > warns at startup if it can't find it. Drawing and CircuiTikZ source generation
 > work without it; the preview and exports do not.
 >
-> **Optional: Poppler (for EPS export only).** Exporting to **EPS** additionally
-> needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/). Everything
-> else — including PDF export — needs only `pdflatex`, so you can skip Poppler
-> unless you specifically export EPS.
+> **Optional: Poppler (for EPS and SVG export).** Exporting to **EPS** or **SVG**
+> additionally needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/).
+> Everything else — including PDF export — needs only `pdflatex`, so you can skip
+> Poppler unless you specifically export EPS or SVG.
 
 > **First launch:** these builds are not code-signed/notarized (Heaviside is a
 > free, open-source alpha), so macOS and Windows will warn on first open — see
@@ -115,7 +108,7 @@ tests/         # pytest suite
 ## Building from source
 
 Heaviside uses [`uv`](https://docs.astral.sh/uv/) and targets **Python ≥ 3.11**. Python dependencies (PySide6, pydantic, qtawesome) are declared in
-[`pyproject.toml`](pyproject.toml) and installed by `uv`. (As when running a downloaded build, the preview and exports need `pdflatex` on your `PATH`, and EPS export additionally needs Poppler — see [Download](#download).)
+[`pyproject.toml`](pyproject.toml) and installed by `uv`. (As when running a downloaded build, the preview and exports need `pdflatex` on your `PATH`, and EPS/SVG export additionally needs Poppler — see [Download](#download).)
 
 ```sh
 uv run heaviside              # run from source
