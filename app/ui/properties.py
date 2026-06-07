@@ -619,8 +619,10 @@ class ParamSection(InspectorSection):
     title = None
 
     def _build(self) -> None:
+        self._row: "QWidget | None" = None
         self._spin: "QSpinBox | None" = None
         self._param_name: str | None = None
+        self._kind: str | None = None
         self._container = QVBoxLayout()
         self._container.setSpacing(6)
         self.body.addLayout(self._container)
@@ -631,23 +633,39 @@ class ParamSection(InspectorSection):
 
     def _load(self, comp: Component) -> None:
         from app.components import library
-        if self._spin is not None:
-            self._spin.setParent(None)
-            self._spin.deleteLater()
-            self._spin = None
         spec = library.param_spec(comp.kind)
         if not spec:
+            self._teardown()
             return
+        # Same kind: just refresh the value.  Rebuilding on every re-bind (which
+        # happens after each spinner step, via the SetParamCommand) would leak a
+        # duplicate label/spinbox each time.
+        if self._kind == comp.kind and self._spin is not None:
+            self._spin.blockSignals(True)
+            self._spin.setValue(library.param_value(comp))
+            self._spin.blockSignals(False)
+            return
+        self._teardown()
+        self._kind = comp.kind
         self._param_name = spec["name"]
-        row = QHBoxLayout()
+        row_w = QWidget()
+        row = QHBoxLayout(row_w)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel(spec["name"].capitalize()))
         spin = QSpinBox()
         spin.setRange(int(spec["min"]), int(spec["max"]))
         spin.setValue(library.param_value(comp))
         spin.valueChanged.connect(self._on_changed)
         row.addWidget(spin)
-        self._container.addLayout(row)
-        self._spin = spin
+        self._container.addWidget(row_w)
+        self._row, self._spin = row_w, spin
+
+    def _teardown(self) -> None:
+        if self._row is not None:
+            self._row.setParent(None)
+            self._row.deleteLater()
+        self._row = self._spin = None
+        self._param_name = self._kind = None
 
     def _on_changed(self, value: int) -> None:
         t = self._target()
