@@ -27,10 +27,10 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
-    QAction, QActionGroup, QColor, QDesktopServices, QFont, QImage, QKeySequence,
-    QPainter, QPalette, QPen, QPixmap, QShortcut,
+    QAction, QActionGroup, QColor, QDesktopServices, QFont, QGuiApplication,
+    QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -66,6 +66,7 @@ from app.preview.latex import (
     check_dependencies,
     compile_tex,
     pdf_to_eps,
+    pdf_to_qimage,
     pdf_to_svg,
 )
 from app.preview import mathrender, tools
@@ -193,6 +194,17 @@ class MainWindow(QMainWindow):
         self._act_export_svg = QAction("Export to S&VG…", self)
         self._act_export_svg.triggered.connect(self._on_export_svg)
         file_menu.addAction(self._act_export_svg)
+
+        file_menu.addSeparator()
+
+        self._act_copy_png = QAction("Copy Figure as PN&G", self)
+        self._act_copy_png.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        self._act_copy_png.triggered.connect(self._on_copy_png)
+        file_menu.addAction(self._act_copy_png)
+
+        self._act_copy_svg = QAction("Copy Figure as S&VG", self)
+        self._act_copy_svg.triggered.connect(self._on_copy_svg)
+        file_menu.addAction(self._act_copy_svg)
 
         file_menu.addSeparator()
 
@@ -955,6 +967,55 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Export Error", str(exc))
             return
         self._status_compile.setText(f"Exported to {Path(path).name}")
+
+    # ------------------------------------------------------------------
+    # Copy figure to clipboard
+    # ------------------------------------------------------------------
+
+    def _on_copy_png(self) -> None:
+        """Copy the compiled figure to the clipboard as a raster image (PNG).
+
+        The schematic is compiled to PDF and rendered to a QImage (QtPdf, no
+        Poppler), then placed on the clipboard so it can be pasted into slides,
+        docs, chat, etc. Requires ``pdflatex``; failures report like the exports.
+        """
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Copy failed")
+            return
+        try:
+            image = pdf_to_qimage(pdf_bytes, dpi=300)
+        except (CompileError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Copy Error", str(exc))
+            self._status_compile.setText("Copy failed")
+            return
+        QGuiApplication.clipboard().setImage(image)
+        self._status_compile.setText("Copied figure to clipboard (PNG)")
+
+    def _on_copy_svg(self) -> None:
+        """Copy the compiled figure to the clipboard as vector SVG.
+
+        Sets both ``image/svg+xml`` (for vector-aware consumers like Inkscape /
+        Illustrator) and a ``text/plain`` fallback. Needs ``pdflatex`` and
+        ``pdftocairo`` (Poppler), as for SVG export.
+        """
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Copy failed")
+            return
+        try:
+            svg_bytes = pdf_to_svg(pdf_bytes)
+        except CompileError as exc:
+            QMessageBox.critical(self, "Copy Error", str(exc))
+            self._status_compile.setText("Copy failed")
+            return
+        mime = QMimeData()
+        mime.setData("image/svg+xml", svg_bytes)
+        mime.setText(svg_bytes.decode("utf-8", errors="replace"))
+        QGuiApplication.clipboard().setMimeData(mime)
+        self._status_compile.setText("Copied figure to clipboard (SVG)")
 
     def _confirm_discard(self) -> bool:
         """Return True if it is safe to discard the current document."""

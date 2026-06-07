@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Copy figure to clipboard.** File ▸ *Copy Figure as PNG* (Ctrl+Shift+C) and
+  *Copy Figure as SVG* put the compiled schematic on the clipboard — a raster
+  QImage (PNG, via QtPdf) or vector `image/svg+xml` (+ text fallback) — for
+  pasting straight into slides, docs, or chat. Same toolchain needs as the
+  corresponding exports (`pdflatex`; `pdftocairo` for SVG).
 - **European / cute component variants.** Added a European-style resistor
   (Resistors), European and "cute" inductors (Inductors), and the full set of
   **European/IEC logic gates** — AND/OR/NAND/NOR/XOR/XNOR (parametric, 2–16
