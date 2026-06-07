@@ -102,6 +102,25 @@ def test_european_and_cute_variants_present():
         assert kind in cg._TWO_TERMINAL_KINDS
 
 
+def test_european_logic_gates_present():
+    """European (IEC) logic gates use the style-independent `european … port`
+    keywords; the AND/OR family is parametric, NOT/buffer are fixed; all are
+    multi-terminal nodes in the Logic category."""
+    parametric = {"eand": "and", "eor": "or", "enand": "nand",
+                  "enor": "nor", "exor": "xor", "exnor": "xnor"}
+    fixed = {"enot": "not", "ebuffer": "buffer"}
+    for kind, word in {**parametric, **fixed}.items():
+        defn = REGISTRY[kind]
+        assert defn.category == "Logic"
+        assert defn.tikz_keyword == f"european {word} port"
+        assert kind in cg._MULTI_TERMINAL_KINDS
+    for kind in parametric:
+        assert library.param_spec(kind) is not None      # variable input count
+        assert library.param_spec(kind)["height_key"].startswith("tripoles/european")
+    for kind in fixed:
+        assert library.param_spec(kind) is None
+
+
 def test_emission_is_path_or_node():
     # Emission collapses to two LaTeX-syntax groups: ``path`` (to[…]) and
     # ``node`` (node[…]).  Multi-terminal-ness is derived from the data, not a

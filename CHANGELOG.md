@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **European / cute component variants.** Added a European-style resistor
-  (Resistors) and European and "cute" inductors (Inductors), using CircuiTikZ's
-  style-independent shape keywords (`european resistor`, `european inductor`,
-  `cute inductor`) so they render the same shape on the canvas and in output
-  regardless of the global style — and can sit alongside the american symbols.
+  (Resistors), European and "cute" inductors (Inductors), and the full set of
+  **European/IEC logic gates** — AND/OR/NAND/NOR/XOR/XNOR (parametric, 2–16
+  inputs) plus NOT/buffer (Logic). All use CircuiTikZ's style-independent shape
+  keywords (`european resistor`, `european inductor`, `cute inductor`,
+  `european … port`) so they render the same shape on the canvas and in output
+  regardless of the global style — and sit alongside the american symbols.
 - **Document Settings (Edit ▸ Document Settings…).** Choose the CircuiTikZ
   **american/european** style for voltage (`v=`) and current (`i=`) labels
   per-document. Stored in the `.hv` file (new `config` object; format bumped to

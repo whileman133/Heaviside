@@ -61,6 +61,15 @@ def test_european_components_emit_shape_keywords() -> None:
     assert "to[cute inductor]" in generate(_schematic(_comp("cuteL")))
 
 
+def test_european_logic_gates_emit_keywords() -> None:
+    """European logic gates emit `node[european … port]`; the parametric AND keeps
+    its scoped european height setting."""
+    assert "node[european not port" in generate(_schematic(_comp("enot")))
+    src = generate(_schematic(_comp("eand")))
+    assert "node[european and port" in src
+    assert r"\ctikzset{tripoles/european and port/height" in src
+
+
 # ---------------------------------------------------------------------------
 # Document voltage/current label styles (§7.2)
 # ---------------------------------------------------------------------------
