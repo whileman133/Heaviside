@@ -260,3 +260,46 @@ quick grid review. What does *not* generalise: components that don't fit the
 `two_terminal`/`node`/`multi_terminal` model with simple point terminals
 (multi-pin ICs, logic with configurable pins, buses) — those need model work, not
 just a data entry.
+
+---
+
+## 8. Parametric components (variable pin count)
+
+Some symbols have a variable number of terminals — e.g. a logic gate with 2–16
+inputs. These are **parametric**: the kind declares a `param` block, and an
+instance carries an integer in `Component.params` (e.g. `{"inputs": 4}`).
+
+```jsonc
+"and": {
+  "display_name": "AND Gate", "category": "Logic", "emission": "multi_terminal",
+  "tikz": "and port", "anchor_pin": "out",
+  "param": {
+    "name": "inputs", "min": 2, "max": 16, "default": 2,
+    "option": "number inputs={n}",                 // appended to tikz per instance
+    "input":  {"name": "in{i}", "anchor": "in {i}", "x": -1.5, "pitch": 0.5},
+    "output": {"name": "out", "anchor": "out", "offset": [0, 0]},
+    "n_data": {"2": {"scale": […], "leads": […], "bbox": […]}, …, "16": {…}}
+  },
+  // plus the ordinary default-value fields: bbox, pins, scale, leads
+}
+```
+
+**Grid alignment.** CircuiTikZ lays the inputs in one vertical column, symmetric
+about the output, but with a pitch that *shrinks* as inputs grow. Imposing a
+constant grid pitch (0.5 GU), a single per-value `[xscale, yscale]` lands every
+input and the output exactly on the grid — no leads (verified for 2–16; the
+ordinary `fit_alignment` machinery, §4). The gate body just grows taller with
+more inputs.
+
+**Generation.** `render_parametric` renders one geometry per value (keyed
+`kind:N`), derives per-N `scale`/`leads`/`bbox`, and computes the pins from the
+value. At its **default** value the entry is an ordinary `multi_terminal` record
+(`pins`/`bbox`/`scale`), so the registry, palette, and codegen need no special
+handling — only the variable-N runtime consults the `param` block.
+
+**Runtime.** `library.resolved_pins` / `param_value` / `param_geometry_suffix` /
+`param_n_data` resolve an instance's pins, geometry key, scale, and bbox from its
+value. `component_pin_positions` (connectivity), `ComponentItem` (paint/bbox/pin
+dots), and the codegen (`number inputs=N` + that value's scale) all go through
+these. The inspector's `ParamSection` is a spinbox per declared parameter, undoable
+via `SetParamCommand`; the value is persisted in `Component.params` (`schematic/io.py`).

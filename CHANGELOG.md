@@ -48,6 +48,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *renamed* kind on load, so a future symbol rename won't break old files.
 
 ### Added
+- **Logic gates with a live input count.** The American gate family — AND, OR,
+  NAND, NOR, XOR, XNOR (each **2–16 inputs**), plus NOT and Buffer — under a new
+  **Logic** palette category. The multi-input gates are *parametric*: the input
+  count is a per-instance integer you set in the inspector (a spinbox, undoable),
+  and the symbol resizes live while every input pin stays grid-aligned (the gate
+  is scaled per count to a constant 0.5 GU input pitch). Built on a new generic
+  parametric-component mechanism: a kind declares a `param` block in
+  `definitions.json`; the generator renders one geometry per value (keyed
+  `kind:N`) with per-N scale/bbox; the runtime resolves an instance's pins,
+  geometry, bbox, and codegen (`number inputs=N`) from its value. The count is
+  stored in the `.hv` file (`Component.params`).
 - **19 new CircuiTikZ components**, bulk-imported via `components/import_family.py`
   with no per-component code (the registry/codegen/canvas derive everything from
   the data): bipoles `vR`, `eC`, `pC`, `fuse`, `lamp`, `ammeter`, `voltmeter`,
