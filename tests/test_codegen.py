@@ -95,6 +95,28 @@ def test_mirror_emits_mirror_option_for_two_terminal() -> None:
     )
 
 
+def test_mirror_endpoint_order_depends_on_rotation_parity() -> None:
+    """The canvas Flip-X happens *before* rotation, so a mirrored bipole at a
+    90°/270° rotation needs its ``to[...]`` endpoints swapped (an extra along-axis
+    reversal) on top of the ``mirror`` key — otherwise it renders rotated 180°
+    from the canvas. Regression for a mirrored, rotated resistor appearing
+    vertically flipped in the LaTeX preview.
+
+    Endpoints are the same two pin coordinates regardless of order, so wires still
+    connect; only their order changes. (No Y-flip here — pure model coordinates.)
+    """
+    def line(rot: int) -> str:
+        src = generate(_schematic(_comp("R", rotation=rot, mirror=True, options="l=$R$")))
+        return next(ln.strip() for ln in src.splitlines() if "to[" in ln)
+
+    # Even parity (0/180): natural order — the position pin trails as coord1.
+    assert line(0) == "(2,0) to[R, mirror, l=$R$] (0,0)"
+    assert line(180) == "(0,0) to[R, mirror, l=$R$] (2,0)"
+    # Odd parity (90/270): endpoints swapped so the symbol is not 180°-rotated.
+    assert line(90) == "(0,0) to[R, mirror, l=$R$] (0,2)"
+    assert line(270) == "(0,2) to[R, mirror, l=$R$] (0,0)"
+
+
 def test_switches_and_choke_emit_keywords() -> None:
     assert "to[nos]" in generate(_schematic(_comp("nos")))
     assert "to[ncs]" in generate(_schematic(_comp("ncs")))

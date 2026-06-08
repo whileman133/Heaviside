@@ -1230,13 +1230,24 @@ Where `OPTIONS` is the component's options string, e.g.:
 ```
 
 **Mirror.** A mirrored component (`Component.mirror`) is the canvas Flip-X
-(`scale(-1, 1)` before rotation, §4.2). The endpoints already account for it (the
-span's x is negated before rotation, so an asymmetric body reverses *along* its
-axis — e.g. a diode's direction). To also flip features *perpendicular* to the
-axis (e.g. an LED's emission arrows) onto the same side as the canvas, the
-`mirror` key is added to the `to[…]` options: **swap (along-axis) ∘ `mirror`
-(perpendicular) = Flip-X**. Emitted only when `mirror` is set; unmirrored output
-is unchanged. (Multi-terminal nodes flip via `xscale=-1` instead, §7.2.)
+(`scale(-1, 1)` **before** rotation, §4.2). Because Flip-X reflects across the
+**global** x-axis, its effect in the bipole's own frame depends on the rotation
+parity:
+
+- *Rotation ≡ 0 (mod 180)* — Flip-X reflects *across* the bipole axis, reproduced
+  directly by CircuiTikZ's `mirror` key (which also reflects features
+  *perpendicular* to the axis, e.g. an LED's emission arrows, onto the canvas
+  side). Endpoints keep their natural order.
+- *Rotation ≡ 90 (mod 180)* — Flip-X reflects *along* the axis, i.e. it
+  additionally reverses the bipole's direction. `mirror` alone would leave the
+  symbol rotated 180° from the canvas (a mirrored, 90°-rotated resistor rendered
+  vertically flipped). The two `to[…]` **endpoints are swapped** to supply that
+  along-axis reversal.
+
+Both cases emit the `mirror` key; only the endpoint order changes, and the
+endpoints are the same two pin coordinates either way, so wires still connect.
+Emitted only when `mirror` is set; unmirrored output is unchanged.
+(Multi-terminal nodes flip via `xscale=-1` instead, §7.2.)
 
 **Comma protection.** The options string is mostly passed through verbatim, but
 each `key=value` label slot whose *value* contains a comma is brace-wrapped
