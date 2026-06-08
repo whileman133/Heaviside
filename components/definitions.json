@@ -6371,6 +6371,147 @@
           "anchor": null
         }
       ]
+    },
+    "opening": {
+      "display_name": "Opening Switch",
+      "category": "Switches",
+      "emission": "path",
+      "tikz": "opening switch",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.35,
+        2.05,
+        0.1
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "closing": {
+      "display_name": "Closing Switch",
+      "category": "Switches",
+      "emission": "path",
+      "tikz": "closing switch",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.15
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "spdt": {
+      "display_name": "SPDT Switch",
+      "category": "Switches",
+      "emission": "node",
+      "tikz": "spdt",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -0.6,
+        -0.4,
+        0.6,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            -0.5,
+            0.0
+          ],
+          "anchor": "in"
+        },
+        {
+          "name": "out1",
+          "offset": [
+            0.5,
+            -0.25
+          ],
+          "anchor": "out 1"
+        },
+        {
+          "name": "out2",
+          "offset": [
+            0.5,
+            0.25
+          ],
+          "anchor": "out 2"
+        }
+      ],
+      "anchor_pin": null,
+      "leads": [
+        {
+          "anchor": "in",
+          "to": [
+            -0.5,
+            0.0
+          ]
+        },
+        {
+          "anchor": "out 1",
+          "to": [
+            0.5,
+            -0.25
+          ]
+        },
+        {
+          "anchor": "out 2",
+          "to": [
+            0.5,
+            0.25
+          ]
+        }
+      ]
     }
   }
 }

@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Switches and choke.** Added a Switches category with normally-open (`nos`),
-  normally-closed (`ncs`), and push-button (`push button`) switches, plus a Choke
-  (`cute choke`) inductor.
+  normally-closed (`ncs`), push-button (`push button`), **opening** and
+  **closing** switches, a **3-terminal SPDT** switch, plus a Choke (`cute choke`)
+  inductor.
 - **Battery, cell, and amplifier components.** Added a multi-cell **Battery**
   (`battery`) in Sources, an **Instrumentation Amplifier** (`inst amp`) and a
   **Transconductance Amplifier** (`gm amp`) in Amplifiers. The existing
