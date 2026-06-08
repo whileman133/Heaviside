@@ -1731,8 +1731,9 @@ inherited by the central area, panels, splitter gaps, status bar). Both
 (`#e8f0fe`), and the active tool shown as a soft-blue fill (the one accent
 `#5b87f0`) rather than the native highlight. `MainWindow.setStyleSheet(theme.
 app_qss())` applies a flat **form-control** language (buttons as rounded pills,
-line edits/combos/spin boxes with hairline borders and an accent focus ring) that
-cascades to the palette and properties panels; the modal dialogs (Preferences,
+line edits/spin boxes with hairline borders and an accent focus ring) that
+cascades to the palette and properties panels; combo boxes are left native
+(styling them via QSS crashes on teardown under the offscreen QPA platform); the modal dialogs (Preferences,
 Document Settings) apply `theme.app_qss()` too, since top-level windows don't
 inherit it. Toolbars and palette tiles keep their own scoped stylesheets, which
 win for their subtrees.
