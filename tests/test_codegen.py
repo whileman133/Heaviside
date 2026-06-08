@@ -76,6 +76,12 @@ def test_european_logic_gates_emit_keywords() -> None:
     assert r"\ctikzset{tripoles/european and port/height" in src
 
 
+def test_battery_and_inst_amp_emit_keywords() -> None:
+    assert "to[battery]" in generate(_schematic(_comp("battery")))
+    assert "node[inst amp" in generate(_schematic(_comp("instamp")))
+    assert "node[gm amp" in generate(_schematic(_comp("gmamp")))
+
+
 # ---------------------------------------------------------------------------
 # Document voltage/current label styles (§7.2)
 # ---------------------------------------------------------------------------

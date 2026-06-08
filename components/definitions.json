@@ -555,7 +555,7 @@
       }
     },
     "battery1": {
-      "display_name": "Battery",
+      "display_name": "Cell",
       "category": "Sources",
       "emission": "path",
       "tikz": "battery1",
@@ -6049,6 +6049,174 @@
             0
           ],
           "anchor": null
+        }
+      ]
+    },
+    "battery": {
+      "display_name": "Battery",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "battery",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0,
+            0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2,
+            0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "instamp": {
+      "display_name": "Instrumentation Amplifier",
+      "category": "Amplifiers",
+      "emission": "node",
+      "tikz": "inst amp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -1.0,
+        1.5,
+        1.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            -1.5,
+            0.5
+          ],
+          "anchor": "+"
+        },
+        {
+          "name": "-",
+          "offset": [
+            -1.5,
+            -0.5
+          ],
+          "anchor": "-"
+        },
+        {
+          "name": "out",
+          "offset": [
+            1.5,
+            0.0
+          ],
+          "anchor": "out"
+        }
+      ],
+      "anchor_pin": null,
+      "leads": [
+        {
+          "anchor": "+",
+          "to": [
+            -1.5,
+            0.5
+          ]
+        },
+        {
+          "anchor": "-",
+          "to": [
+            -1.5,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "out",
+          "to": [
+            1.5,
+            0.0
+          ]
+        }
+      ]
+    },
+    "gmamp": {
+      "display_name": "Transconductance Amplifier",
+      "category": "Amplifiers",
+      "emission": "node",
+      "tikz": "gm amp",
+      "labels": [
+        "l"
+      ],
+      "bbox": [
+        -1.5,
+        -1.0,
+        1.5,
+        1.0
+      ],
+      "pins": [
+        {
+          "name": "+",
+          "offset": [
+            -1.5,
+            0.5
+          ],
+          "anchor": "+"
+        },
+        {
+          "name": "-",
+          "offset": [
+            -1.5,
+            -0.5
+          ],
+          "anchor": "-"
+        },
+        {
+          "name": "out",
+          "offset": [
+            1.5,
+            0.0
+          ],
+          "anchor": "out"
+        }
+      ],
+      "anchor_pin": null,
+      "leads": [
+        {
+          "anchor": "+",
+          "to": [
+            -1.5,
+            0.5
+          ]
+        },
+        {
+          "anchor": "-",
+          "to": [
+            -1.5,
+            -0.5
+          ]
+        },
+        {
+          "anchor": "out",
+          "to": [
+            1.5,
+            0.0
+          ]
         }
       ]
     }

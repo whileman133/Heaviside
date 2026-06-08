@@ -141,6 +141,21 @@ def test_european_logic_gates_present():
         assert library.param_spec(kind) is None
 
 
+def test_battery_cell_and_inst_amp_components():
+    """Battery (multi-cell), the relabeled single Cell, and the instrumentation /
+    transconductance amplifiers are registered with the right kind/category."""
+    assert REGISTRY["battery1"].display_name == "Cell"          # single-cell, relabeled
+    assert REGISTRY["battery"].display_name == "Battery"
+    assert REGISTRY["battery"].category == "Sources"
+    assert "battery" in cg._TWO_TERMINAL_KINDS                  # two-terminal to[…]
+    for kind, tikz in (("instamp", "inst amp"), ("gmamp", "gm amp")):
+        defn = REGISTRY[kind]
+        assert defn.category == "Amplifiers"
+        assert defn.tikz_keyword == tikz
+        assert kind in cg._MULTI_TERMINAL_KINDS                 # node[…] with anchors
+        assert [p.name for p in defn.pins] == ["+", "-", "out"]
+
+
 def test_emission_is_path_or_node():
     # Emission collapses to two LaTeX-syntax groups: ``path`` (to[…]) and
     # ``node`` (node[…]).  Multi-terminal-ness is derived from the data, not a
