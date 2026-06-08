@@ -1731,12 +1731,14 @@ inherited by the central area, panels, splitter gaps, status bar). Both
 (`#e8f0fe`), and the active tool shown as a soft-blue fill (the one accent
 `#5b87f0`) rather than the native highlight. `MainWindow.setStyleSheet(theme.
 app_qss())` applies a flat **form-control** language (buttons as rounded pills,
-line edits/spin boxes with hairline borders and an accent focus ring) that
-cascades to the palette and properties panels; combo boxes are left native
-(styling them via QSS crashes on teardown under the offscreen QPA platform); the modal dialogs (Preferences,
-Document Settings) apply `theme.app_qss()` too, since top-level windows don't
-inherit it. Toolbars and palette tiles keep their own scoped stylesheets, which
-win for their subtrees.
+line edits with hairline borders and an accent focus ring) that cascades to the
+palette and properties panels. **Combo boxes and spin boxes are left native** —
+styling a combo via QSS crashes on teardown under the offscreen QPA platform, and
+styling a spin-box frame hides its up/down arrows — and the **modal dialogs
+(Preferences, Document Settings) keep the native style** (they don't apply
+`app_qss`). Toolbars and palette tiles keep their own scoped stylesheets, which
+win for their subtrees; the Copy PDF/SVG buttons set `theme.flat_button_qss()`
+directly (+ a pointer cursor) so the panel's stylesheet doesn't shadow them.
 
 **Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
 editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning

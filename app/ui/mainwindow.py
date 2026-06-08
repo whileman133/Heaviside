@@ -1595,6 +1595,12 @@ class _PreviewPanel(QWidget):
         copy_svg = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy SVG")
         copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
         copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
+        # Pointer cursor + an explicit flat/hover style so they highlight on
+        # hover like the palette tiles (the panel's own stylesheet would otherwise
+        # shadow the inherited button style).
+        for btn in (copy_pdf, copy_svg):
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(theme.flat_button_qss())
         copy_pdf.clicked.connect(self.copy_pdf_requested)
         copy_svg.clicked.connect(self.copy_svg_requested)
         btn_row.addStretch(1)

@@ -54,16 +54,29 @@ def ribbon_qss() -> str:
     """
 
 
+def flat_button_qss() -> str:
+    """Just the flat rounded-pill ``QPushButton`` rules, for applying directly to
+    a button whose ancestor's stylesheet would otherwise shadow the app style."""
+    return f"""
+        QPushButton {{ background: {BUTTON_BG}; border: 1px solid {BUTTON_BORDER};
+                       border-radius: 6px; padding: 4px 12px; color: {TEXT}; }}
+        QPushButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
+        QPushButton:pressed {{ background: {PRESSED}; }}
+    """
+
+
 def app_qss() -> str:
     """Flat form-control language for buttons and inputs — applied at the main
     window (cascades to the palette/properties panels) and on each dialog (which,
     as top-level windows, do not inherit the main window's stylesheet).
 
-    Scoped to ``QPushButton`` / ``QLineEdit`` / spin boxes / ``QCheckBox``.
-    ``QComboBox`` is deliberately **left native**: styling it via QSS crashes on
-    teardown under the offscreen QPA platform (Linux/CI), and a native combo still
-    reads fine next to the flat inputs. Toolbars and palette tiles keep their own
-    scoped stylesheets.
+    Scoped to ``QPushButton`` / ``QLineEdit`` / ``QCheckBox``. ``QComboBox`` **and
+    spin boxes are deliberately left native**: styling a ``QComboBox`` via QSS
+    crashes on teardown under the offscreen QPA platform, and styling a
+    ``QSpinBox``/``QDoubleSpinBox`` frame hides its up/down arrow buttons unless
+    every sub-control is also restyled (a fragile, cross-platform footgun) — both
+    read fine native next to the flat line edits. Toolbars and palette tiles keep
+    their own scoped stylesheets.
     """
     return f"""
         QPushButton {{ background: {BUTTON_BG}; border: 1px solid {BUTTON_BORDER};
@@ -73,13 +86,10 @@ def app_qss() -> str:
         QPushButton:default {{ border-color: {ACCENT}; }}
         QPushButton:disabled {{ color: #aaaaaa; background: #f4f4f4;
                                 border-color: #e6e6e6; }}
-        QLineEdit, QSpinBox, QDoubleSpinBox {{
-            border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 6px;
-            background: {SURFACE}; selection-background-color: {ACCENT};
-            selection-color: white; }}
-        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-            border-color: {ACCENT}; }}
-        QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
-            background: #f4f4f4; color: #aaaaaa; }}
+        QLineEdit {{ border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 6px;
+                     background: {SURFACE}; selection-background-color: {ACCENT};
+                     selection-color: white; }}
+        QLineEdit:focus {{ border-color: {ACCENT}; }}
+        QLineEdit:disabled {{ background: #f4f4f4; color: #aaaaaa; }}
         QCheckBox {{ spacing: 6px; }}
     """
