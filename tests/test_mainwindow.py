@@ -128,6 +128,31 @@ def test_copy_png_puts_image_on_clipboard(tmp_path, monkeypatch):
     assert fake.image is img and not fake.image.isNull()
 
 
+def test_copy_pdf_puts_pdf_mime_on_clipboard(tmp_path, monkeypatch):
+    """Copy-as-PDF sets an application/pdf clipboard payload (the compiled PDF)."""
+    win = _win(tmp_path)
+    monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4 body")
+    fake = _FakeClipboard()
+    monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
+
+    win._on_copy_pdf()
+    assert fake.mime is not None and fake.mime.hasFormat("application/pdf")
+    assert bytes(fake.mime.data("application/pdf")).startswith(b"%PDF")
+
+
+def test_preview_panel_buttons_emit_copy_signals():
+    """The preview panel's Copy PDF/SVG buttons emit the copy-request signals."""
+    from PySide6.QtWidgets import QPushButton
+
+    panel = mw._PreviewPanel()
+    got = []
+    panel.copy_pdf_requested.connect(lambda: got.append("pdf"))
+    panel.copy_svg_requested.connect(lambda: got.append("svg"))
+    for btn in panel.findChildren(QPushButton):
+        btn.click()
+    assert "pdf" in got and "svg" in got
+
+
 def test_copy_svg_puts_svg_mime_on_clipboard(tmp_path, monkeypatch):
     """Copy-as-SVG sets an image/svg+xml clipboard payload (+ text fallback)."""
     win = _win(tmp_path)

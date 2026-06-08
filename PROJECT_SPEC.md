@@ -1571,13 +1571,15 @@ compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
 PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows; SVG
 suits the web and vector editors (Inkscape, Illustrator).
 
-**Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`) and **Copy
-Figure as SVG** place the compiled figure on the clipboard instead of writing a
-file, for pasting directly into slides/docs/chat. PNG renders the compiled PDF to
-a `QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`;
-SVG converts via `pdf_to_svg` and sets a `QMimeData` with `image/svg+xml` plus a
-`text/plain` fallback. Same toolchain requirements as the matching exports
-(`pdflatex`; `pdftocairo` for SVG); failures report as for export.
+**Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`), **as PDF**,
+and **as SVG** place the compiled figure on the clipboard instead of writing a
+file, for pasting directly into slides/docs/chat; **Copy PDF / Copy SVG buttons**
+also sit below the LaTeX preview panel (§10.5). PNG renders the compiled PDF to a
+`QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`;
+PDF sets a `QMimeData` with the compiled PDF as `application/pdf`; SVG converts
+via `pdf_to_svg` and sets `image/svg+xml` plus a `text/plain` fallback. Same
+toolchain requirements as the matching exports (`pdflatex`; `pdftocairo` for SVG);
+failures report as for export.
 
 ### 8.7 Dependencies
 
@@ -2350,8 +2352,9 @@ labelled component without error (used when the math engine / ziamath preference
 changes, §8.4); and `DocumentSettingsDialog` writes the chosen voltage/current
 styles onto the schematic on accept, reporting `changed()` only when a value
 actually differs (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
-non-null clipboard image and copy-as-SVG sets an `image/svg+xml` payload (compile
-+ convert stubbed, so no LaTeX). MainWindow tests neutralise the startup
+non-null clipboard image, copy-as-PDF sets an `application/pdf` payload, and
+copy-as-SVG sets an `image/svg+xml` payload (compile + convert stubbed, so no
+LaTeX); the preview panel's Copy PDF/SVG buttons emit the copy-request signals. MainWindow tests neutralise the startup
 dependency check (an autouse fixture) so a missing tool never pops a modal that
 would hang a headless run.
 
