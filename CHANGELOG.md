@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Battery, cell, and amplifier components.** Added a multi-cell **Battery**
+  (`battery`) in Sources, an **Instrumentation Amplifier** (`inst amp`) and a
+  **Transconductance Amplifier** (`gm amp`) in Amplifiers. The existing
+  single-cell symbol (`battery1`) is relabeled **"Cell"** to distinguish it from
+  the new Battery.
 - **Multi-component property editing.** Shift-click (or rubber-band) to select
   several components, and when they're all the **same kind** the property
   inspector edits **all of them at once** — changing options, rotation, mirror,
