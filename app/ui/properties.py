@@ -405,7 +405,10 @@ class InspectorSection(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._scene: SchematicScene | None = None
-        self._comp_id: str | None = None
+        # Bound component id(s). Single-select binds one; multi-select (all of the
+        # same kind) binds several and an edit applies to all (see _apply). Reads
+        # (_load / _target) use the first as the representative.
+        self._comp_ids: list[str] = []
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -436,12 +439,23 @@ class InspectorSection(QWidget):
     # --- lifecycle ------------------------------------------------------
     def bind(self, comp: Component, scene: SchematicScene) -> None:
         self._scene = scene
-        self._comp_id = comp.id
+        self._comp_ids = [comp.id]
         self._load(comp)
         self.show()
 
+    def bind_multi(self, comps: list[Component], scene: SchematicScene) -> None:
+        """Bind several components (all the same kind); edits apply to all of them.
+
+        Widgets load from the first as the representative — values may differ
+        across the selection, but editing a field writes it to every component.
+        """
+        self._scene = scene
+        self._comp_ids = [c.id for c in comps]
+        self._load(comps[0])
+        self.show()
+
     def unbind(self) -> None:
-        self._comp_id = None
+        self._comp_ids = []
         self.hide()
 
     def set_top_separator_visible(self, visible: bool) -> None:
@@ -449,9 +463,22 @@ class InspectorSection(QWidget):
 
     # --- helper for write callbacks -------------------------------------
     def _target(self) -> tuple[SchematicScene, str] | None:
-        if self._scene is not None and self._comp_id is not None:
-            return self._scene, self._comp_id
+        """Scene + the representative (first) component id, for reads."""
+        if self._scene is not None and self._comp_ids:
+            return self._scene, self._comp_ids[0]
         return None
+
+    def _apply(self, label: str, fn) -> None:  # noqa: ANN001
+        """Apply ``fn(scene, comp_id)`` to every bound component as one undo step.
+
+        Wraps the edits in ``scene.batch`` so a multi-select change is a single
+        MacroCommand; for a single-select it is just that one command.
+        """
+        if self._scene is None or not self._comp_ids:
+            return
+        with self._scene.batch(label):
+            for cid in self._comp_ids:
+                fn(self._scene, cid)
 
 
 # ---------------------------------------------------------------------------
@@ -490,9 +517,8 @@ class OptionsSection(InspectorSection):
         self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
 
     def _commit(self) -> None:
-        t = self._target()
-        if t:
-            t[0].edit_component_options(t[1], self._field.text().strip())
+        text = self._field.text().strip()
+        self._apply("Options", lambda s, cid: s.edit_component_options(cid, text))
 
 
 class TextContentSection(InspectorSection):
@@ -520,9 +546,8 @@ class TextContentSection(InspectorSection):
         self._field.blockSignals(False)
 
     def _commit(self) -> None:
-        t = self._target()
-        if t:
-            t[0].edit_component_options(t[1], self._field.text().strip())
+        text = self._field.text().strip()
+        self._apply("Options", lambda s, cid: s.edit_component_options(cid, text))
 
 
 class BipoleLabelSection(InspectorSection):
@@ -563,12 +588,10 @@ class BipoleLabelSection(InspectorSection):
             field.blockSignals(False)
 
     def _commit(self) -> None:
-        t = self._target()
-        if t:
-            options = _replace_bipole_label(
-                self._opts_field.text().strip(), self._label_field.text().strip()
-            )
-            t[0].edit_component_options(t[1], options)
+        options = _replace_bipole_label(
+            self._opts_field.text().strip(), self._label_field.text().strip()
+        )
+        self._apply("Label", lambda s, cid: s.edit_component_options(cid, options))
 
 
 class VariantSection(InspectorSection):
@@ -606,9 +629,8 @@ class VariantSection(InspectorSection):
             self._checks[name] = cb
 
     def _on_changed(self, name: str, state: int) -> None:
-        t = self._target()
-        if t:
-            t[0].set_component_variant(t[1], name, bool(state))
+        on = bool(state)
+        self._apply("Variant", lambda s, cid: s.set_component_variant(cid, name, on))
 
 
 class ParamSection(InspectorSection):
@@ -668,9 +690,9 @@ class ParamSection(InspectorSection):
         self._param_name = self._kind = None
 
     def _on_changed(self, value: int) -> None:
-        t = self._target()
-        if t and self._param_name:
-            t[0].set_component_param(t[1], self._param_name, int(value))
+        if self._param_name:
+            name, n = self._param_name, int(value)
+            self._apply("Inputs", lambda s, cid: s.set_component_param(cid, name, n))
 
 
 class FontSection(InspectorSection):
@@ -691,14 +713,10 @@ class FontSection(InspectorSection):
         self._font.load(comp.font_size, comp.font_bold, comp.font_italic, comp.font_family)
 
     def _on_size(self, size: float) -> None:
-        t = self._target()
-        if t:
-            t[0].set_font_size(t[1], size)
+        self._apply("Font size", lambda s, cid: s.set_font_size(cid, size))
 
     def _on_style(self, bold: bool, italic: bool, family: str) -> None:
-        t = self._target()
-        if t:
-            t[0].set_font_style(t[1], bold, italic, family)
+        self._apply("Font style", lambda s, cid: s.set_font_style(cid, bold, italic, family))
 
 
 class FillBorderSection(InspectorSection):
@@ -742,14 +760,18 @@ class FillBorderSection(InspectorSection):
         _set_combo(self._fill, _TIKZ_FILL_TO_LABEL.get(comp.fill_color, "None"))
 
     def _commit(self) -> None:
-        t = self._target()
-        if not t:
-            return
-        scene, cid = t
-        # Per-field undoable commands (no-ops when unchanged).
-        scene.set_line_style(cid, _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), ""))
-        scene.set_border_width(cid, self._width.value())
-        scene.set_fill_color(cid, _LABEL_TO_TIKZ_FILL.get(self._fill.currentText(), ""))
+        # Per-field undoable commands (no-ops when unchanged); for a multi-select
+        # all three fields across all components collapse into one undo step.
+        style = _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), "")
+        width = self._width.value()
+        fill = _LABEL_TO_TIKZ_FILL.get(self._fill.currentText(), "")
+
+        def apply(s, cid):  # noqa: ANN001
+            s.set_line_style(cid, style)
+            s.set_border_width(cid, width)
+            s.set_fill_color(cid, fill)
+
+        self._apply("Style", apply)
 
 
 class WireStyleSection(InspectorSection):
@@ -1067,14 +1089,11 @@ class TransformSection(InspectorSection):
             self._mirror_cb.hide()
 
     def _on_rotate(self, angle: int) -> None:
-        t = self._target()
-        if t:
-            t[0].rotate_component(t[1], angle)
+        self._apply("Rotate", lambda s, cid: s.rotate_component(cid, angle))
 
     def _on_mirror(self, state: int) -> None:
-        t = self._target()
-        if t:
-            t[0].mirror_component(t[1], bool(state))
+        on = bool(state)
+        self._apply("Mirror", lambda s, cid: s.mirror_component(cid, on))
 
 
 class LayerSection(InspectorSection):
@@ -1113,16 +1132,17 @@ class LayerSection(InspectorSection):
         self._z_spin.blockSignals(False)
 
     def _on_z_changed(self, value: int) -> None:
-        t = self._target()
-        if t:
-            t[0].set_component_z_order(t[1], value)
+        self._apply("Z-order", lambda s, cid: s.set_component_z_order(cid, value))
 
     def _move(self, *, to_front: bool) -> None:
         t = self._target()
         if not t:
             return
-        scene, cid = t
-        new_z = scene.bring_to_front(cid) if to_front else scene.send_to_back(cid)
+        scene = t[0]
+        new_z = 0
+        with scene.batch("Move to front" if to_front else "Move to back"):
+            for cid in self._comp_ids:
+                new_z = scene.bring_to_front(cid) if to_front else scene.send_to_back(cid)
         self._z_spin.blockSignals(True)
         self._z_spin.setValue(new_z)
         self._z_spin.blockSignals(False)
@@ -1215,6 +1235,37 @@ class PropertiesPanel(QWidget):
         for sec in self._sections:
             if sec.applies_to(comp):
                 sec.bind(comp, self._scene)
+                sec.set_top_separator_visible(not first_visible)
+                first_visible = False
+            else:
+                sec.unbind()
+
+    def show_components(self, comp_ids: list[str]) -> None:
+        """Bind the inspector to several same-kind components; edits hit them all.
+
+        Used for a multi-selection of components that share a kind (so the same
+        sections apply). Widgets load from the first; each edit is applied to
+        every selected component as one undo step (see ``InspectorSection._apply``).
+        Falls back to a count-only view if the scene/components are unavailable or
+        the kinds differ.
+        """
+        if self._scene is None:
+            self.clear()
+            return
+        by_id = {c.id: c for c in self._scene.schematic.components}
+        comps = [by_id[cid] for cid in comp_ids if cid in by_id]
+        if len(comps) < 2 or len({c.kind for c in comps}) != 1:
+            self.show_multi_select(len(comp_ids))
+            return
+
+        self._wire_section.unbind()
+        defn = REGISTRY[comps[0].kind]
+        self._header.setText(f"{len(comps)} × {defn.display_name}\n({comps[0].kind})")
+
+        first_visible = True
+        for sec in self._sections:
+            if sec.applies_to(comps[0]):
+                sec.bind_multi(comps, self._scene)
                 sec.set_top_separator_visible(not first_visible)
                 first_visible = False
             else:

@@ -2824,3 +2824,29 @@ def test_set_component_variant_toggles_and_undoes(scene: SchematicScene):
     scene._stack.undo()
     comp = next(c for c in scene.schematic.components if c.id == a.id)
     assert not comp.variants.get("body_diode")
+
+
+def test_batch_groups_edits_into_one_undo_step(scene: SchematicScene):
+    """scene.batch() collapses multiple mutations into a single MacroCommand:
+    one undo reverts them all (used for multi-component inspector edits)."""
+    a = scene.place_component("R", (2.0, 0.0))
+    b = scene.place_component("R", (6.0, 0.0))
+    with scene.batch("Edit options"):
+        scene.edit_component_options(a.id, "l=$R_1$")
+        scene.edit_component_options(b.id, "l=$R_2$")
+    opts = {c.id: c.options for c in scene.schematic.components}
+    assert opts[a.id] == "l=$R_1$" and opts[b.id] == "l=$R_2$"
+
+    scene.undo()  # single step
+    opts = {c.id: c.options for c in scene.schematic.components}
+    assert opts[a.id] == "" and opts[b.id] == ""
+
+
+def test_batch_with_single_edit_is_not_wrapped(scene: SchematicScene):
+    """A batch containing one command pushes it directly (still one undo step)."""
+    a = scene.place_component("R", (2.0, 0.0))
+    with scene.batch("Edit"):
+        scene.edit_component_options(a.id, "l=$R$")
+    assert scene.schematic.components[0].options == "l=$R$"
+    scene.undo()
+    assert scene.schematic.components[0].options == ""

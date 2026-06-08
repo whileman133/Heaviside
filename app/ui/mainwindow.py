@@ -613,6 +613,10 @@ class MainWindow(QMainWindow):
             self._props.show_component(comp_ids[0])
         elif total == 1 and len(wire_ids) == 1:
             self._props.show_wire(wire_ids[0])
+        elif len(comp_ids) >= 2 and not wire_ids:
+            # Several components, no wires → bulk-edit if they're all one kind
+            # (show_components falls back to a count for a mixed selection).
+            self._props.show_components(comp_ids)
         else:
             self._props.show_multi_select(total)
 
@@ -1166,6 +1170,7 @@ _HELP_SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 _HELP_GESTURE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Selecting", [
         ("Click an item",        "Select a component or wire."),
+        ("Shift-click an item",  "Add or remove it from the selection (multi-select)."),
         ("Drag on empty canvas", "Rubber-band select everything inside the box."),
         ("Click empty canvas",   "Clear the current selection."),
     ]),
