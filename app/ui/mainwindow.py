@@ -107,12 +107,11 @@ class MainWindow(QMainWindow):
         pal = self.palette()
         pal.setColor(QPalette.Window, QColor("#ffffff"))
         self.setPalette(pal)
-
-        # Flat form-control language (buttons, line edits, combos, spin boxes,
-        # checkboxes) — cascades to the palette + properties panels. Toolbars and
-        # palette tiles keep their own scoped stylesheets (theme.*), which win for
-        # their subtrees. Dialogs are top-level and apply theme.app_qss() too.
-        self.setStyleSheet(theme.app_qss())
+        # Form controls (dialogs, message boxes, spin boxes, combos, line edits)
+        # keep their **native** look — the toolbars and palette tiles get the flat
+        # theme via their own scoped stylesheets, and the Copy PDF/PNG/SVG buttons
+        # set theme.flat_button_qss() directly. A global form-control stylesheet
+        # cascaded into child dialogs/message boxes and made them non-native.
 
         # -- Core objects --------------------------------------------------
         self._scene = SchematicScene()
@@ -491,6 +490,7 @@ class MainWindow(QMainWindow):
         bottom_split.addWidget(self._source_panel)
 
         self._preview_panel = _PreviewPanel()
+        self._preview_panel.copy_png_requested.connect(self._on_copy_png)
         self._preview_panel.copy_pdf_requested.connect(self._on_copy_pdf)
         self._preview_panel.copy_svg_requested.connect(self._on_copy_svg)
         bottom_split.addWidget(self._preview_panel)
@@ -1552,6 +1552,7 @@ class _PreviewPanel(QWidget):
     to fill the panel while preserving aspect ratio.
     """
 
+    copy_png_requested = Signal()
     copy_pdf_requested = Signal()
     copy_svg_requested = Signal()
 
@@ -1591,21 +1592,23 @@ class _PreviewPanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
+        copy_png = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy PNG")
         copy_pdf = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy PDF")
         copy_svg = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy SVG")
+        copy_png.setToolTip("Copy the compiled figure to the clipboard as a PNG image")
         copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
         copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
-        # Pointer cursor + an explicit flat/hover style so they highlight on
-        # hover like the palette tiles (the panel's own stylesheet would otherwise
-        # shadow the inherited button style).
-        for btn in (copy_pdf, copy_svg):
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(theme.flat_button_qss())
+        copy_png.clicked.connect(self.copy_png_requested)
         copy_pdf.clicked.connect(self.copy_pdf_requested)
         copy_svg.clicked.connect(self.copy_svg_requested)
         btn_row.addStretch(1)
-        btn_row.addWidget(copy_pdf)
-        btn_row.addWidget(copy_svg)
+        # Pointer cursor + an explicit flat/hover style so they highlight on
+        # hover like the palette tiles (the panel's own stylesheet would otherwise
+        # shadow the button style).
+        for btn in (copy_png, copy_pdf, copy_svg):
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(theme.flat_button_qss())
+            btn_row.addWidget(btn)
         layout.addLayout(btn_row)
 
         self._raw_image: QImage | None = None

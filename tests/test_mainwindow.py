@@ -141,16 +141,17 @@ def test_copy_pdf_puts_pdf_mime_on_clipboard(tmp_path, monkeypatch):
 
 
 def test_preview_panel_buttons_emit_copy_signals():
-    """The preview panel's Copy PDF/SVG buttons emit the copy-request signals."""
+    """The preview panel's Copy PNG/PDF/SVG buttons emit the copy-request signals."""
     from PySide6.QtWidgets import QPushButton
 
     panel = mw._PreviewPanel()
     got = []
+    panel.copy_png_requested.connect(lambda: got.append("png"))
     panel.copy_pdf_requested.connect(lambda: got.append("pdf"))
     panel.copy_svg_requested.connect(lambda: got.append("svg"))
     for btn in panel.findChildren(QPushButton):
         btn.click()
-    assert "pdf" in got and "svg" in got
+    assert set(got) == {"png", "pdf", "svg"}
 
 
 def test_copy_svg_puts_svg_mime_on_clipboard(tmp_path, monkeypatch):

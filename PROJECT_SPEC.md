@@ -1229,6 +1229,15 @@ Where `OPTIONS` is the component's options string, e.g.:
 (0,0) to[R, l=$R_1$, v=$V_R$] (2,0)
 ```
 
+**Mirror.** A mirrored component (`Component.mirror`) is the canvas Flip-X
+(`scale(-1, 1)` before rotation, §4.2). The endpoints already account for it (the
+span's x is negated before rotation, so an asymmetric body reverses *along* its
+axis — e.g. a diode's direction). To also flip features *perpendicular* to the
+axis (e.g. an LED's emission arrows) onto the same side as the canvas, the
+`mirror` key is added to the `to[…]` options: **swap (along-axis) ∘ `mirror`
+(perpendicular) = Flip-X**. Emitted only when `mirror` is set; unmirrored output
+is unchanged. (Multi-terminal nodes flip via `xscale=-1` instead, §7.2.)
+
 **Comma protection.** The options string is mostly passed through verbatim, but
 each `key=value` label slot whose *value* contains a comma is brace-wrapped
 (`v=$\phi(0,0)$` → `v={$\phi(0,0)$}`) by `protect_label_commas()` (in
@@ -1573,7 +1582,7 @@ suits the web and vector editors (Inkscape, Illustrator).
 
 **Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`), **as PDF**,
 and **as SVG** place the compiled figure on the clipboard instead of writing a
-file, for pasting directly into slides/docs/chat; **Copy PDF / Copy SVG buttons**
+file, for pasting directly into slides/docs/chat; **Copy PNG / PDF / SVG buttons**
 also sit below the LaTeX preview panel (§10.5). PNG renders the compiled PDF to a
 `QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`;
 PDF sets a `QMimeData` with the compiled PDF as `application/pdf`; SVG converts
@@ -1729,16 +1738,7 @@ inherited by the central area, panels, splitter gaps, status bar). Both
 **toolbars are white** with a hairline divider (`theme.top_toolbar_qss` /
 `ribbon_qss`), icons tinted `theme.ICON` (`#555`), rounded soft-blue hovers
 (`#e8f0fe`), and the active tool shown as a soft-blue fill (the one accent
-`#5b87f0`) rather than the native highlight. `MainWindow.setStyleSheet(theme.
-app_qss())` applies a flat **form-control** language (buttons as rounded pills,
-line edits with hairline borders and an accent focus ring) that cascades to the
-palette and properties panels. **Combo boxes and spin boxes are left native** —
-styling a combo via QSS crashes on teardown under the offscreen QPA platform, and
-styling a spin-box frame hides its up/down arrows — and the **modal dialogs
-(Preferences, Document Settings) keep the native style** (they don't apply
-`app_qss`). Toolbars and palette tiles keep their own scoped stylesheets, which
-win for their subtrees; the Copy PDF/SVG buttons set `theme.flat_button_qss()`
-directly (+ a pointer cursor) so the panel's stylesheet doesn't shadow them.
+`#5b87f0`) rather than the native highlight. **Form controls stay native.** Dialogs, message boxes, spin boxes, and combo boxes keep the platform-native look (a global form-control stylesheet cascaded into child dialogs/message boxes and made them non-native, and styling combo/spin sub-controls broke their arrows). Only the toolbars and palette tiles are themed (their own scoped stylesheets), and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor).
 
 **Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
 editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning

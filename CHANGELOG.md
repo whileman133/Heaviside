@@ -24,6 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Mirroring now matches in the LaTeX output.** A mirrored two-terminal
+  component whose symbol has off-axis features (e.g. an LED's emission arrows)
+  was reversed only *along* its axis in the generated CircuiTikZ, so those
+  features ended up on the wrong side versus the canvas. Codegen now adds the
+  `mirror` key so the perpendicular reflection matches the canvas Flip-X.
+- **Native dialogs, message boxes, and spin boxes.** Dropped the global
+  form-control stylesheet that was cascading into the modal dialogs and message
+  boxes (making them non-native); they — and spin/combo boxes — now use the
+  platform style. The toolbars, palette, and Copy buttons stay themed.
 - **Spin-box arrows restored** — the themed form styling had hidden the up/down
   arrows on number fields (Inputs, z-order, font size); spin boxes are native
   again. Reverted the modal dialogs (Preferences, Document Settings) to the
@@ -58,7 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *PDF*, and *SVG* put the compiled schematic on the clipboard — a raster QImage
   (PNG, via QtPdf), the compiled PDF (`application/pdf`), or vector
   `image/svg+xml` (+ text fallback) — for pasting straight into slides, docs, or
-  chat. **Copy PDF / Copy SVG buttons** also sit below the LaTeX preview. Same
+  chat. **Copy PNG / PDF / SVG buttons** also sit below the LaTeX preview. Same
   toolchain needs as the corresponding exports (`pdflatex`; `pdftocairo` for SVG).
 - **European / cute component variants.** Added a European-style resistor
   (Resistors), European and "cute" inductors (Inductors), and the full set of

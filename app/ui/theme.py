@@ -65,31 +65,8 @@ def flat_button_qss() -> str:
     """
 
 
-def app_qss() -> str:
-    """Flat form-control language for buttons and inputs — applied at the main
-    window (cascades to the palette/properties panels) and on each dialog (which,
-    as top-level windows, do not inherit the main window's stylesheet).
-
-    Scoped to ``QPushButton`` / ``QLineEdit`` / ``QCheckBox``. ``QComboBox`` **and
-    spin boxes are deliberately left native**: styling a ``QComboBox`` via QSS
-    crashes on teardown under the offscreen QPA platform, and styling a
-    ``QSpinBox``/``QDoubleSpinBox`` frame hides its up/down arrow buttons unless
-    every sub-control is also restyled (a fragile, cross-platform footgun) — both
-    read fine native next to the flat line edits. Toolbars and palette tiles keep
-    their own scoped stylesheets.
-    """
-    return f"""
-        QPushButton {{ background: {BUTTON_BG}; border: 1px solid {BUTTON_BORDER};
-                       border-radius: 6px; padding: 4px 12px; color: {TEXT}; }}
-        QPushButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
-        QPushButton:pressed {{ background: {PRESSED}; }}
-        QPushButton:default {{ border-color: {ACCENT}; }}
-        QPushButton:disabled {{ color: #aaaaaa; background: #f4f4f4;
-                                border-color: #e6e6e6; }}
-        QLineEdit {{ border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 6px;
-                     background: {SURFACE}; selection-background-color: {ACCENT};
-                     selection-color: white; }}
-        QLineEdit:focus {{ border-color: {ACCENT}; }}
-        QLineEdit:disabled {{ background: #f4f4f4; color: #aaaaaa; }}
-        QCheckBox {{ spacing: 6px; }}
-    """
+# NOTE: there is intentionally no global form-control stylesheet. Dialogs, message
+# boxes, spin boxes, and combo boxes keep their **native** look; only the toolbars
+# (top_toolbar_qss/ribbon_qss) and the Copy buttons (flat_button_qss) are themed.
+# A global QSS cascaded into child dialogs/message boxes and made them non-native,
+# and styling combo/spin sub-controls broke their arrows / crashed offscreen.
