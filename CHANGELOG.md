@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Switches and choke.** Added a Switches category with normally-open (`nos`),
+  normally-closed (`ncs`), and push-button (`push button`) switches, plus a Choke
+  (`cute choke`) inductor.
 - **Battery, cell, and amplifier components.** Added a multi-cell **Battery**
   (`battery`) in Sources, an **Instrumentation Amplifier** (`inst amp`) and a
   **Transconductance Amplifier** (`gm amp`) in Amplifiers. The existing
@@ -20,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Changed
+- **Palette categories tidied.** The **Supplies** category was merged into
+  **Sources** (power rails now live there), and within every category the
+  american-style components are grouped before the european-style ones instead of
+  interleaving.
 - **Harmonized, modern UI theme.** The toolbars, buttons, and dialog form
   controls now share the component palette's flat, light look (white surfaces,
   hairline dividers, muted icons, one soft-blue accent) instead of the previous

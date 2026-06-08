@@ -3016,7 +3016,7 @@
     },
     "vcc": {
       "display_name": "VCC",
-      "category": "Supplies",
+      "category": "Sources",
       "emission": "node",
       "tikz": "vcc",
       "labels": [
@@ -3041,7 +3041,7 @@
     },
     "vdd": {
       "display_name": "VDD",
-      "category": "Supplies",
+      "category": "Sources",
       "emission": "node",
       "tikz": "vdd",
       "labels": [
@@ -3066,7 +3066,7 @@
     },
     "vee": {
       "display_name": "VEE",
-      "category": "Supplies",
+      "category": "Sources",
       "emission": "node",
       "tikz": "vee",
       "labels": [
@@ -3165,7 +3165,7 @@
     },
     "vss": {
       "display_name": "VSS",
-      "category": "Supplies",
+      "category": "Sources",
       "emission": "node",
       "tikz": "vss",
       "labels": [
@@ -6217,6 +6217,158 @@
             1.5,
             0.0
           ]
+        }
+      ]
+    },
+    "nos": {
+      "display_name": "Switch (NO)",
+      "category": "Switches",
+      "emission": "path",
+      "tikz": "nos",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "ncs": {
+      "display_name": "Switch (NC)",
+      "category": "Switches",
+      "emission": "path",
+      "tikz": "ncs",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.05
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "pushbutton": {
+      "display_name": "Push Button",
+      "category": "Switches",
+      "emission": "path",
+      "tikz": "push button",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.1
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "choke": {
+      "display_name": "Choke",
+      "category": "Inductors",
+      "emission": "path",
+      "tikz": "cute choke",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.15
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
         }
       ]
     }

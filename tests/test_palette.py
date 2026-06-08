@@ -40,6 +40,26 @@ def test_builds_with_a_card_per_category():
     assert p._active_cat in cats  # a default active category is selected
 
 
+def test_american_components_sorted_before_european():
+    """Within a category, american-style kinds come before european-style ones."""
+    from app.ui.palette import _is_european_style
+
+    p = _palette()
+    for kinds in p._by_cat.values():
+        styles = [_is_european_style(k) for k in kinds]
+        # No european kind precedes an american one (False sorts before True).
+        assert styles == sorted(styles)
+    # Concretely: the american resistor leads, the european resistor trails.
+    res = p._by_cat["Resistors"]
+    assert res.index("R") < res.index("eR")
+
+
+def test_supplies_merged_into_sources_no_supplies_category():
+    p = _palette()
+    assert "Supplies" not in p._cards
+    assert "vcc" in p._by_cat["Sources"]
+
+
 def test_selecting_a_category_makes_it_active():
     p = _palette()
     target = "Sources" if "Sources" in p._cards else next(iter(p._cards))

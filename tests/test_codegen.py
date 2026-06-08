@@ -82,6 +82,13 @@ def test_battery_and_inst_amp_emit_keywords() -> None:
     assert "node[gm amp" in generate(_schematic(_comp("gmamp")))
 
 
+def test_switches_and_choke_emit_keywords() -> None:
+    assert "to[nos]" in generate(_schematic(_comp("nos")))
+    assert "to[ncs]" in generate(_schematic(_comp("ncs")))
+    assert "to[push button]" in generate(_schematic(_comp("pushbutton")))
+    assert "to[cute choke]" in generate(_schematic(_comp("choke")))
+
+
 # ---------------------------------------------------------------------------
 # Document voltage/current label styles (§7.2)
 # ---------------------------------------------------------------------------

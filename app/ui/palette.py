@@ -51,7 +51,7 @@ _ITEM_COLS = 4
 # CircuiTikZ bipole/tripole classification.
 _CATEGORY_ORDER = [
     "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors",
-    "Amplifiers", "Logic", "Sources", "Instruments", "Grounds", "Supplies",
+    "Amplifiers", "Logic", "Switches", "Sources", "Instruments", "Grounds",
     "Misc", "Annotations", "Drawing",
 ]
 
@@ -126,6 +126,13 @@ def _category_icon(category: str) -> QIcon:
         return qta.icon(name, color="#444")
     except Exception:  # noqa: BLE001 - unknown icon name → no icon
         return QIcon()
+
+
+def _is_european_style(kind: str) -> bool:
+    """True for a european-style component, so the palette can group american
+    symbols together (first) and european ones after. Derived from the CircuiTikZ
+    keyword (every european kind uses an ``european …`` shape keyword)."""
+    return "european" in REGISTRY[kind].tikz_keyword.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +273,10 @@ class ComponentPalette(QWidget):
         self._by_cat: dict[str, list[str]] = defaultdict(list)
         for kind, defn in REGISTRY.items():
             self._by_cat[defn.category].append(kind)
+        # Within each category, keep american-style components together (first),
+        # then european-style ones, instead of jumbling them by registry order.
+        for kinds in self._by_cat.values():
+            kinds.sort(key=lambda k: (_is_european_style(k),))  # stable: keeps order within each group
         self._ordered_cats = [c for c in _CATEGORY_ORDER if c in self._by_cat] + [
             c for c in self._by_cat if c not in _CATEGORY_ORDER
         ]
