@@ -22,18 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   variants, inputs, fonts, styles, or layer applies to every selected component
   as a single undo step. (A mixed-kind selection shows just a count.)
 
+### Fixed
+- **Spin-box arrows restored** — the themed form styling had hidden the up/down
+  arrows on number fields (Inputs, z-order, font size); spin boxes are native
+  again. Reverted the modal dialogs (Preferences, Document Settings) to the
+  native style. The component palette is a touch wider so cards aren't cut off,
+  and the Copy PDF/SVG buttons show a pointer cursor and hover highlight.
+
 ### Changed
 - **Palette categories tidied.** The **Supplies** category was merged into
   **Sources** (power rails now live there), and within every category the
   american-style components are grouped before the european-style ones instead of
   interleaving.
-- **Harmonized, modern UI theme.** The toolbars, buttons, and dialog form
-  controls now share the component palette's flat, light look (white surfaces,
-  hairline dividers, muted icons, one soft-blue accent) instead of the previous
-  native gray/3-D chrome. The top toolbar and left tool ribbon are white with a
-  hairline divider and a soft-blue active-tool state; the Copy PDF/SVG buttons
-  and the dialog inputs/buttons are flat and rounded. Centralized in a new
-  `app/ui/theme.py` design-token module.
+- **Harmonized, modern UI theme.** The toolbars and main-window buttons/inputs
+  now share the component palette's flat, light look (white surfaces, hairline
+  dividers, muted icons, one soft-blue accent) instead of the previous native
+  gray/3-D chrome. The top toolbar and left tool ribbon are white with a hairline
+  divider and a soft-blue active-tool state; the Copy PDF/SVG buttons and the
+  palette/properties line edits are flat and rounded. (Modal dialogs and
+  combo/spin boxes stay native.) Centralized in a new `app/ui/theme.py`
+  design-token module.
 - **Full-height palette.** The component palette now spans the whole window
   height on the left; the CircuiTikZ source and LaTeX preview panels moved into
   the region to its right (no longer running underneath the palette).

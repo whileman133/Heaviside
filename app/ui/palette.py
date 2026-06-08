@@ -44,7 +44,7 @@ from app.components.registry import REGISTRY
 
 _THUMB_SIZE = 34
 _TILE_SIZE = 46
-_PALETTE_WIDTH = 236
+_PALETTE_WIDTH = 256
 _ITEM_COLS = 4
 
 # Preferred category order (spec §5.4) — engineer-facing groups, not the

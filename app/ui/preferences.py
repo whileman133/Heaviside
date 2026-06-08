@@ -29,7 +29,6 @@ from PySide6.QtWidgets import (
 )
 
 from app.preview import tools as _tools
-from app.ui import theme as _theme
 
 # QSettings keys.
 _KEY_AUTO_TEX = "export/auto_tex_on_save"
@@ -156,7 +155,6 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self.setModal(True)
         self.setMinimumWidth(520)  # room for the tool path fields + Browse button
-        self.setStyleSheet(_theme.app_qss())  # match the app's flat form controls
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 16)
