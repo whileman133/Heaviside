@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.schematic.model import LABEL_STYLES, Schematic
+from app.ui import theme as _theme
 
 _STYLE_LABELS = {"american": "American", "european": "European"}
 
@@ -44,6 +45,7 @@ class DocumentSettingsDialog(QDialog):
         self.setWindowTitle("Document Settings")
         self.setModal(True)
         self.setMinimumWidth(420)
+        self.setStyleSheet(_theme.app_qss())  # match the app's flat form controls
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 16)

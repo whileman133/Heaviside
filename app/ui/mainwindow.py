@@ -75,6 +75,7 @@ from app.preview.worker import PreviewWorker
 from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
 from app.ui.palette import ComponentPalette
+from app.ui import theme
 from app.ui.documentsettings import DocumentSettingsDialog
 from app.ui.preferences import Preferences, PreferencesDialog
 from app.ui.properties import PropertiesPanel
@@ -102,11 +103,16 @@ class MainWindow(QMainWindow):
 
         # White window background. Children inherit the Window role, so the
         # central area, panels, splitter gaps, and status bar render white. The
-        # two toolbars keep their explicit gray (they set their own stylesheet),
-        # and input controls are unaffected (they use the Base/Button roles).
+        # toolbars set their own (flat, white) stylesheet.
         pal = self.palette()
         pal.setColor(QPalette.Window, QColor("#ffffff"))
         self.setPalette(pal)
+
+        # Flat form-control language (buttons, line edits, combos, spin boxes,
+        # checkboxes) — cascades to the palette + properties panels. Toolbars and
+        # palette tiles keep their own scoped stylesheets (theme.*), which win for
+        # their subtrees. Dialogs are top-level and apply theme.app_qss() too.
+        self.setStyleSheet(theme.app_qss())
 
         # -- Core objects --------------------------------------------------
         self._scene = SchematicScene()
@@ -329,19 +335,14 @@ class MainWindow(QMainWindow):
         tb = QToolBar("Main")
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        tb.setStyleSheet(
-            "QToolBar { background: #ebebeb; border: none; spacing: 2px; }"
-            "QToolButton { background: transparent; border: none; border-radius: 4px; padding: 3px; }"
-            "QToolButton:hover { background: palette(midlight); }"
-            "QToolButton:pressed { background: palette(mid); }"
-        )
+        tb.setStyleSheet(theme.top_toolbar_qss())
         self.addToolBar(tb)
 
-        self._act_new.setIcon(qta.icon("fa5s.file"))
-        self._act_open.setIcon(qta.icon("fa5s.folder-open"))
-        self._act_save.setIcon(qta.icon("fa5s.save"))
-        self._act_undo.setIcon(qta.icon("fa5s.undo"))
-        self._act_redo.setIcon(qta.icon("fa5s.redo"))
+        self._act_new.setIcon(qta.icon("fa5s.file", color=theme.ICON))
+        self._act_open.setIcon(qta.icon("fa5s.folder-open", color=theme.ICON))
+        self._act_save.setIcon(qta.icon("fa5s.save", color=theme.ICON))
+        self._act_undo.setIcon(qta.icon("fa5s.undo", color=theme.ICON))
+        self._act_redo.setIcon(qta.icon("fa5s.redo", color=theme.ICON))
 
         tb.addAction(self._act_new)
         tb.addAction(self._act_open)
@@ -351,7 +352,7 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_redo)
         tb.addSeparator()
 
-        compile_btn = QAction(qta.icon("fa5s.play"), "Compile", self)
+        compile_btn = QAction(qta.icon("fa5s.play", color=theme.ICON), "Compile", self)
         compile_btn.setShortcut(QKeySequence("Ctrl+Return"))
         compile_btn.triggered.connect(self._on_compile_now)
         tb.addAction(compile_btn)
@@ -360,11 +361,11 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        self._act_help.setIcon(qta.icon("fa5s.question-circle"))
+        self._act_help.setIcon(qta.icon("fa5s.question-circle", color=theme.ICON))
         self._act_help.setToolTip("Keyboard shortcuts & gestures (F1)")
         tb.addAction(self._act_help)
 
-        self._act_report_bug.setIcon(qta.icon("fa5s.bug"))
+        self._act_report_bug.setIcon(qta.icon("fa5s.bug", color=theme.ICON))
         self._act_report_bug.setToolTip("Report a bug (opens GitHub issues)")
         tb.addAction(self._act_report_bug)
 
@@ -384,21 +385,13 @@ class MainWindow(QMainWindow):
         ribbon.setMovable(False)
         ribbon.setToolButtonStyle(Qt.ToolButtonIconOnly)
         ribbon.setIconSize(QSize(22, 22))
-        ribbon.setStyleSheet(
-            "QToolBar { background: #ebebeb; border: none; spacing: 2px; padding: 4px 2px; }"
-            "QToolButton { background: transparent; border: none; border-radius: 4px; padding: 3px;"
-            "              min-width: 32px; min-height: 32px; }"
-            "QToolButton:hover { background: palette(midlight); }"
-            "QToolButton:pressed { background: palette(mid); }"
-            "QToolButton:checked { background: palette(highlight); color: palette(highlighted-text); }"
-            "QToolButton:checked:hover { background: palette(highlight); }"
-        )
+        ribbon.setStyleSheet(theme.ribbon_qss())
         self.addToolBar(Qt.LeftToolBarArea, ribbon)
 
         group = QActionGroup(self)
         group.setExclusive(True)
 
-        self._tool_select = QAction(qta.icon("fa5s.mouse-pointer"), "Select", self)
+        self._tool_select = QAction(qta.icon("fa5s.mouse-pointer", color=theme.ICON), "Select", self)
         self._tool_select.setToolTip("Select  [S / Esc]")
         self._tool_select.setCheckable(True)
         self._tool_select.setChecked(True)
@@ -406,14 +399,14 @@ class MainWindow(QMainWindow):
         group.addAction(self._tool_select)
         ribbon.addAction(self._tool_select)
 
-        self._tool_wire = QAction(qta.icon("fa5s.pen"), "Wire", self)
+        self._tool_wire = QAction(qta.icon("fa5s.pen", color=theme.ICON), "Wire", self)
         self._tool_wire.setToolTip("Wire  [W]")
         self._tool_wire.setCheckable(True)
         self._tool_wire.triggered.connect(self._scene.enter_wire_mode)
         group.addAction(self._tool_wire)
         ribbon.addAction(self._tool_wire)
 
-        self._tool_pan = QAction(qta.icon("fa5s.hand-paper"), "Pan", self)
+        self._tool_pan = QAction(qta.icon("fa5s.hand-paper", color=theme.ICON), "Pan", self)
         self._tool_pan.setToolTip("Pan  [P / Space+drag]")
         self._tool_pan.setCheckable(True)
         self._tool_pan.triggered.connect(self._scene.enter_pan_mode)
@@ -1598,8 +1591,8 @@ class _PreviewPanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
-        copy_pdf = QPushButton(qta.icon("fa5s.copy"), " Copy PDF")
-        copy_svg = QPushButton(qta.icon("fa5s.copy"), " Copy SVG")
+        copy_pdf = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy PDF")
+        copy_svg = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy SVG")
         copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
         copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
         copy_pdf.clicked.connect(self.copy_pdf_requested)

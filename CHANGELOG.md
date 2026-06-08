@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Changed
+- **Harmonized, modern UI theme.** The toolbars, buttons, and dialog form
+  controls now share the component palette's flat, light look (white surfaces,
+  hairline dividers, muted icons, one soft-blue accent) instead of the previous
+  native gray/3-D chrome. The top toolbar and left tool ribbon are white with a
+  hairline divider and a soft-blue active-tool state; the Copy PDF/SVG buttons
+  and the dialog inputs/buttons are flat and rounded. Centralized in a new
+  `app/ui/theme.py` design-token module.
 - **Full-height palette.** The component palette now spans the whole window
   height on the left; the CircuiTikZ source and LaTeX preview panels moved into
   the region to its right (no longer running underneath the palette).

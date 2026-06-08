@@ -1721,11 +1721,21 @@ The **palette spans the full window height** on the left; the canvas + propertie
 and, beneath them, the source/preview strip occupy the region to its right (so the
 source and preview no longer run underneath the palette).
 
-**Window background.** The window background is white: `MainWindow` sets its
-palette `Window` color to `#ffffff`, which child widgets inherit (central area,
-panels, splitter gaps, status bar). The two **toolbars keep their gray** (`#ebebeb`,
-set via their own stylesheets) and input controls are unaffected (they paint
-with the `Base`/`Button` palette roles, not `Window`).
+**Visual language.** A single flat, light theme unifies the chrome with the
+component palette — defined as colour tokens + stylesheet fragments in
+`app/ui/theme.py` (import the tokens; don't hard-code colours). The window
+background is white (`MainWindow` sets its palette `Window` color to `#ffffff`,
+inherited by the central area, panels, splitter gaps, status bar). Both
+**toolbars are white** with a hairline divider (`theme.top_toolbar_qss` /
+`ribbon_qss`), icons tinted `theme.ICON` (`#555`), rounded soft-blue hovers
+(`#e8f0fe`), and the active tool shown as a soft-blue fill (the one accent
+`#5b87f0`) rather than the native highlight. `MainWindow.setStyleSheet(theme.
+app_qss())` applies a flat **form-control** language (buttons as rounded pills,
+line edits/combos/spin boxes with hairline borders and an accent focus ring) that
+cascades to the palette and properties panels; the modal dialogs (Preferences,
+Document Settings) apply `theme.app_qss()` too, since top-level windows don't
+inherit it. Toolbars and palette tiles keep their own scoped stylesheets, which
+win for their subtrees.
 
 **Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
 editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning
@@ -1999,6 +2009,7 @@ heaviside/
 │       ├── mainwindow.py          # MainWindow(QMainWindow)
 │       ├── palette.py             # ComponentPalette(QWidget)
 │       ├── properties.py          # PropertiesPanel(QWidget)
+│       ├── theme.py               # shared design tokens + flat stylesheet fragments
 │       ├── preferences.py         # Preferences (QSettings), PreferencesDialog
 │       ├── documentsettings.py    # DocumentSettingsDialog (per-document v/i styles)
 │       └── sourcepanel.py         # SourcePanel(QWidget)
