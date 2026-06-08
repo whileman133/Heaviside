@@ -87,6 +87,11 @@ def test_switches_and_choke_emit_keywords() -> None:
     assert "to[ncs]" in generate(_schematic(_comp("ncs")))
     assert "to[push button]" in generate(_schematic(_comp("pushbutton")))
     assert "to[cute choke]" in generate(_schematic(_comp("choke")))
+    assert "to[opening switch]" in generate(_schematic(_comp("opening")))
+    assert "to[closing switch]" in generate(_schematic(_comp("closing")))
+    spdt_src = generate(_schematic(_comp("spdt")))
+    assert "node[spdt]" in spdt_src
+    assert "(node_" in spdt_src and ".out 1)" in spdt_src  # leads bridge its terminals
 
 
 # ---------------------------------------------------------------------------

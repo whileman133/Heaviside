@@ -149,6 +149,15 @@ def test_switches_choke_and_merged_categories():
         assert kind in cg._TWO_TERMINAL_KINDS
     assert REGISTRY["choke"].category == "Inductors"
     assert REGISTRY["choke"].tikz_keyword == "cute choke"
+    # opening/closing (2-terminal) and the 3-terminal SPDT switch.
+    for kind, tikz in (("opening", "opening switch"), ("closing", "closing switch")):
+        assert REGISTRY[kind].category == "Switches"
+        assert REGISTRY[kind].tikz_keyword == tikz
+        assert kind in cg._TWO_TERMINAL_KINDS
+    spdt = REGISTRY["spdt"]
+    assert spdt.category == "Switches" and spdt.tikz_keyword == "spdt"
+    assert [p.name for p in spdt.pins] == ["in", "out1", "out2"]
+    assert "spdt" in cg._MULTI_TERMINAL_KINDS
     # Supplies folded into Sources.
     cats = {d.category for d in REGISTRY.values()}
     assert "Supplies" not in cats
