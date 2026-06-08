@@ -607,7 +607,7 @@ Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()
 
 **SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
 
-The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Sources → Instruments → Grounds → Supplies → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components.
+The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Logic → Switches → Sources → Instruments → Grounds → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. (Power-supply rails live in **Sources**; there is no separate Supplies category.) The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, american-style components are listed first and european-style ones after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave.
 
 **American vs. european shapes.** Both conventions are offered as *distinct
 components* sitting side by side in their category, rather than a global toggle:

@@ -141,6 +141,20 @@ def test_european_logic_gates_present():
         assert library.param_spec(kind) is None
 
 
+def test_switches_choke_and_merged_categories():
+    """Switches + choke present; Supplies merged into Sources (no Supplies left)."""
+    for kind, tikz in (("nos", "nos"), ("ncs", "ncs"), ("pushbutton", "push button")):
+        assert REGISTRY[kind].category == "Switches"
+        assert REGISTRY[kind].tikz_keyword == tikz
+        assert kind in cg._TWO_TERMINAL_KINDS
+    assert REGISTRY["choke"].category == "Inductors"
+    assert REGISTRY["choke"].tikz_keyword == "cute choke"
+    # Supplies folded into Sources.
+    cats = {d.category for d in REGISTRY.values()}
+    assert "Supplies" not in cats
+    assert REGISTRY["vcc"].category == "Sources"
+
+
 def test_battery_cell_and_inst_amp_components():
     """Battery (multi-cell), the relabeled single Cell, and the instrumentation /
     transconductance amplifiers are registered with the right kind/category."""
