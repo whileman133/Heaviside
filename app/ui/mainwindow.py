@@ -27,7 +27,7 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QFont, QGuiApplication,
     QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut,
@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -201,6 +202,10 @@ class MainWindow(QMainWindow):
         self._act_copy_png.setShortcut(QKeySequence("Ctrl+Shift+C"))
         self._act_copy_png.triggered.connect(self._on_copy_png)
         file_menu.addAction(self._act_copy_png)
+
+        self._act_copy_pdf = QAction("Copy Figure as PD&F", self)
+        self._act_copy_pdf.triggered.connect(self._on_copy_pdf)
+        file_menu.addAction(self._act_copy_pdf)
 
         self._act_copy_svg = QAction("Copy Figure as S&VG", self)
         self._act_copy_svg.triggered.connect(self._on_copy_svg)
@@ -493,6 +498,8 @@ class MainWindow(QMainWindow):
         bottom_split.addWidget(self._source_panel)
 
         self._preview_panel = _PreviewPanel()
+        self._preview_panel.copy_pdf_requested.connect(self._on_copy_pdf)
+        self._preview_panel.copy_svg_requested.connect(self._on_copy_svg)
         bottom_split.addWidget(self._preview_panel)
 
         # Source stays only as wide as it needs; preview takes the extra room.
@@ -1000,6 +1007,22 @@ class MainWindow(QMainWindow):
             return
         QGuiApplication.clipboard().setImage(image)
         self._status_compile.setText("Copied figure to clipboard (PNG)")
+
+    def _on_copy_pdf(self) -> None:
+        """Copy the compiled figure to the clipboard as PDF (``application/pdf``).
+
+        The compiled PDF is the highest-fidelity vector form; many macOS apps
+        (Keynote, Pages, Preview) paste it directly. Needs ``pdflatex``.
+        """
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Copy failed")
+            return
+        mime = QMimeData()
+        mime.setData("application/pdf", pdf_bytes)
+        QGuiApplication.clipboard().setMimeData(mime)
+        self._status_compile.setText("Copied figure to clipboard (PDF)")
 
     def _on_copy_svg(self) -> None:
         """Copy the compiled figure to the clipboard as vector SVG.
@@ -1531,6 +1554,9 @@ class _PreviewPanel(QWidget):
     to fill the panel while preserving aspect ratio.
     """
 
+    copy_pdf_requested = Signal()
+    copy_svg_requested = Signal()
+
     _MIN_W = 240
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -1562,6 +1588,21 @@ class _PreviewPanel(QWidget):
         self._error_label.setStyleSheet("color: red; font-size: 10px;")
         self._error_label.hide()
         layout.addWidget(self._error_label)
+
+        # Copy-to-clipboard buttons below the preview image.
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 0, 0, 0)
+        btn_row.setSpacing(4)
+        copy_pdf = QPushButton(qta.icon("fa5s.copy"), " Copy PDF")
+        copy_svg = QPushButton(qta.icon("fa5s.copy"), " Copy SVG")
+        copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
+        copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
+        copy_pdf.clicked.connect(self.copy_pdf_requested)
+        copy_svg.clicked.connect(self.copy_svg_requested)
+        btn_row.addStretch(1)
+        btn_row.addWidget(copy_pdf)
+        btn_row.addWidget(copy_svg)
+        layout.addLayout(btn_row)
 
         self._raw_image: QImage | None = None
 
