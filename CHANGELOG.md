@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Multi-component property editing.** Shift-click (or rubber-band) to select
+  several components, and when they're all the **same kind** the property
+  inspector edits **all of them at once** — changing options, rotation, mirror,
+  variants, inputs, fonts, styles, or layer applies to every selected component
+  as a single undo step. (A mixed-kind selection shows just a count.)
+
 ### Changed
 - **Full-height palette.** The component palette now spans the whole window
   height on the left; the CircuiTikZ source and LaTeX preview panels moved into

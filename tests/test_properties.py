@@ -49,3 +49,41 @@ def test_param_section_applies_only_to_parametric_kinds(_app):
     sec = ParamSection()
     assert sec.applies_to(Component(id="a", kind="and", position=(0, 0), rotation=0, options=""))
     assert not sec.applies_to(Component(id="b", kind="R", position=(0, 0), rotation=0, options=""))
+
+
+def test_multi_select_edits_all_same_kind_components(_app):
+    """Binding the panel to several same-kind components edits all of them, as a
+    single undo step; a mixed-kind selection falls back to a count."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import OptionsSection, PropertiesPanel
+
+    scene = SchematicScene()
+    a = scene.place_component("R", (2.0, 0.0))
+    b = scene.place_component("R", (6.0, 0.0))
+
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_components([a.id, b.id])
+    assert panel._header.text().startswith("2 × ")
+
+    opt = next(s for s in panel._sections if isinstance(s, OptionsSection))
+    assert opt._comp_ids == [a.id, b.id]
+    opt._field.setText("l=$R_x$")
+    opt._commit()
+    assert all(c.options == "l=$R_x$" for c in scene.schematic.components)
+
+    scene.undo()  # one step reverts both
+    assert all(c.options == "" for c in scene.schematic.components)
+
+
+def test_multi_select_mixed_kinds_shows_count(_app):
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PropertiesPanel
+
+    scene = SchematicScene()
+    a = scene.place_component("R", (2.0, 0.0))
+    c = scene.place_component("C", (6.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_components([a.id, c.id])
+    assert panel._header.text() == "2 items selected"

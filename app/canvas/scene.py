@@ -25,6 +25,7 @@ Helpers :meth:`scene_to_gu` / :meth:`gu_to_scene` convert between them, and
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import dataclasses
 import uuid
@@ -149,6 +150,9 @@ class SchematicScene(QGraphicsScene):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
         self._stack = UndoStack(self._schematic)
+        # When non-None, _push() accumulates commands here for one MacroCommand
+        # (see batch()); used for multi-component inspector edits.
+        self._batch: list | None = None
 
         # Stateless query helper for wire snapping / hit-testing. Reads the live
         # schematic through a getter so it stays valid across set_schematic().
@@ -357,9 +361,38 @@ class SchematicScene(QGraphicsScene):
             self.schematic_changed.emit()
 
     def _push(self, command) -> None:
+        # While batching (see batch()), accumulate commands instead of applying
+        # them, so a group of edits becomes one MacroCommand / one undo step.
+        if self._batch is not None:
+            self._batch.append(command)
+            return
         self._stack.push(command)
         self._rebuild_items()
         self.schematic_changed.emit()
+
+    @contextlib.contextmanager
+    def batch(self, label: str = "Edit"):
+        """Group all mutations made inside the block into a single undoable step.
+
+        Every scene mutation routes through :meth:`_push`; inside this context
+        those commands are collected and, on exit, applied as one ``MacroCommand``
+        (a single undo entry, one ``_rebuild_items`` + one ``schematic_changed``).
+        Used for multi-component inspector edits. Re-entrant: a nested ``batch``
+        joins the outer one and flushes only at the outermost level. Commands in a
+        batch must be independent (they are applied only on flush), which holds for
+        same-attribute edits across distinct components.
+        """
+        if self._batch is not None:
+            yield  # already batching → join the existing group
+            return
+        self._batch = []
+        try:
+            yield
+        finally:
+            cmds = self._batch
+            self._batch = None
+            if cmds:
+                self._push(cmds[0] if len(cmds) == 1 else MacroCommand(cmds, label))
 
     # ------------------------------------------------------------------
     # Commands triggered by UI/keyboard
