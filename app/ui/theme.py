@@ -36,7 +36,6 @@ def top_toolbar_qss() -> str:
         QToolButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
         QToolButton:pressed {{ background: {PRESSED}; }}
         QToolButton:checked {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
-        QToolBar::separator {{ background: {DIVIDER}; width: 1px; margin: 4px 4px; }}
     """
 
 
@@ -60,9 +59,11 @@ def app_qss() -> str:
     window (cascades to the palette/properties panels) and on each dialog (which,
     as top-level windows, do not inherit the main window's stylesheet).
 
-    Scoped to ``QPushButton`` / ``QLineEdit`` / ``QComboBox`` / spin boxes /
-    ``QCheckBox`` only; toolbars and palette tiles keep their own stylesheets, and
-    the combo drop-down is left native to avoid the classic missing-arrow footgun.
+    Scoped to ``QPushButton`` / ``QLineEdit`` / spin boxes / ``QCheckBox``.
+    ``QComboBox`` is deliberately **left native**: styling it via QSS crashes on
+    teardown under the offscreen QPA platform (Linux/CI), and a native combo still
+    reads fine next to the flat inputs. Toolbars and palette tiles keep their own
+    scoped stylesheets.
     """
     return f"""
         QPushButton {{ background: {BUTTON_BG}; border: 1px solid {BUTTON_BORDER};
@@ -72,13 +73,13 @@ def app_qss() -> str:
         QPushButton:default {{ border-color: {ACCENT}; }}
         QPushButton:disabled {{ color: #aaaaaa; background: #f4f4f4;
                                 border-color: #e6e6e6; }}
-        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
+        QLineEdit, QSpinBox, QDoubleSpinBox {{
             border: 1px solid {BORDER}; border-radius: 5px; padding: 3px 6px;
             background: {SURFACE}; selection-background-color: {ACCENT};
             selection-color: white; }}
-        QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
+        QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
             border-color: {ACCENT}; }}
-        QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled,
-        QDoubleSpinBox:disabled {{ background: #f4f4f4; color: #aaaaaa; }}
+        QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {{
+            background: #f4f4f4; color: #aaaaaa; }}
         QCheckBox {{ spacing: 6px; }}
     """
