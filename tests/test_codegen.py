@@ -82,6 +82,19 @@ def test_battery_and_inst_amp_emit_keywords() -> None:
     assert "node[gm amp" in generate(_schematic(_comp("gmamp")))
 
 
+def test_mirror_emits_mirror_option_for_two_terminal() -> None:
+    """A mirrored two-terminal bipole adds CircuiTikZ's `mirror` key so off-axis
+    features (e.g. an LED's emission arrows) land on the same side as the canvas
+    Flip-X; unmirrored output is unchanged (regression for the canvas/LaTeX
+    mirror mismatch)."""
+    assert "to[leD, mirror]" in generate(_schematic(_comp("leD", mirror=True)))
+    assert "mirror" not in generate(_schematic(_comp("leD", mirror=False)))
+    # With a label the key precedes the label.
+    assert "to[D, mirror, l=$D$]" in generate(
+        _schematic(_comp("D", mirror=True, options="l=$D$"))
+    )
+
+
 def test_switches_and_choke_emit_keywords() -> None:
     assert "to[nos]" in generate(_schematic(_comp("nos")))
     assert "to[ncs]" in generate(_schematic(_comp("ncs")))

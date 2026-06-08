@@ -486,11 +486,19 @@ def _two_terminal_line(
     label_str = _label_args(comp)
     _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
     tikz_kind = defn.tikz_keyword + _suffix
-    to_arg = tikz_kind
-    if label_str:
-        to_arg = f"{tikz_kind}, {label_str}"
 
-    return f"{coord0} to[{to_arg}] {coord1}"
+    # Mirror: the swapped endpoints above already reverse the bipole *along* its
+    # axis (the canvas Flip-X of an asymmetric body, e.g. a diode's direction).
+    # The CircuiTikZ ``mirror`` key adds the *perpendicular* reflection, so a
+    # symbol with off-axis features (an LED's emission arrows) ends up on the same
+    # side as on the canvas: swap (along-axis) ∘ mirror (perpendicular) = Flip-X.
+    opts = [tikz_kind]
+    if comp.mirror:
+        opts.append("mirror")
+    if label_str:
+        opts.append(label_str)
+
+    return f"{coord0} to[{', '.join(opts)}] {coord1}"
 
 
 def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
