@@ -41,6 +41,10 @@ Pre-built apps (always the latest release):
 Or browse all releases (with checksums and release notes) on the
 [Releases page](https://github.com/whileman133/Heaviside/releases).
 
+> **The macOS build is Apple Silicon (arm64) only.** It will not run on an
+> Intel Mac. Intel users can run Heaviside by [building from source](#packaging-a-standalone-app)
+> (`scripts/build.py` produces a native Intel `.app` on an Intel Mac).
+
 > **Works without LaTeX — for the most part.** Drawing, on-canvas typeset
 > equation labels (rendered by a bundled, pure-Python engine), CircuiTikZ source
 > generation, and `.tex` export all work with **no LaTeX installation**.
