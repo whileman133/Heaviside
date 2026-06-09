@@ -61,9 +61,10 @@ _DEFAULT_PROFILE = "heaviside-notary"
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    """Echo and run a command, raising on failure (unless check=False)."""
+    """Echo and run a command, raising on failure (unless check=False is passed)."""
     print("  $ " + " ".join(cmd))
-    return subprocess.run(cmd, check=True, **kw)
+    kw.setdefault("check", True)
+    return subprocess.run(cmd, **kw)
 
 
 def _fail(msg: str) -> "int":
