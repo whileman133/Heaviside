@@ -645,8 +645,13 @@ class ComponentItem(QGraphicsItem):
         x, y = component.position
         self.setPos(x * GRID_PX, y * GRID_PX)
         # Apply rotation and optional horizontal mirror via QTransform.
-        # mirror is applied first (xscale=-1), then rotation — matching the
-        # spec §4.2 "mirror before rotation" convention.
+        # QTransform.scale/rotate pre-multiply the coordinate system, so for a
+        # *point* the operations apply in reverse of the call order: the point is
+        # rotated first, then the global Flip-X (scale(-1,1)). Mirror is thus a
+        # global horizontal flip of the already-rotated component — the
+        # rotate-then-mirror order that component_pin_positions and the code
+        # generator match, keeping a mirrored vertical bipole's terminals in place
+        # (§7 Mirror).
         t = QTransform()
         if component.mirror:
             t.scale(-1.0, 1.0)

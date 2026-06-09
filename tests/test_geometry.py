@@ -61,8 +61,13 @@ def test_local_span_to_world_known_values():
     # CW rotation in Y-down space: 90° maps (2,0) -> (0,2).
     assert local_span_to_world((2.0, 0.0), 90, False) == pytest.approx((0.0, 2.0))
     assert local_span_to_world((2.0, 0.0), 180, False) == pytest.approx((-2.0, 0.0))
-    # Mirror flips the local x first.
+    # Mirror is a global Flip-X applied *after* rotation (negates the rotated
+    # world x). At 0° that reverses the horizontal span; at 90°/270° the span is
+    # vertical (x already 0) so it is left in place — never flipped to the
+    # opposite side as mirror-before-rotation would do.
     assert local_span_to_world((2.0, 0.0), 0, True) == pytest.approx((-2.0, 0.0))
+    assert local_span_to_world((2.0, 0.0), 90, True) == pytest.approx((0.0, 2.0))
+    assert local_span_to_world((2.0, 0.0), 270, True) == pytest.approx((0.0, -2.0))
 
 
 def test_dist2_to_segment_interior_vs_endpoint():

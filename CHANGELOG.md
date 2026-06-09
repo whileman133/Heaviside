@@ -29,13 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was reversed only *along* its axis in the generated CircuiTikZ, so those
   features ended up on the wrong side versus the canvas. Codegen now adds the
   `mirror` key so the perpendicular reflection matches the canvas Flip-X.
-- **Mirrored, rotated components no longer flip the wrong way.** A mirrored
-  two-terminal component at a 90°/270° rotation (e.g. a vertical resistor with a
-  `v=` voltage label) rendered rotated 180° from the canvas — the labels and
-  voltage polarity appeared *vertically* flipped instead of horizontally.
-  Because the canvas Flip-X happens before rotation, such components now swap
-  their `to[…]` endpoints to supply the extra along-axis reversal, so the LaTeX
-  output matches the canvas at every rotation.
+- **Mirroring a rotated two-terminal component no longer detaches it.**
+  Mirroring a vertical (90°/270°) bipole — e.g. the boost converter's load
+  resistor — moved its far terminal to the opposite side of its origin,
+  detaching it from connected wires and rendering it in the wrong place in the
+  LaTeX preview. The mirror is the canvas global Flip-X, which is applied *after*
+  rotation, not before; `component_pin_positions`, `local_span_to_world`, and the
+  code generator now all mirror after rotating, so a mirrored vertical bipole
+  keeps its terminals on their grid cells and the preview matches the canvas at
+  every rotation. (Off-axis symbol features still flip via the `mirror` key.)
 - **Native dialogs, message boxes, and spin boxes.** Dropped the global
   form-control stylesheet that was cascading into the modal dialogs and message
   boxes (making them non-native); they — and spin/combo boxes — now use the

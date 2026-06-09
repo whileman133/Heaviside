@@ -70,10 +70,11 @@ def snap_point_gu(pt: QPointF) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 #
 # A two-terminal component stores its terminal offset as a *local* span; the
-# terminal's world position is that span mirrored (about the local x-axis) then
-# rotated clockwise (Qt's Y-down convention). These two helpers are exact
-# inverses of each other's rotation step and were previously copy-pasted three
-# times inside the scene's endpoint-drag code.
+# terminal's world position is that span rotated clockwise (Qt's Y-down
+# convention) and then horizontally mirrored (a global Flip-X applied outermost,
+# matching the canvas QTransform). These two helpers are exact inverses of each
+# other's rotation step and were previously copy-pasted three times inside the
+# scene's endpoint-drag code.
 
 def world_delta_to_local(dx_w: float, dy_w: float, rotation: int) -> tuple[float, float]:
     """Map a world-space delta back into a component's local span axes.
@@ -96,20 +97,26 @@ def local_span_to_world(
 ) -> tuple[float, float]:
     """Map a component-local span to its world-space terminal offset.
 
-    Applies mirror about the local x-axis first, then a clockwise rotation
-    (Y-down), matching ``component_pin_positions`` in the model.
+    Applies a clockwise rotation (Y-down) first, then the horizontal mirror —
+    matching the canvas ``QTransform`` (``scale(-1,1)`` is applied *outermost*,
+    i.e. a global Flip-X of the already-rotated component) and
+    ``component_pin_positions`` in the model. Mirroring *after* rotation keeps a
+    bipole's terminals on their grid cells for every rotation; mirroring before
+    would move the far terminal to the opposite side of the origin at 90°/270°.
     """
     sdx, sdy = span
-    if mirror:
-        sdx = -sdx
     r = rotation % 360
     if r == 90:
-        return (-sdy, sdx)
-    if r == 180:
-        return (-sdx, -sdy)
-    if r == 270:
-        return (sdy, -sdx)
-    return (sdx, sdy)
+        rx, ry = (-sdy, sdx)
+    elif r == 180:
+        rx, ry = (-sdx, -sdy)
+    elif r == 270:
+        rx, ry = (sdy, -sdx)
+    else:
+        rx, ry = (sdx, sdy)
+    if mirror:
+        rx = -rx
+    return (rx, ry)
 
 
 # ---------------------------------------------------------------------------

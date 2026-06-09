@@ -462,15 +462,14 @@ def _two_terminal_line(
 
     base_span = comp.span_override if comp.span_override is not None else defn.default_span
     dx, dy = _rotate(base_span, comp.rotation)
+    # Mirror is the canvas global Flip-X applied *after* rotation (negate the
+    # rotated world x), matching ``component_pin_positions``. Mirroring before
+    # rotation would move the far terminal across the origin at 90°/270° and
+    # detach it from connected wires.
+    if comp.mirror:
+        dx = -dx
     x1 = x0 + dx
     y1 = y0 + dy
-
-    if comp.mirror:
-        mdx, mdy = base_span
-        mdx = -mdx
-        dx, dy = _rotate((mdx, mdy), comp.rotation)
-        x1 = x0 + dx
-        y1 = y0 + dy
 
     def _ref(x: float, y: float) -> str:
         if pin_coord_to_ref:
@@ -483,29 +482,15 @@ def _two_terminal_line(
     coord0 = _ref(x0, y0)
     coord1 = _ref(x1, y1)
 
-    # Mirror + rotation: the canvas applies Flip-X (``scale(-1,1)``) *before*
-    # rotating, i.e. it reflects across the **global** x-axis. In the bipole's own
-    # frame that reflection lands on a different axis depending on the rotation
-    # parity:
-    #   * rotation ≡ 0 (mod 180) — the global Flip-X reflects *across* the bipole
-    #     axis, which the CircuiTikZ ``mirror`` key reproduces directly.
-    #   * rotation ≡ 90 (mod 180) — the global Flip-X reflects *along* the axis,
-    #     i.e. it additionally reverses the bipole's direction. ``mirror`` alone
-    #     would leave the symbol rotated 180° from the canvas (the bug where a
-    #     mirrored, 90°-rotated resistor rendered vertically flipped). Swapping the
-    #     two endpoints supplies that extra along-axis reversal.
-    # The endpoints are the same two pin coordinates either way, so wires still
-    # connect; only their order in ``to[...]`` changes.
-    if comp.mirror and comp.rotation % 180 == 90:
-        coord0, coord1 = coord1, coord0
-
     label_str = _label_args(comp)
     _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
     tikz_kind = defn.tikz_keyword + _suffix
 
-    # The CircuiTikZ ``mirror`` key reflects the symbol across its own axis (the
-    # perpendicular reflection); combined with the endpoint order chosen above it
-    # reproduces the canvas Flip-X for every rotation.
+    # The endpoints above already place the bipole on the canvas Flip-X axis with
+    # the correct along-axis direction (mirror applied after rotation, §7 Mirror).
+    # The CircuiTikZ ``mirror`` key supplies the remaining *perpendicular*
+    # reflection, so off-axis features (an LED's emission arrows, a voltage
+    # label's side) land where the canvas Flip-X puts them at every rotation.
     opts = [tikz_kind]
     if comp.mirror:
         opts.append("mirror")

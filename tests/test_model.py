@@ -256,6 +256,34 @@ def test_wire_on_quarter_grid_is_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Mirror is applied after rotation (canvas global Flip-X)
+# ---------------------------------------------------------------------------
+
+def test_mirror_after_rotation_keeps_vertical_bipole_pins() -> None:
+    """``component_pin_positions`` mirrors *after* rotation, matching the canvas
+    ``QTransform`` (``scale(-1,1)`` outermost). A vertical (90°/270°) bipole sits
+    on the Flip-X axis, so mirroring leaves both terminals on their cells —
+    mirroring *before* rotation would flip the far terminal across the origin,
+    detaching connected wires (the boost converter load-resistor bug)."""
+    for rot in (90, 270):
+        plain = Component(id=_uid(), kind="R", position=(4.0, 4.0), rotation=rot,
+                          options="", mirror=False)
+        mirrored = Component(id=_uid(), kind="R", position=(4.0, 4.0), rotation=rot,
+                             options="", mirror=True)
+        assert component_pin_positions(plain) == component_pin_positions(mirrored)
+
+
+def test_mirror_after_rotation_horizontal_bipole_reverses() -> None:
+    """At 0°/180° the bipole lies along the Flip-X direction, so mirroring does
+    reverse it across the origin (matching the canvas) — the far terminal's x is
+    negated about the component origin."""
+    r = Component(id=_uid(), kind="R", position=(4.0, 4.0), rotation=0,
+                  options="", mirror=True)
+    # Origin pin fixed at (4,4); far pin at (4-2, 4) instead of (4+2, 4).
+    assert component_pin_positions(r) == [(4.0, 4.0), (2.0, 4.0)]
+
+
+# ---------------------------------------------------------------------------
 # test_wire_diagonal
 # ---------------------------------------------------------------------------
 

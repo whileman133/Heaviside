@@ -156,7 +156,14 @@ class DragPreviewController:
             return None
         comp = item.component
         ox, oy = comp.position
-        dx, dy = world_delta_to_local(gu[0] - ox, gu[1] - oy, comp.rotation)
+        wdx, wdy = gu[0] - ox, gu[1] - oy
+        # Invert the same rotate-then-mirror transform local_span_to_world
+        # applies (§7 Mirror): undo the global Flip-X (negate world x) first, then
+        # the rotation, so the dragged terminal of a mirrored component lands
+        # under the cursor.
+        if comp.mirror:
+            wdx = -wdx
+        dx, dy = world_delta_to_local(wdx, wdy, comp.rotation)
         return item, comp, dx, dy
 
     # ------------------------------------------------------------------

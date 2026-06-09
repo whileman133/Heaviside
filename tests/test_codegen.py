@@ -95,26 +95,46 @@ def test_mirror_emits_mirror_option_for_two_terminal() -> None:
     )
 
 
-def test_mirror_endpoint_order_depends_on_rotation_parity() -> None:
-    """The canvas Flip-X happens *before* rotation, so a mirrored bipole at a
-    90°/270° rotation needs its ``to[...]`` endpoints swapped (an extra along-axis
-    reversal) on top of the ``mirror`` key — otherwise it renders rotated 180°
-    from the canvas. Regression for a mirrored, rotated resistor appearing
-    vertically flipped in the LaTeX preview.
+def test_mirror_terminal_placement_matches_canvas_flip_x() -> None:
+    """Mirror is the canvas global Flip-X applied *after* rotation, so the far
+    terminal is the rotated span with its world x negated — never the
+    mirror-before-rotation result, which lands on the opposite side at 90°/270°.
 
-    Endpoints are the same two pin coordinates regardless of order, so wires still
-    connect; only their order changes. (No Y-flip here — pure model coordinates.)
+    The emitted endpoints (after ``generate`` shifts the figure to the origin)
+    place the bipole exactly where the canvas draws it, so connected wires stay
+    attached. (No Y-flip here — pure model coordinates.)
     """
     def line(rot: int) -> str:
         src = generate(_schematic(_comp("R", rotation=rot, mirror=True, options="l=$R$")))
         return next(ln.strip() for ln in src.splitlines() if "to[" in ln)
 
-    # Even parity (0/180): natural order — the position pin trails as coord1.
+    # rot 0/180: horizontal bipole — Flip-X reverses it along its own axis.
     assert line(0) == "(2,0) to[R, mirror, l=$R$] (0,0)"
     assert line(180) == "(0,0) to[R, mirror, l=$R$] (2,0)"
-    # Odd parity (90/270): endpoints swapped so the symbol is not 180°-rotated.
+    # rot 90/270: vertical bipole — Flip-X leaves the on-axis terminals in place
+    # (the span is unchanged from the unmirrored component), only the symbol's
+    # perpendicular features flip via the ``mirror`` key.
     assert line(90) == "(0,0) to[R, mirror, l=$R$] (0,2)"
     assert line(270) == "(0,2) to[R, mirror, l=$R$] (0,0)"
+
+
+def test_mirror_at_90_keeps_two_terminal_wire_connected() -> None:
+    """Mirroring a vertical (90°) two-terminal component must keep its ``to[...]``
+    endpoints on the same grid cells as the unmirrored one, so a wire joined to
+    the far terminal stays attached. Regression: the boost converter's vertical
+    load resistor detached from the ground rail when mirrored because codegen
+    mirrored *before* rotating, flipping the far terminal across the origin."""
+    def endpoints(mirror: bool) -> str:
+        r = _comp("R", position=(4.0, 4.0), rotation=90, mirror=mirror)
+        # A wire from the far terminal (4,6) down to ground.
+        w = _wire([(4.0, 6.0), (4.0, 8.0)])
+        src = generate(_schematic(r, wires=[w]))
+        return next(ln.strip() for ln in src.splitlines() if "to[" in ln)
+
+    # The resistor spans the same two cells whether or not it is mirrored; the
+    # mirror only adds the ``mirror`` key.
+    assert endpoints(False) == "(0,0) to[R] (0,2)"
+    assert endpoints(True) == "(0,0) to[R, mirror] (0,2)"
 
 
 def test_switches_and_choke_emit_keywords() -> None:

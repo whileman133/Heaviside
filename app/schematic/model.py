@@ -404,12 +404,16 @@ def route(
 
 
 def component_pin_positions(component: "Component") -> list[tuple[float, float]]:
-    """Absolute (mirror-then-rotate) pin coordinates of *component*, in GU.
+    """Absolute (rotate-then-mirror) pin coordinates of *component*, in GU.
 
     Pin offsets live in the registry relative to the component origin; this
-    applies the same mirror-then-clockwise-rotate transform the canvas and code
-    generator use, so connectivity tests operate in schematic coordinates.
-    Returns an empty list for an unknown kind.
+    applies the same clockwise-rotate-then-horizontal-mirror transform the canvas
+    ``QTransform`` and code generator use, so connectivity tests operate in
+    schematic coordinates. Mirroring *after* rotation (a global Flip-X of the
+    rotated component) keeps a bipole's terminals on their grid cells at every
+    rotation — mirroring before rotation would relocate the far terminal at
+    90°/270°, detaching it from connected wires. Returns an empty list for an
+    unknown kind.
     """
     # Lazy import avoids a cycle during package construction.
     from app.components.registry import REGISTRY
@@ -435,8 +439,6 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             and component.span_override is not None
         ):
             dx, dy = component.span_override
-        if component.mirror:
-            dx = -dx
         r = component.rotation % 360
         if r == 90:
             rx, ry = (-dy, dx)
@@ -446,6 +448,8 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             rx, ry = (dy, -dx)
         else:
             rx, ry = (dx, dy)
+        if component.mirror:
+            rx = -rx
         out.append((ox + rx, oy + ry))
     return out
 
