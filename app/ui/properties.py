@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFormLayout,
     QPushButton,
     QSpinBox,
     QFrame,
@@ -63,7 +64,7 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
-from app.schematic.model import Component
+from app.schematic.model import Component, LABEL_STYLES
 
 _PANEL_WIDTH = 250
 
@@ -156,6 +157,9 @@ class _HopModeCheckBox(QCheckBox):
 
 def _make_section_label(text: str) -> QLabel:
     lbl = QLabel(text)
+    # Tagged so PropertiesPanel.apply_theme can re-ink it on a light/dark swap
+    # (a stylesheet pins the colour, so it would otherwise not follow the theme).
+    lbl.setObjectName("sectionLabel")
     lbl.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {theme.ICON};")
     return lbl
 
@@ -166,6 +170,21 @@ def _make_separator() -> QFrame:
     sep.setFrameShape(QFrame.HLine)
     sep.setFrameShadow(QFrame.Sunken)
     return sep
+
+
+def _reink_themed_labels(widget: QWidget) -> None:
+    """Re-apply the themed colour to every tagged label under *widget* on a
+    light/dark swap. A stylesheet pins each label's colour (so it won't follow the
+    window palette), so the header / section / hint labels are restyled in place by
+    object-name tag. Field-row labels carry no stylesheet and follow the palette."""
+    for lbl in widget.findChildren(QLabel):
+        name = lbl.objectName()
+        if name == "headerLabel":
+            lbl.setStyleSheet(f"font-weight: bold; font-size: 13px; color: {theme.TEXT};")
+        elif name == "sectionLabel":
+            lbl.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {theme.ICON};")
+        elif name == "hintLabel":
+            lbl.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
 
 
 def _make_rotation_row(
@@ -416,8 +435,9 @@ class InspectorSection(QWidget):
         outer.setSpacing(6)
         self._top_sep = _make_separator()
         outer.addWidget(self._top_sep)
-        if self.title:
-            outer.addWidget(_make_section_label(self.title))
+        self._title_label = _make_section_label(self.title) if self.title else None
+        if self._title_label is not None:
+            outer.addWidget(self._title_label)
         self.body = QVBoxLayout()
         self.body.setSpacing(6)
         outer.addLayout(self.body)
@@ -498,6 +518,7 @@ class OptionsSection(InspectorSection):
         self.body.addWidget(self._field)
 
         self._hint = QLabel()
+        self._hint.setObjectName("hintLabel")
         self._hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
         self._hint.setWordWrap(True)
         self.body.addWidget(self._hint)
@@ -562,15 +583,17 @@ class BipoleLabelSection(InspectorSection):
         self._label_field.textChanged.connect(lambda _t: self._timer.start())
         self.body.addWidget(self._label_field)
 
-        self.body.addWidget(_make_section_label("Other CircuiTikZ options"))
+        self._opts_sublabel = _make_section_label("Other CircuiTikZ options")
+        self.body.addWidget(self._opts_sublabel)
         self._opts_field = QLineEdit()
         self._opts_field.setPlaceholderText("e.g. l=$H(s)$, v=$V_o$")
         self._opts_field.textChanged.connect(lambda _t: self._timer.start())
         self.body.addWidget(self._opts_field)
 
-        hint = QLabel("Slots: l, l_, v, v^, i, i_")
-        hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
-        self.body.addWidget(hint)
+        self._hint = QLabel("Slots: l, l_, v, v^, i, i_")
+        self._hint.setObjectName("hintLabel")
+        self._hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
+        self.body.addWidget(self._hint)
 
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -1150,6 +1173,106 @@ class LayerSection(InspectorSection):
 
 
 # ---------------------------------------------------------------------------
+# Document properties (per-document CircuiTikZ conventions)
+# ---------------------------------------------------------------------------
+
+_STYLE_LABELS = {"american": "American", "european": "European"}
+
+
+class DocumentPropertiesPanel(QWidget):
+    """Per-document properties — the CircuiTikZ voltage/current **label styles**
+    (american / european), stored on the :class:`Schematic` and travelling with
+    the ``.hv`` file (spec §10.3 / §7.2).
+
+    Replaces the former modal *Document Settings* dialog: edits apply **live**
+    (each change mutates the schematic and emits :attr:`document_changed`, which
+    the main window turns into a relayout + recompile). It is the second tab of
+    the inspector, shown automatically when nothing is selected.
+    """
+
+    document_changed = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedWidth(_PANEL_WIDTH)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self._scene: SchematicScene | None = None
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 6, 6, 6)
+        outer.setSpacing(6)
+
+        self._header = QLabel("Document")
+        self._header.setObjectName("headerLabel")
+        self._header.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: {theme.TEXT};"
+        )
+        outer.addWidget(self._header)
+        outer.addWidget(_make_separator())
+
+        outer.addWidget(_make_section_label("CircuiTikZ conventions"))
+        form = QFormLayout()
+        form.setSpacing(8)
+        self._voltage = self._style_combo()
+        self._current = self._style_combo()
+        form.addRow("Voltage labels", self._voltage)
+        form.addRow("Current labels", self._current)
+        outer.addLayout(form)
+
+        hint = QLabel(
+            "Arrow convention for voltage (<tt>v=</tt>) and current (<tt>i=</tt>) "
+            "labels in this document — emitted as a picture-scoped "
+            "<tt>\\ctikzset{voltage=…, current=…}</tt>, so it also applies to the "
+            "exported figure. Stored in the .hv file."
+        )
+        hint.setObjectName("hintLabel")
+        hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
+        hint.setWordWrap(True)
+        outer.addWidget(hint)
+        outer.addStretch(1)
+
+        self._voltage.currentIndexChanged.connect(self._on_change)
+        self._current.currentIndexChanged.connect(self._on_change)
+
+    def _style_combo(self) -> QComboBox:
+        combo = QComboBox()
+        for style in LABEL_STYLES:
+            combo.addItem(_STYLE_LABELS.get(style, style), style)
+        return combo
+
+    def set_scene(self, scene: SchematicScene) -> None:
+        self._scene = scene
+        self.refresh()
+
+    def refresh(self) -> None:
+        """Reload the combos from the current document (e.g. after New/Open)."""
+        if self._scene is None:
+            return
+        sch = self._scene.schematic
+        for combo, value in ((self._voltage, sch.voltage_style),
+                             (self._current, sch.current_style)):
+            combo.blockSignals(True)
+            idx = combo.findData(value if value in LABEL_STYLES else "american")
+            combo.setCurrentIndex(max(0, idx))
+            combo.blockSignals(False)
+
+    def apply_theme(self) -> None:
+        _reink_themed_labels(self)
+
+    def _on_change(self) -> None:
+        if self._scene is None:
+            return
+        sch = self._scene.schematic
+        voltage = self._voltage.currentData()
+        current = self._current.currentData()
+        if voltage == sch.voltage_style and current == sch.current_style:
+            return
+        sch.voltage_style = voltage
+        sch.current_style = current
+        self.document_changed.emit()
+
+
+# ---------------------------------------------------------------------------
 # Outer container
 # ---------------------------------------------------------------------------
 
@@ -1174,20 +1297,33 @@ class PropertiesPanel(QWidget):
         outer.setSpacing(6)
 
         self._header = QLabel("No selection")
-        self._header.setStyleSheet("font-weight: bold; font-size: 13px;")
+        self._header.setObjectName("headerLabel")
+        self._header.setStyleSheet(
+            f"font-weight: bold; font-size: 13px; color: {theme.TEXT};"
+        )
         self._header.setWordWrap(True)
         outer.addWidget(self._header)
 
         outer.addWidget(_make_separator())
 
-        # Scrollable column of sections.
+        # Scrollable column of sections. The QScrollArea otherwise paints an
+        # opaque `Base` fill (white on the native style) for its viewport, which
+        # reads as a distinct inset box; the Document tab looks "clear" because it
+        # is a plain transparent widget showing the tab pane. Make the viewport and
+        # content **transparent** (object-name-scoped so the rule does not cascade
+        # onto the native form controls) so the body shows the pane like the
+        # Document tab. A scoped stylesheet on a scroll widget de-natives its
+        # scrollbars, so we theme them cleanly (matching the source panel, §10.4).
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.viewport().setObjectName("inspViewport")
         outer.addWidget(scroll)
 
         content = QWidget()
+        content.setObjectName("inspContent")
         col = QVBoxLayout(content)
         # Reserve room on the right so the vertical scrollbar never overlaps the
         # section fields (macOS overlay scrollbars float over the content).
@@ -1215,9 +1351,27 @@ class PropertiesPanel(QWidget):
 
         col.addStretch(1)
         scroll.setWidget(content)
+        self._apply_scroll_style()
+
+    def _apply_scroll_style(self) -> None:
+        """Transparent viewport/content (so the body shows the tab pane like the
+        Document tab) plus a clean themed scrollbar. Re-applied on a theme swap so
+        the scrollbar colours follow. The ``#id`` selectors keep the transparency
+        off the native form controls."""
+        self._scroll.setStyleSheet(
+            "QScrollArea { background: transparent; border: none; }"
+            "#inspViewport, #inspContent { background: transparent; }"
+            + theme.scrollbar_qss()
+        )
 
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
+
+    def apply_theme(self) -> None:
+        """Re-ink the inspector's themed text and refresh the scroll style for a
+        light/dark swap (called by MainWindow._apply_theme)."""
+        _reink_themed_labels(self)
+        self._apply_scroll_style()
 
     def show_component(self, comp_id: str) -> None:
         """Bind every section that applies to the selected component; hide the rest."""

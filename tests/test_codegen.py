@@ -145,8 +145,12 @@ def test_switches_and_choke_emit_keywords() -> None:
     assert "to[opening switch]" in generate(_schematic(_comp("opening")))
     assert "to[closing switch]" in generate(_schematic(_comp("closing")))
     spdt_src = generate(_schematic(_comp("spdt")))
-    assert "node[spdt]" in spdt_src
-    assert "(node_" in spdt_src and ".out 1)" in spdt_src  # leads bridge its terminals
+    # The SPDT is an anchor-pinned (at `in`) scaled node, like the MOSFET/BJT: its
+    # xscale/yscale land the out anchors on the grid, so no bridge leads are
+    # needed (the out terminals connect at the scaled node anchors directly).
+    assert "node[spdt" in spdt_src
+    assert "anchor=in" in spdt_src
+    assert "xscale=" in spdt_src and "yscale=" in spdt_src
 
 
 # ---------------------------------------------------------------------------

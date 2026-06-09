@@ -76,23 +76,72 @@ def test_auto_export_disabled_writes_nothing(tmp_path):
     assert not any(out.with_suffix(s).exists() for s in (".tex", ".pdf", ".eps", ".svg"))
 
 
-def test_document_settings_dialog_writes_styles():
-    """Accepting Document Settings writes the chosen styles onto the schematic."""
-    from app.schematic.model import Schematic
-    from app.ui.documentsettings import DocumentSettingsDialog
+def test_document_panel_writes_styles_live():
+    """The Document inspector tab writes the chosen styles onto the schematic live
+    and signals the change (it replaced the modal Document Settings dialog)."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import DocumentPropertiesPanel
 
-    s = Schematic(version="0.2", name="t")
-    dlg = DocumentSettingsDialog(s)
-    dlg._voltage.setCurrentIndex(dlg._voltage.findData("european"))
-    dlg._on_accept()
-    assert s.voltage_style == "european"
-    assert s.current_style == "american"
-    assert dlg.changed() is True
+    scene = SchematicScene()
+    panel = DocumentPropertiesPanel()
+    panel.set_scene(scene)               # combos load from the (american) document
+    assert panel._voltage.currentData() == "american"
 
-    # Accepting with no change reports changed() == False (caller skips recompile).
-    dlg2 = DocumentSettingsDialog(s)
-    dlg2._on_accept()
-    assert dlg2.changed() is False
+    changed = []
+    panel.document_changed.connect(lambda: changed.append(True))
+    panel._voltage.setCurrentIndex(panel._voltage.findData("european"))
+
+    assert scene.schematic.voltage_style == "european"
+    assert scene.schematic.current_style == "american"
+    assert changed == [True]
+
+    # refresh() reloads the combos from the document (e.g. after Open) silently.
+    scene.schematic.current_style = "european"
+    panel.refresh()
+    assert panel._current.currentData() == "european"
+    assert changed == [True]   # refresh does not re-emit
+
+
+def test_inspector_tabs_switch_with_selection(tmp_path):
+    """The inspector surfaces the Document tab when nothing is selected and the
+    Properties tab when something is (the Document tab replaced the old dialog)."""
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None  # no real LaTeX
+    try:
+        labels = [win._inspector_tabs.tabText(i)
+                  for i in range(win._inspector_tabs.count())]
+        assert labels == ["Properties", "Document"]
+
+        win._on_selection_changed([])                       # nothing selected
+        assert win._inspector_tabs.currentWidget() is win._doc_props
+
+        comp = win._scene.place_component("R", (2.0, 2.0))   # select something
+        win._on_selection_changed([comp.id])
+        assert win._inspector_tabs.currentWidget() is win._props
+
+        win._on_selection_changed([])                        # deselect → Document
+        assert win._inspector_tabs.currentWidget() is win._doc_props
+    finally:
+        win._modified = False   # avoid the unsaved-changes prompt on close
+        win.close()
+
+
+def test_document_tab_edit_relayouts_and_marks_modified(tmp_path):
+    """Editing a style in the Document tab re-lays out annotations and refreshes
+    via schematic_changed (the live replacement for Document Settings…)."""
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None  # no real LaTeX
+    try:
+        fired = []
+        win._scene.schematic_changed.connect(lambda: fired.append(True))
+        win._doc_props._voltage.setCurrentIndex(
+            win._doc_props._voltage.findData("european")
+        )
+        assert win._scene.schematic.voltage_style == "european"
+        assert fired  # schematic_changed emitted → source/preview refresh + modified
+    finally:
+        win._modified = False   # avoid the unsaved-changes prompt on close
+        win.close()
 
 
 class _FakeClipboard:
@@ -204,6 +253,41 @@ def test_apply_theme_switches_both_palettes(tmp_path):
         assert theme._LIGHT["SURFACE"] in win._toolbar.styleSheet()
     finally:
         # Never leak the dark palette into other tests.
+        style.set_dark(False)
+        theme.set_dark(False)
+
+
+def test_toolbar_dark_toggle(tmp_path):
+    """The toolbar light/dark toggle flips the theme and pins it: once toggled it
+    stops following the OS appearance (a one-way opt-out within the session)."""
+    from app.canvas import style
+    from app.ui import theme
+
+    win = _win(tmp_path)
+    try:
+        win._dark = False
+        win._follow_system = True
+        win._sync_dark_action()
+
+        win._act_dark.setChecked(True)  # user flips it on
+        assert win._dark is True
+        assert style.is_dark() and theme.is_dark()
+        assert win._follow_system is False  # no longer tracks the OS
+
+        # An OS change is now ignored (manual choice wins).
+        win._on_color_scheme_changed()
+        assert win._dark is True
+
+        # The palette search box and canvas scrollbars are themed explicitly (so
+        # they follow the toolbar toggle even when the OS is in light mode).
+        assert theme._DARK["SURFACE_ALT"] in win._palette._search.styleSheet()
+        assert "QScrollBar" in win._view.styleSheet()
+
+        win._act_dark.setChecked(False)  # flip back to light
+        assert win._dark is False
+        assert not style.is_dark() and not theme.is_dark()
+        assert theme._LIGHT["SURFACE_ALT"] in win._palette._search.styleSheet()
+    finally:
         style.set_dark(False)
         theme.set_dark(False)
 

@@ -26,6 +26,7 @@ from app.schematic.model import (
     unconnected_pins,
     route,
     simplify_points,
+    wire_contained_by_others,
     wire_crossings,
     wire_fraction_at_point,
     wire_point_at_fraction,
@@ -1011,3 +1012,28 @@ def test_self_crossing_ignored() -> None:
 
 def test_hop_radius_constant_positive() -> None:
     assert HOP_RADIUS_GU > 0
+
+
+# ---------------------------------------------------------------------------
+# wire_contained_by_others (redundant fully-contained wire — §6.4)
+# ---------------------------------------------------------------------------
+
+def test_wire_contained_by_others() -> None:
+    """A wire whose whole polyline lies on top of other wires is redundant."""
+    long_h = _wire([(0.0, 0.0), (4.0, 0.0)], id="long")
+    # A shorter collinear wire inside it is contained; the longer one is not.
+    assert wire_contained_by_others([(1.0, 0.0), (3.0, 0.0)], [long_h]) is True
+    assert wire_contained_by_others(long_h.points, [_wire([(1.0, 0.0), (3.0, 0.0)])]) is False
+    # An identical overlap is contained (one of a coincident pair is redundant).
+    assert wire_contained_by_others([(0.0, 0.0), (4.0, 0.0)], [long_h]) is True
+    # Covered by the *union* of two collinear wires meeting end-to-end.
+    halves = [_wire([(0.0, 0.0), (2.0, 0.0)]), _wire([(2.0, 0.0), (4.0, 0.0)])]
+    assert wire_contained_by_others([(0.0, 0.0), (4.0, 0.0)], halves) is True
+    # A gap in the cover means not contained.
+    assert wire_contained_by_others([(0.0, 0.0), (4.0, 0.0)], halves[:1]) is False
+    # An L-wire is contained only when *both* legs are covered.
+    legs = [_wire([(0.0, 0.0), (2.0, 0.0)]), _wire([(2.0, 0.0), (2.0, 2.0)])]
+    assert wire_contained_by_others([(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)], legs) is True
+    assert wire_contained_by_others([(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)], legs[:1]) is False
+    # A single-point (other-degenerate) wire is not handled here.
+    assert wire_contained_by_others([(0.0, 0.0)], [long_h]) is False

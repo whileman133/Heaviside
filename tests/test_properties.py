@@ -87,3 +87,33 @@ def test_multi_select_mixed_kinds_shows_count(_app):
     panel.set_scene(scene)
     panel.show_components([a.id, c.id])
     assert panel._header.text() == "2 items selected"
+
+
+def test_apply_theme_reinks_labels(_app):
+    """PropertiesPanel.apply_theme re-inks the header / section / hint labels for a
+    light↔dark swap (their stylesheets pin the colour, so they would otherwise stay
+    light when the toolbar toggle forces dark; §10)."""
+    from app.ui.properties import PropertiesPanel
+    from app.canvas.scene import SchematicScene
+    from app.ui import theme
+
+    try:
+        scene = SchematicScene()
+        comp = scene.place_component("R", (2.0, 2.0))
+        panel = PropertiesPanel()
+        panel.set_scene(scene)
+        panel.show_component(comp.id)  # populates header + section/hint labels
+
+        theme.set_dark(True)
+        panel.apply_theme()
+        assert theme._DARK["TEXT"] in panel._header.styleSheet()
+        secs = [l for l in panel.findChildren(QLabel) if l.objectName() == "sectionLabel"]
+        hints = [l for l in panel.findChildren(QLabel) if l.objectName() == "hintLabel"]
+        assert secs and all(theme._DARK["ICON"] in l.styleSheet() for l in secs)
+        assert all(theme._DARK["ICON_MUTED"] in l.styleSheet() for l in hints)
+
+        theme.set_dark(False)
+        panel.apply_theme()
+        assert theme._LIGHT["TEXT"] in panel._header.styleSheet()
+    finally:
+        theme.set_dark(False)

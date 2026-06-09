@@ -32,7 +32,7 @@ import uuid
 from enum import Enum, auto
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QTransform
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QTransform
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
@@ -275,6 +275,13 @@ class SchematicScene(QGraphicsScene):
             fn = getattr(it, "retypeset", None)
             if callable(fn):
                 fn()
+
+    def relayout_annotations(self) -> None:
+        """Re-lay out every component's per-side slot labels and voltage/current
+        decorations. Used after the document voltage/current style changes (§7.2)
+        so the ± signs / arrows on existing components update without reopening."""
+        for it in self._comp_items.values():
+            it._sync_options_item()
 
     def set_schematic(self, schematic: Schematic) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
@@ -2073,41 +2080,50 @@ class SchematicScene(QGraphicsScene):
         painter.fillRect(rect, QColor(style.COLOR_BACKGROUND))
         super().drawBackground(painter, rect)
 
-        grid_sub = QColor(style.COLOR_GRID_SUB)
-        grid_fine = QColor(style.COLOR_GRID_FINE)
+        # A dotted grid (a dot at each lattice intersection) instead of full
+        # ruled lines, so the grid orients the eye without competing with the
+        # schematic ink. Dots are stroked at a constant *device* size (a
+        # round-cap pen of fixed width), so they stay crisp and small at every
+        # zoom level rather than ballooning with the view transform.
+        scale = painter.worldTransform().m11() or 1.0  # device px per scene px
+        # On-screen spacing of the integer lattice; used to decide whether the
+        # 0.25 GU minor dots are dense enough to drop (keeps zoomed-out views
+        # readable and cheap — no point drawing a smear of overlapping dots).
+        cell_px = GRID_PX * abs(scale)
 
         left = int(rect.left()) - (int(rect.left()) % int(GRID_PX))
         top = int(rect.top()) - (int(rect.top()) % int(GRID_PX))
 
-        # Minor grid: lines at every 0.25 GU within each integer cell. The 0.5
-        # midline is drawn a touch stronger than the 0.25/0.75 lines so the
-        # unit cell stays readable on the denser lattice.
-        for frac in (0.25, 0.5, 0.75):
-            pen = QPen(grid_sub if frac == 0.5 else grid_fine)
-            pen.setWidth(0)
-            painter.setPen(pen)
-            off = GRID_PX * frac
-            x = left
-            while x < rect.right():
-                painter.drawLine(QPointF(x + off, rect.top()), QPointF(x + off, rect.bottom()))
-                x += GRID_PX
+        # Draw in device coordinates so the dots are a fixed pixel size.
+        painter.save()
+        painter.setWorldMatrixEnabled(False)
+        t = painter.worldTransform()
+
+        def _dots(step: float, color: str, dot_px: float) -> None:
+            pts = []
             y = top
             while y < rect.bottom():
-                painter.drawLine(QPointF(rect.left(), y + off), QPointF(rect.right(), y + off))
-                y += GRID_PX
+                x = left
+                while x < rect.right():
+                    pts.append(t.map(QPointF(x, y)))
+                    x += step
+                y += step
+            pen = QPen(QColor(color))
+            pen.setWidthF(dot_px)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            painter.drawPoints(QPolygonF(pts))
 
-        # Integer grid — normal weight.
-        main_pen = QPen(QColor(style.COLOR_GRID))
-        main_pen.setWidth(0)
-        painter.setPen(main_pen)
-        x = left
-        while x < rect.right():
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-            x += GRID_PX
-        y = top
-        while y < rect.bottom():
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-            y += GRID_PX
+        # Minor dots at every 0.25 GU — small and a touch fainter than the
+        # integer dots, drawn whenever the minor cells are large enough on screen
+        # to read as distinct dots (skip only when very zoomed out, to avoid a
+        # dense smear). The integer dots are then drawn over them, larger.
+        if cell_px * 0.25 >= 5.0:
+            _dots(GRID_PX * 0.25, style.COLOR_GRID_SUB, 1.6)
+        # Integer-lattice dots — a touch larger/stronger so the unit cell reads.
+        _dots(GRID_PX, style.COLOR_GRID, 2.4)
+
+        painter.restore()
 
 
 # _component_pin_positions is the canonical implementation in app.schematic.model.

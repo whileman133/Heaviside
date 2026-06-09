@@ -87,10 +87,12 @@ def test_selecting_a_category_makes_it_active():
 
 def test_in_use_section_tracks_document():
     p = _palette()
-    assert p._in_use.isHidden()  # empty document → hidden
+    # The "in use" section now lives in a pinned bottom panel (independent
+    # scroll); its visibility is driven through that panel.
+    assert p._in_use_panel.isHidden()  # empty document → hidden
     p._scene.place_component("R", (2.0, 0.0))
     p._refresh_in_use()
-    assert not p._in_use.isHidden()  # now shows the placed kind
+    assert not p._in_use_panel.isHidden()  # now shows the placed kind
 
 
 def test_search_switches_to_results():
@@ -174,3 +176,21 @@ def test_grounds_uses_g_shortcut():
     assert p._active_cat == "Logic (Am)"
     assert p.select_category_by_letter("E")
     assert p._active_cat == "Logic (Eu)"
+
+
+def test_category_names_follow_dark_theme():
+    """Category card names are re-inked on a light/dark swap (their stylesheet pins
+    the colour, so apply_theme must rebuild them with the new token; §10)."""
+    from PySide6.QtWidgets import QLabel
+    from app.ui import theme
+
+    p = _palette()
+    try:
+        theme.set_dark(True)
+        p.apply_theme()
+        card = next(iter(p._cards.values()))
+        labels = card.findChildren(QLabel)
+        assert any(theme._DARK["TEXT"] in lbl.styleSheet() for lbl in labels)
+    finally:
+        theme.set_dark(False)
+        p.apply_theme()

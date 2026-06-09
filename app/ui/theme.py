@@ -151,6 +151,19 @@ def icon_button_qss() -> str:
     """
 
 
+def line_edit_qss() -> str:
+    """A themed ``QLineEdit`` (e.g. the palette search box). Native line edits
+    follow the OS appearance, but the toolbar light/dark toggle can put the app in
+    a mode the OS isn't in, so the search box is themed explicitly to match the
+    surrounding chrome. The clear-button icon is left to the platform."""
+    return f"""
+        QLineEdit {{ background: {SURFACE_ALT}; border: 1px solid {BORDER};
+                     border-radius: 5px; padding: 3px 6px; color: {TEXT};
+                     selection-background-color: {HOVER}; }}
+        QLineEdit:focus {{ border-color: {ACCENT}; }}
+    """
+
+
 def scrollbar_qss() -> str:
     """A clean, minimal scrollbar: a rounded muted handle, a transparent track,
     and no arrow buttons. Once any stylesheet is active on a scroll widget its
@@ -171,8 +184,11 @@ def scrollbar_qss() -> str:
     """
 
 
-# NOTE: there is intentionally no global form-control stylesheet. Dialogs, message
-# boxes, spin boxes, and combo boxes keep their **native** look; only the toolbars
-# (top_toolbar_qss/ribbon_qss) and the Copy buttons (flat_button_qss) are themed.
-# A global QSS cascaded into child dialogs/message boxes and made them non-native,
-# and styling combo/spin sub-controls broke their arrows / crashed offscreen.
+# NOTE: form controls, dialogs, message boxes, tooltips, and tab bars are kept
+# **native** and follow the OS appearance — and, when the user forces a mode with
+# the toolbar toggle, the application colour scheme is driven via
+# ``QGuiApplication.styleHints().setColorScheme`` (MainWindow._apply_color_scheme),
+# so those native widgets re-render dark/light themselves. Restyling them via a
+# stylesheet made them look non-native (and a window-level stylesheet broke the
+# palette-based window background), so only the deliberately-flat chrome (toolbars,
+# palette, side panels, scrollbars) and the canvas are themed by stylesheet/tokens.

@@ -50,6 +50,12 @@ _THUMB_SIZE = 48
 _TILE_SIZE = 64
 _PALETTE_WIDTH = 272
 _ITEM_COLS = 3
+# Height cap (px) for the pinned "in use in document" panel — about three rows of
+# tiles; beyond that it scrolls independently rather than crowding the categories.
+_IN_USE_MAX_H = 232
+# Approximate height (px) of a _CollapsibleSection header (the bold toggle row),
+# used to size the pinned panel deterministically from its tile-grid geometry.
+_IN_USE_HEADER_H = 26
 
 # Preferred category order (spec §5.4) — engineer-facing groups, not the
 # CircuiTikZ bipole/tripole classification. The palette splits the raw "Logic"
@@ -290,10 +296,18 @@ class _CategoryCard(QFrame):
         icon.setFixedSize(20, 20)
         icon.setAlignment(Qt.AlignCenter)
         icon.setPixmap(_category_pixmap(category, 20))
+        # Transparent so the card's own fill shows through (a stylesheet'd QLabel
+        # would otherwise paint an opaque palette box behind the glyph/text).
+        icon.setStyleSheet("background: transparent; border: none;")
         row.addWidget(icon)
         text = QLabel(f"{category}")
         text.setToolTip(f"{count} component{'s' if count != 1 else ''}")
-        text.setStyleSheet("border: none; font-size: 11px;")
+        # Explicit theme ink so the name follows a light/dark swap (the cards are
+        # rebuilt by _build_categories on apply_theme, picking up the new token);
+        # transparent background so it doesn't draw a box over the card.
+        text.setStyleSheet(
+            "border: none; background: transparent; font-size: 11px; color: %s;" % theme.TEXT
+        )
         row.addWidget(text, 1)
         letter = _CATEGORY_LETTERS.get(category)
         if letter:
@@ -383,12 +397,14 @@ class ComponentPalette(QWidget):
         # swallow the palette letter/number hotkeys; Ctrl+/ still focuses it
         # (programmatic setFocus works regardless of the click-focus policy).
         self._search.setFocusPolicy(Qt.ClickFocus)
+        self._search.setStyleSheet(theme.line_edit_qss())
         self._search.textChanged.connect(self._on_search)
         outer.addWidget(self._search)
         focus = QShortcut(QKeySequence("Ctrl+/"), self)
         focus.setContext(Qt.WindowShortcut)
         focus.activated.connect(self._search.setFocus)
 
+        # Top (scrolling) region: categories / active-category / search results.
         scroll = QScrollArea()
         self._scroll = scroll
         scroll.setWidgetResizable(True)
@@ -410,18 +426,55 @@ class ComponentPalette(QWidget):
         self._content.setSpacing(4)
         scroll.setWidget(content)
 
-        self._in_use = _CollapsibleSection("IN USE IN DOCUMENT")
         self._categories = _CollapsibleSection("CATEGORIES")
         self._active = _CollapsibleSection(self._active_cat.upper())
         self._results = _CollapsibleSection("SEARCH RESULTS")
-        for sec in (self._in_use, self._categories, self._active, self._results):
+        for sec in (self._categories, self._active, self._results):
             self._content.addWidget(sec)
         self._content.addStretch(1)
+
+        # Bottom (pinned) region: "in use in document", scrolling independently of
+        # the categories above so the user always has the placed kinds at hand
+        # (spec §10.2). A hairline divider separates it from the scroll region; the
+        # whole panel hides when there is nothing in use (or while searching).
+        self._in_use = _CollapsibleSection("IN USE IN DOCUMENT")
+        self._in_use_expanded_h = _IN_USE_HEADER_H
+        self._in_use._toggle.toggled.connect(self._on_in_use_toggled)
+        self._in_use_panel = QWidget()
+        panel_v = QVBoxLayout(self._in_use_panel)
+        panel_v.setContentsMargins(0, 0, 0, 0)
+        panel_v.setSpacing(0)
+        self._in_use_divider = QFrame()
+        self._in_use_divider.setFrameShape(QFrame.HLine)
+        self._in_use_divider.setFixedHeight(1)
+        self._in_use_divider.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
+        panel_v.addWidget(self._in_use_divider)
+
+        in_use_scroll = QScrollArea()
+        self._in_use_scroll = in_use_scroll
+        in_use_scroll.setWidgetResizable(True)
+        in_use_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        in_use_scroll.setFrameShape(QFrame.NoFrame)
+        in_use_scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
+        in_use_scroll.setStyleSheet(theme.scrollbar_qss())
+        in_use_host = QWidget()
+        self._in_use_host = in_use_host
+        in_use_host.setObjectName("in_use_content")
+        in_use_host.setStyleSheet(
+            "QWidget#in_use_content { background-color: %s; }" % theme.SURFACE
+        )
+        in_use_v = QVBoxLayout(in_use_host)
+        in_use_v.setContentsMargins(0, 0, 2, 0)
+        in_use_v.setSpacing(0)
+        in_use_v.addWidget(self._in_use)
+        in_use_scroll.setWidget(in_use_host)
+        panel_v.addWidget(in_use_scroll)
+        outer.addWidget(self._in_use_panel)   # unstretched → pinned at the bottom
 
         self._build_categories()
         self._rebuild_active()
         self._results.setVisible(False)
-        self._in_use.setVisible(False)
+        self._in_use_panel.setVisible(False)
 
     # -- public API ------------------------------------------------------
 
@@ -512,8 +565,26 @@ class ComponentPalette(QWidget):
         self._clear(body)
         if kinds:
             body.addWidget(_grid(kinds, self._place))
-        # Hidden when empty, and while a search is active (results take over).
-        self._in_use.setVisible(bool(kinds) and not self._search.text().strip())
+        # The pinned bottom panel is hidden when empty, and while a search is
+        # active (the results grid takes over the scroll region above).
+        visible = bool(kinds) and not self._search.text().strip()
+        self._in_use_panel.setVisible(visible)
+        if visible:
+            # Size the bottom scroll to its content, capped so it never crowds the
+            # categories; past the cap it scrolls on its own. Computed from the
+            # tile-grid geometry (header + rows of tiles) rather than a sizeHint,
+            # which is unreliable before the panel has been laid out/shown.
+            rows = (len(kinds) + _ITEM_COLS - 1) // _ITEM_COLS
+            content_h = _IN_USE_HEADER_H + rows * (_TILE_SIZE + 2) + 6
+            self._in_use_expanded_h = min(content_h, _IN_USE_MAX_H)
+            self._on_in_use_toggled(self._in_use._toggle.isChecked())
+
+    def _on_in_use_toggled(self, expanded: bool) -> None:
+        """Shrink the pinned panel to just its header when collapsed, so a
+        collapsed section doesn't leave a tall band of empty space."""
+        self._in_use_scroll.setFixedHeight(
+            self._in_use_expanded_h if expanded else _IN_USE_HEADER_H
+        )
 
     # -- search ----------------------------------------------------------
 
@@ -546,11 +617,18 @@ class ComponentPalette(QWidget):
         self.setStyleSheet(
             "ComponentPalette { background-color: %s; }" % theme.SURFACE
         )
+        self._search.setStyleSheet(theme.line_edit_qss())
         self._scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
         self._scroll.setStyleSheet(theme.scrollbar_qss())
         self._content_host.setStyleSheet(
             "QWidget#palette_content { background-color: %s; }" % theme.SURFACE
         )
+        self._in_use_scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
+        self._in_use_scroll.setStyleSheet(theme.scrollbar_qss())
+        self._in_use_host.setStyleSheet(
+            "QWidget#in_use_content { background-color: %s; }" % theme.SURFACE
+        )
+        self._in_use_divider.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
         for sec in (self._in_use, self._categories, self._active, self._results):
             sec.apply_theme()
         self._build_categories()

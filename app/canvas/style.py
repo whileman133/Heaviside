@@ -53,9 +53,9 @@ _LIGHT = {
     "COLOR_PIN":        "#FFCC0000",   # dark red (pin indicator dots)
     "COLOR_BACKGROUND": "#FFFFFFFF",   # canvas paper; also backs labels / markers
     "COLOR_LABEL_BG":   "#FFFFFFFF",   # opaque backdrop behind typeset labels
-    "COLOR_GRID":       "#FFD0D0D0",   # integer grid lines
-    "COLOR_GRID_SUB":   "#22808080",   # 0.5 GU midline (reduced opacity)
-    "COLOR_GRID_FINE":  "#11808080",   # 0.25/0.75 GU minor lines (faintest)
+    "COLOR_GRID":       "#FFBFBFBF",   # integer-lattice dots (stronger)
+    "COLOR_GRID_SUB":   "#FFDCDCDC",   # 0.25 GU minor dots (lighter, still visible)
+    "COLOR_GRID_FINE":  "#FFDCDCDC",   # (kept as an alias of the minor dot colour)
 }
 _DARK = {
     "COLOR_NORMAL":     "#FFE6E6E6",   # near-white ink on a dark canvas
@@ -65,9 +65,9 @@ _DARK = {
     "COLOR_PIN":        "#FFFF6B6B",   # lighter red
     "COLOR_BACKGROUND": "#FF1E1F22",   # dark canvas paper
     "COLOR_LABEL_BG":   "#FF1E1F22",   # backdrop matches the dark canvas
-    "COLOR_GRID":       "#FF3A3C42",   # subtle light-on-dark integer lines
-    "COLOR_GRID_SUB":   "#22A0A0A0",
-    "COLOR_GRID_FINE":  "#11A0A0A0",
+    "COLOR_GRID":       "#FF60636B",   # integer-lattice dots (light on dark)
+    "COLOR_GRID_SUB":   "#FF44464D",   # 0.25 GU minor dots (dimmer, still visible)
+    "COLOR_GRID_FINE":  "#FF44464D",
 }
 
 # Active values — module globals, defaulting to light. ``set_dark`` rebinds them.

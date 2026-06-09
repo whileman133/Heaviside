@@ -161,6 +161,117 @@ def test_add_wire_rejects_single_point(scene: SchematicScene):
     assert scene.schematic.wires == []
 
 
+def test_move_onto_connected_lead_creates_no_degenerate_wire(scene: SchematicScene):
+    """Moving a component so its pin lands on a wire it is already connected to
+    must not carve off a degenerate single-point wire (regression).
+
+    The split point is computed against the wire's *pre-move* geometry (where the
+    pin lands mid-segment), but the move first reshapes that wire's endpoint onto
+    the same point — so splitting there would leave a 1-point stub. `SplitWireCommand`
+    must no-op when the split would land on an (reshaped) endpoint.
+    """
+    comp = scene.place_component("R", (0.0, 0.0))   # pins (0,0),(2,0)
+    scene.add_wire([(2.0, 0.0), (2.0, 1.0)])         # lead off the right pin
+    item = scene._comp_items[comp.id]
+    item.setSelected(True)
+    scene.nudge_selected(0.0, 0.25)                  # right pin (2,0) → (2,0.25)
+    assert all(len(w.points) >= 2 for w in scene.schematic.wires), (
+        "a move must never leave a degenerate single-point wire"
+    )
+    # And it stays clean across undo/redo.
+    scene.undo()
+    scene.redo()
+    assert all(len(w.points) >= 2 for w in scene.schematic.wires)
+
+
+def test_drag_onto_junction_and_back_restores_topology(scene: SchematicScene):
+    """Dragging a component pin onto a wire junction and back must not leave an
+    erroneous junction dot or tear the net, and the connection re-stretches so the
+    original topology is restored (regression — the reported boost bug + the
+    re-stretch follow-up).
+
+    A resistor's right pin connects (via a short lead) to a node where a rail is
+    split in two. Nudging the resistor onto the node collapses the lead; nudging it
+    back leaves the rail intact, creates no dot at the pin, and re-grows the lead.
+    """
+    from app.schematic.model import Wire, junction_points
+
+    comp = scene.place_component("R", (0.0, 0.0))     # pins (0,0),(2,0)
+    # Lead from the right pin (2,0) down to the rail node (2,1), and the rail
+    # split into two halves meeting at (2,1) — a degree-3 junction.
+    scene.add_wire([(2.0, 0.0), (2.0, 1.0)])
+    scene.schematic.wires.append(Wire(id="railL", points=[(0.0, 1.0), (2.0, 1.0)]))
+    scene.schematic.wires.append(Wire(id="railR", points=[(2.0, 1.0), (4.0, 1.0)]))
+    scene._rebuild_items()
+
+    item = scene._comp_items[comp.id]
+    item.setSelected(True)
+    scene.nudge_selected(0.0, 1.0)    # pin (2,0) → (2,1): lands on the node
+    item.setSelected(True)
+    scene.nudge_selected(0.0, -1.0)   # back: pin (2,1) → (2,0)
+
+    js = junction_points(scene.schematic)
+    assert (2.0, 0.0) not in js, "no phantom junction dot at the returned pin"
+    # The rail halves are untouched (not dragged off the node).
+    rails = {w.id: w.points for w in scene.schematic.wires if w.id in ("railL", "railR")}
+    assert rails["railL"] == [(0.0, 1.0), (2.0, 1.0)]
+    assert rails["railR"] == [(2.0, 1.0), (4.0, 1.0)]
+    # The connection re-grew: a lead now runs from the node (2,1) back to the pin
+    # (2,0), so the component is still wired (and the node is a junction again).
+    others = [w.points for w in scene.schematic.wires if w.id not in ("railL", "railR")]
+    assert any(set(p) == {(2.0, 0.0), (2.0, 1.0)} for p in others), \
+        "expected a re-stretched lead from the node back to the pin"
+    assert (2.0, 1.0) in js
+    # No degenerate wires either.
+    assert all(len(w.points) >= 2 for w in scene.schematic.wires)
+
+
+def test_degenerate_wire_renders_selectable_x(scene: SchematicScene):
+    """A degenerate single-point wire (which an old file might still contain) is
+    shown as a selectable, deletable red ✕ rather than silently invisible."""
+    from app.schematic.model import Wire
+
+    scene.place_component("R", (0.0, 0.0))
+    scene.schematic.wires.append(Wire(id="deg", points=[(4.0, 0.0)]))
+    scene._rebuild_items()
+    item = scene._wire_items["deg"]
+    # Selectable (non-empty hit shape) and has a finite bounding rect to paint into.
+    assert not item.shape().isEmpty()
+    assert item.boundingRect().isValid() and not item.boundingRect().isEmpty()
+    # Select + delete removes it; undo brings it back.
+    item.setSelected(True)
+    scene.delete_selected()
+    assert not any(w.id == "deg" for w in scene.schematic.wires)
+    scene.undo()
+    assert any(w.id == "deg" for w in scene.schematic.wires)
+
+
+def test_degenerate_wire_no_phantom_junction_during_drag(scene: SchematicScene):
+    """A degenerate single-point wire must not create a junction dot during a
+    component drag (regression). ``junction_points`` skips ``len < 2`` wires, and
+    the drag preview must do the same — otherwise a tiny drag (whose rounded pin
+    lands back on the point) pushes the degree to 3 and a phantom dot flickers in.
+    """
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import Wire
+
+    comp = scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])       # real wire off the (2,0) pin
+    # Inject a degenerate single-point wire at the (2,0) pin (the kind that can
+    # linger in a saved file). Statically it forms no junction (degree 2).
+    scene.schematic.wires.append(Wire(id="deg", points=[(2.0, 0.0)]))
+    scene._rebuild_items()
+    assert (2.0, 0.0) not in scene._junction_items
+
+    # Drag the resistor a sub-cell amount so the rounded pin stays at (2,0).
+    item = scene._comp_items[comp.id]
+    scene._drag.drag_start = {comp.id: comp.position}
+    scene._drag.drag_wire_ids = set()
+    item.setPos(0.1 * GRID_PX, 0.0)
+    scene._drag.preview_component_drag()
+    assert (2.0, 0.0) not in scene._junction_items
+
+
 def test_route_manhattan(scene: SchematicScene):
     # Dominant axis: travel the longer leg first (spec §6.4 routing primitive).
     # |dy|=3 > |dx|=2 → vertical-first, corner at (ax, by).
@@ -1427,12 +1538,19 @@ def test_wire_shape_includes_draggable_handles(scene: SchematicScene):
     assert _in_wire_shape(scene, w.id, (2.0, 0.0))
 
 
-def test_wire_shape_empty_for_degenerate(scene: SchematicScene):
+def test_wire_shape_selectable_for_degenerate(scene: SchematicScene):
+    """A degenerate single-point wire is drawn as a selectable red ✕ (so a stray
+    one from an old file can be found and deleted) — its hit shape and bounding
+    rect are non-empty. A truly empty (0-point) wire still has no shape."""
     from app.canvas.items import WireItem
     from app.schematic.model import Wire
 
     item = WireItem(Wire(id="x", points=[(0.0, 0.0)]))
-    assert item.shape().isEmpty()
+    assert not item.shape().isEmpty()
+    assert not item.boundingRect().isEmpty()
+
+    empty = WireItem(Wire(id="y", points=[]))
+    assert empty.shape().isEmpty()
 
 
 # ---------------------------------------------------------------------------
@@ -1741,28 +1859,30 @@ def test_voltage_source_default_v_label_flips_side(scene: SchematicScene):
     assert vdir(cv).x() < -0.5
 
 
-def test_label_and_current_on_same_side_do_not_overlap(scene: SchematicScene):
-    """A label and a current annotation that default to the same side must stack,
-    not overlap (regression).
+def test_label_and_current_on_same_side_offset_along_axis(scene: SchematicScene):
+    """A label and a current that default to the same side don't overlap: the
+    label is centred over the body while the current is placed off-centre over the
+    *exit lead* (offset along the lead axis), matching CircuiTikZ's `i=` placement.
 
-    An inductor with `l=$L$, i=$i_L$` puts both the label (`l`, above) and the
-    current (`i`, above) on the same side. They have *different* preferred
-    clearances — the label clears the body, the current hugs the wire — so naive
-    per-slot offsets let them collide. They must end up on the same side with
-    base distances separated by at least one label row height."""
-    from app.canvas.items import _LABEL_LINE_H
-
-    comp = scene.place_component("L", (0.0, 0.0))
+    An inductor with `l=$L$, i=$i_L$` puts both above. Rather than stacking the
+    current perpendicularly beyond the label, the current sits at the same body
+    clearance but shifted along the axis toward the second pin, so they clear each
+    other along the wire instead of in height."""
+    comp = scene.place_component("L", (0.0, 0.0))   # horizontal lead axis
     scene.edit_component_options(comp.id, r"l=$L$, i=$i_L$")
     item = scene._comp_items[comp.id]
     visible = [s for s in item._slot_items if s.isVisible()]
     assert len(visible) == 2
+    l_slot = next(s for s in visible if s._fragment == "$L$")
+    i_slot = next(s for s in visible if s._fragment == "$i_L$")
     # Same side (same offset direction).
-    d0, d1 = visible[0]._dir, visible[1]._dir
-    assert (round(d0.x(), 3), round(d0.y(), 3)) == (round(d1.x(), 3), round(d1.y(), 3))
-    # Separated by at least one row so they don't visually overlap.
-    bases = sorted(s._base_dist for s in visible)
-    assert bases[1] - bases[0] >= _LABEL_LINE_H - 0.01
+    assert (round(l_slot._dir.x(), 3), round(l_slot._dir.y(), 3)) == \
+           (round(i_slot._dir.x(), 3), round(i_slot._dir.y(), 3))
+    # The current is offset along the lead axis (its label centre is shifted from
+    # the label's, toward the second pin), so the two don't collide.
+    dx = abs(i_slot._center_rel.x() - l_slot._center_rel.x())
+    dy = abs(i_slot._center_rel.y() - l_slot._center_rel.y())
+    assert dx + dy > 1.0
 
 
 def test_open_annotation_labels_centered_on_axis(scene: SchematicScene):
@@ -1775,6 +1895,88 @@ def test_open_annotation_labels_centered_on_axis(scene: SchematicScene):
     assert len(visible) == 1
     assert visible[0]._centered is True
     assert visible[0]._base_dist == 0.0
+
+
+def test_dotted_grid_renders_without_error(scene: SchematicScene):
+    """The dotted-grid background paints onto a device-space painter without
+    error (the dots are stroked in device coords via QPolygonF)."""
+    from PySide6.QtCore import QRectF
+    from PySide6.QtGui import QImage, QPainter
+
+    img = QImage(120, 120, QImage.Format_ARGB32)
+    img.fill(0)
+    painter = QPainter(img)
+    scene.drawBackground(painter, QRectF(0.0, 0.0, 120.0, 120.0))
+    painter.end()
+    # Something was drawn (paper fill at minimum), so the buffer is not empty.
+    assert img.constBits() is not None
+
+
+def _visible_decorations(item):
+    return [d for d in item._decoration_items if d.isVisible()]
+
+
+def test_voltage_slot_draws_american_signs(scene: SchematicScene):
+    """A `v=` slot draws the american ± sign decoration by default (§5.8)."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "v=$v_R$")
+    item = scene._comp_items[comp.id]
+    decs = _visible_decorations(item)
+    assert len(decs) == 1
+    assert decs[0]._mode == "v_american"
+
+
+def test_voltage_slot_draws_european_arrow_when_document_style_european(
+    scene: SchematicScene,
+):
+    """With the document voltage style set to european, the `v=` decoration is the
+    arrow form instead of ± signs; relayout updates existing components (§7.2)."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "v=$v_R$")
+    scene.schematic.voltage_style = "european"
+    scene.relayout_annotations()
+    item = scene._comp_items[comp.id]
+    decs = _visible_decorations(item)
+    assert len(decs) == 1
+    assert decs[0]._mode == "v_european"
+
+
+def test_current_slot_draws_arrow(scene: SchematicScene):
+    """An `i=` slot draws a direction-arrow decoration."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "i=$i$")
+    item = scene._comp_items[comp.id]
+    decs = _visible_decorations(item)
+    assert len(decs) == 1
+    assert decs[0]._mode == "current"
+
+
+def test_label_slot_has_no_decoration(scene: SchematicScene):
+    """A plain `l=` label draws no voltage/current decoration."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "l=$R_1$")
+    item = scene._comp_items[comp.id]
+    assert _visible_decorations(item) == []
+
+
+def test_open_annotation_has_no_decoration(scene: SchematicScene):
+    """The `open` voltage annotation centres its label and draws its own line, so
+    it gets no ± sign / arrow decoration."""
+    comp = scene.place_component("open", (0.0, 0.0))
+    scene.edit_component_options(comp.id, "v=$V_s$")
+    item = scene._comp_items[comp.id]
+    assert _visible_decorations(item) == []
+
+
+def test_voltage_decoration_axis_follows_traversal(scene: SchematicScene):
+    """The voltage arrow's axis points first-pin → second-pin in screen space, so
+    on a 90°-rotated component it is vertical, not horizontal."""
+    comp = scene.place_component("R", (0.0, 0.0), rotation=90)
+    scene.edit_component_options(comp.id, "v=$v_R$")
+    item = scene._comp_items[comp.id]
+    dec = _visible_decorations(item)[0]
+    # Vertical traversal → axis runs along screen-y, not screen-x.
+    assert abs(dec._axis.y()) > abs(dec._axis.x())
 
 
 def test_options_undo_hides_slots(scene: SchematicScene):

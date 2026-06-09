@@ -82,6 +82,18 @@ def test_all_pins_on_quarter_grid() -> None:
             )
 
 
+def test_spdt_pins_anchor_aligned() -> None:
+    """The SPDT switch is an anchor-pinned (at `in`) scaled node whose anchors
+    land on the grid (regression for misaligned pins/leads): `in` at the origin,
+    the two throws one GU to the right at ±0.25 GU, and a derived xscale/yscale.
+    """
+    defn = REGISTRY["spdt"]
+    offsets = {p.name: tuple(p.offset) for p in defn.pins}
+    assert offsets["in"] == (0.0, 0.0)
+    assert offsets["out1"] == (1.0, -0.25)
+    assert offsets["out2"] == (1.0, 0.25)
+
+
 # ---------------------------------------------------------------------------
 # test_default_span_matches_terminal_pin
 # ---------------------------------------------------------------------------

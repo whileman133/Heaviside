@@ -50,10 +50,12 @@ from app.canvas.items import (
     JunctionDragItem,
     JunctionItem,
     OpenCircleItem,
+    WireItem,
     _ResizableTwoTerminalItem,
 )
 from app.schematic.model import (
     NON_CONNECTING_KINDS,
+    Wire,
     component_connection_points,
     component_pin_positions,
     route,
@@ -102,6 +104,11 @@ class DragPreviewController:
         # Wire ids currently showing a drag-preview (during a component drag),
         # so they can be cleared precisely on release.
         self.previewed_wire_ids: set[str] = set()
+
+        # Ghost wire items for the "re-stretch" leads grown while a pin is dragged
+        # off a multi-wire junction (mirrors MoveCommand so the preview matches the
+        # committed result). Transient; cleared when the drag preview is cleared.
+        self._restretch_ghosts: list[WireItem] = []
 
     # ------------------------------------------------------------------
     # Gesture status
@@ -433,18 +440,31 @@ class DragPreviewController:
             set(self.drag_start.keys()) >= {c.id for c in scene._schematic.components}
         )
 
+        # Endpoint multiplicity per coordinate — mirrors MoveCommand so a pin on a
+        # multi-wire junction disconnects (rather than dragging the whole net) in
+        # the live preview too, keeping it consistent with the committed move.
+        endpoint_count: dict[tuple[float, float], int] = {}
+        for w in scene._schematic.wires:
+            if len(w.points) < 2:
+                continue
+            endpoint_count[_round_pt(w.points[0])] = endpoint_count.get(_round_pt(w.points[0]), 0) + 1
+            endpoint_count[_round_pt(w.points[-1])] = endpoint_count.get(_round_pt(w.points[-1]), 0) + 1
+
         previewed: set[str] = set()
         for wire in scene._schematic.wires:
             pts = wire.points
             if len(pts) < 2:
                 continue
             # Mirror MoveCommand._reshape_wires exactly: selected wires and
-            # all_dragged both force a rigid translate so free endpoints follow.
+            # all_dragged both force a rigid translate so free endpoints follow;
+            # otherwise an endpoint follows only when it is its pin's sole lead.
             if all_dragged or wire.id in self.drag_wire_ids:
                 start_hit = end_hit = True
             else:
-                start_hit = _round_pt(pts[0]) in start_pins
-                end_hit = _round_pt(pts[-1]) in start_pins
+                start_hit = (_round_pt(pts[0]) in start_pins
+                             and endpoint_count.get(_round_pt(pts[0]), 0) == 1)
+                end_hit = (_round_pt(pts[-1]) in start_pins
+                           and endpoint_count.get(_round_pt(pts[-1]), 0) == 1)
                 if not (start_hit or end_hit):
                     continue
             new_pts = reshape_wire_points(
@@ -489,6 +509,41 @@ class DragPreviewController:
         self.update_ocirc_preview(preview_pts, extra_pin_positions=dragged_pins)
         self.update_junction_preview(preview_pts, dragged_pins)
         self.update_pin_circle_preview(preview_pts)
+
+        # Ghost the re-stretch leads (pins dragged off a multi-wire junction), so
+        # the preview shows the connection growing — matching what MoveCommand
+        # will commit, not a momentarily-disconnected component.
+        restretch_pins = set() if all_dragged else {
+            p for p in start_pins if endpoint_count.get(p, 0) >= 2
+        }
+        self._update_restretch_preview(restretch_pins, dx, dy)
+
+    def _update_restretch_preview(
+        self, pins: set[tuple[float, float]], dx: float, dy: float
+    ) -> None:
+        """Reconcile the ghost lead items to one per re-stretch pin (node → live
+        dragged position), creating/removing throwaway non-interactive WireItems."""
+        scene = self._scene
+        paths: list[list[tuple[float, float]]] = []
+        for p in sorted(pins):
+            path = route(p, (p[0] + dx, p[1] + dy))
+            if len(path) >= 2 and len(set(path)) >= 2:
+                paths.append(path)
+        while len(self._restretch_ghosts) > len(paths):
+            scene.removeItem(self._restretch_ghosts.pop())
+        while len(self._restretch_ghosts) < len(paths):
+            ghost = WireItem(Wire(id="__restretch_ghost__", points=[(0.0, 0.0), (0.0, 0.0)]))
+            ghost.setFlag(ghost.GraphicsItemFlag.ItemIsSelectable, False)
+            ghost.setAcceptHoverEvents(False)
+            scene.addItem(ghost)
+            self._restretch_ghosts.append(ghost)
+        for ghost, path in zip(self._restretch_ghosts, paths):
+            ghost.set_preview_points(path)
+
+    def _clear_restretch_preview(self) -> None:
+        for ghost in self._restretch_ghosts:
+            self._scene.removeItem(ghost)
+        self._restretch_ghosts = []
 
     def commit_component_drag(self) -> None:
         """Push the MoveCommand(s) for a finished component drag, then reset state.
@@ -539,6 +594,7 @@ class DragPreviewController:
             if item is not None:
                 item.clear_preview_points()
         self.previewed_wire_ids = set()
+        self._clear_restretch_preview()
 
     # ------------------------------------------------------------------
     # Open-circle and junction preview (during a drag)
@@ -688,6 +744,10 @@ class DragPreviewController:
 
         for wire in scene._schematic.wires:
             pts = preview_pts_by_wire.get(wire.id, wire.points)
+            if len(pts) < 2:
+                continue  # a degenerate single-point wire connects nothing
+                          # (mirrors junction_points(); otherwise it would add a
+                          # phantom dot at its point during a drag)
             own: dict[tuple[float, float], int] = {}
             n = len(pts)
             for i, pt in enumerate(pts):

@@ -183,9 +183,6 @@ _LABEL_FONT_PT = 10.0
 _LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
 _LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
 _LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
-# Current annotations (`i=`) hug the wire (lead axis) instead of clearing the
-# whole body, matching where CircuiTikZ draws the current label.
-_CURRENT_GAP = 3.0
 # Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
 # annotation line does not appear to run into the text.
 _LABEL_BG_PAD = 3.0
@@ -194,6 +191,27 @@ _LABEL_BG_PAD = 3.0
 # ComponentItem._slot_direction).  Current sources (I/cI/isourcesin) follow the
 # passive default and are NOT listed.
 _VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
+
+# Annotation decoration geometry (canvas px) — the CircuiTikZ-style ± signs and
+# direction arrows drawn alongside the v=/i= text labels (§5.8). Sizes are in
+# screen pixels (the decoration is counter-rotated so ± glyphs stay upright).
+_SIGN_LEN = 8.0          # arm length of a drawn + / - glyph
+_SIGN_STROKE = 2.0       # ± glyph stroke width
+_SIGN_OFFSET = 7.0       # ± glyph clearance off the body, toward the label side
+_SIGN_INSET = 0.80       # ± glyphs sit at ±inset·half-span (just inside the pins)
+_ARROW_STROKE = 2.0      # voltage/current arrow shaft width
+_ARROW_HEAD = 8.0        # arrowhead length
+_ARROW_HEAD_W = 6.0      # arrowhead full width
+_ARROW_SPAN = 0.62       # voltage arrow shaft spans ±span·half-length about centre
+# Perpendicular band the european-voltage arrow reserves between the body and its
+# text label so the two never overlap.
+_DEC_BAND = 13.0
+# Current (`i=`) annotation — drawn as a bare arrowHEAD on the wire near the exit
+# (second-pin) lead, pointing toward pin1 (the current direction). Only the head
+# is drawn (no shaft), so the arrow never overlaps the component body; the value
+# label is centred directly over the head. _CUR_ARROW_TIP is the head-tip position
+# as a fraction of the half-span (0 = centre, 1 = second pin).
+_CUR_ARROW_TIP = 0.82
 
 # Fallback family lists passed to QFont.setFamilies() — Qt walks the list and
 # uses the first installed face, so at least one matches on any platform.
@@ -611,6 +629,143 @@ class _SlotLabel(QGraphicsItem):
 
 
 # ---------------------------------------------------------------------------
+# Voltage / current decoration (display only)
+# ---------------------------------------------------------------------------
+
+class _AnnotationDecoration(QGraphicsItem):
+    """CircuiTikZ-style voltage/current decoration for one annotation slot (§5.8).
+
+    Draws, in the component's on-screen frame:
+
+      * ``v`` (american voltage) — a ``+`` and ``−`` glyph at the two terminals
+        (``+`` at the first-traversed pin, ``−`` at the second), matching the
+        compiled (Y-flipped) CircuiTikZ output that the canvas mirrors.
+      * ``v`` (european voltage) — a shaft+arrow alongside the body, pointing
+        from the ``+`` terminal toward the ``−`` (first → second pin).
+      * ``i`` (current) — a shaft+arrow along the lead axis in the traversal
+        (first → second pin) direction.
+
+    Like :class:`_SlotLabel` it is counter-rotated so the ± glyphs stay upright;
+    the arrows follow the on-screen lead axis. The text value itself is rendered
+    separately by the slot's :class:`_SlotLabel`, stacked just outside this
+    decoration's perpendicular band.
+    """
+
+    def __init__(self, parent: "ComponentItem") -> None:
+        super().__init__(parent)
+        self.setAcceptedMouseButtons(Qt.NoButton)
+        self._mode = ""                  # "" | "v_american" | "v_european" | "current"
+        self._axis = QPointF(1.0, 0.0)   # unit vector, first→second pin (screen)
+        self._side = QPointF(0.0, -1.0)  # unit vector toward the annotation side
+        self._half_len = 0.0             # half the on-screen terminal span
+        self._perp = 0.0                 # distance from the lead axis to the glyphs
+
+    def configure(
+        self,
+        mode: str,
+        axis_unit: QPointF,
+        half_len: float,
+        side: QPointF,
+        perp: float,
+        center_rel: QPointF,
+        inv: QTransform,
+    ) -> None:
+        """Place this decoration. ``center_rel`` is the component centre and
+        ``inv`` the screen→parent-local transform (both from ``_slot_geometry``);
+        the decoration is counter-rotated and pinned at the centre, drawing its
+        glyphs at screen-space offsets from there."""
+        self.prepareGeometryChange()
+        self._mode = mode
+        self._axis = axis_unit
+        self._half_len = half_len
+        self._side = side
+        self._perp = perp
+        self.setTransform(inv)
+        self.setPos(inv.map(center_rel))
+        self.setVisible(bool(mode))
+        self.update()
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        if not self._mode:
+            return QRectF()
+        ext = self._half_len + self._perp + _DEC_BAND + _ARROW_HEAD + 4.0
+        return QRectF(-ext, -ext, 2.0 * ext, 2.0 * ext)
+
+    def _draw_plus(self, painter: QPainter, c: QPointF) -> None:
+        h = _SIGN_LEN / 2.0
+        painter.drawLine(QPointF(c.x() - h, c.y()), QPointF(c.x() + h, c.y()))
+        painter.drawLine(QPointF(c.x(), c.y() - h), QPointF(c.x(), c.y() + h))
+
+    def _draw_minus(self, painter: QPainter, c: QPointF) -> None:
+        h = _SIGN_LEN / 2.0
+        painter.drawLine(QPointF(c.x() - h, c.y()), QPointF(c.x() + h, c.y()))
+
+    def _draw_arrowhead(self, painter: QPainter, color: QColor,
+                        tip: QPointF, ux: float, uy: float) -> None:
+        """Filled triangular arrowhead at *tip*, pointing along unit (ux, uy)."""
+        px, py = -uy, ux  # perpendicular
+        base = QPointF(tip.x() - ux * _ARROW_HEAD, tip.y() - uy * _ARROW_HEAD)
+        hw = _ARROW_HEAD_W / 2.0
+        left = QPointF(base.x() + px * hw, base.y() + py * hw)
+        right = QPointF(base.x() - px * hw, base.y() - py * hw)
+        head_path = QPainterPath(tip)
+        head_path.lineTo(left)
+        head_path.lineTo(right)
+        head_path.closeSubpath()
+        painter.fillPath(head_path, QBrush(color))
+
+    def _draw_arrow(self, painter: QPainter, color: QColor,
+                    tail: QPointF, head: QPointF) -> None:
+        pen = QPen(color)
+        pen.setWidthF(_ARROW_STROKE)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.drawLine(tail, head)
+        d = head - tail
+        ln = math.hypot(d.x(), d.y()) or 1.0
+        self._draw_arrowhead(painter, color, head, d.x() / ln, d.y() / ln)
+
+    def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
+        if not self._mode:
+            return
+        parent = self.parentItem()
+        color = (parent._label_color() if hasattr(parent, "_label_color")
+                 else QColor(style.COLOR_NORMAL))
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        a, s, L = self._axis, self._side, self._half_len
+        off = QPointF(s.x() * self._perp, s.y() * self._perp)
+
+        # Voltage polarity follows the compiled (Y-flipped) CircuiTikZ output,
+        # which is the canvas's visual ground truth: the `+` sits at the
+        # first-traversed pin (pin0, at -axis) and the `−` at the second (pin1,
+        # at +axis). The european arrow runs from `+` to `−` (pin0 → pin1).
+        if self._mode == "v_american":
+            pen = QPen(color)
+            pen.setWidthF(_SIGN_STROKE)
+            pen.setCapStyle(Qt.RoundCap)
+            painter.setPen(pen)
+            d = _SIGN_INSET * L
+            plus = QPointF(-a.x() * d + off.x(), -a.y() * d + off.y())    # first pin
+            minus = QPointF(a.x() * d + off.x(), a.y() * d + off.y())     # second pin
+            self._draw_plus(painter, plus)
+            self._draw_minus(painter, minus)
+        elif self._mode == "v_european":
+            # Points from the + terminal (first pin) to the − (second pin).
+            d = _ARROW_SPAN * L
+            tail = QPointF(-a.x() * d + off.x(), -a.y() * d + off.y())
+            head = QPointF(a.x() * d + off.x(), a.y() * d + off.y())
+            self._draw_arrow(painter, color, tail, head)
+        elif self._mode == "current":
+            # A bare arrowhead on the wire near the exit lead, pointing toward the
+            # second pin (current direction) — no shaft, so it never overlaps the
+            # body. The label is centred over the head (see _layout_slots).
+            tip = QPointF(a.x() * _CUR_ARROW_TIP * L + off.x(),
+                          a.y() * _CUR_ARROW_TIP * L + off.y())
+            self._draw_arrowhead(painter, color, tip, a.x(), a.y())
+
+
+# ---------------------------------------------------------------------------
 # Base class
 # ---------------------------------------------------------------------------
 
@@ -663,6 +818,7 @@ class ComponentItem(QGraphicsItem):
         self._options_item.setFlag(QGraphicsItem.ItemIsMovable, False)
         self._options_item.set_commit_callback(self._on_options_commit)
         self._slot_items: list[_SlotLabel] = []
+        self._decoration_items: list[_AnnotationDecoration] = []
         self._sync_options_item()
 
     # ------------------------------------------------------------------
@@ -755,55 +911,105 @@ class ComponentItem(QGraphicsItem):
         """
         return False
 
+    def _doc_styles(self) -> tuple[str, str]:
+        """The document's (voltage_style, current_style) — `american`/`european`
+        (§7.2). Defaults to american when there is no scene/schematic yet (ghosts,
+        thumbnails), matching the codegen default."""
+        scene = self.scene()
+        sch = getattr(scene, "schematic", None) if scene is not None else None
+        v = getattr(sch, "voltage_style", "american") or "american"
+        i = getattr(sch, "current_style", "american") or "american"
+        return v, i
+
+    def _decoration_mode(self, key: str, centered: bool,
+                         v_style: str, i_style: str) -> str:
+        """The decoration to draw for a slot key: the american ± signs / european
+        arrow for a voltage slot, an arrow for a current slot, nothing otherwise.
+        Centred (axis-pinned) labels draw their own connecting line and get none."""
+        if centered:
+            return ""
+        if key.startswith("v"):
+            return "v_european" if v_style == "european" else "v_american"
+        if key.startswith("i"):
+            return "current"
+        return ""
+
     def _layout_slots(self) -> None:
         """Render each annotation slot on its conventional side of the body.
 
         Placement is perpendicular to the component's *on-screen* lead axis, so
-        labels land on the correct side regardless of rotation/mirror.
+        labels land on the correct side regardless of rotation/mirror.  Voltage
+        (`v=`) and current (`i=`) slots also get a CircuiTikZ-style decoration —
+        ± signs / a voltage arrow / a current arrow (:class:`_AnnotationDecoration`).
         """
         from app.preview.mathrender import slot_fragments
 
         slots = [] if self._ghost else slot_fragments(self._component.options)
         while len(self._slot_items) < len(slots):
             self._slot_items.append(_SlotLabel(self))
+        while len(self._decoration_items) < len(slots):
+            self._decoration_items.append(_AnnotationDecoration(self))
 
         geom = self._slot_geometry()
         counter = self._label_counter_transform()
         centered = self._labels_centered_on_axis()
-        # Per-direction running "outer edge" so stacked labels never overlap.
-        # Each slot's own preferred base (currents hug the wire; other slots
-        # clear the body) is honoured, but a slot is always pushed out far enough
-        # to clear any sibling already placed on the same side. This matters when
-        # slots on one side have *different* bases — e.g. a label (`l`, clears the
-        # body) and a current (`i`, hugs the wire) both default to "above": the
-        # current must stack beyond the label, not at its own small base.
+        v_style, i_style = self._doc_styles()
+        # Per-direction running "outer edge" so stacked labels never overlap: a
+        # slot clears the body, but is always pushed out far enough to clear any
+        # sibling already placed on the same side (so two `above` labels stack
+        # instead of colliding). Current (`i=`) is the exception — it is placed
+        # off-centre over the exit lead (see below), so it does not participate.
         outer_edge: dict[tuple[float, float], float] = {}
         for idx, item in enumerate(self._slot_items):
-            if idx < len(slots):
-                key, latex = slots[idx]
-                direction = self._slot_direction(key, geom)
-                dk = (round(direction.x(), 3), round(direction.y(), 3))
-                # This slot's preferred distance from the centre line.
-                preferred = 0.0 if centered else (
-                    _CURRENT_GAP if key.startswith("i")
-                    else geom["perp_thickness"] + _LABEL_GAP
-                )
-                # Sit at the preferred distance, but never inside a sibling
-                # already placed on this side.
-                base = max(preferred, outer_edge.get(dk, 0.0))
-                # Advance the running edge past this label's row height.
-                outer_edge[dk] = base + _LABEL_LINE_H
-                item.setTransform(counter)
-                item.configure(
-                    latex, direction, geom["center_rel"],
-                    base, 0.0, geom["inv"], centered,
-                )
-                item.setVisible(True)
-            else:
-                item.configure(
-                    "", geom["left"], geom["center_rel"], 0.0, 0.0, geom["inv"],
-                )
+            dec = self._decoration_items[idx]
+            if idx >= len(slots):
+                item.configure("", geom["left"], geom["center_rel"], 0.0, 0.0, geom["inv"])
                 item.setVisible(False)
+                dec.configure("", geom["axis_unit"], geom["half_len"],
+                              geom["left"], 0.0, geom["center_rel"], geom["inv"])
+                continue
+
+            key, latex = slots[idx]
+            direction = self._slot_direction(key, geom)
+            mode = self._decoration_mode(key, centered, v_style, i_style)
+            item.setTransform(counter)
+
+            if mode == "current":
+                # CircuiTikZ draws `i=` as an arrowhead on the wire near the exit
+                # (second-pin) lead, with the label centred over that head — not
+                # centred on the body or stacked above the other labels. Place the
+                # label over the arrowhead at body clearance.
+                axis = geom["axis_unit"]
+                shift = _CUR_ARROW_TIP * geom["half_len"]
+                cur_center = QPointF(geom["center_rel"].x() + axis.x() * shift,
+                                     geom["center_rel"].y() + axis.y() * shift)
+                item.configure(latex, direction, cur_center,
+                               geom["perp_thickness"] + _LABEL_GAP, 0.0,
+                               geom["inv"], False)
+                item.setVisible(True)
+                dec.configure("current", geom["axis_unit"], geom["half_len"],
+                              direction, 0.0, geom["center_rel"], geom["inv"])
+                continue
+
+            dk = (round(direction.x(), 3), round(direction.y(), 3))
+            preferred = 0.0 if centered else geom["perp_thickness"] + _LABEL_GAP
+            base = max(preferred, outer_edge.get(dk, 0.0))
+            # A european voltage arrow reserves a perpendicular band between the
+            # body and its text; american ± signs sit at the terminals (no band).
+            band = _DEC_BAND if mode == "v_european" else 0.0
+            label_base = base + band
+            outer_edge[dk] = label_base + _LABEL_LINE_H
+            item.configure(latex, direction, geom["center_rel"],
+                           label_base, 0.0, geom["inv"], centered)
+            item.setVisible(True)
+            if mode == "v_american":
+                perp = geom["perp_thickness"] + _SIGN_OFFSET
+            elif mode == "v_european":
+                perp = base + band / 2.0
+            else:
+                perp = 0.0
+            dec.configure(mode, geom["axis_unit"], geom["half_len"],
+                          direction, perp, geom["center_rel"], geom["inv"])
 
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
@@ -891,6 +1097,10 @@ class ComponentItem(QGraphicsItem):
             "right": right,
             "perp_thickness": perp_thickness,
             "inv": inv,
+            # Unit lead axis (first→second pin, screen-space) and half the
+            # terminal span — used to place the voltage/current decorations.
+            "axis_unit": QPointF(ax, ay),
+            "half_len": alen / 2.0,
         }
 
     def begin_options_edit(self) -> None:
@@ -1431,10 +1641,21 @@ class _WireMidLabel(QGraphicsItem):
         painter.restore()
 
 
+#: Half-length (px) of each arm of the red ✕ drawn for a degenerate (single-point)
+#: wire — see WireItem._paint_degenerate.
+_DEGEN_X_R = 7.0
+
+
 class WireItem(QGraphicsItem):
     """A polyline wire drawn as a Manhattan path.
 
     Points are stored in *schematic grid units*; paint() converts to pixels.
+
+    A **degenerate** wire — one with fewer than two points (no segment to draw) —
+    should never be created by the editor (the move/split/vertex commands all drop
+    or refuse a wire that collapses to a point). As a safety net for an old or
+    hand-edited file that still contains one, a single-point wire is drawn as a red
+    ✕ marker that is selectable and deletable, so the user can find and remove it.
     """
 
     def __init__(self, wire, parent: QGraphicsItem | None = None):  # noqa: ANN001
@@ -1730,6 +1951,10 @@ class WireItem(QGraphicsItem):
         pts = self._draw_points()
         if not pts:
             return QRectF()
+        if len(pts) == 1:  # degenerate: a red ✕ marker around the lone point
+            cx, cy = pts[0][0] * GRID_PX, pts[0][1] * GRID_PX
+            m = _DEGEN_X_R + self.HIT_TOL + 2.0
+            return QRectF(cx - m, cy - m, 2 * m, 2 * m)
         xs = [p[0] * GRID_PX for p in pts]
         ys = [p[1] * GRID_PX for p in pts]
         # +HOP_R so a hop bump (which bulges perpendicular to the wire) is never
@@ -1766,6 +1991,11 @@ class WireItem(QGraphicsItem):
         selectable only near the line itself.
         """
         pts_gu = self._draw_points()
+        if len(pts_gu) == 1:  # degenerate: clickable disc around the ✕ marker
+            cx, cy = pts_gu[0][0] * GRID_PX, pts_gu[0][1] * GRID_PX
+            path = QPainterPath()
+            path.addEllipse(QPointF(cx, cy), _DEGEN_X_R + self.HIT_TOL, _DEGEN_X_R + self.HIT_TOL)
+            return path
         if len(pts_gu) < 2:
             return QPainterPath()
         pts = [QPointF(x * GRID_PX, y * GRID_PX) for x, y in pts_gu]
@@ -1785,8 +2015,30 @@ class WireItem(QGraphicsItem):
             hit = hit.united(handle)
         return hit
 
+    def _paint_degenerate(self, painter: QPainter, pt_gu: tuple[float, float]) -> None:
+        """Draw a red ✕ for a degenerate single-point wire (see the class doc)."""
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        cx, cy = pt_gu[0] * GRID_PX, pt_gu[1] * GRID_PX
+        r = _DEGEN_X_R
+        if self.isSelected():
+            color = style.COLOR_SELECTED
+        elif self._hovered:
+            color = style.COLOR_HOVER
+        else:
+            color = style.COLOR_PIN          # red, theme-aware
+        pen = QPen(QColor(color))
+        pen.setWidthF(2.0)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(cx - r, cy - r), QPointF(cx + r, cy + r))
+        painter.drawLine(QPointF(cx - r, cy + r), QPointF(cx + r, cy - r))
+
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         pts_gu = self._draw_points()
+        if len(pts_gu) == 1:
+            self._paint_degenerate(painter, pts_gu[0])
+            return
         if len(pts_gu) < 2:
             return
         painter.setRenderHint(QPainter.Antialiasing, True)

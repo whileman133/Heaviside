@@ -81,9 +81,8 @@ from app.schematic.io import SchematicLoadError, load, save
 from app.schematic.model import Schematic
 from app.ui.palette import ComponentPalette
 from app.ui import theme
-from app.ui.documentsettings import DocumentSettingsDialog
 from app.ui.preferences import Preferences, PreferencesDialog
-from app.ui.properties import PropertiesPanel
+from app.ui.properties import DocumentPropertiesPanel, PropertiesPanel
 from app.ui.sourcepanel import SourcePanel
 
 _WINDOW_TITLE = "Heaviside — CircuiTikZ Editor"
@@ -130,6 +129,9 @@ class MainWindow(QMainWindow):
         # edits) keep their **native** look — on macOS those already follow the OS
         # appearance — so only our themed chrome and the canvas are switched here.
         self._dark = _system_is_dark()
+        # Until the user flips the toolbar toggle, the theme tracks the OS
+        # appearance live; a manual toggle pins it and stops following the OS.
+        self._follow_system = True
         theme.set_dark(self._dark)
         style.set_dark(self._dark)
         # Records (QAction, qtawesome-name) so toolbar/ribbon icons can be
@@ -160,6 +162,9 @@ class MainWindow(QMainWindow):
         self._build_tool_ribbon()
         self._build_central()
         self._build_statusbar()
+        # If the app launched with the manual override already off (it does not at
+        # startup), the OS appearance drives native widgets directly; a later toggle
+        # pins the colour scheme via _apply_color_scheme.
 
         # -- Window-level Escape: cancel placement/wire regardless of focus ----
         # The view's keyPressEvent also handles Escape when the view has focus,
@@ -186,8 +191,11 @@ class MainWindow(QMainWindow):
 
     def _apply_window_palette(self) -> None:
         """Set the window background to the active surface colour so the central
-        area, splitter gaps, and status bar match the themed chrome."""
-        pal = self.palette()
+        area, splitter gaps, and status bar match the themed chrome. Based on the
+        live **application** palette (which reflects the colour scheme set in
+        _apply_color_scheme), so native child widgets still inherit the right
+        Base/Text/Button roles for the active light/dark mode."""
+        pal = QApplication.palette()
         pal.setColor(QPalette.Window, QColor(theme.SURFACE))
         pal.setColor(QPalette.WindowText, QColor(theme.TEXT))
         self.setPalette(pal)
@@ -199,17 +207,59 @@ class MainWindow(QMainWindow):
         self._themed_icons.append((action, name))
 
     def _on_color_scheme_changed(self, _scheme=None) -> None:
+        # Only follow the OS while the user hasn't overridden the theme manually.
+        if not self._follow_system:
+            return
         dark = _system_is_dark()
         if dark != self._dark:
             self._dark = dark
             self._apply_theme()
 
+    def _toggle_dark(self, checked: bool) -> None:
+        """Toolbar light/dark toggle: pin the chosen mode and stop following the
+        OS appearance (a one-way opt-out — there is no 'auto' state to return to
+        within a session)."""
+        self._follow_system = False
+        if checked != self._dark:
+            self._dark = checked
+            self._apply_theme()
+        else:
+            self._sync_dark_action()
+
+    def _sync_dark_action(self) -> None:
+        """Reflect the current dark state on the toolbar toggle: a sun icon (to
+        switch back to light) when dark, a moon (to switch to dark) when light."""
+        act = getattr(self, "_act_dark", None)
+        if act is None:
+            return
+        act.blockSignals(True)
+        act.setChecked(self._dark)
+        act.blockSignals(False)
+        name = "fa5s.sun" if self._dark else "fa5s.moon"
+        act.setIcon(qta.icon(name, color=theme.ICON))
+        act.setToolTip("Switch to light mode" if self._dark else "Switch to dark mode")
+
+    def _apply_color_scheme(self) -> None:
+        """Drive the **application colour scheme** so all **native** widgets — form
+        controls, dialogs, message boxes, tooltips, scrollbars, tab bars, and the
+        window background — follow the chosen light/dark mode natively, instead of
+        being restyled (which looked non-native). While following the OS we leave it
+        ``Unknown`` (the OS already drives native widgets directly); a manual toggle
+        pins ``Dark``/``Light``. Requires Qt 6.8+ (``QStyleHints.setColorScheme``)."""
+        if self._follow_system:
+            return  # the OS appearance drives native widgets; don't override it
+        sh = QGuiApplication.styleHints()
+        target = Qt.ColorScheme.Dark if self._dark else Qt.ColorScheme.Light
+        if sh.colorScheme() != target:
+            sh.setColorScheme(target)
+
     def _apply_theme(self) -> None:
-        """Re-theme every surface for the current ``self._dark`` state: swap the
-        canvas + chrome palettes, re-apply the toolbar/panel stylesheets, re-tint
-        icons, and repaint."""
+        """Re-theme every surface for the current ``self._dark`` state: drive the
+        native colour scheme, swap the canvas + chrome palettes, re-apply the
+        toolbar/panel stylesheets, re-tint icons, and repaint."""
         theme.set_dark(self._dark)
         style.set_dark(self._dark)
+        self._apply_color_scheme()    # native widgets follow (before the window palette)
         self._apply_window_palette()
         if self._toolbar is not None:
             self._toolbar.setStyleSheet(theme.top_toolbar_qss())
@@ -217,8 +267,11 @@ class MainWindow(QMainWindow):
             self._ribbon.setStyleSheet(theme.ribbon_qss())
         for action, name in self._themed_icons:
             action.setIcon(qta.icon(name, color=theme.ICON))
+        self._sync_dark_action()  # state-dependent icon (sun/moon), re-tinted too
+        self._view.setStyleSheet(theme.scrollbar_qss())  # canvas scrollbars
         # Side panels rebuild their own theme-token stylesheets.
-        for panel in (self._palette, self._props, self._source_panel, self._preview_panel):
+        for panel in (self._palette, self._props, self._doc_props,
+                      self._source_panel, self._preview_panel):
             if hasattr(panel, "apply_theme"):
                 panel.apply_theme()
         # The preview is rendered by LaTeX with a matching dark/light page; if one
@@ -229,6 +282,13 @@ class MainWindow(QMainWindow):
         # Repaint the canvas (items read style.COLOR_* at paint time).
         self._scene.update()
         self._view.viewport().update()
+
+    def _on_document_props_changed(self) -> None:
+        """A live edit in the Document inspector changed a style: re-place the
+        on-canvas ± signs / arrows and refresh the source panel + preview (same
+        flow the old Document Settings dialog used)."""
+        self._scene.relayout_annotations()
+        self._scene.schematic_changed.emit()
 
     # ------------------------------------------------------------------
     # Palette keyboard shortcuts (§10.2)
@@ -374,9 +434,8 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
-        self._act_doc_settings = QAction("Document &Settings…", self)
-        self._act_doc_settings.triggered.connect(self._on_document_settings)
-        edit_menu.addAction(self._act_doc_settings)
+        # Per-document CircuiTikZ conventions live in the inspector's Document tab
+        # (the old Edit ▸ Document Settings… dialog was replaced by it).
 
         self._act_preferences = QAction("&Preferences…", self)
         self._act_preferences.setShortcut(QKeySequence("Ctrl+,"))
@@ -474,6 +533,15 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
+
+        # Light/dark toggle. Its icon/tooltip track the state (sun↔moon), so it is
+        # refreshed via _sync_dark_action rather than the name-based re-tint list.
+        self._act_dark = QAction("Toggle dark mode", self)
+        self._act_dark.setCheckable(True)
+        self._act_dark.toggled.connect(self._toggle_dark)
+        tb.addAction(self._act_dark)
+        self._sync_dark_action()
+
         self._themed_icon(self._act_help, "fa5s.question-circle")
         self._act_help.setToolTip("Keyboard shortcuts & gestures (F1)")
         tb.addAction(self._act_help)
@@ -484,7 +552,7 @@ class MainWindow(QMainWindow):
 
         for action in (self._act_new, self._act_open, self._act_save,
                        self._act_undo, self._act_redo, compile_btn,
-                       self._act_help, self._act_report_bug):
+                       self._act_dark, self._act_help, self._act_report_bug):
             btn = tb.widgetForAction(action)
             if btn:
                 btn.setCursor(Qt.PointingHandCursor)
@@ -578,12 +646,29 @@ class MainWindow(QMainWindow):
         self._canvas_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._canvas_stack.addWidget(_WelcomeScreen())   # index 0
         self._canvas_stack.addWidget(self._view)          # index 1
+        # Theme the canvas scrollbars to match the chrome (they would otherwise
+        # stay the native light look when the toolbar toggle forces dark mode).
+        self._view.setStyleSheet(theme.scrollbar_qss())
         self._canvas_stack.setCurrentIndex(0)
         top_split.addWidget(self._canvas_stack)
 
+        # Inspector tabs: the per-object Properties inspector and the per-document
+        # Document inspector (the latter replaces the old Document Settings dialog).
+        from PySide6.QtWidgets import QTabWidget
         self._props = PropertiesPanel()
         self._props.set_scene(self._scene)
-        top_split.addWidget(self._props)
+        self._doc_props = DocumentPropertiesPanel()
+        self._doc_props.set_scene(self._scene)
+        self._doc_props.document_changed.connect(self._on_document_props_changed)
+        # Native QTabWidget (no custom stylesheet) so the tabs and the form
+        # controls inside follow the OS appearance / colour scheme natively.
+        self._inspector_tabs = QTabWidget()
+        self._inspector_tabs.addTab(self._props, "Properties")
+        self._inspector_tabs.addTab(self._doc_props, "Document")
+        # Nothing is selected at startup, so surface the Document tab (the
+        # Properties tab has nothing to show until something is selected).
+        self._inspector_tabs.setCurrentWidget(self._doc_props)
+        top_split.addWidget(self._inspector_tabs)
 
         top_split.setStretchFactor(0, 1)   # canvas: stretch
         top_split.setStretchFactor(1, 0)   # props: fixed
@@ -716,6 +801,11 @@ class MainWindow(QMainWindow):
         # carries component ids).
         wire_ids = self._scene.selected_wire_ids()
         total = len(comp_ids) + len(wire_ids)
+        # With nothing selected the per-object Properties tab has nothing to show,
+        # so surface the Document tab; selecting anything returns to Properties.
+        self._inspector_tabs.setCurrentWidget(
+            self._doc_props if total == 0 else self._props
+        )
         if total == 0:
             self._props.clear()
         elif total == 1 and len(comp_ids) == 1:
@@ -774,6 +864,7 @@ class MainWindow(QMainWindow):
         self._current_path = None
         self._modified = False
         self._update_title()
+        self._doc_props.refresh()
         self._preview_panel.clear()
         self._status_compile.setText("Ready")
 
@@ -796,6 +887,7 @@ class MainWindow(QMainWindow):
         self._modified = False
         self._update_title()
         self._props.clear()
+        self._doc_props.refresh()
         self._status_compile.setText("Ready")
         # Fit the view to the loaded circuit. Deferred so it runs after the
         # welcome→canvas switch and layout pass, when the viewport has its final
@@ -846,6 +938,7 @@ class MainWindow(QMainWindow):
         self._modified = False
         self._update_title()
         self._props.clear()
+        self._doc_props.refresh()
         self._status_compile.setText(f"Loaded example: {path.stem}")
         QTimer.singleShot(0, self._view.fit_to_schematic)
 
@@ -939,17 +1032,6 @@ class MainWindow(QMainWindow):
                 return
 
         self._status_compile.setText("Auto-exported " + ", ".join(written))
-
-    def _on_document_settings(self) -> None:
-        """Open the modal Document Settings dialog (§10): per-document CircuiTikZ
-        voltage/current label styles, stored in the .hv file.
-
-        On a change, emit ``schematic_changed`` so the document is marked modified
-        and the source panel + preview refresh (the styles flow into ``generate``).
-        """
-        dialog = DocumentSettingsDialog(self._scene.schematic, self)
-        if dialog.exec() == QDialog.Accepted and dialog.changed():
-            self._scene.schematic_changed.emit()
 
     def _on_preferences(self) -> None:
         """Open the modal Preferences dialog (§10.8).

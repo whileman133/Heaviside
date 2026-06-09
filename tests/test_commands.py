@@ -650,6 +650,76 @@ def test_move_leaves_unconnected_wires_untouched():
     assert free.points == [(10.0, 10.0), (12.0, 10.0)]
 
 
+def test_move_off_multiwire_junction_restretches_lead():
+    """A moving pin on a junction shared by 2+ wires keeps the existing net intact
+    and stays connected via a fresh **re-stretch lead** from the node to the new
+    pin (regression for the erroneous junction dot after dragging a component onto
+    a rail node and back, plus the re-stretch follow-up).
+    """
+    s = Schematic(
+        version="0.1",
+        name="t",
+        components=[
+            _resistor(comp_id="a", position=(0.0, 0.0)),    # pins (0,0),(2,0)
+            _resistor(comp_id="b", position=(10.0, 10.0)),  # elsewhere, not moved
+        ],
+        wires=[
+            Wire(id="w1", points=[(2.0, 0.0), (2.0, 2.0)]),   # both end on the
+            Wire(id="w2", points=[(2.0, 0.0), (4.0, 0.0)]),   # right pin (2,0)
+        ],
+    )
+    cmd = MoveCommand(["a"], (0.0, -1.0))
+    cmd.do(s)
+    # Neither original wire is torn off the junction — both keep their geometry.
+    assert next(w for w in s.wires if w.id == "w1").points == [(2.0, 0.0), (2.0, 2.0)]
+    assert next(w for w in s.wires if w.id == "w2").points == [(2.0, 0.0), (4.0, 0.0)]
+    # A new lead now connects the node (2,0) to the pin's new position (2,-1).
+    new_leads = [w for w in s.wires if w.id not in ("w1", "w2")]
+    assert len(new_leads) == 1
+    assert new_leads[0].points == [(2.0, 0.0), (2.0, -1.0)]
+    assert validate(s) == []
+    # Undo removes the lead and restores everything; redo re-adds it.
+    cmd.undo(s)
+    assert [w.id for w in s.wires] == ["w1", "w2"]
+    cmd.redo(s)
+    assert any(w.points == [(2.0, 0.0), (2.0, -1.0)] for w in s.wires)
+
+
+def test_move_removes_fully_contained_lead():
+    """When a move slides a connected lead so it lies entirely on top of another
+    wire, the now-redundant lead is removed (and restored on undo)."""
+    s = Schematic(
+        version="0.1",
+        name="t",
+        components=[
+            _resistor(comp_id="a", position=(0.0, 0.0)),    # pins (0,0),(2,0)
+            _resistor(comp_id="b", position=(10.0, 10.0)),  # elsewhere, not moved
+        ],
+        wires=[
+            # Vertical lead off a's right pin (2,0), lying on a longer vertical rail.
+            Wire(id="lead", points=[(2.0, 0.0), (2.0, 2.0)]),
+            Wire(id="rail", points=[(2.0, -2.0), (2.0, 5.0)]),
+        ],
+    )
+    cmd = MoveCommand(["a"], (0.0, 1.0))   # pin (2,0)->(2,1); lead → [(2,1),(2,2)]
+    cmd.do(s)
+    ids = [w.id for w in s.wires]
+    assert "lead" not in ids       # fully on the rail now → removed
+    assert "rail" in ids
+    cmd.undo(s)
+    assert "lead" in [w.id for w in s.wires]   # undo restores it
+    assert next(w for w in s.wires if w.id == "lead").points == [(2.0, 0.0), (2.0, 2.0)]
+
+
+def test_move_single_lead_still_follows():
+    """The fix above must not change the common case: a pin with a *single* lead
+    still drags that lead (it is the pin's sole wire endpoint)."""
+    s = _two_resistors_with_wire()                 # one wire on A's pin (2,0)
+    MoveCommand(["a"], (0.0, -1.0)).do(s)
+    assert s.wires[0].points[0] == (2.0, -1.0)     # the lead followed
+    assert validate(s) == []
+
+
 def test_move_undo_restores_exact_wire_geometry():
     s = _two_resistors_with_wire()
     original = [tuple(p) for p in s.wires[0].points]

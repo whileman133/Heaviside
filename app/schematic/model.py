@@ -367,6 +367,65 @@ def simplify_points(
     return result
 
 
+def _interval_covered(
+    lo: float, hi: float, intervals: list[tuple[float, float]], eps: float = 1e-6
+) -> bool:
+    """True if [lo, hi] is fully covered by the union of *intervals* (each a
+    (start, end) pair on the same axis). A zero-length target is trivially
+    covered."""
+    if hi - lo <= eps:
+        return True
+    relevant = sorted(iv for iv in intervals if iv[1] > lo - eps and iv[0] < hi + eps)
+    cur = lo
+    for a, b in relevant:
+        if a > cur + eps:
+            return False  # gap before this interval
+        cur = max(cur, b)
+        if cur >= hi - eps:
+            return True
+    return cur >= hi - eps
+
+
+def _segment_covered(
+    seg: tuple[tuple[float, float], tuple[float, float]],
+    other_segs: list[tuple[tuple[float, float], tuple[float, float]]],
+) -> bool:
+    """True if axis-aligned *seg* lies entirely on collinear *other_segs*."""
+    (x0, y0), (x1, y1) = seg
+    if x0 == x1:        # vertical at x = x0
+        lo, hi = sorted((y0, y1))
+        ivals = [tuple(sorted((b, d)))
+                 for (a, b), (c, d) in other_segs if a == x0 and c == x0]
+    elif y0 == y1:      # horizontal at y = y0
+        lo, hi = sorted((x0, x1))
+        ivals = [tuple(sorted((a, c)))
+                 for (a, b), (c, d) in other_segs if b == y0 and d == y0]
+    else:               # diagonal (should not occur on a Manhattan wire)
+        return False
+    return _interval_covered(lo, hi, ivals)
+
+
+def wire_contained_by_others(points: list[tuple[float, float]], others) -> bool:
+    """True if a wire's polyline lies *entirely* on top of other wires' segments.
+
+    Such a wire is redundant — it draws nothing not already drawn and forms no new
+    connection — so it should be removed (a degenerate class alongside the
+    single-point wire). *others* is an iterable of objects with a ``points`` list.
+    Every segment of *points* must be collinear-covered by the union of the other
+    wires' segments. A wire with fewer than two points is not handled here (that
+    is the single-point degenerate case)."""
+    if len(points) < 2:
+        return False
+    other_segs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for o in others:
+        op = list(o.points)
+        if len(op) >= 2:
+            other_segs.extend(zip(op, op[1:]))
+    if not other_segs:
+        return False
+    return all(_segment_covered(seg, other_segs) for seg in zip(points, points[1:]))
+
+
 def route(
     a: tuple[float, float],
     b: tuple[float, float],

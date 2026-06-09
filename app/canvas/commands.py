@@ -46,6 +46,7 @@ from app.schematic.model import (
     component_pin_positions as _component_pin_positions,
     route,
     simplify_points,
+    wire_contained_by_others,
 )
 
 __all__ = [
@@ -372,6 +373,10 @@ class MoveCommand(Command):
         self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
         # wire ids that were removed because they collapsed; restored on undo.
         self._removed_wire_ids: set[str] = set()
+        # Fresh "re-stretch" leads created when a pin moves off a multi-wire
+        # junction (keeps the component connected — see _reshape_wires). Computed
+        # once at the first do() (stable ids), re-added on redo, removed on undo.
+        self._created_leads: list[Wire] | None = None
 
     # -- component motion -------------------------------------------------
 
@@ -414,6 +419,21 @@ class MoveCommand(Command):
         pins = self._connected_pin_set(schematic)
         if not pins and not all_dragged and not self._explicit_wire_ids:
             return
+        # How many wire endpoints coincide at each coordinate. A moving pin that
+        # sits on a *junction* (≥2 wire endpoints there) must NOT drag those wires:
+        # doing so tears the net apart when the component is dragged off the node
+        # (e.g. moving a capacitor back down off the rail junction it had been
+        # dragged onto would carry both rail stubs with it, leaving overlapping
+        # segments and a phantom dot). Only a pin that is the *sole* wire endpoint
+        # at its coordinate — a genuine lead — follows; on a shared junction the
+        # pin stays connected by a fresh **re-stretch lead** from the node to its
+        # new position (created below), leaving the existing net intact.
+        endpoint_count: dict[tuple[float, float], int] = {}
+        for w in schematic.wires:
+            if len(w.points) < 2:
+                continue
+            endpoint_count[w.points[0]] = endpoint_count.get(w.points[0], 0) + 1
+            endpoint_count[w.points[-1]] = endpoint_count.get(w.points[-1], 0) + 1
         to_remove: list[str] = []
         for wire in schematic.wires:
             pts = wire.points
@@ -423,8 +443,8 @@ class MoveCommand(Command):
             if all_dragged or wire.id in self._explicit_wire_ids:
                 start_hit = end_hit = True
             else:
-                start_hit = pts[0] in pins
-                end_hit = pts[-1] in pins
+                start_hit = pts[0] in pins and endpoint_count.get(pts[0], 0) == 1
+                end_hit = pts[-1] in pins and endpoint_count.get(pts[-1], 0) == 1
                 if not start_hit and not end_hit:
                     continue
 
@@ -451,6 +471,71 @@ class MoveCommand(Command):
                 w for w in schematic.wires if w.id not in to_remove
             ]
 
+        self._add_restretch_leads(schematic, pins, endpoint_count, all_dragged)
+        self._remove_contained_wires(schematic)
+
+    def _remove_contained_wires(self, schematic: Schematic) -> None:
+        """Drop any wire *this move touched* whose polyline now lies entirely on
+        top of other wires (a redundant, fully-contained wire — e.g. a lead
+        dragged collinearly onto the rail it connects to). Only wires reshaped or
+        created by this move are candidates, so an unrelated redundant wire
+        elsewhere is left alone. Removals are captured for exact undo."""
+        created_ids = {lead.id for lead in (self._created_leads or [])}
+        # Candidates: wires this move reshaped or created.
+        candidates = set(self._orig_wire_points) | created_ids
+        removed: list[str] = []
+        for wire in schematic.wires:
+            if wire.id not in candidates or len(wire.points) < 2:
+                continue  # untouched, or single-point (handled elsewhere)
+            others = [w for w in schematic.wires
+                      if w.id != wire.id and w.id not in removed]
+            if wire_contained_by_others(wire.points, others):
+                removed.append(wire.id)
+        if not removed:
+            return
+        for wid in removed:
+            if wid in created_ids:
+                # A re-stretch lead that turned out redundant — just don't keep it.
+                self._created_leads = [
+                    lead for lead in self._created_leads if lead.id != wid
+                ]
+            else:
+                if wid not in self._orig_wire_points:
+                    w = next(w for w in schematic.wires if w.id == wid)
+                    self._orig_wire_points[wid] = list(w.points)
+                self._removed_wire_ids.add(wid)
+        schematic.wires[:] = [w for w in schematic.wires if w.id not in removed]
+
+    def _add_restretch_leads(
+        self,
+        schematic: Schematic,
+        pins: set[tuple[float, float]],
+        endpoint_count: dict[tuple[float, float], int],
+        all_dragged: bool,
+    ) -> None:
+        """Keep a component connected when it is dragged off a multi-wire junction:
+        add a fresh lead from each such pin's node (its pre-move coordinate) to its
+        new position, so the net stays whole and the connection rubber-bands along
+        instead of snapping. No leads when the whole circuit translates rigidly
+        (everything moves together, nothing is left behind to reconnect to)."""
+        if all_dragged or (self._dx == 0.0 and self._dy == 0.0):
+            self._created_leads = self._created_leads or []
+            return
+        if self._created_leads is None:
+            leads: list[Wire] = []
+            for p in sorted(pins):
+                if endpoint_count.get(p, 0) < 2:
+                    continue  # free pin or a single lead that already followed
+                new_p = (p[0] + self._dx, p[1] + self._dy)
+                path = route(p, new_p)
+                if len(path) >= 2 and len(set(path)) >= 2:
+                    leads.append(Wire(id=str(uuid.uuid4()), points=path))
+            self._created_leads = leads
+        existing = {w.id for w in schematic.wires}
+        for lead in self._created_leads:
+            if lead.id not in existing:
+                schematic.wires.append(Wire(id=lead.id, points=list(lead.points)))
+
     # -- Command API ------------------------------------------------------
 
     def do(self, schematic: Schematic) -> None:
@@ -460,6 +545,10 @@ class MoveCommand(Command):
 
     def undo(self, schematic: Schematic) -> None:
         self._shift_components(schematic, -1.0)
+        # Remove the fresh re-stretch leads this move created.
+        if self._created_leads:
+            lead_ids = {lead.id for lead in self._created_leads}
+            schematic.wires[:] = [w for w in schematic.wires if w.id not in lead_ids]
         # Restore each affected wire's exact original geometry.
         for wire in schematic.wires:
             orig = self._orig_wire_points.get(wire.id)
@@ -799,23 +888,34 @@ class SplitWireCommand(Command):
         if result is None:
             return
         pos, wire = result
-        if self._orig_points is None:
-            self._orig_points = list(wire.points)
-            self._orig_index = pos
-        pts = list(self._orig_points)
+        pts = list(wire.points)
         idx = max(0, min(self._index, len(pts)))
-        if 0 < idx < len(pts) and pts[idx] == self._point:
-            # Point is already the intermediate vertex at idx (corner split):
+        if 0 < idx < len(pts) - 1 and pts[idx] == self._point:
+            # Point is a genuine *intermediate* vertex at idx (corner split):
             # split without inserting a duplicate.
             split_pts = pts
         elif self._point in pts:
-            # Point coincides with an endpoint — nothing to split.
+            # Point coincides with an endpoint (or a stale index now at one) —
+            # nothing to split. This guards the case where the index was computed
+            # against the wire's pre-move geometry but the move reshaped an
+            # endpoint onto the split point (which would otherwise carve off a
+            # degenerate single-point half).
             return
         else:
             # Normal mid-segment case: insert the new vertex.
             split_pts = pts[:idx] + [self._point] + pts[idx:]
-        half1 = Wire(id=self._new_id1, points=split_pts[:idx + 1])
-        half2 = Wire(id=self._new_id2, points=split_pts[idx:])
+        half1_pts = split_pts[:idx + 1]
+        half2_pts = split_pts[idx:]
+        # Belt-and-suspenders: never carve off a degenerate (<2 point) half. If a
+        # split would produce one, the point is effectively at an end — no-op.
+        if len(half1_pts) < 2 or len(half2_pts) < 2:
+            return
+        # Capture the pristine wire for undo only now that a real split happens,
+        # so the no-op branches above leave undo a clean no-op (orig stays None).
+        self._orig_points = list(wire.points)
+        self._orig_index = pos
+        half1 = Wire(id=self._new_id1, points=half1_pts)
+        half2 = Wire(id=self._new_id2, points=half2_pts)
         schematic.wires[pos:pos + 1] = [half1, half2]
 
     def undo(self, schematic: Schematic) -> None:

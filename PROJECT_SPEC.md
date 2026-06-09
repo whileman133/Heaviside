@@ -100,7 +100,7 @@ This document specifies a graphical editor for creating publication-quality circ
 
 - The canvas grid has spacing of **1.0 GU**.
 - All component placements, wire vertices, and junctions snap to **0.25 GU** increments — the *minor grid* (`SNAP_GU = 0.25`). This lets components be centred a quarter-cell off the half-grid (e.g. the IGFET MOSFET, whose body does not sit on the half-grid) while every connected wire stays grid-valid in any direction; arrow keys nudge one minor cell (0.25 GU).
-- The grid is rendered as a light line pattern in the canvas background. Integer-GU lines are drawn at normal weight; the 0.5 GU midline at reduced opacity; the 0.25/0.75 GU minor lines faintest, so the unit cell stays readable on the denser lattice.
+- The grid is rendered as a **dotted lattice** in the canvas background (a dot at each grid intersection rather than full ruled lines, so the grid orients the eye without competing with the schematic ink). The integer-GU intersections carry slightly larger/stronger dots; the 0.25 GU minor intersections get small faint dots that are drawn **only when zoomed in far enough** to read as distinct (skipped when the on-screen cell is too small, keeping zoomed-out views clean and cheap). Dots are stroked at a constant **device** size (a round-cap pen, drawn with world-matrix disabled) so they stay crisp and small at every zoom level instead of scaling with the view transform.
 - Proximity radii for snapping/grabbing (`PIN_SNAP_GU` = 0.125, `VERTEX_HIT_GU` / `PIN_GRAB_GU` = 0.15) are kept below half the 0.25 spacing so a click is never ambiguous between adjacent nodes.
 
 ### 3.2 Coordinate Convention
@@ -288,8 +288,8 @@ class Schematic:
 
 Document-level `voltage_style` / `current_style` (`LABEL_STYLES = ("american",
 "european")`) select the CircuiTikZ arrow convention for `v=`/`i=` labels for the
-whole figure; they are edited via **Edit ▸ Document Settings…** (§10), saved in
-the `.hv` `config` object (§9.2), and emitted by codegen as a picture-scoped
+whole figure; they are edited in the inspector's **Document** tab (§10.3/§10.9),
+saved in the `.hv` `config` object (§9.2), and emitted by codegen as a picture-scoped
 `\ctikzset` (§7.2).
 
 ### 4.5 Invariants
@@ -896,12 +896,46 @@ labels via `SchematicScene.retypeset_labels()`. Renders are cached in-process pe
     component-independent (not flipped).
   Labels are **centred on the component** and offset by the body's
   perpendicular half-thickness (bbox half-height for horizontal leads,
-  half-width for vertical) plus a gap; **current** (`i=`) labels instead hug the
-  wire (a small `_CURRENT_GAP` off the lead axis), matching where CircuiTikZ
-  draws them. Each `_SlotLabel` is counter-rotated to stay upright and stacks
-  outward when several share a direction. This is a readable convention,
-  **not** a pixel-exact reproduction of CircuiTikZ's voltage/current arrow
-  rendering (no ± signs or direction arrows are drawn on the canvas).
+  half-width for vertical) plus a gap; **current** (`i=`) labels clear the body
+  the same way (their arrow rides just above it — see the decoration note below).
+  Each `_SlotLabel` is counter-rotated to stay upright and stacks outward when
+  several share a direction.
+  - **Voltage/current decorations (`_AnnotationDecoration`).** Each `v=`/`i=`
+    slot also draws a CircuiTikZ-style decoration beside its text, following the
+    package default (`nooldvoltagedirection`, i.e. the european/electric-field
+    sign convention) for an `\usepackage[american]{circuitikz}` document:
+    - **Voltage, american style** (document `voltage_style="american"`, default):
+      a `+` glyph at the **first-traversed** pin and a `−` at the **second**
+      (`+` left / `−` right for a left-to-right passive), upright and hugging the
+      body on the label side. This matches the compiled, **Y-flipped** CircuiTikZ
+      preview (the canvas's visual ground truth): the preview negates Y so its
+      orientation equals the canvas's, and there the `+` lands at the first pin.
+    - **Voltage, european style**: a shaft+arrowhead alongside the body, on the
+      label side, pointing from the `+` terminal toward the `−` (first → second
+      pin).
+    - **Current** (`i=`): a bare **arrowhead** (no shaft, so it never overlaps the
+      body) **on the wire near the exit (second-pin) lead** at `_CUR_ARROW_TIP`·
+      half-span, pointing in the traversal (first → second pin) direction — matching
+      CircuiTikZ's default `i=` placement. The value label is centred **directly
+      over the arrowhead** (offset along the lead axis toward the second pin) at the
+      body clearance, so it does **not** stack perpendicularly above an `l=` label on
+      the same side — they clear each other *along* the wire (`L` centred over the
+      body, `i_L` over the exit-lead head).
+    The decoration is counter-rotated like the label so the ± glyphs stay upright,
+    while the arrows follow the on-screen lead axis (so a rotated/mirrored body
+    decorates correctly). The **european voltage arrow** reserves a perpendicular
+    band (`_DEC_BAND`) between the body and its text so the two never overlap; the
+    **american signs** sit at the terminals, and the **current arrowhead** rides on
+    the wire (no shaft, no band, no perpendicular stacking) — see above.
+    Polarity/direction are derived from the pin-0 → pin-1 traversal order — the
+    same basis the label sides and codegen use — and the decoration colour
+    follows the component's interactive/theme ink. The document
+    `voltage_style`/`current_style` (§7.2) selects american vs european; changing
+    it calls `SchematicScene.relayout_annotations()` to update existing
+    components. This is a readable, convention-faithful representation, **not** a
+    pixel-exact reproduction of CircuiTikZ's arrow geometry; `^`/`_` side
+    overrides and the voltage-source default-`v` flip are honoured, but other
+    direction modifiers (`invert`, `i<`/`i>`) are not parsed.
     - **Centred placement.** `ComponentItem._labels_centered_on_axis()` (default
       `False`) lets a component pin its labels *over* the lead axis instead of
       beside it: when `True` the base clearance is zeroed and the label centre
@@ -910,7 +944,8 @@ labels via `SchematicScene.retypeset_labels()`. Renders are cached in-process pe
       label sits over the middle of the line, matching where CircuiTikZ draws
       the arrow label. A centred label is painted over an opaque white backdrop
       padded by `_LABEL_BG_PAD` (3 px) so the annotation line does not appear to
-      run into the text.
+      run into the text. Centred slots draw their own connecting line, so they get
+      **no** `_AnnotationDecoration` (no ± signs / arrow).
 - **Hover association.** Hovering the component body *or* any of its slot labels
   highlights the whole group (body + all slot labels) in `COLOR_HOVER`, so it is
   clear the labels belong to that component. `_SlotLabel` forwards hover events
@@ -989,7 +1024,7 @@ The canvas operates in one of the following mutually exclusive modes at any time
 - Rubber-band drag (drag on empty canvas) selects all components and wire segments within the rectangle.
 - `Ctrl+A` selects all.
 - Selected components can be dragged; the component item snaps to 0.25 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
-- **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta. A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
+- **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta — **provided that pin is the wire's sole lead.** A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **Junction re-stretch rule.** If a moving pin sits on a coordinate where **two or more wire endpoints** coincide (a junction — e.g. a component pin dragged onto a node where a rail is split), those wires do **not** follow (only a pin that is the *unique* wire endpoint at its coordinate carries its lead — the `endpoint_count == 1` gate). Dragging every stub off the node would tear the rail apart and leave overlapping segments and a phantom junction dot. Instead the component **stays connected**: `MoveCommand._add_restretch_leads` grows a fresh **re-stretch lead** from the node (the pin's pre-move coordinate) to the pin's new position — a `route()`-shaped 2-segment Manhattan wire with a new id, captured for exact undo (removed on undo, re-added on redo). So dragging a component onto a junction (its single lead collapses and is removed) and back **fully restores the original topology** — the lead re-grows identically. The live drag preview ghosts these leads (`DragPreviewController._update_restretch_preview`, throwaway non-interactive `WireItem`s) so the preview matches the committed result rather than showing a momentarily-disconnected component. (The all-components-moved and explicitly-selected-wire cases below still translate rigidly regardless, and create no re-stretch leads.) **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
 - `R` rotates the selection 90° CW around the bounding-box centroid of the selected component positions (snapped to 0.25 GU); records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. Connected wires are reshaped or rigidly rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `R` cycles the ghost's rotation instead.
 - Arrow keys nudge selected components by `NUDGE_GU` (0.25 GU, one minor-grid cell) per keypress, in any direction. Connected wires follow (§6.6) and stay grid-valid.
 - `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
@@ -1059,9 +1094,10 @@ targets are what finalize the wire.
 
 #### Junctions and segment splitting
 
-- Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; a true non-connecting **crossing** — one wire's segment passing through another's with *no shared vertex* — is never a connection, and is the case the optional **line-hop** decoration marks, see "Line-hops" below.) A wire with `no_junction_dots=True` (§4.3) is **excluded from the degree count entirely**, so annotation leads do not create dots; other wires/pins at the coordinate are still counted normally.
+- Where wires (and pins) meet, a solid **connection dot** is drawn and emitted as `\node[circ]` (see §7.6). The dot rule is based on the **degree** of a coordinate — the number of wire segment-ends meeting there (an endpoint counts 1, a pass-through/interior vertex counts 2) plus 1 for a coincident pin. **Degree ≥ 3 → dot.** A straight pass-through, a lone corner, two wires meeting end-to-end, and a pin with a single wire all have degree 2 and get no dot. (In this model coincident wire points are electrically joined; a true non-connecting **crossing** — one wire's segment passing through another's with *no shared vertex* — is never a connection, and is the case the optional **line-hop** decoration marks, see "Line-hops" below.) A wire with `no_junction_dots=True` (§4.3) is **excluded from the degree count entirely**, so annotation leads do not create dots; other wires/pins at the coordinate are still counted normally. A **degenerate single-point wire** (`len(points) < 2`, which can linger in an old file) connects nothing and is likewise excluded — both by the static `junction_points()` and by the **live drag preview** (`DragPreviewController.update_junction_preview`), which must skip it too or a sub-cell drag (whose rounded pin lands back on the point) would push the degree to 3 and flash a phantom dot. Such a wire should **never** be created by the editor (see the no-degenerate-half guard below), but as a safety net for an old/hand-edited file `WireItem` paints a single-point wire as a **red ✕ marker** (`_DEGEN_X_R`) that is **selectable and deletable** — so a stray one is visible and removable rather than an invisible source of phantom dots.
 - Wire endpoints that do not coincide with any component pin are drawn as **open circles** and emitted as `\node[ocirc]` (see §7.6). Only the first and last point of each wire are candidates; interior vertices are never open endpoints. A wire with `no_termination_dots=True` (§4.3) is **excluded from `open_endpoints()`**, so its free ends get no terminal — while it still counts as a connection for other wires ending on it. An end carrying a **custom marker** (`start_marker`/`end_marker`, §4.3) is likewise excluded at that specific end, so the marker (e.g. an arrowhead) replaces the automatic open-circle terminal there. The connecting-pin set used here is `component_connection_points` (not the bare named pins), so a wire end on a **rect edge** (§5.4, any 0.25 GU perimeter point) or a **circle cardinal point** (N/S/E/W) counts as connected and gets no open circle. Those box connection points do **not** contribute to the junction degree count above (no spurious dot where a wire meets a box boundary).
-- When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it, by dragging an existing wire vertex onto it, or by **placing or moving a component** such that one of its pins lands mid-segment — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable, and a junction dot is drawn. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand`, `MoveWireVertexCommand`, `PlaceCommand`, or `MoveCommand`) inside a `MacroCommand` so it is one undoable action. Component operations that trigger splits: initial placement, drag-drop, arrow-key nudge, and paste.
+- When a wire connects to the **middle of another wire's segment** or to an existing wire's **intermediate (corner) vertex** — whether by drawing a new wire onto it, by dragging an existing wire vertex onto it, or by **placing or moving a component** such that one of its pins lands mid-segment — the target wire is **split into two independent wire objects** at the connection point so each half is separately selectable and deletable, and a junction dot is drawn. Connecting at an existing *endpoint* (first or last vertex) does not split. The split is bundled with the triggering command (`WireCommand`, `MoveWireVertexCommand`, `PlaceCommand`, or `MoveCommand`) inside a `MacroCommand` so it is one undoable action. Component operations that trigger splits: initial placement, drag-drop, arrow-key nudge, and paste. **No-degenerate-half guard.** A split's `(index, point)` is computed against the wire's *pre-move* geometry, but applied **after** the bundled `MoveCommand` reshaped that wire — which can have moved the wire's own endpoint onto the split point. `SplitWireCommand` therefore re-checks at `do()` time: it treats the corner-split case only for a *genuine intermediate* vertex (`0 < idx < len−1`), no-ops when the point now coincides with an endpoint, and refuses any split that would carve off a `< 2`-point half. This is the single place a degenerate single-point wire could otherwise be created — every other wire-mutating command (`Move`/`Resize`/`GroupRotate`/`MoveWireVertex`/`MoveJunction`) already **removes** a wire that collapses to a point, and `add_wire` rejects a `< 2`-point input.
+  - **Fully-contained wire (a second degenerate class).** A wire whose entire polyline lies on top of other wires' segments (collinear overlap) is **redundant** — it draws nothing new and forms no connection — so it is removed. `MoveCommand` runs `wire_contained_by_others()` (a pure per-segment collinear-coverage test in `model.py`) over the wires *it touched* (reshaped or re-stretched) after a move, and drops any now fully covered by the others (captured for exact undo); processing is sequential so one of a coincident/duplicate pair survives. This catches e.g. a lead dragged collinearly onto the rail it connects to. Only move-touched wires are candidates, so an unrelated redundant wire elsewhere is left alone.
 - When a wire is **deleted** and the deletion dissolves a T-junction (a free endpoint now has exactly two remaining wire neighbors and is not a component pin), those two stubs are automatically **merged** into a single wire. The merge is bundled with the `DeleteCommand` inside a `MacroCommand` so delete + merge is one undoable action. Undoing restores the deleted wire and re-splits the merged wire back into its two halves.
 
 #### Line-hops
@@ -1762,24 +1798,45 @@ inherited by the central area, panels, splitter gaps, status bar). Both
 **toolbars** carry a hairline divider (`theme.top_toolbar_qss` / `ribbon_qss`),
 icons tinted `theme.ICON`, rounded soft-blue hovers (`theme.HOVER`), and the
 active tool shown as a soft-blue fill (the one accent `theme.ACCENT`) rather than
-the native highlight. **Form controls stay native.** Dialogs, message boxes, spin boxes, and combo boxes keep the platform-native look (a global form-control stylesheet cascaded into child dialogs/message boxes and made them non-native, and styling combo/spin sub-controls broke their arrows). Only the toolbars and palette tiles are themed (their own scoped stylesheets), and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor).
+the native highlight. **Form controls stay native and follow the colour scheme.** Form controls (line edits, spin boxes, combo boxes, checkboxes), dialogs, message boxes, tooltips, tab bars, native scrollbars, and the window background keep the platform-native look — restyling them via a stylesheet looked non-native (and a window-level stylesheet broke the palette-based window background). They follow light/dark **natively**: while the app tracks the OS appearance the OS drives them directly, and when the user **forces a mode** with the toolbar toggle, `MainWindow._apply_color_scheme` drives the application colour scheme via `QGuiApplication.styleHints().setColorScheme(Dark/Light)` (Qt 6.8+), so the native widgets re-render dark/light themselves. `_apply_window_palette` then re-snapshots the live `QApplication.palette()` (so native children inherit the right Base/Text/Button roles) and overrides only Window/WindowText with the chrome surface colour. Only the deliberately-flat chrome — toolbars, palette tiles, palette **search box**, side panels, and their scrollbars — is themed by scoped stylesheet/tokens, and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor). The inspector's header/section/hint labels carry a pinned colour and are re-inked on a swap (§10.3); plain field-row labels follow the palette.
 
-**Theme — light / dark (follows the OS appearance).** The chrome and the canvas
-each carry a **switchable two-palette** design: `app/ui/theme.py` (chrome tokens)
-and `app/canvas/style.py` (canvas `COLOR_*`, including `COLOR_BACKGROUND`,
-`COLOR_GRID*`, and the symbol/wire ink `COLOR_NORMAL`) both expose
-`set_dark(on)` / `is_dark()` that rebind their module-level tokens. Canvas items
-read the colours **module-qualified** (`style.COLOR_*`) and re-read them on every
-repaint, so a swap takes effect on the next `update()`. `MainWindow` resolves the
-OS appearance via `QGuiApplication.styleHints().colorScheme()` (the
-`_system_is_dark` helper) **before** building the UI, and stays in sync by
-connecting `colorSchemeChanged`. `MainWindow._apply_theme` swaps both palettes,
+**Theme — light / dark (follows the OS appearance, with a manual toggle).** The
+chrome and the canvas each carry a **switchable two-palette** design:
+`app/ui/theme.py` (chrome tokens) and `app/canvas/style.py` (canvas `COLOR_*`,
+including `COLOR_BACKGROUND`, `COLOR_GRID*`, and the symbol/wire ink
+`COLOR_NORMAL`) both expose `set_dark(on)` / `is_dark()` that rebind their
+module-level tokens. Canvas items read the colours **module-qualified**
+(`style.COLOR_*`) and re-read them on every repaint, so a swap takes effect on the
+next `update()`. `MainWindow` resolves the OS appearance via
+`QGuiApplication.styleHints().colorScheme()` (the `_system_is_dark` helper)
+**before** building the UI, and stays in sync by connecting `colorSchemeChanged`.
+A **light/dark toggle button on the top toolbar** (`_act_dark`, a sun/moon icon)
+lets the user override the OS choice: toggling it pins the theme and sets
+`_follow_system=False`, a one-way opt-out so later OS appearance changes are
+ignored for the rest of the session (`_on_color_scheme_changed` early-returns).
+The button's icon/tooltip track the current mode (a sun to return to light when
+dark, a moon to go dark when light) and are refreshed by `_sync_dark_action`.
+`MainWindow._apply_theme` swaps both palettes,
 re-applies the toolbar/ribbon stylesheets, re-tints the registered toolbar icons,
 asks each side panel to `apply_theme()` (the palette also invalidates its
-ink-coloured thumbnail cache and rebuilds the tile grids), repaints the welcome
-screen and canvas, and sets the window palette. On macOS the **native** form
+ink-coloured thumbnail cache and rebuilds the tile grids; the **properties
+inspector** re-inks its header / section / hint labels — these carry an explicit
+stylesheet that pins the colour, so `PropertiesPanel.apply_theme` restyles each by
+object-name tag (`headerLabel`/`sectionLabel`/`hintLabel`); the palette's category
+**card names** likewise carry pinned ink and are re-inked when the cards rebuild),
+repaints the welcome screen and canvas, and sets the window palette. Labels with a
+stylesheet do not follow the window palette, so any themed text needs an explicit
+re-ink on a swap; plain field-row labels (no stylesheet) follow the palette and do
+not. On macOS the **native** form
 controls already follow the system appearance, so they are deliberately left
-alone. The **on-screen LaTeX preview follows the theme** — in dark mode the
+alone — **except** the two chrome controls that the OS would otherwise leave
+light when the toolbar toggle forces a mode the OS isn't in: the **palette search
+box** (themed via `theme.line_edit_qss()`) and the **canvas scrollbars** (the
+`SchematicView` gets `theme.scrollbar_qss()`); both are re-applied on a swap. The
+**grid dots** read `style.COLOR_GRID` (integer) / `COLOR_GRID_SUB` (0.25 GU minor)
+— opaque, visibility-tuned values in *both* palettes (a too-faint dark grid was
+the reason they are opaque rather than low-alpha). The **on-screen LaTeX preview
+follows the theme** — in dark mode the
 preview is recompiled with `build_tex(source, dark=True)`, which gives the
 standalone document a dark `\pagecolor` and a light default `\color` (matching
 the canvas palette), and the preview panel's background matches so the figure
@@ -1836,11 +1893,18 @@ via `QDesktopServices.openUrl`, so users can file a report without leaving the a
 ### 10.2 Component Palette
 
 Left panel, fixed width `_PALETTE_WIDTH` (≈272px). A search box at the top
-(focus with `Ctrl+/`) and three collapsible sections (`_CollapsibleSection`):
+(focus with `Ctrl+/`), then a **scrolling region** holding the Categories /
+active-category / search-results sections, and a **pinned bottom region**
+holding "in use in document". The two regions **scroll independently** (each has
+its own `QScrollArea`), so the placed kinds stay reachable at the bottom no
+matter how far the categories are scrolled. The sections are
+`_CollapsibleSection`s:
 
 - **In use in document** — icon tiles for the distinct kinds already placed,
-  ordered by category. Rebuilt on `schematic_changed`; hidden when the document
-  is empty (or while a search is active).
+  ordered by category. Lives in the **pinned bottom panel** (a hairline divider
+  above it; height capped at `_IN_USE_MAX_H` ≈ three tile rows, scrolling within
+  itself past that). Rebuilt on `schematic_changed`; the whole bottom panel is
+  hidden when the document is empty (or while a search is active).
 - **Categories** — a **2-column grid** of cards (the split Logic groups use the
   compact names "Logic (Am)" / "Logic (Eu)" so they fit). Each card shows the
   **actual symbol of a representative component** for that category (`_CATEGORY_REP` → rendered by
@@ -1862,9 +1926,12 @@ for readability, cached), with the `display_name` + kind shown as a hover
 (enters **Place** mode). The scroll area uses the shared **`theme.scrollbar_qss`**
 (a clean rounded handle, no arrow buttons) — needed because once a stylesheet is
 active on a scroll widget Qt stops drawing its scrollbars natively. The same
-style is applied to the source panel (§10.4); the properties inspector keeps its
-**native** scrollbar (so its form controls stay native, §10.3) and instead
-reserves a right margin so the overlay scrollbar doesn't cover the fields.
+style is applied to the source panel (§10.4) and to the **properties inspector**
+scroll area — the inspector's body is made transparent (so it shows the tab pane,
+not an opaque white box, §10.3), and a scoped stylesheet on a scroll widget
+de-natives its scrollbars, so it uses the same clean themed scrollbar. (Its
+**form controls** stay native and follow the colour scheme.) It also reserves a
+right margin so the scrollbar doesn't cover the fields.
 
 **Keyboard shortcuts** (`MainWindow.keyPressEvent` → `_handle_palette_shortcut`,
 handled at the window level so it only fires for keys no focused child consumed —
@@ -1880,7 +1947,8 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 
 ### 10.3 Properties Panel
 
-- Right panel, fixed width ~250px, header showing the `ComponentDef.display_name` and `kind`, followed by a vertical scroll area of **capability sections**.
+- Right panel, fixed width ~250px, hosting **two tabs** (a **native** `QTabWidget`, no custom stylesheet): **Properties** (the per-object inspector described here) and **Document** (per-document settings, §10.9). With nothing selected the inspector surfaces the **Document** tab; selecting any object switches to **Properties** (`_on_selection_changed` sets the current tab). The tab bar, form controls, and scrollbar are **native** and follow the light/dark colour scheme (§10) — they are deliberately not restyled.
+- **Properties tab:** header showing the `ComponentDef.display_name` and `kind`, followed by a vertical scroll area of **capability sections**. The scroll viewport/content are made **transparent** via object-name-scoped stylesheet rules (`#inspViewport`/`#inspContent`, so the transparency doesn't cascade onto the native form controls) so the body shows the tab pane like the Document tab, rather than the `QScrollArea`'s opaque `Base` fill (which on the native style read as a distinct white/inset box). A scoped stylesheet de-natives a scroll widget's scrollbars, so the inspector's scrollbar is themed with the shared `theme.scrollbar_qss()` (a clean rounded handle, like the source panel) and re-applied on a light/dark swap (`_apply_scroll_style`).
 - Empty when nothing is selected.
 - Selecting a single **wire** shows the wire inspector instead of the component sections (header "Wire").
 - **Multi-select bulk edit.** When **several components of the *same kind*** are selected (no wires), the panel binds the same sections as for one (header `N × <name>`), loading values from the first; **editing any field applies it to every selected component as one undo step**. The bind is via `InspectorSection.bind_multi`, and each write goes through `InspectorSection._apply`, which wraps the per-component commands in `scene.batch()` (one `MacroCommand`, §6). A selection that mixes kinds (or includes wires) shows just a count (`show_multi_select`).
@@ -2029,17 +2097,20 @@ dialog, which would be intrusive on every save. The image compile is synchronous
 so saving adds the compile latency when PDF/EPS/SVG auto-export is enabled (the
 TeX snippet adds negligible time).
 
-### 10.9 Document Settings
+### 10.9 Document properties (inspector "Document" tab)
 
-**Edit ▸ Document Settings…** opens a modal dialog (`DocumentSettingsDialog`,
-`app/ui/documentsettings.py`) editing the *per-document* CircuiTikZ conventions —
-the **voltage** and **current** label styles (american / european, §7.2) — as
-opposed to the app-wide Preferences (§10.8). The dialog reads the styles from the
-current `Schematic` and writes them back only on **OK**; if a value actually
-changed, the main window emits `schematic_changed`, which marks the document
-modified and refreshes the source panel and preview (the styles flow into
-`generate()`). The settings persist in the `.hv` `config` object (§9.2), so they
-travel with the document rather than the application.
+The **Document** tab of the inspector (§10.3, `DocumentPropertiesPanel`) edits the
+*per-document* CircuiTikZ conventions — the **voltage** and **current** label
+styles (american / european, §7.2) — as opposed to the app-wide Preferences
+(§10.8). It **replaced the former modal Edit ▸ Document Settings… dialog**. Edits
+apply **live**: changing a combo mutates the current `Schematic` and emits
+`DocumentPropertiesPanel.document_changed`, which the main window
+(`_on_document_props_changed`) turns into `SchematicScene.relayout_annotations()`
+(re-place the on-canvas ± signs / arrows for the new style) + `schematic_changed`
+(mark modified, refresh the source panel and preview — the styles flow into
+`generate()`). The panel reloads its combos from the document via `refresh()` on
+New / Open / Open-Example. The settings persist in the `.hv` `config` object
+(§9.2), so they travel with the document rather than the application.
 
 ---
 
@@ -2103,7 +2174,6 @@ heaviside/
 │       ├── properties.py          # PropertiesPanel(QWidget)
 │       ├── theme.py               # shared design tokens + flat stylesheet fragments
 │       ├── preferences.py         # Preferences (QSettings), PreferencesDialog
-│       ├── documentsettings.py    # DocumentSettingsDialog (per-document v/i styles)
 │       └── sourcepanel.py         # SourcePanel(QWidget)
 └── tests/
     ├── test_model.py              # model + validation + geometry helpers (simplify,
@@ -2398,7 +2468,7 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; `SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand` do/undo/redo on a wire; **endpoint-label placement** (`SetWireStartLabelPlacementCommand` / `SetWireEndLabelPlacementCommand` do/undo/redo, setting `start_label_placement` / `end_label_placement`); **rect block-diagram edge connections** (`test_move_drags_wire_connected_to_rect_edge` / `test_move_rect_edge_wire_undo_restores` — a wire endpoint on a rect edge follows a `MoveCommand` and undo restores it; `test_resize_rect_far_edge_wire_follows_scaled` / `test_resize_rect_edge_wire_undo_restores` — under `ResizeCommand` a far-edge connection scales about the fixed corner while a near-edge connection stays put, with exact undo); **circle block-diagram cardinal connections** (`test_move_drags_wire_connected_to_circle_cardinal` — a wire on a circle's cardinal point follows a `MoveCommand`; `test_resize_circle_cardinal_wire_follows_scaled` / `test_resize_circle_cardinal_wire_undo_restores` — under `ResizeCommand` a far cardinal point scales about the fixed corner while the near one stays, with exact undo); and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it).
+In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored; a pin on a multi-wire junction does not drag the net but grows a fresh **re-stretch lead** to its new position — `test_move_off_multiwire_junction_restretches_lead`, `test_move_single_lead_still_follows` — with undo/redo restoring it); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; `SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand` do/undo/redo on a wire; **endpoint-label placement** (`SetWireStartLabelPlacementCommand` / `SetWireEndLabelPlacementCommand` do/undo/redo, setting `start_label_placement` / `end_label_placement`); **rect block-diagram edge connections** (`test_move_drags_wire_connected_to_rect_edge` / `test_move_rect_edge_wire_undo_restores` — a wire endpoint on a rect edge follows a `MoveCommand` and undo restores it; `test_resize_rect_far_edge_wire_follows_scaled` / `test_resize_rect_edge_wire_undo_restores` — under `ResizeCommand` a far-edge connection scales about the fixed corner while a near-edge connection stays put, with exact undo); **circle block-diagram cardinal connections** (`test_move_drags_wire_connected_to_circle_cardinal` — a wire on a circle's cardinal point follows a `MoveCommand`; `test_resize_circle_cardinal_wire_follows_scaled` / `test_resize_circle_cardinal_wire_undo_restores` — under `ResizeCommand` a far cardinal point scales about the fixed corner while the near one stays, with exact undo); and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it).
 
 #### Preview Worker (`test_worker.py`)
 
@@ -2441,10 +2511,11 @@ a blank value clears an override; `set_tool_paths` ignores unknown keys; and
 
 The redesigned palette (§10.2), offscreen Qt: a category card is built per
 registry category and a default active category is selected; selecting a card
-makes it active and retitles the active section; the **in use** section is hidden
-for an empty document and appears once a kind is placed; a non-empty search hides
-the categories/active sections and shows the flat results grid (restored on
-clear); and clicking a tile calls `scene.start_placement(kind)`.
+makes it active and retitles the active section; the **in use** panel (pinned at
+the bottom, §10.2) is hidden for an empty document and appears once a kind is
+placed; a non-empty search hides the categories/active sections and shows the
+flat results grid (restored on clear); and clicking a tile calls
+`scene.start_placement(kind)`.
 
 #### Main window (`test_mainwindow.py`)
 
@@ -2454,14 +2525,20 @@ invoking the compiler (asserted by failing the test if `_compile_to_pdf` is
 called) — confirming it needs no `pdflatex`; with every auto-export preference
 off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
 labelled component without error (used when the math engine / ziamath preference
-changes, §8.4); and `DocumentSettingsDialog` writes the chosen voltage/current
-styles onto the schematic on accept, reporting `changed()` only when a value
-actually differs (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
+changes, §8.4); and the **Document** inspector tab (`DocumentPropertiesPanel`)
+writes the chosen voltage/current styles onto the schematic **live** and emits
+`document_changed` (and `refresh()` reloads silently), and the inspector tabs
+switch between **Properties** (object selected) and **Document** (nothing
+selected) (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
 non-null clipboard image; copy-as-PDF exposes both the `com.adobe.pdf` UTI and
 `application/pdf` plus a raster fallback; copy-as-SVG exposes `public.svg-image` +
 `image/svg+xml` plus a raster fallback and asserts **no** `text/plain` flavor
 (the Office XML-paste regression); compile + convert are stubbed, so no LaTeX.
-The preview panel's Copy PDF/SVG buttons emit the copy-request signals. MainWindow tests neutralise the startup
+The preview panel's Copy PDF/SVG buttons emit the copy-request signals. The
+**toolbar light/dark toggle** (`_act_dark`, §10) flips both palettes and pins the
+choice (`_follow_system=False`), after which an OS appearance change is ignored;
+`_apply_theme` also swaps the canvas + chrome palettes together and re-applies the
+toolbar stylesheet. MainWindow tests neutralise the startup
 dependency check (an autouse fixture) so a missing tool never pops a modal that
 would hang a headless run.
 
@@ -2485,7 +2562,7 @@ and in a menu and that triggering it opens `_ISSUES_URL` via
 
 Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail. As with §13.2, `test_scene.py` is the authoritative list; this is a summary of coverage.
 
-These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable), the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step). The **`scene.batch()`** grouping is covered: several edits inside a batch collapse into one MacroCommand (a single undo reverts them all), and a one-command batch is pushed directly.
+These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable), the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step). The **`scene.batch()`** grouping is covered: several edits inside a batch collapse into one MacroCommand (a single undo reverts them all), and a one-command batch is pushed directly. The **slot labels & annotation decorations** (§5.8) are covered: per-side slot labels appear/hide with the options string and land on the correct (traversal-relative) sides under rotation, with the voltage-source default-`v` flip and same-side stacking; a `v=` slot draws the american ± signs by default and the european arrow when the document `voltage_style` is european (updating live via `relayout_annotations`), an `i=` slot draws a current arrow, a plain `l=` and the centred `open` annotation draw none, and the decoration axis follows the on-screen traversal direction (vertical on a 90°-rotated body). The **dotted-grid** background paints onto a device-space painter without error.
 
 The **inspector** (`test_properties.py`) additionally covers **multi-select bulk edit**: `PropertiesPanel.show_components` over several same-kind components binds the sections (`bind_multi`) and an `OptionsSection` edit applies to all of them as one undo step, while a mixed-kind selection falls back to the count view.
 
@@ -2625,18 +2702,20 @@ What is missing, in increasing difficulty:
    in known coordinates, emitting `<path>` elements is mechanical. Good first
    slice to validate fidelity against the circuitikz SVG: symbols + wires + dots +
    plainly-placed labels, **without** voltage/current arrows yet.
-2. **CircuiTikZ annotation parity** (the real work). The canvas places `l=`/`v=`/
-   `i=` *text* but does **not** draw the voltage arcs or current arrows — those
-   live only in the codegen path (`app/codegen/circuitikz.py`), which passes
-   `comp.options` verbatim into `to[…]`. Because `comp.options` is a free-form
-   circuitikz option string, a native renderer can only support a **curated
-   subset** (the common slots and their `^`/`_` variants, basic styling) and must
-   **fall back or warn** when options exceed it — reimplementing circuitikz fully
-   is unbounded. A promising approach reuses the existing build-time measurement
-   (the same machinery that produced `geometry.json`): render sample annotated
-   components, measure circuitikz's arrow paths and label anchors, and **bake the
-   annotation geometry** so the native renderer merely *places* pre-measured
-   circuitikz geometry — high fidelity, no runtime LaTeX.
+2. **CircuiTikZ annotation parity** (the real work; *partially done*). The canvas
+   now draws a native, convention-faithful representation of the voltage/current
+   annotations alongside the `l=`/`v=`/`i=` text: american ± signs, european
+   voltage arrows, and current direction arrows (`_AnnotationDecoration`, §5.8),
+   honouring the document `voltage_style`/`current_style`, the pin-traversal
+   polarity, and the `^`/`_` side overrides. It is **not** a pixel-exact
+   reproduction of circuitikz's arrow geometry, and direction modifiers beyond the
+   common slots (`invert`, `i<`/`i>`, free-form styling) are not interpreted — the
+   codegen path (`app/codegen/circuitikz.py`) still passes `comp.options` verbatim
+   into `to[…]` for the exported/compiled output. A higher-fidelity route reuses
+   the build-time measurement (the machinery that produced `geometry.json`):
+   render sample annotated components, measure circuitikz's arrow paths and label
+   anchors, and **bake the annotation geometry** so the native renderer merely
+   *places* pre-measured circuitikz geometry — high fidelity, no runtime LaTeX.
 3. **Math labels** (hardest to make truly LaTeX-free). The canvas currently shells
    out to `latex`+`dvisvgm` (cached, optional, falls back to raw text — see
    `app/preview/mathrender.py`). **KaTeX does not solve the export case**: it emits

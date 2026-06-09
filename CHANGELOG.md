@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document properties tab.** The properties inspector is now split into two
+  tabs: **Properties** (the per-object inspector) and **Document** (per-document
+  CircuiTikZ voltage/current label conventions). The Document tab **replaces the
+  Edit ▸ Document Settings… dialog** and applies changes live. It's shown
+  automatically whenever nothing is selected.
+- **Voltage & current annotations are drawn on the canvas.** A `v=` label now
+  shows the CircuiTikZ-style polarity decoration — **American ± signs** at the
+  terminals (the default) or a **European voltage arrow** alongside the body when
+  the document voltage style is European — and an `i=` label shows a **current
+  direction arrow** along the lead. Polarity and arrow direction follow the
+  component's pin traversal (so rotated/mirrored parts decorate correctly), and
+  switching the document's voltage/current style updates existing components
+  immediately. (Readable convention, not a pixel-exact copy of CircuiTikZ.)
+- **Light/dark toggle button on the toolbar.** A sun/moon button flips between
+  light and dark mode on demand; once you use it, the app stops following the OS
+  appearance for the rest of the session.
 - **Keyboard shortcuts for the component palette.** Each category shows a subtle
   **letter** (R=Resistors, C=Capacitors, L=Inductors, D=Diodes, …); pressing it
   selects that category. The first ten components of the active category show a
@@ -41,6 +57,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Current (`i=`) label now matches the LaTeX output.** The on-canvas current
+  annotation is drawn the way CircuiTikZ draws it — a single **arrowhead** on the
+  wire near the exit terminal (pointing in the current direction) with the value
+  label **centred over the head** — instead of a full arrow stacked high above the
+  component's value label. (The shaft is gone, so it never overlaps the body.)
+- **Dark mode keeps native controls and themes them properly.** Forcing dark mode
+  with the toolbar toggle now drives the OS colour scheme (`setColorScheme`, Qt
+  6.8+), so the **native** form controls, dialogs, tooltips, tab bar, scrollbars,
+  and the window background all re-render dark — no more half-light controls, and
+  the controls stay native (not restyled). The inspector tabs are a plain native
+  `QTabWidget` again. The Properties tab body now shows the panel background
+  (clear, like the Document tab) instead of an inset white box, and the category
+  cards' icon/name no longer draw an opaque box behind them.
+- **Dark mode no longer leaves some text light.** Switching to dark mode via the
+  toolbar now also re-inks the palette **category names** and the **properties
+  inspector** title/section/hint labels (their pinned stylesheet colours did not
+  follow the theme before).
+- **Redundant fully-overlapping wires are removed.** A wire whose whole length
+  lies on top of other wires (e.g. a lead dragged collinearly onto the rail it
+  connects to) is now dropped as redundant when a move creates it (undoable),
+  alongside the existing single-point degenerate-wire handling.
+- **SPDT switch terminals now line up with its leads.** The 3-terminal SPDT
+  switch was drawn with its pins off the symbol's actual poles — the output pins
+  sat slightly inboard and above/below where the leads ended. It is now an
+  anchor-pinned, scaled symbol (like the MOSFET/BJT), so the input and the two
+  throws sit exactly on their terminals.
+- **Dragging a component no longer leaves a stray "dead" wire (and phantom
+  junction dot).** Moving a component so a connected lead's endpoint slid onto the
+  point where the move also wanted to split that wire produced an invisible
+  degenerate single-point wire — which then flashed a spurious connection dot at
+  the terminal on later drags. The wire split now refuses to carve off a
+  zero-length half (and the drag preview ignores any such leftover wire). The
+  Boost Converter example, which already contained one, has been cleaned.
+- **Stray degenerate wires are now visible.** As a safety net, a degenerate
+  single-point wire (e.g. from an older file) is drawn on the canvas as a **red ✕**
+  that can be selected and deleted, instead of being silently invisible.
+- **Dragging a component off a wire junction no longer tears the net.** Dragging a
+  component pin onto a junction (where a wire is split in two) and back used to
+  drag **both** wire stubs off the node, leaving overlapping segments and an
+  erroneous junction dot at the pin. A pin now follows only its own single lead;
+  on a shared junction the existing net stays put and the component stays
+  connected by a fresh **lead that rubber-bands** from the node to the pin's new
+  position (shown live during the drag). Dragging onto a junction and back now
+  restores the original wiring exactly.
 - **Scrollbars look right again.** The themed panels' stylesheets had turned the
   CircuiTikZ source (and palette) scrollbars non-native, so they rendered with
   ugly default arrow buttons. They now use a clean themed scrollbar (a rounded
@@ -86,6 +146,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the Copy PDF/SVG buttons show a pointer cursor and hover highlight.
 
 ### Changed
+- **Dotted canvas grid.** The background grid is now a subtle pattern of **dots**
+  at the grid intersections instead of full ruled lines, so it orients the eye
+  without competing with the schematic. The fine 0.25-GU dots appear only when
+  zoomed in far enough to read.
+- **"In use in document" is pinned to the bottom of the palette.** The placed-kinds
+  section now sits in a fixed panel at the bottom of the palette sidebar and
+  **scrolls independently** of the categories above, so it's always reachable.
 - **Refreshed component palette.** Category cards now show the **actual symbol**
   of a representative component (rendered from the component itself) instead of a
   generic icon that often didn't fit; the component previews are **larger** (3
