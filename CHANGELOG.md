@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the Copy PDF/SVG buttons show a pointer cursor and hover highlight.
 
 ### Changed
+- **Signed & notarized macOS releases.** The release workflow now signs the
+  macOS `.app` with a Developer ID Application certificate (hardened runtime +
+  entitlements), submits it to Apple's notary service, and staples the ticket, so
+  downloaded builds open without a Gatekeeper warning. Signing runs only when the
+  signing secrets are configured; runs without them still produce an unsigned
+  build. See `packaging/entitlements.plist` and `.github/workflows/release.yml`.
 - **Palette categories tidied.** The **Supplies** category was merged into
   **Sources** (power rails now live there), and within every category the
   american-style components are grouped before the european-style ones instead of

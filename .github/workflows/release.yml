@@ -6,6 +6,17 @@ name: Release
 #   git tag v0.4.0
 #   git push --tags
 #
+# macOS signing/notarization is automatic when these repository secrets are set
+# (Settings → Secrets and variables → Actions). Without them the macOS build is
+# produced UNSIGNED, so the rest of the pipeline stays testable:
+#   MACOS_CERT_P12       base64 of the Developer ID Application cert (.p12)
+#   MACOS_CERT_PASSWORD  password used when exporting that .p12
+#   KEYCHAIN_PASSWORD    any throwaway string (locks the temp build keychain)
+#   MACOS_SIGN_IDENTITY  "Developer ID Application: Your Name (TEAMID)"
+#   AC_API_KEY_ID        App Store Connect API key ID (for notarytool)
+#   AC_API_ISSUER_ID     App Store Connect API issuer ID
+#   AC_API_KEY           base64 of the App Store Connect API key (.p8)
+#
 on:
   push:
     tags:
@@ -80,9 +91,84 @@ jobs:
       - name: Build the app (PyInstaller)
         run: uv run pyinstaller --noconfirm --clean heaviside.spec
 
+      # macOS signing + notarization (steps below) only runs when the signing
+      # secrets are configured. A run without them — a fork, or a
+      # workflow_dispatch test before the secrets are added — still produces an
+      # UNSIGNED build instead of failing, so the pipeline stays testable.
+      - name: Check for signing credentials (macOS)
+        if: runner.os == 'macOS'
+        id: signing
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+        run: |
+          if [ -n "$MACOS_CERT_P12" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::macOS signing secrets are not set — producing an UNSIGNED, un-notarized build. Downloaders will see a Gatekeeper warning."
+          fi
+
+      # Import the Developer ID Application certificate into a throwaway keychain
+      # scoped to this run. set-key-partition-list authorises codesign to use the
+      # imported key without an interactive prompt.
+      - name: Import Developer ID certificate (macOS)
+        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          # Make the temp keychain searchable so codesign finds the identity.
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+
+      # Sign the whole bundle (inner libraries included, via --deep) with the
+      # hardened runtime, a secure timestamp, and the entitlements a PyInstaller
+      # app needs — all prerequisites for notarization.
+      - name: Sign the app (macOS)
+        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          codesign --force --deep --timestamp --options runtime \
+            --entitlements packaging/entitlements.plist \
+            --sign "$MACOS_SIGN_IDENTITY" dist/Heaviside.app
+          codesign --verify --deep --strict --verbose=2 dist/Heaviside.app
+
+      # Submit to Apple's notary service and wait for the verdict, then staple
+      # the ticket onto the .app so Gatekeeper passes even offline. Uses an App
+      # Store Connect API key (.p8) rather than an Apple ID + app password.
+      - name: Notarize and staple (macOS)
+        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
+        env:
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
+          AC_API_KEY: ${{ secrets.AC_API_KEY }}
+        run: |
+          echo "$AC_API_KEY" | base64 --decode > "$RUNNER_TEMP/api_key.p8"
+          # notarytool uploads an archive, not the .app directory itself.
+          ditto -c -k --keepParent dist/Heaviside.app "$RUNNER_TEMP/notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+            --key "$RUNNER_TEMP/api_key.p8" \
+            --key-id "$AC_API_KEY_ID" \
+            --issuer "$AC_API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple dist/Heaviside.app
+          rm -f "$RUNNER_TEMP/api_key.p8" "$RUNNER_TEMP/notarize.zip"
+
       # macOS: an .app is a directory of many files (including framework symlinks
       # that a plain zip would mangle), so use ditto, which is the macOS-correct
-      # archiver. Then emit a SHA-256 for download verification.
+      # archiver. Runs after signing/stapling above so the zip carries the
+      # notarization ticket. Then emit a SHA-256 for download verification.
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Hardened-runtime entitlements for the notarized macOS build.
+
+    A PyInstaller bundle embeds a Python interpreter and loads PySide6/Qt
+    dynamic libraries that are not signed by Apple, so the hardened runtime
+    (required for notarization) must be relaxed in three ways or the app crashes
+    on launch:
+
+      * allow-jit / allow-unsigned-executable-memory — CPython and Qt's JITs
+        allocate writable+executable memory.
+      * disable-library-validation — lets the Developer-ID-signed app load the
+        bundled third-party (PySide6/Qt) libraries.
+
+    Applied by the `codesign --entitlements` pass in .github/workflows/release.yml.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>
