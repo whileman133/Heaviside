@@ -32,6 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Labels no longer vanish from the canvas after a one-off render failure.** A
+  component label (e.g. a resistor's `l=$R$`) could render to nothing because the
+  math-label cache stored a transient compile failure as a *permanent* empty
+  sentinel — once `$R$` failed to compile once, it never rendered again. Failures
+  are no longer cached (an empty/missing entry is retried and self-heals), and
+  successful renders are written atomically so a partial write can't poison the
+  cache either. Existing poisoned entries recover automatically.
 - **Copy PDF / Copy SVG now paste into Word, PowerPoint, and Google Docs.**
   Copy PDF placed the figure only under the `application/pdf` MIME type, which
   macOS wraps in a flavor Office doesn't recognize — so nothing pasted; Copy SVG

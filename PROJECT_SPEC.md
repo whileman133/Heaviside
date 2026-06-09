@@ -917,9 +917,14 @@ labels via `SchematicScene.retypeset_labels()`. Renders are cached in-process pe
   to `ComponentItem._set_hovered()`, which repaints the body and every slot.
 - **Caching.** Two tiers: an in-process `lru_cache` of parsed paths, and an
   on-disk cache of compiled SVG text keyed by a content hash (with a
-  `_RENDER_VERSION` prefix so template changes invalidate it). A failed compile
-  writes an empty sentinel so it is not retried. Reopening a file re-parses
-  cached SVGs without invoking `latex`.
+  `_RENDER_VERSION` prefix so template changes invalidate it). Only **successful**
+  renders are persisted, written atomically (temp file + rename) so a partial
+  write can't be read back as content. A failure is **not** cached: an empty or
+  missing entry is a miss and is retried, so a one-off transient failure never
+  poisons a good fragment permanently (the bug where an `l=$R$` label vanished
+  because an empty sentinel had been cached for `$R$`). The in-process cache still
+  prevents re-shelling for a genuinely bad fragment within a session. Reopening a
+  file re-parses cached SVGs without invoking `latex`.
 - **Async, non-blocking.** `render_async(fragment, on_done)` runs the compile on
   a bounded `QThreadPool` (2 workers) and delivers the result back on the UI
   thread via a queued signal. Until the path arrives items show raw text; if the

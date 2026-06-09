@@ -41,6 +41,7 @@ path is the one-time ``latex`` compile).
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import subprocess
 import tempfile
@@ -114,16 +115,41 @@ def _cache_key(fragment: str) -> str:
 # Compilation: fragment -> SVG text  (disk-cached)
 # ---------------------------------------------------------------------------
 
+def _atomic_write(dest: Path, text: str) -> None:
+    """Write *text* to *dest* via a temp file + rename, so a concurrent reader
+    never observes a partial (or empty) file. A truncated cache entry would
+    otherwise be read back as valid content that fails to parse — re-poisoning
+    the fragment just like the empty-sentinel bug did."""
+    fd, tmp = tempfile.mkstemp(dir=str(dest.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, dest)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
     """Return dvisvgm SVG text for *fragment*, or ``None`` on failure.
 
-    The result is cached on disk by content hash.  A sentinel empty file marks a
-    previous compile failure so we don't repeatedly shell out for a bad fragment.
+    A **successful** render is cached on disk by content hash. Failures are NOT
+    persisted: an empty/missing cache file is treated as a miss and retried, so a
+    one-off transient failure (a momentary tooling hiccup, a race, an interrupted
+    write) can never poison a perfectly good fragment forever — the bug where a
+    resistor's ``l=$R$`` label silently vanished because an old empty sentinel was
+    cached for ``$R$``. Within a session, ``render_path``'s in-memory cache still
+    prevents re-shelling for a genuinely bad fragment.
     """
     cache_file = _cache_dir() / f"{_cache_key(fragment)}.svg"
     if cache_file.exists():
         text = cache_file.read_text(encoding="utf-8")
-        return text or None
+        if text:
+            return text
+        # Empty file: a stale failure marker from an older build (or a partial
+        # write). Fall through and retry instead of returning None forever.
 
     latex_exe = _tools.resolve("latex")
     dvisvgm_exe = _tools.resolve("dvisvgm")
@@ -140,7 +166,6 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
                 cwd=tmp, capture_output=True, timeout=timeout,
             )
             if r.returncode != 0 or not (tmp_path / "m.dvi").exists():
-                cache_file.write_text("", encoding="utf-8")
                 return None
             r = subprocess.run(
                 [dvisvgm_exe, "--no-fonts", "m.dvi", "-o", "m.svg"],
@@ -148,14 +173,14 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
             )
             svg_file = tmp_path / "m.svg"
             if r.returncode != 0 or not svg_file.exists():
-                cache_file.write_text("", encoding="utf-8")
                 return None
             text = svg_file.read_text(encoding="utf-8")
         except (subprocess.TimeoutExpired, OSError):
             return None
 
-    cache_file.write_text(text, encoding="utf-8")
-    return text
+    if text:
+        _atomic_write(cache_file, text)
+    return text or None
 
 
 # ---------------------------------------------------------------------------

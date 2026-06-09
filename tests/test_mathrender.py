@@ -177,6 +177,42 @@ def test_render_latex_caches_on_disk() -> None:
 
 
 @pytestmark_tex
+def test_empty_cache_sentinel_self_heals() -> None:
+    """A stale **empty** cache file (a failure marker from an older build, or a
+    partial write) is treated as a miss and re-rendered — never returned as a
+    permanent failure. Regression: a resistor's ``l=$R$`` label vanished because
+    an empty sentinel had been cached for ``$R$``."""
+    from app.preview.mathrender import _cache_dir, _cache_key, _compile_svg
+
+    frag = r"$\Phi_\mathrm{heal,test}$"
+    cache_file = _cache_dir() / f"{_cache_key(frag)}.svg"
+    cache_file.write_text("", encoding="utf-8")  # poison with an empty sentinel
+    render_path.cache_clear()
+    try:
+        svg = _compile_svg(frag)
+        assert svg, "empty sentinel must be ignored and the fragment recompiled"
+        assert cache_file.read_text(encoding="utf-8")  # healed: real content now
+    finally:
+        cache_file.unlink(missing_ok=True)
+
+
+@pytestmark_tex
+def test_failed_compile_writes_no_sentinel() -> None:
+    """A genuine compile failure does not persist an empty sentinel, so it never
+    blocks a later retry (the poisoning mechanism is gone for good)."""
+    from app.preview.mathrender import _cache_dir, _cache_key, _compile_svg
+
+    frag = r"$\notARealLatexCommand_{zz}$"
+    cache_file = _cache_dir() / f"{_cache_key(frag)}.svg"
+    cache_file.unlink(missing_ok=True)
+    try:
+        assert _compile_svg(frag) is None
+        assert not cache_file.exists(), "a failure must not write a cache sentinel"
+    finally:
+        cache_file.unlink(missing_ok=True)
+
+
+@pytestmark_tex
 def test_render_latex_empty_returns_none() -> None:
     assert render_latex("   ") is None
 
