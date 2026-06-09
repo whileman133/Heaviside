@@ -59,13 +59,17 @@ class _SchematicCompileWorker(QObject):
         super().__init__()
         self._dpi = dpi
         self.source: str = ""
+        # Written on the main thread before a dispatch, read here on the worker
+        # thread (same ordering guarantee as ``source``). Dark renders the
+        # preview with a dark page; exports never go through this path.
+        self.dark: bool = False
 
     @Slot()
     def do_compile(self) -> None:
         """Called (via queued connection) on the worker thread."""
         self.compile_started.emit()
         try:
-            tex = build_tex(self.source)
+            tex = build_tex(self.source, dark=self.dark)
             pdf_bytes = compile_tex(tex)
             image = pdf_to_qimage(pdf_bytes, dpi=self._dpi)
             self.preview_ready.emit(image)
@@ -127,6 +131,11 @@ class PreviewWorker(QObject):
     # ------------------------------------------------------------------
     # Public API (main thread)
     # ------------------------------------------------------------------
+
+    def set_dark(self, dark: bool) -> None:
+        """Render subsequent previews with a dark page (preview only). Set on the
+        main thread; takes effect on the next compile."""
+        self._worker.dark = dark
 
     def request_compile(self, circuitikz_source: str) -> None:
         """

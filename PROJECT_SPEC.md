@@ -1597,11 +1597,18 @@ suits the web and vector editors (Inkscape, Illustrator).
 and **as SVG** place the compiled figure on the clipboard instead of writing a
 file, for pasting directly into slides/docs/chat; **Copy PNG / PDF / SVG buttons**
 also sit below the LaTeX preview panel (§10.5). PNG renders the compiled PDF to a
-`QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`;
-PDF sets a `QMimeData` with the compiled PDF as `application/pdf`; SVG converts
-via `pdf_to_svg` and sets `image/svg+xml` plus a `text/plain` fallback. Same
-toolchain requirements as the matching exports (`pdflatex`; `pdftocairo` for SVG);
-failures report as for export.
+`QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`.
+PDF and SVG each set a `QMimeData` carrying the vector data under **both** its
+macOS pasteboard UTI — `com.adobe.pdf` / `public.svg-image` (so Keynote, Pages,
+Preview, Illustrator, Inkscape, and Office where supported paste it as vector) —
+**and** the cross-platform MIME type (`application/pdf` / `image/svg+xml`), plus a
+**raster fallback** (`setImageData` of the 300-dpi render, which Qt exposes under
+`public.tiff`/`public.png`) so apps without vector paste — Word, PowerPoint,
+Google Docs, Slack — still receive the figure. SVG deliberately does **not** add a
+`text/plain` flavor: that made Office paste the raw `<svg>` markup. The copied
+figure always uses the **light** export template (`build_tex` without `dark`), so
+dark mode never affects what is pasted. Same toolchain requirements as the
+matching exports (`pdflatex`; `pdftocairo` for SVG); failures report as for export.
 
 ### 8.7 Dependencies
 
@@ -1743,15 +1750,41 @@ The **palette spans the full window height** on the left; the canvas + propertie
 and, beneath them, the source/preview strip occupy the region to its right (so the
 source and preview no longer run underneath the palette).
 
-**Visual language.** A single flat, light theme unifies the chrome with the
-component palette — defined as colour tokens + stylesheet fragments in
-`app/ui/theme.py` (import the tokens; don't hard-code colours). The window
-background is white (`MainWindow` sets its palette `Window` color to `#ffffff`,
+**Visual language.** A single flat theme unifies the chrome with the component
+palette — defined as colour tokens + stylesheet fragments in `app/ui/theme.py`
+(import the tokens; don't hard-code colours). The window background is the
+active surface (`MainWindow` sets its palette `Window`/`WindowText` colours,
 inherited by the central area, panels, splitter gaps, status bar). Both
-**toolbars are white** with a hairline divider (`theme.top_toolbar_qss` /
-`ribbon_qss`), icons tinted `theme.ICON` (`#555`), rounded soft-blue hovers
-(`#e8f0fe`), and the active tool shown as a soft-blue fill (the one accent
-`#5b87f0`) rather than the native highlight. **Form controls stay native.** Dialogs, message boxes, spin boxes, and combo boxes keep the platform-native look (a global form-control stylesheet cascaded into child dialogs/message boxes and made them non-native, and styling combo/spin sub-controls broke their arrows). Only the toolbars and palette tiles are themed (their own scoped stylesheets), and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor).
+**toolbars** carry a hairline divider (`theme.top_toolbar_qss` / `ribbon_qss`),
+icons tinted `theme.ICON`, rounded soft-blue hovers (`theme.HOVER`), and the
+active tool shown as a soft-blue fill (the one accent `theme.ACCENT`) rather than
+the native highlight. **Form controls stay native.** Dialogs, message boxes, spin boxes, and combo boxes keep the platform-native look (a global form-control stylesheet cascaded into child dialogs/message boxes and made them non-native, and styling combo/spin sub-controls broke their arrows). Only the toolbars and palette tiles are themed (their own scoped stylesheets), and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor).
+
+**Theme — light / dark (follows the OS appearance).** The chrome and the canvas
+each carry a **switchable two-palette** design: `app/ui/theme.py` (chrome tokens)
+and `app/canvas/style.py` (canvas `COLOR_*`, including `COLOR_BACKGROUND`,
+`COLOR_GRID*`, and the symbol/wire ink `COLOR_NORMAL`) both expose
+`set_dark(on)` / `is_dark()` that rebind their module-level tokens. Canvas items
+read the colours **module-qualified** (`style.COLOR_*`) and re-read them on every
+repaint, so a swap takes effect on the next `update()`. `MainWindow` resolves the
+OS appearance via `QGuiApplication.styleHints().colorScheme()` (the
+`_system_is_dark` helper) **before** building the UI, and stays in sync by
+connecting `colorSchemeChanged`. `MainWindow._apply_theme` swaps both palettes,
+re-applies the toolbar/ribbon stylesheets, re-tints the registered toolbar icons,
+asks each side panel to `apply_theme()` (the palette also invalidates its
+ink-coloured thumbnail cache and rebuilds the tile grids), repaints the welcome
+screen and canvas, and sets the window palette. On macOS the **native** form
+controls already follow the system appearance, so they are deliberately left
+alone. The **on-screen LaTeX preview follows the theme** — in dark mode the
+preview is recompiled with `build_tex(source, dark=True)`, which gives the
+standalone document a dark `\pagecolor` and a light default `\color` (matching
+the canvas palette), and the preview panel's background matches so the figure
+blends in. This is the only consumer of the dark template: the preview worker
+(`PreviewWorker.set_dark`) sets it, and `_apply_theme` recompiles a shown preview
+on a swap. **All exports stay light** — `build_tex` defaults to the light
+template and the PDF/EPS/SVG/PNG export path and `build_snippet` never pass
+`dark`, so the distributed figure remains white-paper/black-ink regardless of the
+UI theme.
 
 **Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
 editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning
@@ -2040,6 +2073,7 @@ heaviside/
     ├── test_wiregeometry.py       # WireGeometry snapping / hit-testing (no Qt scene)
     ├── test_scene.py              # SchematicScene/SchematicView interaction (offscreen Qt)
     ├── test_preferences.py        # Preferences (QSettings) + dialog
+    ├── test_theme.py              # light/dark palette swap (canvas style + chrome theme)
     ├── test_palette.py            # component palette: cards, active category, search, in-use (offscreen Qt)
     ├── test_tools.py              # external-tool path resolution (override vs PATH)
     ├── test_mainwindow.py         # MainWindow auto-export + label re-typeset (offscreen Qt)
@@ -2380,9 +2414,11 @@ labelled component without error (used when the math engine / ziamath preference
 changes, §8.4); and `DocumentSettingsDialog` writes the chosen voltage/current
 styles onto the schematic on accept, reporting `changed()` only when a value
 actually differs (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
-non-null clipboard image, copy-as-PDF sets an `application/pdf` payload, and
-copy-as-SVG sets an `image/svg+xml` payload (compile + convert stubbed, so no
-LaTeX); the preview panel's Copy PDF/SVG buttons emit the copy-request signals. MainWindow tests neutralise the startup
+non-null clipboard image; copy-as-PDF exposes both the `com.adobe.pdf` UTI and
+`application/pdf` plus a raster fallback; copy-as-SVG exposes `public.svg-image` +
+`image/svg+xml` plus a raster fallback and asserts **no** `text/plain` flavor
+(the Office XML-paste regression); compile + convert are stubbed, so no LaTeX.
+The preview panel's Copy PDF/SVG buttons emit the copy-request signals. MainWindow tests neutralise the startup
 dependency check (an autouse fixture) so a missing tool never pops a modal that
 would hang a headless run.
 

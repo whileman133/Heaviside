@@ -36,14 +36,66 @@ PIN_R: float = 3.0
 """Radius of pin indicator dots, in pixels."""
 
 # ---------------------------------------------------------------------------
-# Colors (ARGB hex strings — compatible with QColor(str) constructor)
+# Colors (ARGB hex strings — compatible with the QColor(str) constructor)
 # ---------------------------------------------------------------------------
+#
+# A switchable light/dark palette. Canvas code reads these **module-qualified**
+# (``style.COLOR_NORMAL``, never ``from style import COLOR_NORMAL``) and re-reads
+# them on every repaint, so ``set_dark()`` can swap the whole canvas at runtime —
+# the chrome counterpart lives in ``app/ui/theme.py``. The defaults are the light
+# values, so code that never calls ``set_dark`` is unchanged.
 
-COLOR_NORMAL    = "#FF000000"   # black
-COLOR_SELECTED  = "#FF0055CC"   # blue highlight
-COLOR_HOVER     = "#FF228B22"   # forest green
-COLOR_GHOST     = "#80000000"   # 50 % transparent black (placement preview)
-COLOR_PIN       = "#FFCC0000"   # dark red (pin indicator dots)
+_LIGHT = {
+    "COLOR_NORMAL":     "#FF000000",   # symbol/wire ink (black)
+    "COLOR_SELECTED":   "#FF0055CC",   # blue selection highlight
+    "COLOR_HOVER":      "#FF228B22",   # forest-green hover
+    "COLOR_GHOST":      "#80000000",   # 50 % transparent ink (placement preview)
+    "COLOR_PIN":        "#FFCC0000",   # dark red (pin indicator dots)
+    "COLOR_BACKGROUND": "#FFFFFFFF",   # canvas paper; also backs labels / markers
+    "COLOR_LABEL_BG":   "#FFFFFFFF",   # opaque backdrop behind typeset labels
+    "COLOR_GRID":       "#FFD0D0D0",   # integer grid lines
+    "COLOR_GRID_SUB":   "#22808080",   # 0.5 GU midline (reduced opacity)
+    "COLOR_GRID_FINE":  "#11808080",   # 0.25/0.75 GU minor lines (faintest)
+}
+_DARK = {
+    "COLOR_NORMAL":     "#FFE6E6E6",   # near-white ink on a dark canvas
+    "COLOR_SELECTED":   "#FF5C9DFF",   # brighter blue (legible on dark)
+    "COLOR_HOVER":      "#FF52D273",   # brighter green
+    "COLOR_GHOST":      "#80FFFFFF",   # 50 % transparent light ink
+    "COLOR_PIN":        "#FFFF6B6B",   # lighter red
+    "COLOR_BACKGROUND": "#FF1E1F22",   # dark canvas paper
+    "COLOR_LABEL_BG":   "#FF1E1F22",   # backdrop matches the dark canvas
+    "COLOR_GRID":       "#FF3A3C42",   # subtle light-on-dark integer lines
+    "COLOR_GRID_SUB":   "#22A0A0A0",
+    "COLOR_GRID_FINE":  "#11A0A0A0",
+}
+
+# Active values — module globals, defaulting to light. ``set_dark`` rebinds them.
+COLOR_NORMAL     = _LIGHT["COLOR_NORMAL"]
+COLOR_SELECTED   = _LIGHT["COLOR_SELECTED"]
+COLOR_HOVER      = _LIGHT["COLOR_HOVER"]
+COLOR_GHOST      = _LIGHT["COLOR_GHOST"]
+COLOR_PIN        = _LIGHT["COLOR_PIN"]
+COLOR_BACKGROUND = _LIGHT["COLOR_BACKGROUND"]
+COLOR_LABEL_BG   = _LIGHT["COLOR_LABEL_BG"]
+COLOR_GRID       = _LIGHT["COLOR_GRID"]
+COLOR_GRID_SUB   = _LIGHT["COLOR_GRID_SUB"]
+COLOR_GRID_FINE  = _LIGHT["COLOR_GRID_FINE"]
+
+
+def set_dark(on: bool) -> None:
+    """Swap the canvas palette between light and dark.
+
+    Rebinds the module-level ``COLOR_*`` globals so callers that read them as
+    ``style.COLOR_*`` pick up the change on their next repaint. Pair with
+    ``app.ui.theme.set_dark`` (chrome) and a canvas ``update()``.
+    """
+    globals().update(_DARK if on else _LIGHT)
+
+
+def is_dark() -> bool:
+    """True if the dark palette is currently active."""
+    return COLOR_BACKGROUND == _DARK["COLOR_BACKGROUND"]
 
 # Opacity applied to the voltage-annotation (open) connecting line so it reads
 # as a translucent annotation rather than a solid/dashed wire (§5.9).

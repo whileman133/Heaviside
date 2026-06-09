@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Dark mode (follows the system appearance).** The whole app — canvas (paper,
+  grid, symbol/wire ink), toolbars, component palette, properties, source panel,
+  the welcome screen, and the LaTeX preview — now switches between light and dark
+  to match the OS appearance, live via `colorSchemeChanged`. Native dialogs and
+  spin/combo boxes follow the system as before. In dark mode the preview is
+  recompiled with a dark page and light ink so it no longer glares against the UI;
+  **exports stay light** (the copied/saved figure is the publication artifact —
+  white paper, black ink — so dark mode never affects what you put in a document).
 - **Switches and choke.** Added a Switches category with normally-open (`nos`),
   normally-closed (`ncs`), push-button (`push button`), **opening** and
   **closing** switches, a **3-terminal SPDT** switch, plus a Choke (`cute choke`)
@@ -24,6 +32,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Copy PDF / Copy SVG now paste into Word, PowerPoint, and Google Docs.**
+  Copy PDF placed the figure only under the `application/pdf` MIME type, which
+  macOS wraps in a flavor Office doesn't recognize — so nothing pasted; Copy SVG
+  also put the markup on the clipboard as plain text, so Office pasted the raw
+  `<svg>` XML. Both now expose the figure under its real macOS pasteboard UTI
+  (`com.adobe.pdf` / `public.svg-image`) for vector-aware apps **and** attach a
+  300-dpi raster fallback so apps without vector paste still get the image; the
+  SVG `text/plain` flavor is gone. (Exports are unchanged.)
 - **Mirroring now matches in the LaTeX output.** A mirrored two-terminal
   component whose symbol has off-axis features (e.g. an LED's emission arrows)
   was reversed only *along* its axis in the generated CircuiTikZ, so those

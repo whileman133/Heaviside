@@ -129,15 +129,23 @@ def test_copy_png_puts_image_on_clipboard(tmp_path, monkeypatch):
 
 
 def test_copy_pdf_puts_pdf_mime_on_clipboard(tmp_path, monkeypatch):
-    """Copy-as-PDF sets an application/pdf clipboard payload (the compiled PDF)."""
+    """Copy-as-PDF exposes the figure under both the macOS PDF pasteboard UTI
+    (com.adobe.pdf — so Office/iWork paste it) and the application/pdf MIME type,
+    plus a raster fallback for apps without vector paste."""
+    from PySide6.QtGui import QImage
+
     win = _win(tmp_path)
     monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4 body")
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: QImage(8, 8, QImage.Format_RGB32))
     fake = _FakeClipboard()
     monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
 
     win._on_copy_pdf()
-    assert fake.mime is not None and fake.mime.hasFormat("application/pdf")
+    assert fake.mime is not None
+    assert fake.mime.hasFormat("com.adobe.pdf")       # macOS UTI (the fix)
+    assert fake.mime.hasFormat("application/pdf")
     assert bytes(fake.mime.data("application/pdf")).startswith(b"%PDF")
+    assert fake.mime.hasImage()                       # raster fallback
 
 
 def test_preview_panel_buttons_emit_copy_signals():
@@ -155,18 +163,26 @@ def test_preview_panel_buttons_emit_copy_signals():
 
 
 def test_copy_svg_puts_svg_mime_on_clipboard(tmp_path, monkeypatch):
-    """Copy-as-SVG sets an image/svg+xml clipboard payload (+ text fallback)."""
+    """Copy-as-SVG exposes the SVG under the macOS UTI (public.svg-image) and the
+    image/svg+xml MIME type, plus a raster fallback — and crucially NOT as
+    text/plain, so Word/PowerPoint paste an image instead of the raw XML markup
+    (regression)."""
+    from PySide6.QtGui import QImage
+
     win = _win(tmp_path)
     monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
     monkeypatch.setattr(mw, "pdf_to_svg", lambda *a, **k: b"<svg xmlns='...'/>")
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: QImage(8, 8, QImage.Format_RGB32))
     fake = _FakeClipboard()
     monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
 
     win._on_copy_svg()
     assert fake.mime is not None
     assert fake.mime.hasFormat("image/svg+xml")
+    assert fake.mime.hasFormat("public.svg-image")    # macOS UTI (the fix)
     assert bytes(fake.mime.data("image/svg+xml")).startswith(b"<svg")
-    assert fake.mime.text().startswith("<svg")
+    assert fake.mime.hasImage()                       # raster fallback for Office
+    assert not fake.mime.hasText()                    # the XML-paste bug is gone
 
 
 def test_retypeset_labels_runs_on_populated_scene(tmp_path):
@@ -183,3 +199,28 @@ def test_retypeset_labels_runs_on_populated_scene(tmp_path):
         win._scene.retypeset_labels()  # must not raise
     finally:
         mathrender.set_force_ziamath(False)
+
+
+def test_apply_theme_switches_both_palettes(tmp_path):
+    """MainWindow._apply_theme swaps the canvas + chrome palettes together and
+    re-applies the toolbar stylesheet, so a dark appearance themes everything."""
+    from app.canvas import style
+    from app.ui import theme
+
+    win = _win(tmp_path)
+    try:
+        win._dark = True
+        win._apply_theme()
+        assert style.is_dark()
+        assert theme.is_dark()
+        assert theme._DARK["SURFACE"] in win._toolbar.styleSheet()
+
+        win._dark = False
+        win._apply_theme()
+        assert not style.is_dark()
+        assert not theme.is_dark()
+        assert theme._LIGHT["SURFACE"] in win._toolbar.styleSheet()
+    finally:
+        # Never leak the dark palette into other tests.
+        style.set_dark(False)
+        theme.set_dark(False)

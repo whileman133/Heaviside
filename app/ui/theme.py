@@ -10,20 +10,76 @@ hard-coding colours, to keep the look from drifting apart again.
 from __future__ import annotations
 
 # -- Colour tokens ----------------------------------------------------------
-SURFACE = "#ffffff"        # primary surface (panels, chrome)
-SURFACE_ALT = "#fafafa"    # subtle raised surface (cards)
-DIVIDER = "#ececec"        # hairline chrome divider
-BORDER = "#cfcfcf"         # input borders
-BORDER_SOFT = "#dadada"    # card / soft borders
-ACCENT = "#5b87f0"         # the one accent (focus, active, default)
-HOVER = "#e8f0fe"          # soft-blue hover/active fill
-HOVER_BORDER = "#c5d9fb"   # hover/active border
-PRESSED = "#dce7fc"        # pressed fill
-BUTTON_BG = "#f4f6fb"      # resting flat-button fill
-BUTTON_BORDER = "#d7def0"  # resting flat-button border
-TEXT = "#333333"           # body text
-ICON = "#555555"           # icon tint (toolbars, buttons)
-ICON_MUTED = "#888888"     # secondary icons
+#
+# Two palettes (light / dark). The active values are module globals that the QSS
+# functions below read at call time, so ``set_dark()`` followed by re-applying
+# the stylesheets re-themes the chrome. The canvas counterpart is
+# ``app/canvas/style.py``. Defaults are the light values, so callers that never
+# switch are unchanged.
+
+_LIGHT = {
+    "SURFACE":       "#ffffff",   # primary surface (panels, chrome)
+    "SURFACE_ALT":   "#fafafa",   # subtle raised surface (cards)
+    "DIVIDER":       "#ececec",   # hairline chrome divider
+    "BORDER":        "#cfcfcf",   # input borders
+    "BORDER_SOFT":   "#dadada",   # card / soft borders
+    "ACCENT":        "#5b87f0",   # the one accent (focus, active, default)
+    "HOVER":         "#e8f0fe",   # soft-blue hover/active fill
+    "HOVER_BORDER":  "#c5d9fb",   # hover/active border
+    "PRESSED":       "#dce7fc",   # pressed fill
+    "BUTTON_BG":     "#f4f6fb",   # resting flat-button fill
+    "BUTTON_BORDER": "#d7def0",   # resting flat-button border
+    "TEXT":          "#333333",   # body text
+    "ICON":          "#555555",   # icon tint (toolbars, buttons)
+    "ICON_MUTED":    "#888888",   # secondary icons
+}
+_DARK = {
+    "SURFACE":       "#2a2c30",
+    "SURFACE_ALT":   "#303338",
+    "DIVIDER":       "#3a3c42",
+    "BORDER":        "#4a4d55",
+    "BORDER_SOFT":   "#43464d",
+    "ACCENT":        "#6f9bff",
+    "HOVER":         "#2f3a52",
+    "HOVER_BORDER":  "#3d4f78",
+    "PRESSED":       "#37456a",
+    "BUTTON_BG":     "#33363c",
+    "BUTTON_BORDER": "#444751",
+    "TEXT":          "#e6e6e6",
+    "ICON":          "#c9ccd1",
+    "ICON_MUTED":    "#9aa0a8",
+}
+
+SURFACE = _LIGHT["SURFACE"]
+SURFACE_ALT = _LIGHT["SURFACE_ALT"]
+DIVIDER = _LIGHT["DIVIDER"]
+BORDER = _LIGHT["BORDER"]
+BORDER_SOFT = _LIGHT["BORDER_SOFT"]
+ACCENT = _LIGHT["ACCENT"]
+HOVER = _LIGHT["HOVER"]
+HOVER_BORDER = _LIGHT["HOVER_BORDER"]
+PRESSED = _LIGHT["PRESSED"]
+BUTTON_BG = _LIGHT["BUTTON_BG"]
+BUTTON_BORDER = _LIGHT["BUTTON_BORDER"]
+TEXT = _LIGHT["TEXT"]
+ICON = _LIGHT["ICON"]
+ICON_MUTED = _LIGHT["ICON_MUTED"]
+
+
+def set_dark(on: bool) -> None:
+    """Swap the chrome palette between light and dark.
+
+    Rebinds the module-level tokens so the ``*_qss()`` builders below emit the
+    new colours next time they are called. The caller must re-apply the
+    stylesheets (and regenerate any tinted icons) — see
+    ``MainWindow._apply_theme``. Pair with ``app.canvas.style.set_dark``.
+    """
+    globals().update(_DARK if on else _LIGHT)
+
+
+def is_dark() -> bool:
+    """True if the dark chrome palette is currently active."""
+    return SURFACE == _DARK["SURFACE"]
 
 
 def top_toolbar_qss() -> str:

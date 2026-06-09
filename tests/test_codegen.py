@@ -1445,6 +1445,22 @@ def test_build_tex_loads_arrows_meta() -> None:
     assert r"\usetikzlibrary{arrows.meta}" in tex
 
 
+def test_build_tex_dark_only_affects_preview() -> None:
+    """The dark template (preview only) sets a dark page + light ink; the default
+    (export) template stays light and byte-for-byte unchanged. Guards against dark
+    mode leaking into the distributed figure."""
+    from app.preview.latex import build_tex
+
+    src = generate(_schematic(_comp("R")), y_flip=True)
+    light = build_tex(src)
+    dark = build_tex(src, dark=True)
+
+    assert "pagecolor" not in light          # export path never darkens
+    assert build_tex(src, dark=False) == light
+    assert r"\pagecolor{hvbg}" in dark and r"\color{hvfg}" in dark
+    assert src in dark                        # the figure source is still embedded
+
+
 def test_build_snippet_has_no_document_wrapper() -> None:
     r"""A snippet is includable, not standalone: no \documentclass/\begin{document}."""
     from app.preview.latex import build_snippet

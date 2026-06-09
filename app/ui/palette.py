@@ -41,6 +41,7 @@ import qtawesome as qta
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
 from app.components.registry import REGISTRY
+from app.ui import theme
 
 _THUMB_SIZE = 34
 _TILE_SIZE = 46
@@ -123,7 +124,7 @@ def _thumbnail(kind: str) -> QPixmap:
 def _category_icon(category: str) -> QIcon:
     name = _CATEGORY_ICONS.get(category, "fa5s.cube")
     try:
-        return qta.icon(name, color="#444")
+        return qta.icon(name, color=theme.ICON)
     except Exception:  # noqa: BLE001 - unknown icon name → no icon
         return QIcon()
 
@@ -157,8 +158,8 @@ class _CollapsibleSection(QWidget):
         self._toggle.setAutoRaise(True)
         self._toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; color: #555; "
-            "font-size: 11px; padding: 4px 2px; text-align: left; }"
+            "QToolButton { border: none; font-weight: bold; color: %s; "
+            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
         )
         self._toggle.toggled.connect(self._on_toggled)
         self._layout.addWidget(self._toggle)
@@ -179,6 +180,12 @@ class _CollapsibleSection(QWidget):
         self._toggle.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._body.setVisible(expanded)
 
+    def apply_theme(self) -> None:
+        self._toggle.setStyleSheet(
+            "QToolButton { border: none; font-weight: bold; color: %s; "
+            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
+        )
+
 
 class _ComponentTile(QToolButton):
     """Icon-only, clickable component tile; the name is a hover tooltip."""
@@ -195,7 +202,8 @@ class _ComponentTile(QToolButton):
         self.setToolTip(f"{defn.display_name} ({kind})")
         self.setStyleSheet(
             "QToolButton { border: 1px solid transparent; border-radius: 5px; }"
-            "QToolButton:hover { background: #e8f0fe; border-color: #c5d9fb; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            % (theme.HOVER, theme.HOVER_BORDER)
         )
         self.clicked.connect(lambda: place(kind))
 
@@ -223,15 +231,16 @@ class _CategoryCard(QFrame):
         text.setStyleSheet("border: none; font-size: 11px;")
         row.addWidget(text, 1)
         cnt = QLabel(str(count))
-        cnt.setStyleSheet("border: none; color: #999; font-size: 10px;")
+        cnt.setStyleSheet("border: none; color: %s; font-size: 10px;" % theme.ICON_MUTED)
         row.addWidget(cnt)
 
     def _set_active(self, active: bool) -> None:
+        border, bg = (theme.ACCENT, theme.HOVER) if active else (theme.BORDER_SOFT, theme.SURFACE_ALT)
         self.setStyleSheet(
             "QFrame#catcard { border: 1px solid %s; border-radius: 5px; "
             "background: %s; }"
-            "QFrame#catcard:hover { background: #e8f0fe; }"
-            % (("#5b87f0", "#e8f0fe") if active else ("#dadada", "#fafafa"))
+            "QFrame#catcard:hover { background: %s; }"
+            % (border, bg, theme.HOVER)
         )
 
     def set_active(self, active: bool) -> None:
@@ -267,7 +276,9 @@ class ComponentPalette(QWidget):
         super().__init__(parent)
         self.setFixedWidth(_PALETTE_WIDTH)
         self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        self.setStyleSheet("ComponentPalette { background-color: #ffffff; }")
+        self.setStyleSheet(
+            "ComponentPalette { background-color: %s; }" % theme.SURFACE
+        )
 
         self._scene: SchematicScene | None = None
         self._by_cat: dict[str, list[str]] = defaultdict(list)
@@ -297,15 +308,19 @@ class ComponentPalette(QWidget):
         focus.activated.connect(self._search.setFocus)
 
         scroll = QScrollArea()
+        self._scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.viewport().setStyleSheet("background-color: #ffffff;")
+        scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
         outer.addWidget(scroll, 1)
 
         content = QWidget()
+        self._content_host = content
         content.setObjectName("palette_content")
-        content.setStyleSheet("QWidget#palette_content { background-color: #ffffff; }")
+        content.setStyleSheet(
+            "QWidget#palette_content { background-color: %s; }" % theme.SURFACE
+        )
         self._content = QVBoxLayout(content)
         self._content.setContentsMargins(0, 0, 0, 0)
         self._content.setSpacing(4)
@@ -411,3 +426,23 @@ class ComponentPalette(QWidget):
         body = self._results.body_layout()
         self._clear(body)
         body.addWidget(_grid(matches, self._place))
+
+    # -- theme -----------------------------------------------------------
+
+    def apply_theme(self) -> None:
+        """Re-theme for a light/dark swap: invalidate the (ink-coloured) thumbnail
+        cache, re-style the containers and section headers, then rebuild the tile
+        grids so every symbol re-renders in the new ink colour."""
+        _thumb_cache.clear()
+        self.setStyleSheet(
+            "ComponentPalette { background-color: %s; }" % theme.SURFACE
+        )
+        self._scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
+        self._content_host.setStyleSheet(
+            "QWidget#palette_content { background-color: %s; }" % theme.SURFACE
+        )
+        for sec in (self._in_use, self._categories, self._active, self._results):
+            sec.apply_theme()
+        self._build_categories()
+        self._rebuild_active()
+        self._on_search(self._search.text())  # refreshes in-use + results grids

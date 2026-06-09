@@ -59,6 +59,7 @@ from app.resources import resource_path
 from app.version import __version__
 from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
 from app.canvas.view import SchematicView
+from app.canvas import style
 from app.codegen.circuitikz import generate
 from app.preview.latex import (
     CompileError,
@@ -86,6 +87,23 @@ _WINDOW_TITLE = "Heaviside — CircuiTikZ Editor"
 _ISSUES_URL = "https://github.com/whileman133/Heaviside/issues"
 
 
+def _system_is_dark() -> bool:
+    """True if the OS appearance is dark.
+
+    Uses Qt's cross-platform colour-scheme hint (Qt 6.5+); falls back to a
+    window-vs-text luminance check on the older/unknown case.
+    """
+    hints = QGuiApplication.styleHints()
+    scheme = hints.colorScheme()
+    if scheme == Qt.ColorScheme.Dark:
+        return True
+    if scheme == Qt.ColorScheme.Light:
+        return False
+    # Unknown: compare the default window/text lightness.
+    pal = QGuiApplication.palette()
+    return pal.color(QPalette.Window).lightness() < pal.color(QPalette.WindowText).lightness()
+
+
 def _component_editor_available() -> bool:
     """The Component Editor is a developer tool: it renders/measures CircuiTikZ
     symbols via ``latex`` + ``dvisvgm``, which a packaged end-user build does not
@@ -101,22 +119,27 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(_WINDOW_TITLE)
         self.resize(1280, 800)
 
-        # White window background. Children inherit the Window role, so the
-        # central area, panels, splitter gaps, and status bar render white. The
-        # toolbars set their own (flat, white) stylesheet.
-        pal = self.palette()
-        pal.setColor(QPalette.Window, QColor("#ffffff"))
-        self.setPalette(pal)
-        # Form controls (dialogs, message boxes, spin boxes, combos, line edits)
-        # keep their **native** look — the toolbars and palette tiles get the flat
-        # theme via their own scoped stylesheets, and the Copy PDF/PNG/SVG buttons
-        # set theme.flat_button_qss() directly. A global form-control stylesheet
-        # cascaded into child dialogs/message boxes and made them non-native.
+        # Theme follows the OS appearance (light/dark). Resolve it *before*
+        # building the UI so toolbars, palette tiles, and panels construct with
+        # the right tokens, then keep it in sync via styleHints().colorSchemeChanged
+        # (§10). Form controls (dialogs, message boxes, spin/combo boxes, line
+        # edits) keep their **native** look — on macOS those already follow the OS
+        # appearance — so only our themed chrome and the canvas are switched here.
+        self._dark = _system_is_dark()
+        theme.set_dark(self._dark)
+        style.set_dark(self._dark)
+        # Records (QAction, qtawesome-name) so toolbar/ribbon icons can be
+        # re-tinted when the appearance changes.
+        self._themed_icons: list[tuple[QAction, str]] = []
+        self._toolbar: QToolBar | None = None
+        self._ribbon: QToolBar | None = None
+        self._apply_window_palette()
 
         # -- Core objects --------------------------------------------------
         self._scene = SchematicScene()
         self._view = SchematicView(self._scene)
         self._preview_worker = PreviewWorker(self, dpi=300)
+        self._preview_worker.set_dark(self._dark)  # render the preview dark to match
         self._current_path: Path | None = None
         self._modified = False
         self._prefs = Preferences()
@@ -145,8 +168,63 @@ class MainWindow(QMainWindow):
         # -- Wire signals ---------------------------------------------------
         self._connect_signals()
 
+        # -- Follow the OS light/dark appearance live (§10) -----------------
+        QGuiApplication.styleHints().colorSchemeChanged.connect(
+            self._on_color_scheme_changed
+        )
+
         # -- Dependency warnings (non-blocking) ----------------------------
         self._check_and_warn_dependencies()
+
+    # ------------------------------------------------------------------
+    # Theme (light / dark, follows the OS appearance) — §10
+    # ------------------------------------------------------------------
+
+    def _apply_window_palette(self) -> None:
+        """Set the window background to the active surface colour so the central
+        area, splitter gaps, and status bar match the themed chrome."""
+        pal = self.palette()
+        pal.setColor(QPalette.Window, QColor(theme.SURFACE))
+        pal.setColor(QPalette.WindowText, QColor(theme.TEXT))
+        self.setPalette(pal)
+
+    def _themed_icon(self, action: QAction, name: str) -> None:
+        """Tint *action*'s icon with the current ``theme.ICON`` and remember the
+        (action, name) pair so it can be re-tinted on a theme change."""
+        action.setIcon(qta.icon(name, color=theme.ICON))
+        self._themed_icons.append((action, name))
+
+    def _on_color_scheme_changed(self, _scheme=None) -> None:
+        dark = _system_is_dark()
+        if dark != self._dark:
+            self._dark = dark
+            self._apply_theme()
+
+    def _apply_theme(self) -> None:
+        """Re-theme every surface for the current ``self._dark`` state: swap the
+        canvas + chrome palettes, re-apply the toolbar/panel stylesheets, re-tint
+        icons, and repaint."""
+        theme.set_dark(self._dark)
+        style.set_dark(self._dark)
+        self._apply_window_palette()
+        if self._toolbar is not None:
+            self._toolbar.setStyleSheet(theme.top_toolbar_qss())
+        if self._ribbon is not None:
+            self._ribbon.setStyleSheet(theme.ribbon_qss())
+        for action, name in self._themed_icons:
+            action.setIcon(qta.icon(name, color=theme.ICON))
+        # Side panels rebuild their own theme-token stylesheets.
+        for panel in (self._palette, self._props, self._source_panel, self._preview_panel):
+            if hasattr(panel, "apply_theme"):
+                panel.apply_theme()
+        # The preview is rendered by LaTeX with a matching dark/light page; if one
+        # is already shown, recompile it in the new theme.
+        self._preview_worker.set_dark(self._dark)
+        if self._preview_panel.has_image():
+            self._on_auto_compile()
+        # Repaint the canvas (items read style.COLOR_* at paint time).
+        self._scene.update()
+        self._view.viewport().update()
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -332,16 +410,17 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         tb = QToolBar("Main")
+        self._toolbar = tb
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonIconOnly)
         tb.setStyleSheet(theme.top_toolbar_qss())
         self.addToolBar(tb)
 
-        self._act_new.setIcon(qta.icon("fa5s.file", color=theme.ICON))
-        self._act_open.setIcon(qta.icon("fa5s.folder-open", color=theme.ICON))
-        self._act_save.setIcon(qta.icon("fa5s.save", color=theme.ICON))
-        self._act_undo.setIcon(qta.icon("fa5s.undo", color=theme.ICON))
-        self._act_redo.setIcon(qta.icon("fa5s.redo", color=theme.ICON))
+        self._themed_icon(self._act_new, "fa5s.file")
+        self._themed_icon(self._act_open, "fa5s.folder-open")
+        self._themed_icon(self._act_save, "fa5s.save")
+        self._themed_icon(self._act_undo, "fa5s.undo")
+        self._themed_icon(self._act_redo, "fa5s.redo")
 
         tb.addAction(self._act_new)
         tb.addAction(self._act_open)
@@ -351,7 +430,8 @@ class MainWindow(QMainWindow):
         tb.addAction(self._act_redo)
         tb.addSeparator()
 
-        compile_btn = QAction(qta.icon("fa5s.play", color=theme.ICON), "Compile", self)
+        compile_btn = QAction("Compile", self)
+        self._themed_icon(compile_btn, "fa5s.play")
         compile_btn.setShortcut(QKeySequence("Ctrl+Return"))
         compile_btn.triggered.connect(self._on_compile_now)
         tb.addAction(compile_btn)
@@ -360,11 +440,11 @@ class MainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        self._act_help.setIcon(qta.icon("fa5s.question-circle", color=theme.ICON))
+        self._themed_icon(self._act_help, "fa5s.question-circle")
         self._act_help.setToolTip("Keyboard shortcuts & gestures (F1)")
         tb.addAction(self._act_help)
 
-        self._act_report_bug.setIcon(qta.icon("fa5s.bug", color=theme.ICON))
+        self._themed_icon(self._act_report_bug, "fa5s.bug")
         self._act_report_bug.setToolTip("Report a bug (opens GitHub issues)")
         tb.addAction(self._act_report_bug)
 
@@ -381,6 +461,7 @@ class MainWindow(QMainWindow):
 
     def _build_tool_ribbon(self) -> None:
         ribbon = QToolBar("Tools")
+        self._ribbon = ribbon
         ribbon.setMovable(False)
         ribbon.setToolButtonStyle(Qt.ToolButtonIconOnly)
         ribbon.setIconSize(QSize(22, 22))
@@ -390,7 +471,8 @@ class MainWindow(QMainWindow):
         group = QActionGroup(self)
         group.setExclusive(True)
 
-        self._tool_select = QAction(qta.icon("fa5s.mouse-pointer", color=theme.ICON), "Select", self)
+        self._tool_select = QAction("Select", self)
+        self._themed_icon(self._tool_select, "fa5s.mouse-pointer")
         self._tool_select.setToolTip("Select  [S / Esc]")
         self._tool_select.setCheckable(True)
         self._tool_select.setChecked(True)
@@ -398,14 +480,16 @@ class MainWindow(QMainWindow):
         group.addAction(self._tool_select)
         ribbon.addAction(self._tool_select)
 
-        self._tool_wire = QAction(qta.icon("fa5s.pen", color=theme.ICON), "Wire", self)
+        self._tool_wire = QAction("Wire", self)
+        self._themed_icon(self._tool_wire, "fa5s.pen")
         self._tool_wire.setToolTip("Wire  [W]")
         self._tool_wire.setCheckable(True)
         self._tool_wire.triggered.connect(self._scene.enter_wire_mode)
         group.addAction(self._tool_wire)
         ribbon.addAction(self._tool_wire)
 
-        self._tool_pan = QAction(qta.icon("fa5s.hand-paper", color=theme.ICON), "Pan", self)
+        self._tool_pan = QAction("Pan", self)
+        self._themed_icon(self._tool_pan, "fa5s.hand-paper")
         self._tool_pan.setToolTip("Pan  [P / Space+drag]")
         self._tool_pan.setCheckable(True)
         self._tool_pan.triggered.connect(self._scene.enter_pan_mode)
@@ -1005,11 +1089,28 @@ class MainWindow(QMainWindow):
         QGuiApplication.clipboard().setImage(image)
         self._status_compile.setText("Copied figure to clipboard (PNG)")
 
-    def _on_copy_pdf(self) -> None:
-        """Copy the compiled figure to the clipboard as PDF (``application/pdf``).
+    def _add_raster_fallback(self, mime: QMimeData, pdf_bytes: bytes) -> None:
+        """Attach a high-res raster of the figure to *mime*.
 
-        The compiled PDF is the highest-fidelity vector form; many macOS apps
-        (Keynote, Pages, Preview) paste it directly. Needs ``pdflatex``.
+        Apps that can't paste a vector flavor — Word, PowerPoint, Google Docs,
+        Slack — fall back to this image (Qt exposes it under the ``public.tiff`` /
+        ``public.png`` pasteboard types macOS apps accept). Best-effort: a render
+        failure just omits the fallback. The PDF is the **light** export figure,
+        so the pasted image is white-paper/black-ink regardless of the UI theme.
+        """
+        try:
+            mime.setImageData(pdf_to_qimage(pdf_bytes, dpi=300))
+        except Exception:  # noqa: BLE001 - raster is a best-effort extra
+            pass
+
+    def _on_copy_pdf(self) -> None:
+        """Copy the compiled figure to the clipboard as PDF.
+
+        Exposes the PDF under the macOS ``com.adobe.pdf`` pasteboard UTI (so
+        Keynote/Pages/Preview — and Word/PowerPoint where supported — paste it as
+        vector) plus the ``application/pdf`` MIME type for Linux/Windows, and adds
+        a raster fallback so apps without vector paste still get the figure.
+        Needs ``pdflatex``.
         """
         self._status_compile.setText("Compiling…")
         pdf_bytes = self._compile_to_pdf()
@@ -1017,16 +1118,21 @@ class MainWindow(QMainWindow):
             self._status_compile.setText("Copy failed")
             return
         mime = QMimeData()
-        mime.setData("application/pdf", pdf_bytes)
+        mime.setData("com.adobe.pdf", pdf_bytes)     # macOS pasteboard UTI (vector)
+        mime.setData("application/pdf", pdf_bytes)   # Linux/Windows + other apps
+        self._add_raster_fallback(mime, pdf_bytes)
         QGuiApplication.clipboard().setMimeData(mime)
         self._status_compile.setText("Copied figure to clipboard (PDF)")
 
     def _on_copy_svg(self) -> None:
         """Copy the compiled figure to the clipboard as vector SVG.
 
-        Sets both ``image/svg+xml`` (for vector-aware consumers like Inkscape /
-        Illustrator) and a ``text/plain`` fallback. Needs ``pdflatex`` and
-        ``pdftocairo`` (Poppler), as for SVG export.
+        Exposes the SVG under the macOS ``public.svg-image`` UTI and the
+        ``image/svg+xml`` MIME type for vector-aware consumers (Illustrator,
+        Inkscape, Figma), plus a raster fallback so Word/PowerPoint paste the
+        figure as an image instead of the raw XML. (We deliberately do **not**
+        put the SVG on the clipboard as ``text/plain`` — that is what made Office
+        paste the markup.) Needs ``pdflatex`` and ``pdftocairo`` (Poppler).
         """
         self._status_compile.setText("Compiling…")
         pdf_bytes = self._compile_to_pdf()
@@ -1040,8 +1146,9 @@ class MainWindow(QMainWindow):
             self._status_compile.setText("Copy failed")
             return
         mime = QMimeData()
-        mime.setData("image/svg+xml", svg_bytes)
-        mime.setText(svg_bytes.decode("utf-8", errors="replace"))
+        mime.setData("public.svg-image", svg_bytes)  # macOS pasteboard UTI (vector)
+        mime.setData("image/svg+xml", svg_bytes)     # Linux/Windows + vector apps
+        self._add_raster_fallback(mime, pdf_bytes)   # Word/PowerPoint paste this
         QGuiApplication.clipboard().setMimeData(mime)
         self._status_compile.setText("Copied figure to clipboard (SVG)")
 
@@ -1220,7 +1327,9 @@ class _WelcomeScreen(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         w, h = float(self.width()), float(self.height())
-        painter.fillRect(self.rect(), _C_BG)
+        # Background follows the canvas paper colour (light/dark); the muted-blue
+        # step graphic reads on either.
+        painter.fillRect(self.rect(), QColor(style.COLOR_BACKGROUND))
 
         # ---- step function (centred) -----------------------------------
         step_w  = min(w * 0.40, 260.0)
@@ -1564,18 +1673,14 @@ class _PreviewPanel(QWidget):
         # resizeEvent). A minimum width keeps it from collapsing to nothing.
         self.setMinimumWidth(self._MIN_W)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.setStyleSheet(
-            "background: white; border-left: 1px solid #ddd;"
-        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 6)
         layout.setSpacing(2)
 
         from PySide6.QtWidgets import QLabel as _QLabel
-        title = _QLabel("LaTeX Preview")
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
-        layout.addWidget(title)
+        self._title = _QLabel("LaTeX Preview")
+        layout.addWidget(self._title)
 
         self._img_label = QLabel()
         self._img_label.setAlignment(Qt.AlignCenter)
@@ -1592,9 +1697,9 @@ class _PreviewPanel(QWidget):
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(4)
-        copy_png = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy PNG")
-        copy_pdf = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy PDF")
-        copy_svg = QPushButton(qta.icon("fa5s.copy", color=theme.ICON), " Copy SVG")
+        copy_png = QPushButton(" Copy PNG")
+        copy_pdf = QPushButton(" Copy PDF")
+        copy_svg = QPushButton(" Copy SVG")
         copy_png.setToolTip("Copy the compiled figure to the clipboard as a PNG image")
         copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
         copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
@@ -1602,16 +1707,35 @@ class _PreviewPanel(QWidget):
         copy_pdf.clicked.connect(self.copy_pdf_requested)
         copy_svg.clicked.connect(self.copy_svg_requested)
         btn_row.addStretch(1)
-        # Pointer cursor + an explicit flat/hover style so they highlight on
-        # hover like the palette tiles (the panel's own stylesheet would otherwise
-        # shadow the button style).
-        for btn in (copy_png, copy_pdf, copy_svg):
+        # Pointer cursor; the flat/hover style and icon tint are applied in
+        # apply_theme so they follow light/dark (the panel's own stylesheet would
+        # otherwise shadow the button style).
+        self._copy_buttons = (copy_png, copy_pdf, copy_svg)
+        for btn in self._copy_buttons:
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setStyleSheet(theme.flat_button_qss())
             btn_row.addWidget(btn)
         layout.addLayout(btn_row)
 
         self._raw_image: QImage | None = None
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        """Follow light/dark. The panel background matches the figure's page
+        colour (``style.COLOR_BACKGROUND``) so the rendered schematic blends in;
+        the Copy buttons and title re-tint with the chrome tokens."""
+        self.setStyleSheet(
+            "background: %s; border-left: 1px solid %s;"
+            % (style.COLOR_BACKGROUND, theme.BORDER)
+        )
+        self._title.setStyleSheet(
+            "font-weight: bold; font-size: 11px; color: %s;" % theme.ICON
+        )
+        for btn in self._copy_buttons:
+            btn.setIcon(qta.icon("fa5s.copy", color=theme.ICON))
+            btn.setStyleSheet(theme.flat_button_qss())
+
+    def has_image(self) -> bool:
+        return self._raw_image is not None
 
     def resizeEvent(self, event) -> None:  # noqa: N802, ANN001
         super().resizeEvent(event)

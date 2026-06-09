@@ -75,8 +75,26 @@ _SCHEMATIC_TEMPLATE = r"""\documentclass[border=4pt]{standalone}
 \end{document}
 """
 
+# Dark variant used **only for the on-screen preview** (never for exports): a
+# dark page colour and a light default ink so the rendered figure blends into a
+# dark UI instead of glaring white. The colours match the canvas dark palette
+# (app/canvas/style._DARK: COLOR_BACKGROUND / COLOR_NORMAL). circuitikz draws and
+# labels inherit the ambient ``\color``; elements with an explicit colour (e.g. a
+# user fill) keep it. xcolor is already loaded by tikz, so no extra package.
+_SCHEMATIC_TEMPLATE_DARK = r"""\documentclass[border=4pt]{standalone}
+\usepackage[american]{circuitikz}
+\usetikzlibrary{arrows.meta}
+\ctikzset{voltage=american, current=american, resistor=american}
+\definecolor{hvbg}{HTML}{1E1F22}
+\definecolor{hvfg}{HTML}{E6E6E6}
+\begin{document}
+\pagecolor{hvbg}\color{hvfg}
+% CIRCUITIKZ_SOURCE
+\end{document}
+"""
 
-def build_tex(circuitikz_source: str) -> str:
+
+def build_tex(circuitikz_source: str, dark: bool = False) -> str:
     """
     Wrap a CircuiTikZ environment string in the minimal standalone template.
 
@@ -84,8 +102,14 @@ def build_tex(circuitikz_source: str) -> str:
     with ``generate(schematic, y_flip=True)``.  This function is a pure
     template wrapper; Y-negation and rotation correction are handled in the
     codegen layer, not here.
+
+    When *dark* is True the document gets a dark page colour and light default
+    ink — used for the **preview only** so it reads against a dark UI. Exports
+    always use the default (light) template, so the distributed figure stays
+    white-paper/black-ink. The light output is byte-for-byte unchanged.
     """
-    return _SCHEMATIC_TEMPLATE.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
+    template = _SCHEMATIC_TEMPLATE_DARK if dark else _SCHEMATIC_TEMPLATE
+    return template.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
 
 
 _SNIPPET_HEADER = r"""% CircuiTikZ schematic exported from Heaviside.

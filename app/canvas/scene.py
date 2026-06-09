@@ -78,6 +78,7 @@ from app.canvas.geometry import (
     snap_point_gu as _snap_point_gu,
 )
 from app.canvas.drag import DragPreviewController
+from app.canvas import style
 from app.canvas.style import GRID_PX
 from app.canvas.wiregeometry import WireGeometry
 from app.components.registry import ITEM_CLASSES, REGISTRY
@@ -107,9 +108,8 @@ from app.schematic.model import (
 # Snap / proximity constants live in app.canvas.geometry; the wire-snap radii
 # are used by WireGeometry.
 
-_GRID_NORMAL = QColor("#FFD0D0D0")   # integer grid lines
-_GRID_SUB = QColor("#22808080")      # 0.5 GU midline (reduced opacity)
-_GRID_SUB_FINE = QColor("#11808080")  # 0.25/0.75 GU minor lines (faintest)
+# Grid line colours live in the switchable palette (app/canvas/style.py) and are
+# read at paint time in drawBackground(), so the grid follows a light/dark swap.
 
 _LABEL_CLEARANCE = 6  # px gap used by auto-placement candidates (§8.3)
 
@@ -2068,7 +2068,13 @@ class SchematicScene(QGraphicsScene):
     # ------------------------------------------------------------------
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:  # noqa: N802
+        # Paint the canvas paper explicitly (theme-aware) rather than relying on
+        # the view's palette, so a light/dark swap repaints reliably.
+        painter.fillRect(rect, QColor(style.COLOR_BACKGROUND))
         super().drawBackground(painter, rect)
+
+        grid_sub = QColor(style.COLOR_GRID_SUB)
+        grid_fine = QColor(style.COLOR_GRID_FINE)
 
         left = int(rect.left()) - (int(rect.left()) % int(GRID_PX))
         top = int(rect.top()) - (int(rect.top()) % int(GRID_PX))
@@ -2077,7 +2083,7 @@ class SchematicScene(QGraphicsScene):
         # midline is drawn a touch stronger than the 0.25/0.75 lines so the
         # unit cell stays readable on the denser lattice.
         for frac in (0.25, 0.5, 0.75):
-            pen = QPen(_GRID_SUB if frac == 0.5 else _GRID_SUB_FINE)
+            pen = QPen(grid_sub if frac == 0.5 else grid_fine)
             pen.setWidth(0)
             painter.setPen(pen)
             off = GRID_PX * frac
@@ -2091,7 +2097,7 @@ class SchematicScene(QGraphicsScene):
                 y += GRID_PX
 
         # Integer grid — normal weight.
-        main_pen = QPen(_GRID_NORMAL)
+        main_pen = QPen(QColor(style.COLOR_GRID))
         main_pen.setWidth(0)
         painter.setPen(main_pen)
         x = left

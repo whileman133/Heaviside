@@ -45,12 +45,10 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsTextItem
 from shiboken6 import isValid
 
+# Colors are read module-qualified (style.COLOR_*) so the light/dark palette
+# swap in app/canvas/style.set_dark() takes effect on the next repaint.
+from app.canvas import style
 from app.canvas.style import (
-    COLOR_GHOST,
-    COLOR_HOVER,
-    COLOR_NORMAL,
-    COLOR_PIN,
-    COLOR_SELECTED,
     GRID_PX,
     LINE_W,
     LINE_W_THICK,
@@ -259,7 +257,7 @@ class LabelTextItem(QGraphicsTextItem):
         f = self.font()
         f.setPixelSize(_LABEL_FONT_PX)
         self.setFont(f)
-        self.setDefaultTextColor(QColor(COLOR_NORMAL))
+        self.setDefaultTextColor(QColor(style.COLOR_NORMAL))
 
     def set_commit_callback(self, cb) -> None:  # noqa: ANN001
         self._commit_cb = cb
@@ -345,7 +343,7 @@ class LabelTextItem(QGraphicsTextItem):
             and not parent_selected
             and not self._editing
         )
-        return QColor(COLOR_HOVER if show_hover else COLOR_NORMAL)
+        return QColor(style.COLOR_HOVER if show_hover else style.COLOR_NORMAL)
 
     def _apply_text_color(self) -> None:
         """Set text colour based on current interactive/hover/edit state."""
@@ -406,8 +404,8 @@ class LabelTextItem(QGraphicsTextItem):
             # underlying wires, symbols, or other labels.
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing, True)
-            painter.setPen(_pen(COLOR_SELECTED, 1.0))
-            painter.setBrush(QBrush(QColor("#FFFFFFFF")))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_LABEL_BG)))
             painter.drawRoundedRect(
                 self.boundingRect().adjusted(0.5, 0.5, -0.5, -0.5), 3.0, 3.0
             )
@@ -594,7 +592,7 @@ class _SlotLabel(QGraphicsItem):
         if self._path is None:
             return
         parent = self.parentItem()
-        color = parent._label_color() if hasattr(parent, "_label_color") else QColor(COLOR_NORMAL)
+        color = parent._label_color() if hasattr(parent, "_label_color") else QColor(style.COLOR_NORMAL)
         painter.setRenderHint(QPainter.Antialiasing, True)
         # Axis-centred labels (e.g. the voltage annotation) sit on top of the
         # line, so give them an opaque backdrop with a little padding to keep
@@ -604,7 +602,7 @@ class _SlotLabel(QGraphicsItem):
                 self._scaled_rect().adjusted(
                     -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
                 ),
-                QColor("#FFFFFFFF"),
+                QColor(style.COLOR_LABEL_BG),
             )
         painter.save()
         painter.scale(_VEC_SCALE, _VEC_SCALE)
@@ -950,29 +948,29 @@ class ComponentItem(QGraphicsItem):
     def _label_color(self) -> QColor:
         """Colour for the per-side slot labels: hover-highlight with the body."""
         if self._ghost:
-            return QColor(COLOR_GHOST)
+            return QColor(style.COLOR_GHOST)
         if self._hovered:
-            return QColor(COLOR_HOVER)
-        return QColor(COLOR_NORMAL)
+            return QColor(style.COLOR_HOVER)
+        return QColor(style.COLOR_NORMAL)
 
     def _body_color(self) -> str:
         if self._ghost:
-            return COLOR_GHOST
+            return style.COLOR_GHOST
         if self.isSelected():
-            return COLOR_SELECTED
+            return style.COLOR_SELECTED
         if self._hovered:
-            return COLOR_HOVER
-        return COLOR_NORMAL
+            return style.COLOR_HOVER
+        return style.COLOR_NORMAL
 
     def _pin_pen(self) -> QPen:
         if self._ghost:
-            return _pen(COLOR_GHOST, 1.0)
-        return _pen(COLOR_PIN, 1.0)
+            return _pen(style.COLOR_GHOST, 1.0)
+        return _pen(style.COLOR_PIN, 1.0)
 
     def _pin_brush(self) -> QBrush:
         if self._ghost:
-            return QBrush(QColor(COLOR_GHOST))
-        return QBrush(QColor(COLOR_PIN))
+            return QBrush(QColor(style.COLOR_GHOST))
+        return QBrush(QColor(style.COLOR_PIN))
 
     # ------------------------------------------------------------------
     # Vector-math label preview (shared by inline-label items)
@@ -1153,8 +1151,8 @@ class _ResizableTwoTerminalItem(ComponentItem):
             for pt in (QPointF(0.0, 0.0), ep):
                 painter.drawEllipse(pt, PIN_R, PIN_R)
         if self.isSelected() and not self._ghost:
-            painter.setPen(_pen(COLOR_SELECTED, 1.0))
-            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
             painter.drawRect(
                 ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
                 _HANDLE_HALF * 2, _HANDLE_HALF * 2,
@@ -1330,7 +1328,7 @@ class _WireEndLabel(QGraphicsItem):
         if self._path is None:
             return
         parent = self.parentItem()
-        color = parent.label_color() if hasattr(parent, "label_color") else QColor(COLOR_NORMAL)
+        color = parent.label_color() if hasattr(parent, "label_color") else QColor(style.COLOR_NORMAL)
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.save()
         painter.scale(_VEC_SCALE, _VEC_SCALE)
@@ -1418,14 +1416,14 @@ class _WireMidLabel(QGraphicsItem):
         if self._path is None:
             return
         parent = self.parentItem()
-        color = parent.label_color() if hasattr(parent, "label_color") else QColor(COLOR_NORMAL)
+        color = parent.label_color() if hasattr(parent, "label_color") else QColor(style.COLOR_NORMAL)
         painter.setRenderHint(QPainter.Antialiasing, True)
         # Opaque backdrop so the wire doesn't run through the text.
         painter.fillRect(
             self._scaled_rect().adjusted(
                 -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
             ),
-            QColor("#FFFFFFFF"),
+            QColor(style.COLOR_LABEL_BG),
         )
         painter.save()
         painter.scale(_VEC_SCALE, _VEC_SCALE)
@@ -1497,10 +1495,10 @@ class WireItem(QGraphicsItem):
     def label_color(self) -> QColor:
         """Current paint colour for endpoint labels (follows selection/hover)."""
         if self.isSelected():
-            return QColor(COLOR_SELECTED)
+            return QColor(style.COLOR_SELECTED)
         if self._hovered:
-            return QColor(COLOR_HOVER)
-        return QColor(COLOR_NORMAL)
+            return QColor(style.COLOR_HOVER)
+        return QColor(style.COLOR_NORMAL)
 
     @staticmethod
     def _outward(tip: tuple[float, float], neighbour: tuple[float, float]) -> QPointF:
@@ -1793,11 +1791,11 @@ class WireItem(QGraphicsItem):
             return
         painter.setRenderHint(QPainter.Antialiasing, True)
         if self.isSelected():
-            color = COLOR_SELECTED
+            color = style.COLOR_SELECTED
         elif self._hovered:
-            color = COLOR_HOVER
+            color = style.COLOR_HOVER
         else:
-            color = COLOR_NORMAL
+            color = style.COLOR_NORMAL
         painter.setPen(_pen(color, self._line_width_px(), self._line_pen_style()))
         painter.setBrush(Qt.NoBrush)
         pts = [QPointF(x * GRID_PX, y * GRID_PX) for x, y in pts_gu]
@@ -1810,8 +1808,8 @@ class WireItem(QGraphicsItem):
         # so the user can see which nodes can be moved. Locked endpoints (on a
         # pin) are not drawn as grab handles.
         if self.isSelected() or self._hovered:
-            painter.setPen(_pen(COLOR_SELECTED, 1.0))
-            painter.setBrush(QBrush(QColor("#FFFFFFFF")))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_LABEL_BG)))
             for i, pt in enumerate(pts):
                 if i in self.locked_indices:
                     continue
@@ -1891,15 +1889,15 @@ class WirePreviewItem(QGraphicsItem):
         # --- the polyline (committed legs + pending leg) ------------------
         pts = self._all_pts_px()
         if len(pts) >= 2:
-            pen = _pen(COLOR_GHOST, LINE_W, Qt.DashLine)
+            pen = _pen(style.COLOR_GHOST, LINE_W, Qt.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.NoBrush)
             painter.drawPath(_polyline_with_hops(pts, self.hops))
 
         # --- committed vertex anchors (small ghost dots) ------------------
         if self.points:
-            painter.setPen(_pen(COLOR_GHOST, 1.0))
-            painter.setBrush(QBrush(QColor(COLOR_GHOST)))
+            painter.setPen(_pen(style.COLOR_GHOST, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_GHOST)))
             for x, y in self.points:
                 painter.drawEllipse(QPointF(x * GRID_PX, y * GRID_PX), PIN_R, PIN_R)
 
@@ -1908,13 +1906,13 @@ class WirePreviewItem(QGraphicsItem):
             cx, cy = self.cursor[0] * GRID_PX, self.cursor[1] * GRID_PX
             if self.cursor_is_pin:
                 # Hollow ring: snapping to a pin.
-                painter.setPen(_pen(COLOR_SELECTED, LINE_W))
+                painter.setPen(_pen(style.COLOR_SELECTED, LINE_W))
                 painter.setBrush(Qt.NoBrush)
                 painter.drawEllipse(QPointF(cx, cy), PIN_R + 2.5, PIN_R + 2.5)
             else:
                 # Small filled dot: a bare grid-node anchor.
-                painter.setPen(_pen(COLOR_GHOST, 1.0))
-                painter.setBrush(QBrush(QColor(COLOR_GHOST)))
+                painter.setPen(_pen(style.COLOR_GHOST, 1.0))
+                painter.setBrush(QBrush(QColor(style.COLOR_GHOST)))
                 painter.drawEllipse(QPointF(cx, cy), PIN_R, PIN_R)
 
 
@@ -1960,7 +1958,7 @@ class JunctionItem(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
-        color = COLOR_SELECTED if self._hover else COLOR_NORMAL
+        color = style.COLOR_SELECTED if self._hover else style.COLOR_NORMAL
         painter.setPen(_pen(color, 1.0))
         painter.setBrush(QBrush(QColor(color)))
         painter.drawEllipse(QPointF(0.0, 0.0), self._radius(), self._radius())
@@ -1983,8 +1981,8 @@ class JunctionDragItem(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(_pen(COLOR_SELECTED, 1.0))
-        painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+        painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+        painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
         painter.drawEllipse(QPointF(0.0, 0.0), self.R, self.R)
 
 
@@ -2013,8 +2011,8 @@ class OpenCircleItem(QGraphicsItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
-        painter.setPen(_pen(COLOR_NORMAL, LINE_W))
-        painter.setBrush(Qt.white)
+        painter.setPen(_pen(style.COLOR_NORMAL, LINE_W))
+        painter.setBrush(QColor(style.COLOR_BACKGROUND))
         painter.drawEllipse(QPointF(0.0, 0.0), self.R, self.R)
 
 
@@ -2162,7 +2160,7 @@ class TextNodeItem(_DrawingAnnotationBase):
                 painter.drawText(rect, Qt.AlignCenter, "Text")
 
         if self.isSelected() and not self._ghost:
-            painter.setPen(_pen(COLOR_SELECTED, 1.0, Qt.DashLine))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(rect)
 
@@ -2392,8 +2390,8 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         self._draw_connection_dots(painter)
         # Resize handle at the far corner when selected.
         if self.isSelected() and not self._ghost:
-            painter.setPen(_pen(COLOR_SELECTED, 1.0))
-            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
             painter.drawRect(
                 ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
                 _HANDLE_HALF * 2, _HANDLE_HALF * 2,
@@ -2580,8 +2578,8 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
             for pt in (QPointF(0.0, 0.0), ep):
                 painter.drawEllipse(pt, PIN_R, PIN_R)
         if self.isSelected() and not self._ghost:
-            painter.setPen(_pen(COLOR_SELECTED, 1.0))
-            painter.setBrush(QBrush(QColor(COLOR_SELECTED)))
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
             painter.drawRect(
                 ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
                 _HANDLE_HALF * 2, _HANDLE_HALF * 2,

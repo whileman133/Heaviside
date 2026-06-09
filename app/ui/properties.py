@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.canvas.scene import SchematicScene
+from app.ui import theme
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
@@ -155,7 +156,7 @@ class _HopModeCheckBox(QCheckBox):
 
 def _make_section_label(text: str) -> QLabel:
     lbl = QLabel(text)
-    lbl.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
+    lbl.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {theme.ICON};")
     return lbl
 
 
@@ -497,7 +498,7 @@ class OptionsSection(InspectorSection):
         self.body.addWidget(self._field)
 
         self._hint = QLabel()
-        self._hint.setStyleSheet("color: #888; font-size: 10px;")
+        self._hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
         self._hint.setWordWrap(True)
         self.body.addWidget(self._hint)
 
@@ -568,7 +569,7 @@ class BipoleLabelSection(InspectorSection):
         self.body.addWidget(self._opts_field)
 
         hint = QLabel("Slots: l, l_, v, v^, i, i_")
-        hint.setStyleSheet("color: #888; font-size: 10px;")
+        hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
         self.body.addWidget(hint)
 
         self._timer = QTimer(self)

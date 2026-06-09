@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.scene import SchematicScene
 from app.codegen.circuitikz import generate
+from app.ui import theme
 
 _DEBOUNCE_MS = 300
 
@@ -47,9 +48,8 @@ class SourcePanel(QWidget):
         header_row.setContentsMargins(0, 0, 0, 0)
 
         from PySide6.QtWidgets import QLabel
-        title = QLabel("CircuiTikZ Source")
-        title.setStyleSheet("font-weight: bold; font-size: 11px; color: #555;")
-        header_row.addWidget(title)
+        self._title = QLabel("CircuiTikZ Source")
+        header_row.addWidget(self._title)
         header_row.addStretch(1)
         layout.addLayout(header_row)
 
@@ -61,8 +61,19 @@ class SourcePanel(QWidget):
         mono.setStyleHint(QFont.TypeWriter)
         mono.setPointSize(10)
         self._text.setFont(mono)
-        self._text.setStyleSheet("background: #ffffff; border: 1px solid #ddd;")
         layout.addWidget(self._text, 1)
+
+        self.apply_theme()
+
+    def apply_theme(self) -> None:
+        """Re-apply the theme-token stylesheets so the panel follows light/dark."""
+        self._title.setStyleSheet(
+            f"font-weight: bold; font-size: 11px; color: {theme.ICON};"
+        )
+        self._text.setStyleSheet(
+            f"background: {theme.SURFACE}; color: {theme.TEXT}; "
+            f"border: 1px solid {theme.BORDER};"
+        )
 
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
