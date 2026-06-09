@@ -155,3 +155,15 @@ def test_dialog_cancel_discards(prefs: Preferences) -> None:
     dlg._chk_pdf.setChecked(True)
     dlg.reject()  # cancel — no write
     assert prefs.auto_export_pdf is False
+
+
+def test_roundtrip_png(prefs: Preferences) -> None:
+    assert prefs.auto_export_png is False  # default off
+    prefs.auto_export_png = True
+    assert prefs.auto_export_png is True
+
+
+def test_png_dpi_default_and_roundtrip(prefs: Preferences) -> None:
+    assert prefs.png_dpi == 300            # publication default
+    prefs.png_dpi = 600
+    assert prefs.png_dpi == 600

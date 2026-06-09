@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Keyboard shortcuts for the component palette.** Each category shows a subtle
+  **letter** (R=Resistors, C=Capacitors, L=Inductors, D=Diodes, …); pressing it
+  selects that category. The first ten components of the active category show a
+  subtle **1–9/0** hint in the top-right of their tile; pressing the digit places
+  that component. Keys are ignored while typing in a field, and the canvas keeps
+  R/S/W/P (rotate/tools) while it's focused. (See the Help dialog, F1.)
+- **Export to PNG**, plus an **auto-export PNG on save** preference (alongside the
+  existing TeX/PDF/EPS/SVG). A new **PNG resolution** preference (default **300
+  dpi**, publication grade) controls both Copy PNG and PNG export.
 - **Dark mode (follows the system appearance).** The whole app — canvas (paper,
   grid, symbol/wire ink), toolbars, component palette, properties, source panel,
   the welcome screen, and the LaTeX preview — now switches between light and dark
@@ -32,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Scrollbars look right again.** The themed panels' stylesheets had turned the
+  CircuiTikZ source (and palette) scrollbars non-native, so they rendered with
+  ugly default arrow buttons. They now use a clean themed scrollbar (a rounded
+  muted handle, no arrows), and the properties inspector reserves room on the
+  right so its native (overlay) scrollbar doesn't cover the fields.
 - **Labels no longer vanish from the canvas after a one-off render failure.** A
   component label (e.g. a resistor's `l=$R$`) could render to nothing because the
   math-label cache stored a transient compile failure as a *permanent* empty
@@ -72,16 +86,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the Copy PDF/SVG buttons show a pointer cursor and hover highlight.
 
 ### Changed
+- **Refreshed component palette.** Category cards now show the **actual symbol**
+  of a representative component (rendered from the component itself) instead of a
+  generic icon that often didn't fit; the component previews are **larger** (3
+  columns); and the keyboard badges are subtle (no boxes).
+- **Split two palette categories.** **Logic** is now **Logic (Am)** and
+  **Logic (Eu)**, and the power rails (VCC/VDD/VEE/VSS) and batteries split
+  out of **Sources** into a new **Supplies** category (the actual sources, incl.
+  the european ones, stay in Sources).
+- **Copy to clipboard is PNG-only now.** Copy PDF and Copy SVG were dropped: the
+  common paste targets (Word, PowerPoint, Google Docs) rasterize a pasted figure
+  anyway, so the extra buttons were misleading. Copy PNG renders at the **PNG
+  resolution** preference. Vector output stays available via **File ▸ Export**
+  (PDF/EPS/SVG/PNG).
+- **Modernized the source & preview panels.** The CircuiTikZ source and LaTeX
+  preview now share a consistent **bordered card** look with padded titles, a
+  hairline divider, and **aligned title-bar heights**. The single Copy PNG action
+  sits **inline with the LaTeX Preview title** as a compact icon button.
 - **Signed & notarized macOS releases.** The release workflow now signs the
   macOS `.app` with a Developer ID Application certificate (hardened runtime +
   entitlements), submits it to Apple's notary service, and staples the ticket, so
   downloaded builds open without a Gatekeeper warning. Signing runs only when the
   signing secrets are configured; runs without them still produce an unsigned
   build. See `packaging/entitlements.plist` and `.github/workflows/release.yml`.
-- **Palette categories tidied.** The **Supplies** category was merged into
-  **Sources** (power rails now live there), and within every category the
-  american-style components are grouped before the european-style ones instead of
-  interleaving.
+- **Palette categories tidied.** Within every category the american-style
+  components are grouped before the european-style ones instead of interleaving.
 - **Harmonized, modern UI theme.** The toolbars and main-window buttons/inputs
   now share the component palette's flat, light look (white surfaces, hairline
   dividers, muted icons, one soft-blue accent) instead of the previous native

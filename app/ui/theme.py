@@ -121,6 +121,56 @@ def flat_button_qss() -> str:
     """
 
 
+# -- Side panels (CircuiTikZ source / LaTeX preview) -------------------------
+# A consistent "card with a title bar" look: a rounded, bordered frame with a
+# header strip (title + a hairline bottom divider). Used by both panels (§10.4/5)
+# so they line up and share styling. Object names: the panel frame is passed by
+# name; its header child must be named "panelHeader".
+
+def panel_frame_qss(name: str) -> str:
+    """Rounded, bordered card frame for a side panel (selected by object name)."""
+    return f"#{name} {{ background: {SURFACE}; border: 1px solid {BORDER_SOFT}; border-radius: 6px; }}"
+
+
+def panel_header_qss() -> str:
+    """Header strip inside a panel: transparent, with a hairline bottom divider."""
+    return f"#panelHeader {{ background: transparent; border: none; border-bottom: 1px solid {DIVIDER}; }}"
+
+
+def panel_title_qss() -> str:
+    """The panel's title label."""
+    return f"border: none; background: transparent; font-weight: 600; font-size: 11px; color: {TEXT};"
+
+
+def icon_button_qss() -> str:
+    """Small flat icon-only buttons in a panel header (e.g. Copy PNG/PDF/SVG)."""
+    return f"""
+        QToolButton {{ border: 1px solid transparent; border-radius: 5px; padding: 3px; }}
+        QToolButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
+        QToolButton:pressed {{ background: {PRESSED}; }}
+    """
+
+
+def scrollbar_qss() -> str:
+    """A clean, minimal scrollbar: a rounded muted handle, a transparent track,
+    and no arrow buttons. Once any stylesheet is active on a scroll widget its
+    scrollbars stop being native (and render with ugly default arrows), so the
+    themed panels/palette style theirs explicitly to match."""
+    return f"""
+        QScrollBar:vertical {{ background: transparent; width: 12px; margin: 0; }}
+        QScrollBar:horizontal {{ background: transparent; height: 12px; margin: 0; }}
+        QScrollBar::handle:vertical {{
+            background: {BORDER}; border-radius: 4px; min-height: 28px; margin: 2px; }}
+        QScrollBar::handle:horizontal {{
+            background: {BORDER}; border-radius: 4px; min-width: 28px; margin: 2px; }}
+        QScrollBar::handle:hover {{ background: {ICON_MUTED}; }}
+        QScrollBar::add-line, QScrollBar::sub-line {{
+            width: 0; height: 0; background: none; border: none; }}
+        QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
+        QAbstractScrollArea::corner {{ background: transparent; border: none; }}
+    """
+
+
 # NOTE: there is intentionally no global form-control stylesheet. Dialogs, message
 # boxes, spin boxes, and combo boxes keep their **native** look; only the toolbars
 # (top_toolbar_qss/ribbon_qss) and the Copy buttons (flat_button_qss) are themed.

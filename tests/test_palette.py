@@ -33,11 +33,15 @@ def _palette():
 
 
 def test_builds_with_a_card_per_category():
+    from app.ui.palette import _palette_category
+
     p = _palette()
-    # One category card per category present in the registry.
-    cats = {defn.category for defn in REGISTRY.values()}
+    # One card per *palette* category (Logic split into American/European, supply
+    # rails/batteries split into Supplies — see _palette_category).
+    cats = {_palette_category(k, d.category) for k, d in REGISTRY.items()}
     assert set(p._cards) == cats
     assert p._active_cat in cats  # a default active category is selected
+    assert {"Logic (Am)", "Logic (Eu)", "Supplies"} <= cats
 
 
 def test_american_components_sorted_before_european():
@@ -54,10 +58,22 @@ def test_american_components_sorted_before_european():
     assert res.index("R") < res.index("eR")
 
 
-def test_supplies_merged_into_sources_no_supplies_category():
+def test_supplies_split_out_of_sources():
+    """Power rails and batteries live in their own Supplies category; the actual
+    sources (incl. european ones) stay in Sources."""
     p = _palette()
-    assert "Supplies" not in p._cards
-    assert "vcc" in p._by_cat["Sources"]
+    assert "Supplies" in p._cards
+    assert "vcc" in p._by_cat["Supplies"] and "battery" in p._by_cat["Supplies"]
+    assert "vcc" not in p._by_cat["Sources"]
+    assert "V" in p._by_cat["Sources"] and "eV" in p._by_cat["Sources"]
+
+
+def test_logic_split_by_style():
+    """Logic is split into American and European palette categories."""
+    p = _palette()
+    assert "and" in p._by_cat["Logic (Am)"]
+    assert "eand" in p._by_cat["Logic (Eu)"]
+    assert "Logic" not in p._cards
 
 
 def test_selecting_a_category_makes_it_active():
@@ -95,3 +111,66 @@ def test_clicking_a_tile_starts_placement(monkeypatch):
     monkeypatch.setattr(p._scene, "start_placement", lambda k: started.append(k))
     p._place("C")
     assert started == ["C"]
+
+
+def test_select_category_by_letter():
+    """Each category's mnemonic letter activates it (keyboard shortcut path)."""
+    from app.ui.palette import _CATEGORY_LETTERS
+
+    p = _palette()
+    assert p.select_category_by_letter("C")        # Capacitors
+    assert p._active_cat == "Capacitors"
+    assert p.select_category_by_letter("d")        # case-insensitive → Diodes
+    assert p._active_cat == "Diodes"
+    assert not p.select_category_by_letter("?")    # unknown letter → no-op
+    assert p._active_cat == "Diodes"
+    # The letter map is unique (no two categories share a key).
+    assert len(set(_CATEGORY_LETTERS.values())) == len(_CATEGORY_LETTERS)
+
+
+def test_place_active_index(monkeypatch):
+    """Digit shortcuts place the Nth component of the active category."""
+    p = _palette()
+    started = []
+    monkeypatch.setattr(p._scene, "start_placement", lambda k: started.append(k))
+    p.select_category_by_letter("R")               # Resistors active
+    kinds = p._by_cat["Resistors"]
+    assert p.place_active_index(0)                  # press "1"
+    assert started == [kinds[0]]
+    assert p.place_active_index(2)                  # press "3"
+    assert started == [kinds[0], kinds[2]]
+    # Out-of-range index is ignored (no crash, returns False).
+    assert not p.place_active_index(999)
+    assert len(started) == 2
+
+
+def test_category_icons_render_from_representative_kind():
+    """Each category's card icon renders from a real component symbol (no empty
+    pixmaps), so the icons match the components."""
+    from app.ui.palette import _CATEGORY_REP, _category_pixmap
+    from app.components.registry import REGISTRY
+
+    for cat, kind in _CATEGORY_REP.items():
+        assert kind in REGISTRY, f"{cat}: representative {kind!r} not in registry"
+        pm = _category_pixmap(cat, 20)
+        assert not pm.isNull(), f"{cat}: icon failed to render"
+
+
+def test_search_box_does_not_grab_initial_focus():
+    """The search box uses click-focus so it doesn't steal focus at startup and
+    swallow the palette letter/number hotkeys (regression)."""
+    from PySide6.QtCore import Qt
+
+    p = _palette()
+    assert p._search.focusPolicy() == Qt.ClickFocus
+
+
+def test_grounds_uses_g_shortcut():
+    """Grounds is reachable via 'G'; the two Logic groups use 'O' and 'E'."""
+    p = _palette()
+    assert p.select_category_by_letter("G")
+    assert p._active_cat == "Grounds"
+    assert p.select_category_by_letter("O")
+    assert p._active_cat == "Logic (Am)"
+    assert p.select_category_by_letter("E")
+    assert p._active_cat == "Logic (Eu)"

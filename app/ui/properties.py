@@ -1189,7 +1189,9 @@ class PropertiesPanel(QWidget):
 
         content = QWidget()
         col = QVBoxLayout(content)
-        col.setContentsMargins(0, 0, 0, 0)
+        # Reserve room on the right so the vertical scrollbar never overlaps the
+        # section fields (macOS overlay scrollbars float over the content).
+        col.setContentsMargins(0, 0, 10, 0)
         col.setSpacing(6)
 
         # Ordered section list — order is the visual order in the panel.

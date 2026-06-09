@@ -39,24 +39,29 @@ class SourcePanel(QWidget):
         self._debounce.setInterval(_DEBOUNCE_MS)
         self._debounce.timeout.connect(self._refresh)
 
+        self.setObjectName("srcPanel")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 4)
-        layout.setSpacing(2)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Header row: label only.
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-
+        # Header strip: title with padding + a hairline bottom divider (matches
+        # the LaTeX preview panel, §10.5).
         from PySide6.QtWidgets import QLabel
+        self._header = QWidget()
+        self._header.setObjectName("panelHeader")
+        self._header.setFixedHeight(30)   # matches _PreviewPanel._HEADER_H
+        header_row = QHBoxLayout(self._header)
+        header_row.setContentsMargins(10, 2, 10, 2)
         self._title = QLabel("CircuiTikZ Source")
         header_row.addWidget(self._title)
         header_row.addStretch(1)
-        layout.addLayout(header_row)
+        layout.addWidget(self._header)
 
-        # Read-only source text area.
+        # Read-only source text area (the panel frame provides the border).
         self._text = QPlainTextEdit()
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self._text.setFrameShape(QPlainTextEdit.NoFrame)
         mono = QFont("Monospace")
         mono.setStyleHint(QFont.TypeWriter)
         mono.setPointSize(10)
@@ -67,12 +72,12 @@ class SourcePanel(QWidget):
 
     def apply_theme(self) -> None:
         """Re-apply the theme-token stylesheets so the panel follows light/dark."""
-        self._title.setStyleSheet(
-            f"font-weight: bold; font-size: 11px; color: {theme.ICON};"
-        )
+        self.setStyleSheet(theme.panel_frame_qss("srcPanel"))
+        self._header.setStyleSheet(theme.panel_header_qss())
+        self._title.setStyleSheet(theme.panel_title_qss())
         self._text.setStyleSheet(
-            f"background: {theme.SURFACE}; color: {theme.TEXT}; "
-            f"border: 1px solid {theme.BORDER};"
+            f"QPlainTextEdit {{ background: {theme.SURFACE}; color: {theme.TEXT}; "
+            f"border: none; padding: 4px 6px; }}" + theme.scrollbar_qss()
         )
 
     def set_scene(self, scene: SchematicScene) -> None:

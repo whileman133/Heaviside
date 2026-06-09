@@ -21,9 +21,11 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -35,6 +37,11 @@ _KEY_AUTO_TEX = "export/auto_tex_on_save"
 _KEY_AUTO_PDF = "export/auto_pdf_on_save"
 _KEY_AUTO_EPS = "export/auto_eps_on_save"
 _KEY_AUTO_SVG = "export/auto_svg_on_save"
+_KEY_AUTO_PNG = "export/auto_png_on_save"
+_KEY_PNG_DPI = "export/png_dpi"
+
+#: Default raster resolution for PNG copy/export — 300 dpi is publication grade.
+_DEFAULT_PNG_DPI = 300
 _KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
 _KEY_LINE_HOPS = "display/line_hops"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
@@ -93,6 +100,26 @@ class Preferences:
     @auto_export_svg.setter
     def auto_export_svg(self, value: bool) -> None:
         self._settings.setValue(_KEY_AUTO_SVG, bool(value))
+
+    @property
+    def auto_export_png(self) -> bool:
+        return _to_bool(self._settings.value(_KEY_AUTO_PNG), default=False)
+
+    @auto_export_png.setter
+    def auto_export_png(self, value: bool) -> None:
+        self._settings.setValue(_KEY_AUTO_PNG, bool(value))
+
+    @property
+    def png_dpi(self) -> int:
+        """Raster resolution (dots per inch) for PNG copy and export."""
+        try:
+            return int(self._settings.value(_KEY_PNG_DPI, _DEFAULT_PNG_DPI))
+        except (TypeError, ValueError):
+            return _DEFAULT_PNG_DPI
+
+    @png_dpi.setter
+    def png_dpi(self, value: int) -> None:
+        self._settings.setValue(_KEY_PNG_DPI, int(value))
 
     # -- Display -------------------------------------------------------------
 
@@ -180,11 +207,30 @@ class PreferencesDialog(QDialog):
         self._chk_svg.setChecked(prefs.auto_export_svg)
         group_layout.addWidget(self._chk_svg)
 
+        self._chk_png = QCheckBox("Export a PNG next to the schematic file")
+        self._chk_png.setChecked(prefs.auto_export_png)
+        group_layout.addWidget(self._chk_png)
+
+        # PNG resolution (shared by Copy PNG and Export/auto-export PNG).
+        dpi_row = QHBoxLayout()
+        dpi_row.setContentsMargins(0, 0, 0, 0)
+        dpi_row.addWidget(QLabel("PNG resolution:"))
+        self._spin_dpi = QSpinBox()
+        self._spin_dpi.setRange(72, 1200)
+        self._spin_dpi.setSingleStep(50)
+        self._spin_dpi.setSuffix(" dpi")
+        self._spin_dpi.setValue(prefs.png_dpi)
+        dpi_row.addWidget(self._spin_dpi)
+        dpi_row.addStretch(1)
+        group_layout.addLayout(dpi_row)
+
         hint = QLabel(
             "When saving <name>.hv, also write <name>.tex / <name>.pdf / <name>.eps "
-            "/ <name>.svg to the same folder so an \\input or \\includegraphics in "
-            "your LaTeX document stays up to date.  The TeX snippet needs nothing; "
-            "PDF/EPS/SVG require pdflatex (and pdftocairo for EPS/SVG)."
+            "/ <name>.svg / <name>.png to the same folder so an \\input or "
+            "\\includegraphics in your LaTeX document stays up to date.  The TeX "
+            "snippet needs nothing; PDF/EPS/SVG/PNG require pdflatex (and pdftocairo "
+            "for EPS/SVG). PNG resolution applies to both Copy PNG and PNG export "
+            "(300 dpi is publication grade)."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666; font-size: 11px;")
@@ -318,6 +364,8 @@ class PreferencesDialog(QDialog):
         self._prefs.auto_export_pdf = self._chk_pdf.isChecked()
         self._prefs.auto_export_eps = self._chk_eps.isChecked()
         self._prefs.auto_export_svg = self._chk_svg.isChecked()
+        self._prefs.auto_export_png = self._chk_png.isChecked()
+        self._prefs.png_dpi = self._spin_dpi.value()
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
         self._prefs.line_hops = self._chk_line_hops.isChecked()
         self._prefs.force_ziamath = self._chk_force_ziamath.isChecked()

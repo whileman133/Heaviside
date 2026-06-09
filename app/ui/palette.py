@@ -21,8 +21,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut
+from PySide6.QtCore import QSize, Qt
+from PySide6.QtGui import (
+    QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+)
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -36,43 +38,77 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-import qtawesome as qta
-
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
 from app.components.registry import REGISTRY
 from app.ui import theme
 
-_THUMB_SIZE = 34
-_TILE_SIZE = 46
-_PALETTE_WIDTH = 256
-_ITEM_COLS = 4
+# Preview glyph + tile sizes — enlarged (and 3 columns instead of 4) so the
+# symbols read clearly. The tile leaves room around the glyph for the hover
+# outline and the keyboard-number badge.
+_THUMB_SIZE = 48
+_TILE_SIZE = 64
+_PALETTE_WIDTH = 272
+_ITEM_COLS = 3
 
 # Preferred category order (spec §5.4) — engineer-facing groups, not the
-# CircuiTikZ bipole/tripole classification.
+# CircuiTikZ bipole/tripole classification. The palette splits the raw "Logic"
+# and "Sources" registry categories into finer groups (see _palette_category).
 _CATEGORY_ORDER = [
     "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors",
-    "Amplifiers", "Logic", "Switches", "Sources", "Instruments", "Grounds",
+    "Amplifiers", "Logic (Am)", "Logic (Eu)", "Switches",
+    "Sources", "Supplies", "Instruments", "Grounds",
     "Misc", "Annotations", "Drawing",
 ]
 
-# A representative qtawesome (Font Awesome 5 solid) icon per category. Purely
-# decorative aids on the category cards; resolved safely (see _category_icon).
-_CATEGORY_ICONS = {
-    "Resistors": "fa5s.wave-square",
-    "Capacitors": "fa5s.grip-lines-vertical",
-    "Inductors": "fa5s.water",
-    "Diodes": "fa5s.play",
-    "Transistors": "fa5s.microchip",
-    "Amplifiers": "fa5s.bullhorn",
-    "Logic": "fa5s.sitemap",
-    "Sources": "fa5s.bolt",
-    "Instruments": "fa5s.tachometer-alt",
-    "Grounds": "fa5s.arrow-down",
-    "Supplies": "fa5s.battery-full",
-    "Misc": "fa5s.shapes",
-    "Annotations": "fa5s.font",
-    "Drawing": "fa5s.draw-polygon",
+# Power-supply kinds (rails + batteries) split out of the raw "Sources" registry
+# category into the palette-only "Supplies" group; the actual sources stay put.
+_SUPPLY_KINDS = frozenset({"vcc", "vdd", "vee", "vss", "battery", "battery1"})
+
+
+def _palette_category(kind: str, raw: str) -> str:
+    """Refine a component's registry category into its palette group: split Logic
+    by american/european style and move the supply rails/batteries into Supplies.
+    (Category is a palette-grouping concern, §5.4, so this stays UI-side.)"""
+    if raw == "Logic":
+        return "Logic (Eu)" if _is_european_style(kind) else "Logic (Am)"
+    if raw == "Sources" and kind in _SUPPLY_KINDS:
+        return "Supplies"
+    return raw
+
+
+# A representative component **kind** per category. Its actual symbol is rendered
+# as the category-card icon (see _category_pixmap), so the icons always match the
+# components — no decorative stand-ins that don't fit.
+_CATEGORY_REP = {
+    "Resistors": "R",
+    "Capacitors": "C",
+    "Inductors": "L",
+    "Diodes": "D",
+    "Transistors": "npn",
+    "Amplifiers": "op amp",
+    "Logic (Am)": "and",
+    "Logic (Eu)": "eand",
+    "Switches": "nos",
+    "Sources": "V",
+    "Supplies": "battery",
+    "Instruments": "voltmeter",
+    "Grounds": "ground",
+    "Misc": "lamp",
+    "Annotations": "open",
+    "Drawing": "rect",
+}
+
+# Keyboard shortcut letter per category (unique; the canvas keeps R/S/W/P while it
+# is focused — see MainWindow._handle_palette_shortcut). Shown as a subtle badge
+# on each card; pressing 1–9/0 then places the Nth component.
+_CATEGORY_LETTERS = {
+    "Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D",
+    "Transistors": "T", "Amplifiers": "A",
+    "Logic (Am)": "O", "Logic (Eu)": "E",
+    "Switches": "W", "Sources": "V", "Supplies": "U",
+    "Instruments": "M", "Grounds": "G", "Misc": "X",
+    "Annotations": "N", "Drawing": "B",
 }
 
 
@@ -121,12 +157,18 @@ def _thumbnail(kind: str) -> QPixmap:
     return _thumb_cache[kind]
 
 
-def _category_icon(category: str) -> QIcon:
-    name = _CATEGORY_ICONS.get(category, "fa5s.cube")
+def _category_pixmap(category: str, size: int) -> QPixmap:
+    """Render the category's representative component symbol as a *size*×*size*
+    icon (Retina-crisp). Falls back to an empty pixmap if the kind is unknown."""
+    kind = _CATEGORY_REP.get(category)
+    if not (kind and kind in REGISTRY):
+        return QPixmap()
     try:
-        return qta.icon(name, color=theme.ICON)
-    except Exception:  # noqa: BLE001 - unknown icon name → no icon
-        return QIcon()
+        pm = _render_thumbnail(kind, size * 2)  # 2× for a sharp Retina icon
+        pm.setDevicePixelRatio(2.0)
+        return pm
+    except Exception:  # noqa: BLE001 - never let a bad symbol break the panel
+        return QPixmap()
 
 
 def _is_european_style(kind: str) -> bool:
@@ -188,24 +230,45 @@ class _CollapsibleSection(QWidget):
 
 
 class _ComponentTile(QToolButton):
-    """Icon-only, clickable component tile; the name is a hover tooltip."""
+    """Icon-only, clickable component tile; the name is a hover tooltip.
 
-    def __init__(self, kind: str, place, parent: QWidget | None = None) -> None:  # noqa: ANN001
+    When *number* is set (1–9, or 0 for the tenth), a small keyboard-hint badge is
+    painted in the corner — the digit that places this component (§10.2)."""
+
+    def __init__(self, kind: str, place, number: int | None = None,  # noqa: ANN001
+                 parent: QWidget | None = None) -> None:
         super().__init__(parent)
         defn = REGISTRY[kind]
+        self._number = number
         self.setIcon(QIcon(_thumbnail(kind)))
-        from PySide6.QtCore import QSize
         self.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
         self.setFixedSize(_TILE_SIZE, _TILE_SIZE)
         self.setAutoRaise(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(f"{defn.display_name} ({kind})")
+        tip = f"{defn.display_name} ({kind})"
+        if number is not None:
+            tip += f"  ·  press {number}"
+        self.setToolTip(tip)
         self.setStyleSheet(
-            "QToolButton { border: 1px solid transparent; border-radius: 5px; }"
+            "QToolButton { border: 1px solid transparent; border-radius: 6px; }"
             "QToolButton:hover { background: %s; border-color: %s; }"
             % (theme.HOVER, theme.HOVER_BORDER)
         )
         self.clicked.connect(lambda: place(kind))
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ANN001
+        super().paintEvent(event)
+        if self._number is None:
+            return
+        # A subtle digit in the top-right corner (no box), the keyboard hint.
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        f = QFont(); f.setPointSize(8); f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(theme.ICON_MUTED))
+        p.drawText(0, 2, self.width() - 4, 12,
+                   Qt.AlignRight | Qt.AlignTop, str(self._number))
+        p.end()
 
 
 class _CategoryCard(QFrame):
@@ -221,18 +284,28 @@ class _CategoryCard(QFrame):
         self._set_active(False)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(6, 5, 6, 5)
-        row.setSpacing(6)
+        row.setContentsMargins(5, 4, 5, 4)
+        row.setSpacing(5)
         icon = QLabel()
-        pm = _category_icon(category).pixmap(16, 16)
-        icon.setPixmap(pm)
+        icon.setFixedSize(20, 20)
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setPixmap(_category_pixmap(category, 20))
         row.addWidget(icon)
         text = QLabel(f"{category}")
+        text.setToolTip(f"{count} component{'s' if count != 1 else ''}")
         text.setStyleSheet("border: none; font-size: 11px;")
         row.addWidget(text, 1)
-        cnt = QLabel(str(count))
-        cnt.setStyleSheet("border: none; color: %s; font-size: 10px;" % theme.ICON_MUTED)
-        row.addWidget(cnt)
+        letter = _CATEGORY_LETTERS.get(category)
+        if letter:
+            key = QLabel(letter)
+            key.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            key.setFixedWidth(14)
+            key.setToolTip(f"Shortcut: {letter}")
+            key.setStyleSheet(
+                "border: none; background: transparent; color: %s; "
+                "font-size: 11px; font-weight: bold;" % theme.ICON_MUTED
+            )
+            row.addWidget(key)
 
     def _set_active(self, active: bool) -> None:
         border, bg = (theme.ACCENT, theme.HOVER) if active else (theme.BORDER_SOFT, theme.SURFACE_ALT)
@@ -252,14 +325,19 @@ class _CategoryCard(QFrame):
         super().mousePressEvent(event)
 
 
-def _grid(kinds: list[str], place, cols: int = _ITEM_COLS) -> QWidget:  # noqa: ANN001
-    """A grid of component tiles, *cols* per row, left-aligned."""
+def _grid(kinds: list[str], place, cols: int = _ITEM_COLS,  # noqa: ANN001
+          numbered: bool = False) -> QWidget:
+    """A grid of component tiles, *cols* per row, left-aligned.
+
+    When *numbered* is True, the first ten tiles get a 1–9/0 keyboard-hint badge.
+    """
     host = QWidget()
     grid = QGridLayout(host)
     grid.setContentsMargins(0, 0, 0, 0)
     grid.setSpacing(2)
     for i, kind in enumerate(kinds):
-        grid.addWidget(_ComponentTile(kind, place), i // cols, i % cols)
+        num = (i + 1) % 10 if (numbered and i < 10) else None  # 1..9 then 0
+        grid.addWidget(_ComponentTile(kind, place, number=num), i // cols, i % cols)
     # Push tiles to the top-left so partial last rows don't stretch.
     grid.setColumnStretch(cols, 1)
     return host
@@ -283,7 +361,7 @@ class ComponentPalette(QWidget):
         self._scene: SchematicScene | None = None
         self._by_cat: dict[str, list[str]] = defaultdict(list)
         for kind, defn in REGISTRY.items():
-            self._by_cat[defn.category].append(kind)
+            self._by_cat[_palette_category(kind, defn.category)].append(kind)
         # Within each category, keep american-style components together (first),
         # then european-style ones, instead of jumbling them by registry order.
         for kinds in self._by_cat.values():
@@ -301,6 +379,10 @@ class ComponentPalette(QWidget):
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search components…  (Ctrl+/)")
         self._search.setClearButtonEnabled(True)
+        # Click-focus only, so the search box doesn't grab focus at startup and
+        # swallow the palette letter/number hotkeys; Ctrl+/ still focuses it
+        # (programmatic setFocus works regardless of the click-focus policy).
+        self._search.setFocusPolicy(Qt.ClickFocus)
         self._search.textChanged.connect(self._on_search)
         outer.addWidget(self._search)
         focus = QShortcut(QKeySequence("Ctrl+/"), self)
@@ -313,6 +395,7 @@ class ComponentPalette(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
+        scroll.setStyleSheet(theme.scrollbar_qss())   # clean themed scrollbar
         outer.addWidget(scroll, 1)
 
         content = QWidget()
@@ -322,7 +405,8 @@ class ComponentPalette(QWidget):
             "QWidget#palette_content { background-color: %s; }" % theme.SURFACE
         )
         self._content = QVBoxLayout(content)
-        self._content.setContentsMargins(0, 0, 0, 0)
+        # A little right padding so the cards/tiles clear the scrollbar.
+        self._content.setContentsMargins(0, 0, 2, 0)
         self._content.setSpacing(4)
         scroll.setWidget(content)
 
@@ -390,7 +474,32 @@ class ComponentPalette(QWidget):
         self._active.set_title(self._active_cat.upper())
         body = self._active.body_layout()
         self._clear(body)
-        body.addWidget(_grid(self._by_cat.get(self._active_cat, []), self._place))
+        body.addWidget(
+            _grid(self._by_cat.get(self._active_cat, []), self._place, numbered=True)
+        )
+
+    # -- keyboard shortcuts (driven by MainWindow's key handling) --------
+
+    def select_category_by_letter(self, letter: str) -> bool:
+        """Make the category bound to *letter* active. Returns True if handled."""
+        for cat, ltr in _CATEGORY_LETTERS.items():
+            if ltr == letter.upper() and cat in self._by_cat:
+                if self._search.text().strip():
+                    self._search.clear()  # leave search mode so the category shows
+                self._select_category(cat)
+                # _select_category no-ops if already active; ensure the section shows.
+                self._active.setVisible(True)
+                self._categories.setVisible(True)
+                return True
+        return False
+
+    def place_active_index(self, index: int) -> bool:
+        """Place the *index*-th (0-based) component of the active category."""
+        kinds = self._by_cat.get(self._active_cat, [])
+        if 0 <= index < len(kinds):
+            self._place(kinds[index])
+            return True
+        return False
 
     def _refresh_in_use(self) -> None:
         if self._scene is None:
@@ -438,6 +547,7 @@ class ComponentPalette(QWidget):
             "ComponentPalette { background-color: %s; }" % theme.SURFACE
         )
         self._scroll.viewport().setStyleSheet("background-color: %s;" % theme.SURFACE)
+        self._scroll.setStyleSheet(theme.scrollbar_qss())
         self._content_host.setStyleSheet(
             "QWidget#palette_content { background-color: %s; }" % theme.SURFACE
         )

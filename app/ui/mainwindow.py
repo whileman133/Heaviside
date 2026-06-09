@@ -27,13 +27,15 @@ from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QFont, QGuiApplication,
     QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QAbstractSpinBox,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -41,9 +43,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QPlainTextEdit,
     QMessageBox,
-    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSplitter,
@@ -51,6 +54,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -227,6 +231,40 @@ class MainWindow(QMainWindow):
         self._view.viewport().update()
 
     # ------------------------------------------------------------------
+    # Palette keyboard shortcuts (§10.2)
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
+        """Window-level palette shortcuts: a letter selects a component category,
+        digits 1–9/0 place the Nth component of the active category.
+
+        This only fires for keys no focused child consumed, so text inputs keep
+        their typing and the canvas keeps R/S/W/P (rotate/tools) while it is
+        focused — no fragile focus checks needed."""
+        if not self._handle_palette_shortcut(event):
+            super().keyPressEvent(event)
+
+    def _handle_palette_shortcut(self, event) -> bool:  # noqa: ANN001
+        # Plain keys only — never shadow menu/app accelerators.
+        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
+            return False
+        # Belt-and-suspenders: never act while a text input is focused (a
+        # read-only QPlainTextEdit can ignore letters, which would propagate here).
+        if isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QAbstractSpinBox)):
+            return False
+
+        key = event.key()
+        if Qt.Key_1 <= key <= Qt.Key_9:
+            return self._palette.place_active_index(key - Qt.Key_1)
+        if key == Qt.Key_0:
+            return self._palette.place_active_index(9)
+
+        text = event.text().upper()
+        if len(text) == 1 and text.isalpha():
+            return self._palette.select_category_by_letter(text)
+        return False
+
+    # ------------------------------------------------------------------
     # Menu bar
     # ------------------------------------------------------------------
 
@@ -279,20 +317,16 @@ class MainWindow(QMainWindow):
         self._act_export_svg.triggered.connect(self._on_export_svg)
         file_menu.addAction(self._act_export_svg)
 
+        self._act_export_png = QAction("Export to PN&G…", self)
+        self._act_export_png.triggered.connect(self._on_export_png)
+        file_menu.addAction(self._act_export_png)
+
         file_menu.addSeparator()
 
         self._act_copy_png = QAction("Copy Figure as PN&G", self)
         self._act_copy_png.setShortcut(QKeySequence("Ctrl+Shift+C"))
         self._act_copy_png.triggered.connect(self._on_copy_png)
         file_menu.addAction(self._act_copy_png)
-
-        self._act_copy_pdf = QAction("Copy Figure as PD&F", self)
-        self._act_copy_pdf.triggered.connect(self._on_copy_pdf)
-        file_menu.addAction(self._act_copy_pdf)
-
-        self._act_copy_svg = QAction("Copy Figure as S&VG", self)
-        self._act_copy_svg.triggered.connect(self._on_copy_svg)
-        file_menu.addAction(self._act_copy_svg)
 
         file_menu.addSeparator()
 
@@ -560,13 +594,13 @@ class MainWindow(QMainWindow):
         # preview gets the larger initial share of the width; the user can drag
         # the handle to rebalance.
         bottom = QWidget()
-        bottom.setFixedHeight(260)
+        bottom.setFixedHeight(264)
         bottom_layout = QHBoxLayout(bottom)
-        bottom_layout.setContentsMargins(0, 0, 0, 0)
+        bottom_layout.setContentsMargins(6, 2, 6, 6)
         bottom_layout.setSpacing(0)
 
         bottom_split = QSplitter(Qt.Horizontal)
-        bottom_split.setHandleWidth(4)
+        bottom_split.setHandleWidth(8)   # gap between the two cards
         bottom_split.setChildrenCollapsible(False)
 
         self._source_panel = SourcePanel(preferences=self._prefs)
@@ -575,8 +609,6 @@ class MainWindow(QMainWindow):
 
         self._preview_panel = _PreviewPanel()
         self._preview_panel.copy_png_requested.connect(self._on_copy_png)
-        self._preview_panel.copy_pdf_requested.connect(self._on_copy_pdf)
-        self._preview_panel.copy_svg_requested.connect(self._on_copy_svg)
         bottom_split.addWidget(self._preview_panel)
 
         # Source stays only as wide as it needs; preview takes the extra room.
@@ -857,7 +889,8 @@ class MainWindow(QMainWindow):
         want_pdf = self._prefs.auto_export_pdf
         want_eps = self._prefs.auto_export_eps
         want_svg = self._prefs.auto_export_svg
-        if not (want_tex or want_pdf or want_eps or want_svg):
+        want_png = self._prefs.auto_export_png
+        if not (want_tex or want_pdf or want_eps or want_svg or want_png):
             return
 
         self._status_compile.setText("Auto-exporting…")
@@ -876,8 +909,8 @@ class MainWindow(QMainWindow):
                 self._status_compile.setText(f"Auto-export failed: {exc}")
                 return
 
-        # Image formats: one compile shared by PDF/EPS/SVG.
-        if want_pdf or want_eps or want_svg:
+        # Image formats: one compile shared by PDF/EPS/SVG/PNG.
+        if want_pdf or want_eps or want_svg or want_png:
             pdf_bytes = self._compile_to_pdf(quiet=True)
             if pdf_bytes is None:
                 self._status_compile.setText("Auto-export failed (see Compile)")
@@ -895,7 +928,13 @@ class MainWindow(QMainWindow):
                     svg_path = path.with_suffix(".svg")
                     svg_path.write_bytes(pdf_to_svg(pdf_bytes))
                     written.append(svg_path.name)
-            except (OSError, CompileError) as exc:
+                if want_png:
+                    png_path = path.with_suffix(".png")
+                    image = pdf_to_qimage(pdf_bytes, dpi=self._prefs.png_dpi)
+                    if not image.save(str(png_path), "PNG"):
+                        raise OSError(f"could not write {png_path.name}")
+                    written.append(png_path.name)
+            except (OSError, CompileError, RuntimeError) as exc:
                 self._status_compile.setText(f"Auto-export failed: {exc}")
                 return
 
@@ -1064,6 +1103,32 @@ class MainWindow(QMainWindow):
             return
         self._status_compile.setText(f"Exported to {Path(path).name}")
 
+    def _on_export_png(self) -> None:
+        """Export the schematic as a raster PNG at the configured DPI (§8.6)."""
+        self._status_compile.setText("Compiling…")
+        pdf_bytes = self._compile_to_pdf()
+        if pdf_bytes is None:
+            self._status_compile.setText("Export failed")
+            return
+        try:
+            image = pdf_to_qimage(pdf_bytes, dpi=self._prefs.png_dpi)
+        except (CompileError, RuntimeError) as exc:
+            QMessageBox.critical(self, "Export Error", str(exc))
+            self._status_compile.setText("Export failed")
+            return
+        default_name = (self._current_path.stem if self._current_path else "untitled") + ".png"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export to PNG", default_name, "PNG Image (*.png);;All Files (*)"
+        )
+        if not path:
+            return
+        if not path.endswith(".png"):
+            path += ".png"
+        if not image.save(path, "PNG"):
+            QMessageBox.critical(self, "Export Error", f"Could not write {path}")
+            return
+        self._status_compile.setText(f"Exported to {Path(path).name}")
+
     # ------------------------------------------------------------------
     # Copy figure to clipboard
     # ------------------------------------------------------------------
@@ -1072,8 +1137,14 @@ class MainWindow(QMainWindow):
         """Copy the compiled figure to the clipboard as a raster image (PNG).
 
         The schematic is compiled to PDF and rendered to a QImage (QtPdf, no
-        Poppler), then placed on the clipboard so it can be pasted into slides,
-        docs, chat, etc. Requires ``pdflatex``; failures report like the exports.
+        Poppler) at the configured PNG resolution (Preferences → PNG resolution,
+        default 300 dpi), then placed on the clipboard so it can be pasted into
+        slides, docs, chat, etc. Requires ``pdflatex``.
+
+        Only PNG is offered (not PDF/SVG): the common paste targets — Word,
+        PowerPoint, Google Docs — rasterize a pasted figure anyway, so a single
+        high-resolution PNG is the honest, useful option. Vector output stays
+        available via File ▸ Export.
         """
         self._status_compile.setText("Compiling…")
         pdf_bytes = self._compile_to_pdf()
@@ -1081,76 +1152,15 @@ class MainWindow(QMainWindow):
             self._status_compile.setText("Copy failed")
             return
         try:
-            image = pdf_to_qimage(pdf_bytes, dpi=300)
+            image = pdf_to_qimage(pdf_bytes, dpi=self._prefs.png_dpi)
         except (CompileError, RuntimeError) as exc:
             QMessageBox.critical(self, "Copy Error", str(exc))
             self._status_compile.setText("Copy failed")
             return
         QGuiApplication.clipboard().setImage(image)
-        self._status_compile.setText("Copied figure to clipboard (PNG)")
-
-    def _add_raster_fallback(self, mime: QMimeData, pdf_bytes: bytes) -> None:
-        """Attach a high-res raster of the figure to *mime*.
-
-        Apps that can't paste a vector flavor — Word, PowerPoint, Google Docs,
-        Slack — fall back to this image (Qt exposes it under the ``public.tiff`` /
-        ``public.png`` pasteboard types macOS apps accept). Best-effort: a render
-        failure just omits the fallback. The PDF is the **light** export figure,
-        so the pasted image is white-paper/black-ink regardless of the UI theme.
-        """
-        try:
-            mime.setImageData(pdf_to_qimage(pdf_bytes, dpi=300))
-        except Exception:  # noqa: BLE001 - raster is a best-effort extra
-            pass
-
-    def _on_copy_pdf(self) -> None:
-        """Copy the compiled figure to the clipboard as PDF.
-
-        Exposes the PDF under the macOS ``com.adobe.pdf`` pasteboard UTI (so
-        Keynote/Pages/Preview — and Word/PowerPoint where supported — paste it as
-        vector) plus the ``application/pdf`` MIME type for Linux/Windows, and adds
-        a raster fallback so apps without vector paste still get the figure.
-        Needs ``pdflatex``.
-        """
-        self._status_compile.setText("Compiling…")
-        pdf_bytes = self._compile_to_pdf()
-        if pdf_bytes is None:
-            self._status_compile.setText("Copy failed")
-            return
-        mime = QMimeData()
-        mime.setData("com.adobe.pdf", pdf_bytes)     # macOS pasteboard UTI (vector)
-        mime.setData("application/pdf", pdf_bytes)   # Linux/Windows + other apps
-        self._add_raster_fallback(mime, pdf_bytes)
-        QGuiApplication.clipboard().setMimeData(mime)
-        self._status_compile.setText("Copied figure to clipboard (PDF)")
-
-    def _on_copy_svg(self) -> None:
-        """Copy the compiled figure to the clipboard as vector SVG.
-
-        Exposes the SVG under the macOS ``public.svg-image`` UTI and the
-        ``image/svg+xml`` MIME type for vector-aware consumers (Illustrator,
-        Inkscape, Figma), plus a raster fallback so Word/PowerPoint paste the
-        figure as an image instead of the raw XML. (We deliberately do **not**
-        put the SVG on the clipboard as ``text/plain`` — that is what made Office
-        paste the markup.) Needs ``pdflatex`` and ``pdftocairo`` (Poppler).
-        """
-        self._status_compile.setText("Compiling…")
-        pdf_bytes = self._compile_to_pdf()
-        if pdf_bytes is None:
-            self._status_compile.setText("Copy failed")
-            return
-        try:
-            svg_bytes = pdf_to_svg(pdf_bytes)
-        except CompileError as exc:
-            QMessageBox.critical(self, "Copy Error", str(exc))
-            self._status_compile.setText("Copy failed")
-            return
-        mime = QMimeData()
-        mime.setData("public.svg-image", svg_bytes)  # macOS pasteboard UTI (vector)
-        mime.setData("image/svg+xml", svg_bytes)     # Linux/Windows + vector apps
-        self._add_raster_fallback(mime, pdf_bytes)   # Word/PowerPoint paste this
-        QGuiApplication.clipboard().setMimeData(mime)
-        self._status_compile.setText("Copied figure to clipboard (SVG)")
+        self._status_compile.setText(
+            f"Copied figure to clipboard (PNG, {self._prefs.png_dpi} dpi)"
+        )
 
     def _confirm_discard(self) -> bool:
         """Return True if it is safe to discard the current document."""
@@ -1254,6 +1264,13 @@ _HELP_SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("R",            "Rotate the selection 90° clockwise."),
         ("Arrows",       "Nudge the selection 0.25 units (one minor-grid cell)."),
         ("Esc",          "Cancel placing/wiring and return to the Select tool."),
+    ]),
+    ("Component palette", [
+        ("Ctrl+/",       "Focus the palette search box."),
+        ("Letter key",   "Jump to a category by its keycap letter (R=Resistors, "
+                         "C=Capacitors, L=Inductors, D=Diodes, …). The canvas keeps "
+                         "R/S/W/P while it is focused."),
+        ("1 – 9, 0",     "Place the 1st–10th component of the active category."),
     ]),
     ("Tab — cycle the item under the cursor", [
         ("Tab (over a label)",
@@ -1662,25 +1679,48 @@ class _PreviewPanel(QWidget):
     """
 
     copy_png_requested = Signal()
-    copy_pdf_requested = Signal()
-    copy_svg_requested = Signal()
 
     _MIN_W = 240
+    _HEADER_H = 30   # shared with the source panel so the title bars line up
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # Resizable: the panel lives in a splitter and re-renders to fit (see
         # resizeEvent). A minimum width keeps it from collapsing to nothing.
+        self.setObjectName("prevPanel")
         self.setMinimumWidth(self._MIN_W)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 6)
-        layout.setSpacing(2)
-
         from PySide6.QtWidgets import QLabel as _QLabel
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header strip: "LaTeX Preview" with the Copy PNG button inline on the
+        # right as an icon-only button (§10.5), same fixed height as the source
+        # panel header so the two title bars align.
+        self._header = QWidget()
+        self._header.setObjectName("panelHeader")
+        self._header.setFixedHeight(self._HEADER_H)
+        header_row = QHBoxLayout(self._header)
+        header_row.setContentsMargins(10, 2, 6, 2)
+        header_row.setSpacing(2)
         self._title = _QLabel("LaTeX Preview")
-        layout.addWidget(self._title)
+        header_row.addWidget(self._title)
+        header_row.addStretch(1)
+
+        # Only PNG is offered for clipboard copy: PDF/SVG always paste as a raster
+        # into the common targets (Word/PowerPoint/Docs) anyway, so the extra
+        # buttons were misleading. Vector output is still available via Export.
+        self._copy_icons = ["fa5s.image"]
+        btn = QToolButton()
+        btn.setAutoRaise(True)
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.setToolTip("Copy the figure to the clipboard as a PNG image")
+        btn.clicked.connect(self.copy_png_requested)
+        self._copy_buttons = [btn]
+        header_row.addWidget(btn)
+        layout.addWidget(self._header)
 
         self._img_label = QLabel()
         self._img_label.setAlignment(Qt.AlignCenter)
@@ -1689,50 +1729,26 @@ class _PreviewPanel(QWidget):
 
         self._error_label = QLabel()
         self._error_label.setWordWrap(True)
-        self._error_label.setStyleSheet("color: red; font-size: 10px;")
+        self._error_label.setStyleSheet("color: red; font-size: 10px; border: none; padding: 4px 8px;")
         self._error_label.hide()
         layout.addWidget(self._error_label)
-
-        # Copy-to-clipboard buttons below the preview image.
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(4)
-        copy_png = QPushButton(" Copy PNG")
-        copy_pdf = QPushButton(" Copy PDF")
-        copy_svg = QPushButton(" Copy SVG")
-        copy_png.setToolTip("Copy the compiled figure to the clipboard as a PNG image")
-        copy_pdf.setToolTip("Copy the compiled figure to the clipboard as PDF")
-        copy_svg.setToolTip("Copy the compiled figure to the clipboard as SVG")
-        copy_png.clicked.connect(self.copy_png_requested)
-        copy_pdf.clicked.connect(self.copy_pdf_requested)
-        copy_svg.clicked.connect(self.copy_svg_requested)
-        btn_row.addStretch(1)
-        # Pointer cursor; the flat/hover style and icon tint are applied in
-        # apply_theme so they follow light/dark (the panel's own stylesheet would
-        # otherwise shadow the button style).
-        self._copy_buttons = (copy_png, copy_pdf, copy_svg)
-        for btn in self._copy_buttons:
-            btn.setCursor(Qt.PointingHandCursor)
-            btn_row.addWidget(btn)
-        layout.addLayout(btn_row)
 
         self._raw_image: QImage | None = None
         self.apply_theme()
 
     def apply_theme(self) -> None:
-        """Follow light/dark. The panel background matches the figure's page
-        colour (``style.COLOR_BACKGROUND``) so the rendered schematic blends in;
-        the Copy buttons and title re-tint with the chrome tokens."""
-        self.setStyleSheet(
-            "background: %s; border-left: 1px solid %s;"
-            % (style.COLOR_BACKGROUND, theme.BORDER)
+        """Follow light/dark with a card frame matching the source panel; the
+        image area uses the figure's page colour (``style.COLOR_BACKGROUND``) so
+        the rendered schematic blends in."""
+        self.setStyleSheet(theme.panel_frame_qss("prevPanel"))
+        self._header.setStyleSheet(theme.panel_header_qss())
+        self._title.setStyleSheet(theme.panel_title_qss())
+        self._img_label.setStyleSheet(
+            "border: none; background: %s;" % style.COLOR_BACKGROUND
         )
-        self._title.setStyleSheet(
-            "font-weight: bold; font-size: 11px; color: %s;" % theme.ICON
-        )
-        for btn in self._copy_buttons:
-            btn.setIcon(qta.icon("fa5s.copy", color=theme.ICON))
-            btn.setStyleSheet(theme.flat_button_qss())
+        for btn, icon_name in zip(self._copy_buttons, self._copy_icons):
+            btn.setIcon(qta.icon(icon_name, color=theme.ICON))
+            btn.setStyleSheet(theme.icon_button_qss())
 
     def has_image(self) -> bool:
         return self._raw_image is not None

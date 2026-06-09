@@ -128,61 +128,43 @@ def test_copy_png_puts_image_on_clipboard(tmp_path, monkeypatch):
     assert fake.image is img and not fake.image.isNull()
 
 
-def test_copy_pdf_puts_pdf_mime_on_clipboard(tmp_path, monkeypatch):
-    """Copy-as-PDF exposes the figure under both the macOS PDF pasteboard UTI
-    (com.adobe.pdf — so Office/iWork paste it) and the application/pdf MIME type,
-    plus a raster fallback for apps without vector paste."""
-    from PySide6.QtGui import QImage
-
-    win = _win(tmp_path)
-    monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4 body")
-    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: QImage(8, 8, QImage.Format_RGB32))
-    fake = _FakeClipboard()
-    monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
-
-    win._on_copy_pdf()
-    assert fake.mime is not None
-    assert fake.mime.hasFormat("com.adobe.pdf")       # macOS UTI (the fix)
-    assert fake.mime.hasFormat("application/pdf")
-    assert bytes(fake.mime.data("application/pdf")).startswith(b"%PDF")
-    assert fake.mime.hasImage()                       # raster fallback
-
-
-def test_preview_panel_buttons_emit_copy_signals():
-    """The preview panel's Copy PNG/PDF/SVG buttons emit the copy-request signals."""
-    from PySide6.QtWidgets import QPushButton
+def test_preview_panel_has_only_copy_png_button():
+    """The preview header offers a single Copy PNG icon button (PDF/SVG clipboard
+    copy was dropped — they paste as raster anyway; vector stays in Export)."""
+    from PySide6.QtWidgets import QToolButton
 
     panel = mw._PreviewPanel()
+    assert not hasattr(panel, "copy_pdf_requested")
+    assert not hasattr(panel, "copy_svg_requested")
     got = []
     panel.copy_png_requested.connect(lambda: got.append("png"))
-    panel.copy_pdf_requested.connect(lambda: got.append("pdf"))
-    panel.copy_svg_requested.connect(lambda: got.append("svg"))
-    for btn in panel.findChildren(QPushButton):
-        btn.click()
-    assert set(got) == {"png", "pdf", "svg"}
+    buttons = panel.findChildren(QToolButton)
+    assert len(buttons) == 1   # icon-only Copy PNG in the header
+    buttons[0].click()
+    assert got == ["png"]
 
 
-def test_copy_svg_puts_svg_mime_on_clipboard(tmp_path, monkeypatch):
-    """Copy-as-SVG exposes the SVG under the macOS UTI (public.svg-image) and the
-    image/svg+xml MIME type, plus a raster fallback — and crucially NOT as
-    text/plain, so Word/PowerPoint paste an image instead of the raw XML markup
-    (regression)."""
+def test_copy_png_uses_dpi_preference(tmp_path, monkeypatch):
+    """Copy PNG renders at the configured PNG DPI preference (default 300)."""
     from PySide6.QtGui import QImage
 
     win = _win(tmp_path)
+    win._prefs.png_dpi = 600
     monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
-    monkeypatch.setattr(mw, "pdf_to_svg", lambda *a, **k: b"<svg xmlns='...'/>")
-    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: QImage(8, 8, QImage.Format_RGB32))
+    seen = {}
+    img = QImage(8, 8, QImage.Format_RGB32)
+
+    def fake_qimage(pdf, dpi=150):
+        seen["dpi"] = dpi
+        return img
+
+    monkeypatch.setattr(mw, "pdf_to_qimage", fake_qimage)
     fake = _FakeClipboard()
     monkeypatch.setattr(mw.QGuiApplication, "clipboard", staticmethod(lambda: fake))
 
-    win._on_copy_svg()
-    assert fake.mime is not None
-    assert fake.mime.hasFormat("image/svg+xml")
-    assert fake.mime.hasFormat("public.svg-image")    # macOS UTI (the fix)
-    assert bytes(fake.mime.data("image/svg+xml")).startswith(b"<svg")
-    assert fake.mime.hasImage()                       # raster fallback for Office
-    assert not fake.mime.hasText()                    # the XML-paste bug is gone
+    win._on_copy_png()
+    assert seen["dpi"] == 600
+    assert fake.image is img
 
 
 def test_retypeset_labels_runs_on_populated_scene(tmp_path):
@@ -224,3 +206,62 @@ def test_apply_theme_switches_both_palettes(tmp_path):
         # Never leak the dark palette into other tests.
         style.set_dark(False)
         theme.set_dark(False)
+
+
+def test_palette_keyboard_shortcuts(tmp_path, monkeypatch):
+    """Letters select a category and digits place the Nth component; modifier
+    chords are ignored so they don't shadow menu accelerators (§10.2)."""
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QKeyEvent
+
+    win = _win(tmp_path)
+    started = []
+    monkeypatch.setattr(win._scene, "start_placement", lambda k: started.append(k))
+
+    def press(text, key, mods=Qt.NoModifier):
+        return win._handle_palette_shortcut(QKeyEvent(QEvent.KeyPress, key, mods, text))
+
+    assert press("c", Qt.Key_C)                      # → Capacitors
+    assert win._palette._active_cat == "Capacitors"
+    assert press("1", Qt.Key_1)                      # place first capacitor
+    assert started == [win._palette._by_cat["Capacitors"][0]]
+    # A Ctrl-chord (e.g. Ctrl+C) must NOT be hijacked as the category letter.
+    assert not press("c", Qt.Key_C, Qt.ControlModifier)
+
+
+def test_export_png_renders_at_dpi(tmp_path, monkeypatch):
+    """Export PNG renders the figure at the PNG DPI preference and writes a file."""
+    from PySide6.QtGui import QImage
+
+    win = _win(tmp_path)
+    win._prefs.png_dpi = 200
+    out = tmp_path / "fig.png"
+    monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
+    seen = {}
+    img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
+
+    def fake_qimage(pdf, dpi=150):
+        seen["dpi"] = dpi
+        return img
+
+    monkeypatch.setattr(mw, "pdf_to_qimage", fake_qimage)
+    monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: (str(out), "")))
+    win._on_export_png()
+    assert seen["dpi"] == 200
+    assert out.exists() and out.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_auto_export_png_writes_file(tmp_path, monkeypatch):
+    """With auto-export PNG on, saving writes a sibling <name>.png."""
+    from PySide6.QtGui import QImage
+
+    win = _win(tmp_path)
+    win._prefs.auto_export_png = True
+    img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
+    monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
+
+    out = tmp_path / "demo.hv"
+    win._auto_export(out)
+    assert out.with_suffix(".png").exists()

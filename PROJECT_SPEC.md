@@ -607,7 +607,7 @@ Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()
 
 **SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
 
-The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Logic → Switches → Sources → Instruments → Grounds → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. (Power-supply rails live in **Sources**; there is no separate Supplies category.) The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, american-style components are listed first and european-style ones after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave.
+The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Amplifiers → Logic (Am) → Logic (Eu) → Switches → Sources → Supplies → Instruments → Grounds → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. The palette refines the raw registry `category` for display (`palette._palette_category`): the raw **Logic** category splits by symbol style into **Logic (Am)** / **Logic (Eu)**, and the power-supply rails + batteries (`_SUPPLY_KINDS`: `vcc`/`vdd`/`vee`/`vss`/`battery`/`battery1`) split out of the raw **Sources** category into a palette-only **Supplies** group (the actual sources, including the european ones, stay in Sources). This is a UI-grouping concern; the model `ComponentDef.category` is unchanged. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, american-style components are listed first and european-style ones after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave.
 
 **American vs. european shapes.** Both conventions are offered as *distinct
 components* sitting side by side in their category, rather than a global toggle:
@@ -780,7 +780,7 @@ All canvas symbols follow **American/IEEE style**, matching the `[american]` Cir
 #### General Drawing Rules
 
 - All symbols are drawn as `QPainterPath` geometry translated from `components/geometry.json`. No external image assets are used.
-- Stroke width is `LINE_W` for normal strokes and `LINE_W * 2` for thick strokes (e.g. gate electrodes). At palette thumbnail scale (32×32px), stroke width is reduced to `LINE_W_THIN` to prevent fine detail from filling in.
+- Stroke width is `LINE_W` for normal strokes and `LINE_W * 2` for thick strokes (e.g. gate electrodes). At palette thumbnail scale (`_THUMB_SIZE`px), stroke width is reduced to `LINE_W_THIN` to prevent fine detail from filling in.
 - Pin indicator dots of radius `PIN_R` are drawn at every `PinDef` offset. They are visible in normal and selected states; suppressed in ghost (placement preview) state.
 - No label text is drawn inside palette thumbnails. Component identity is conveyed by shape alone.
 - Each symbol is scaled so its bounding box fills the `ComponentDef.bbox` area with consistent padding on all sides.
@@ -1590,30 +1590,29 @@ in a LaTeX document (or any other consumer). All reuse the §8.1 compile pipelin
    beyond the one EPS already requires. The standalone PDF is already cropped
    tight, so the SVG inherits that extent. Both share the `_pdf_to_vector` helper.
 
+5. **PNG export** renders the compiled PDF to a `QImage` via `pdf_to_qimage`
+   (QtPdf — no extra dependency) at the **PNG resolution** preference (default 300
+   dpi, §10.8) and saves it with `QImage.save`.
+
 Unlike the §8.5 `.tex` snippet, these formats require `pdflatex` to be available
 at export time (and `pdftocairo` for EPS/SVG), but the result is a self-contained
 image that does not need the host document to load `circuitikz`. Compile or
 conversion failures are reported in a dialog (the `pdflatex` log is included for
 compile errors) and leave no file behind. For a `pdflatex`/`lualatex` workflow,
 PDF is the natural choice; EPS is for `latex`+`dvips` PostScript workflows; SVG
-suits the web and vector editors (Inkscape, Illustrator).
+suits the web and vector editors (Inkscape, Illustrator); PNG is a portable
+raster for slides/docs.
 
-**Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`), **as PDF**,
-and **as SVG** place the compiled figure on the clipboard instead of writing a
-file, for pasting directly into slides/docs/chat; **Copy PNG / PDF / SVG buttons**
-also sit below the LaTeX preview panel (§10.5). PNG renders the compiled PDF to a
-`QImage` via `pdf_to_qimage` (QtPdf, 300 dpi) and calls `clipboard().setImage`.
-PDF and SVG each set a `QMimeData` carrying the vector data under **both** its
-macOS pasteboard UTI — `com.adobe.pdf` / `public.svg-image` (so Keynote, Pages,
-Preview, Illustrator, Inkscape, and Office where supported paste it as vector) —
-**and** the cross-platform MIME type (`application/pdf` / `image/svg+xml`), plus a
-**raster fallback** (`setImageData` of the 300-dpi render, which Qt exposes under
-`public.tiff`/`public.png`) so apps without vector paste — Word, PowerPoint,
-Google Docs, Slack — still receive the figure. SVG deliberately does **not** add a
-`text/plain` flavor: that made Office paste the raw `<svg>` markup. The copied
-figure always uses the **light** export template (`build_tex` without `dark`), so
-dark mode never affects what is pasted. Same toolchain requirements as the
-matching exports (`pdflatex`; `pdftocairo` for SVG); failures report as for export.
+**Copy to clipboard.** **File ▸ Copy Figure as PNG** (`Ctrl+Shift+C`), and a Copy
+PNG icon button in the LaTeX preview header (§10.5), place the compiled figure on
+the clipboard as a raster image (`pdf_to_qimage` at the PNG-resolution preference →
+`clipboard().setImage`) for pasting into slides/docs/chat. **Only PNG is offered**:
+the common paste targets (Word, PowerPoint, Google Docs) rasterize a pasted figure
+regardless of the source flavor, so the earlier Copy PDF / Copy SVG (with macOS
+pasteboard-UTI vector flavors) were dropped as misleading — vector output stays
+available via **Export** (PDF/EPS/SVG). The copied figure always uses the **light**
+export template (`build_tex` without `dark`), so dark mode never affects what is
+pasted. Needs `pdflatex`; failures report as for export.
 
 ### 8.7 Dependencies
 
@@ -1836,21 +1835,44 @@ via `QDesktopServices.openUrl`, so users can file a report without leaving the a
 
 ### 10.2 Component Palette
 
-Left panel, fixed width ~236px, white background. A search box at the top
+Left panel, fixed width `_PALETTE_WIDTH` (≈272px). A search box at the top
 (focus with `Ctrl+/`) and three collapsible sections (`_CollapsibleSection`):
 
 - **In use in document** — icon tiles for the distinct kinds already placed,
   ordered by category. Rebuilt on `schematic_changed`; hidden when the document
   is empty (or while a search is active).
-- **Categories** — a 2-column grid of cards (a qtawesome icon + the category name
-  + a component count). Clicking a card makes it the **active** category
-  (highlighted); category order follows §5.4.
-- **&lt;active category&gt;** — the components in the active category.
+- **Categories** — a **2-column grid** of cards (the split Logic groups use the
+  compact names "Logic (Am)" / "Logic (Eu)" so they fit). Each card shows the
+  **actual symbol of a representative component** for that category (`_CATEGORY_REP` → rendered by
+  `_category_pixmap`, so the icons always match the components rather than using a
+  decorative stand-in), the category name, and a subtle right-aligned **letter**
+  (its keyboard shortcut, no box). Clicking a card (or pressing its letter) makes
+  it the **active** category (highlighted); category order follows §5.4. The
+  palette refines the raw registry `category` via `_palette_category`: **Logic**
+  splits into **Logic (Am)** / **Logic (Eu)** by symbol style, and the
+  supply rails + batteries (`_SUPPLY_KINDS`) split out of **Sources** into a
+  **Supplies** group (a palette-only grouping; the model `category` is unchanged).
+- **&lt;active category&gt;** — the components in the active category; the first ten
+  tiles carry a subtle 1–9/0 keyboard hint in the **top-right** corner.
 
 Components are **icon-only tiles**: a thumbnail rendered from the component's own
-`ComponentItem` (32×32, cached), with the `display_name` + kind shown as a hover
-**tooltip** rather than inline, to keep the panel compact. Clicking a tile calls
-`scene.start_placement(kind)` (enters **Place** mode).
+`ComponentItem` (`_THUMB_SIZE`=48 in a `_TILE_SIZE`=64 tile, 3 columns — enlarged
+for readability, cached), with the `display_name` + kind shown as a hover
+**tooltip** rather than inline. Clicking a tile calls `scene.start_placement(kind)`
+(enters **Place** mode). The scroll area uses the shared **`theme.scrollbar_qss`**
+(a clean rounded handle, no arrow buttons) — needed because once a stylesheet is
+active on a scroll widget Qt stops drawing its scrollbars natively. The same
+style is applied to the source panel (§10.4); the properties inspector keeps its
+**native** scrollbar (so its form controls stay native, §10.3) and instead
+reserves a right margin so the overlay scrollbar doesn't cover the fields.
+
+**Keyboard shortcuts** (`MainWindow.keyPressEvent` → `_handle_palette_shortcut`,
+handled at the window level so it only fires for keys no focused child consumed —
+text inputs keep their typing and the canvas keeps R/S/W/P while focused, with no
+fragile focus checks): a **letter** (`_CATEGORY_LETTERS`, a unique mnemonic per
+category) selects that category; **digits 1–9 / 0** place the 1st–10th component of
+the active category via `place_active_index`. Modifier chords are ignored so they
+never shadow menu accelerators.
 
 A non-empty **search** replaces the categories/active/in-use sections with a flat
 **Search results** grid of every component whose `kind` or `display_name` matches
@@ -1894,19 +1916,29 @@ short, the preview gets the larger initial share of the width (initial sizes
 ≈ 440 / 840); the user can drag the handle to rebalance, and neither pane is
 collapsible.
 
+Both bottom-strip panels share a consistent **card** look: a rounded, bordered
+frame (`theme.panel_frame_qss`) with a **header strip** — a padded title and a
+hairline bottom divider (`theme.panel_header_qss` / `panel_title_qss`, header
+object name `panelHeader`). The two headers use the **same fixed height**
+(`_PreviewPanel._HEADER_H` = 30px) so their title bars line up. Both follow the
+light/dark theme via `apply_theme`.
+
 ### 10.4 Source Panel
 
-- Left pane of the bottom strip.
-- Read-only `QPlainTextEdit` showing the current generated CircuiTikZ source.
+- Left pane of the bottom strip; card frame with a "CircuiTikZ Source" header.
+- Read-only, frameless `QPlainTextEdit` showing the current generated CircuiTikZ
+  source (the card supplies the border).
 - Updates live (debounced 300ms) as the schematic changes.
 - Syntax is not highlighted in v1.
 
 ### 10.5 Preview Panel
 
-- Right pane of the bottom strip, separated by a 1px border; resizable via the
-  splitter (minimum width ~240px), and re-renders to fit on resize.
-- Shows the rendered PDF preview image, scaled to fill the available area.
-- Shows error text on compilation failure.
+- Right pane of the bottom strip; card frame matching the source panel, resizable
+  via the splitter (minimum width ~240px), and re-renders to fit on resize.
+- Header: a "LaTeX Preview" title with a single **Copy PNG** flat **icon-only**
+  `QToolButton` (`fa5s.image`, `theme.icon_button_qss`) inline on the right (§8.6).
+- The image area uses the figure's page colour (`style.COLOR_BACKGROUND`) so the
+  rendered schematic blends in; shows error text on compilation failure.
 - The panel is always visible; content appears after first compile.
 
 ### 10.6 Keyboard Shortcuts
@@ -1928,6 +1960,10 @@ collapsible.
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
+| Rotate selection 90° CW | `R` |
+| Focus palette search | `Ctrl+/` |
+| Select component category (by its keycap letter) | letter key |
+| Place 1st–10th component of the active category | `1`–`9` / `0` |
 | Cycle, while hovering: endpoint-label position (over a label) / endpoint marker (over any endpoint) / line style (over the body) | `Tab` / `Shift+Tab` |
 | Cancel / Select mode | `Escape` |
 | Pan (transient) | `Space` + drag |
@@ -1971,6 +2007,8 @@ Current settings:
 | Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
 | Auto-export SVG on save | `export/auto_svg_on_save` | off | After a successful save, also write `<name>.svg` to the same directory. |
+| Auto-export PNG on save | `export/auto_png_on_save` | off | After a successful save, also write `<name>.png` (rendered at the PNG-resolution preference) to the same directory. |
+| PNG resolution | `export/png_dpi` | **300** | Dots-per-inch for **Copy PNG** and **PNG export / auto-export** (300 dpi is publication grade). A spin box (72–1200) in the Auto-export group. |
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
 | Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
@@ -1979,8 +2017,8 @@ Current settings:
 When any is enabled, `_do_save()` calls `_auto_export()`. The `.tex` snippet is
 generated directly (`generate()` → `build_snippet()`, pure Python — **no LaTeX
 install required**); the image formats share a **single** compile (reusing the
-§8.6 pipeline), with the one PDF converted via `pdf_to_eps()` / `pdf_to_svg()` as
-requested. This keeps an `\input{<name>.tex}` or `\includegraphics{<name>.pdf}`
+§8.6 pipeline), with the one PDF converted via `pdf_to_eps()` / `pdf_to_svg()` /
+`pdf_to_qimage()` (PNG) as requested. This keeps an `\input{<name>.tex}` or `\includegraphics{<name>.pdf}`
 (or `.eps`/`.svg`) in a LaTeX document in sync with the schematic without a manual
 export step. Enabling only TeX auto-export therefore works with no `pdflatex` present.
 
