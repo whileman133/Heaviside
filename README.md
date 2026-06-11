@@ -34,9 +34,9 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 
 Pre-built apps (always the latest release):
 
-- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.zip)
-- **Windows (x64)** → [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
-- **Linux (x64)** → [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz)
+- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg)
+- **Windows (x64)** → [Heaviside-windows-x64-setup.exe](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64-setup.exe) (installer) · [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip) (portable)
+- **Linux (x64)** → [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage) (run anywhere) · [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz) (portable)
 
 Or browse all releases (with checksums and release notes) on the
 [Releases page](https://github.com/whileman133/Heaviside/releases).
@@ -61,21 +61,65 @@ Or browse all releases (with checksums and release notes) on the
 > PDF export needs only `pdflatex`, so you can skip Poppler unless you export EPS
 > or SVG.
 
-> **First launch:** these builds are not code-signed/notarized (Heaviside is a
-> free, open-source alpha), so macOS and Windows will warn on first open — see
-> [Opening the app with macOS](#opening-the-app-with-macos) for more information. On **Linux**,
-> extract the archive (`tar -xzf Heaviside-linux-x64.tar.gz`) and run the
-> `Heaviside` executable inside the folder.
+> **Installing:** On **macOS**, open the `.dmg` and drag **Heaviside** onto the
+> **Applications** folder. On **Windows**, run **`Heaviside-windows-x64-setup.exe`**
+> — it installs Heaviside (no admin needed), adds a Start Menu shortcut, and
+> associates `.hv` files so you can double-click a schematic to open it; an
+> uninstaller is added to *Add or remove programs*. (Prefer no install? The
+> `.zip` is portable — unzip and run `Heaviside.exe`.) On **Linux**, download the
+> **`.AppImage`**, make it executable (`chmod +x Heaviside-linux-x86_64.AppImage`)
+> and run it — no install, no root. (Prefer the folder form? The `.tar.gz` is
+> portable — `tar -xzf Heaviside-linux-x64.tar.gz` and run the `Heaviside`
+> executable inside.) The AppImage needs FUSE; on systems without it, run it with
+> `./Heaviside-linux-x86_64.AppImage --appimage-extract-and-run`.
+>
+> **First launch:** if these builds are not code-signed/notarized, macOS and
+> Windows will warn on first open — see
+> [Opening the app with macOS](#opening-the-app-with-macos) for how to proceed.
+
+> **Stay up to date.** Heaviside checks GitHub for a newer release on startup and
+> tells you if one is available (it never downloads or installs anything by
+> itself, and sends no information about you). Turn it off in
+> **Preferences → Updates**, or check on demand from **Help → Check for Updates**.
+
+## Getting started
+
+1. **Launch Heaviside.** You're greeted by a welcome screen. Start a blank
+   schematic with **File → New**, or explore a ready-made one via
+   **File → Open Example ▸** (these ship with the app).
+2. **Place components.** Drag symbols from the component palette on the left onto
+   the canvas. They snap to the CircuiTikZ grid so everything stays aligned.
+3. **Wire them up.** Drag from one component terminal to another; wires route at
+   right angles and drop junction dots automatically.
+4. **Label and style.** Select a component or wire to edit its labels (typeset
+   math, e.g. `$R_1$`), value, orientation, and style in the properties panel.
+5. **Watch the source and preview.** The CircuiTikZ source and a live compiled
+   PDF preview update as you work. Press **Ctrl/Cmd+Return** to force a recompile.
+6. **Save once, export forever.** **File → Save** writes the `.hv` source and, on
+   every save, automatically refreshes the co-located `.tex` and image exports so
+   your paper's figures stay current. You can also export on demand from the
+   **File → Export** menu (`.tex`, `.pdf`, `.svg`, `.eps`, `.png`).
+
+> **No LaTeX? Most of this still works.** Drawing, typeset on-canvas labels,
+> CircuiTikZ source, and `.tex` export need no LaTeX install. The live **PDF
+> preview** and **PDF/EPS/SVG** image exports need `pdflatex` (and Poppler for
+> EPS/SVG) — see the [Download](#download) notes above. Point Heaviside at a
+> specific install under **Preferences → Tools** if a tool isn't on your `PATH`.
 
 ## Opening the app with macOS
 
-The distributed `Heaviside.app` is **not signed with an Apple Developer ID or
-notarized** (Heaviside is a free, open-source project). macOS Gatekeeper will
-therefore block it on first launch with a message like *“Apple could not verify
-‘Heaviside.app’ is free of malware that may harm your Mac or compromise your
-privacy.”* This does **not** indicate a problem with the app — it is how macOS treats software that hasn’t been notarized through a paid Developer ID.
+Open the downloaded `.dmg` and drag **Heaviside** onto the **Applications**
+folder, then launch it from Applications.
 
-To open it the first time, do **one** of the following:
+When the release is **signed and notarized** with an Apple Developer ID, it
+opens normally — you can skip the rest of this section.
+
+If a build is **not** notarized (e.g. a fork, or before signing is configured),
+macOS Gatekeeper blocks it on first launch with a message like *“Apple could not
+verify ‘Heaviside.app’ is free of malware…”*. This does **not** indicate a
+problem with the app — it is how macOS treats software that hasn’t been notarized
+through a paid Developer ID. To open it the first time, do **one** of the
+following:
 
 - **System Settings → Privacy & Security:** try to open the app once (and dismiss
   the warning), then open **System Settings → Privacy & Security**, scroll to the

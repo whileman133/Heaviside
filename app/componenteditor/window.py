@@ -14,7 +14,7 @@ The window is a thin shell over the Qt-free :mod:`app.componenteditor.draft` /
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen, QTransform
+from PySide6.QtGui import QBrush, QColor, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
     QComboBox,
@@ -38,7 +38,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.canvas.style import GRID_PX, SVG_PT_PER_GU
+from app.canvas import svgsym
+from app.canvas.style import GRID_PX
 from app.components import library, render
 from app.componenteditor import draft, renderer
 
@@ -397,14 +398,11 @@ class ComponentEditorWindow(QMainWindow):
     def _render_preview(self, geom: dict, entry: dict,
                         lead_ds: set[str] | None = None) -> None:
         self._scene.clear()
-        # Same transform as svgsym: translate(-origin) then uniform scale.
-        try:
-            ox, oy = library.origin_svg()
-        except Exception:  # noqa: BLE001
-            ox, oy = 15.0312, 15.0312
-        t = QTransform()
-        t.scale(GRID_PX / SVG_PT_PER_GU, GRID_PX / SVG_PT_PER_GU)
-        t.translate(-ox, -oy)
+        # The exact transform the canvas uses (svgsym), computed fresh so a
+        # just-saved store's origin is picked up.  No fallback needed: _on_render
+        # already calls library.origin_svg() (via compute_bbox) before reaching
+        # the preview, so a missing store fails earlier with a clear error.
+        t = svgsym.local_transform()
 
         # 0.25 GU grid (minor lines faint, integer lines darker) — pins sit on it.
         EXT, STEP = 3.0, 0.25

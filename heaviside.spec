@@ -71,9 +71,18 @@ datas = [
 ]
 # Example schematics for the File → Open Example menu. Only the .hv sources are
 # bundled — the co-located .pdf/.eps are regenerable and intentionally skipped.
-datas += [(f, "examples") for f in glob("examples/*.hv")]
+# Recurse so category sub-folders (examples/<Category>/<name>.hv) are preserved in
+# the bundle; the dest mirrors each file's parent so the menu keeps its categories.
+datas += [(f, str(Path(f).parent)) for f in glob("examples/**/*.hv", recursive=True)]
 # qtawesome ships its icon fonts as package data (toolbar/ribbon glyphs).
 datas += collect_data_files("qtawesome")
+# ziamath/ziafont bundle their math/text fonts (STIX Two Math, DejaVu Sans) as
+# package data and load them at import time. Without these the pure-Python,
+# no-LaTeX math-label fallback (app/preview/mathrender.py) is dead in the frozen
+# app — the very feature that lets canvas labels render with no TeX installed.
+# PyInstaller does not collect them automatically (neither package ships a hook).
+datas += collect_data_files("ziamath")
+datas += collect_data_files("ziafont")
 # Third-party license notices. The bundled Qt/PySide6 is LGPLv3, which requires
 # the attribution notice and license text to travel *inside* the distributed
 # application (.app / Heaviside/ folder). Ship the whole licenses/ folder.

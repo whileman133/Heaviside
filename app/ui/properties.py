@@ -20,7 +20,10 @@ Section → applicability map:
   VariantSection      – one checkbox per boolean variant the kind declares
                         (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
-  FillBorderSection   – StyledComponent (rect, bipole)
+  FillBorderSection   – StyledComponent (rect, circle, bipole) — fill + line style
+  StrokeWidthSection  – the unified stroke/outline width, every kind but text_node
+                        (symbols and blocks share one line_width)
+  ScaleSection        – logic-gate size multiplier (scale), grid-safe dropdown
   TransformSection    – rotation (all but rect, whose rotation is a codegen no-op)
                         + mirror (circuit + bipole only)
   LayerSection        – DrawingComponent (z-order + move front/back)
@@ -30,7 +33,6 @@ All edits funnel through SchematicScene methods, which push undoable commands.
 
 from __future__ import annotations
 
-import re
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -52,7 +54,9 @@ from PySide6.QtWidgets import (
     QButtonGroup,
 )
 
+from app.canvas.commands import SetDocumentPropertiesCommand
 from app.canvas.scene import SchematicScene
+from app.components.style import split_top_level
 from app.ui import theme
 from app.components.model import (
     BipoleComponent,
@@ -292,6 +296,34 @@ def _set_combo(combo: QComboBox, label: str) -> None:
     combo.blockSignals(False)
 
 
+def _set_combo_value(
+    combo: QComboBox, value: str, value_to_label: dict[str, str]
+) -> None:
+    """Select the item matching the model *value* without emitting signals.
+
+    A value the combo's preset list cannot represent (e.g. a hand-authored
+    ``fill=red!40`` in the .hv file) is **inserted as an extra item** showing the
+    raw value, so a later section commit round-trips it instead of silently
+    overwriting it with the index-0 preset. The extra item is removed again when
+    the loaded value is representable. Commit paths must map an unknown display
+    text back to itself (``mapping.get(text, text)``).
+    """
+    combo.blockSignals(True)
+    # Drop any stale extra item from a previous unrepresentable value.
+    for i in range(combo.count() - 1, -1, -1):
+        if combo.itemData(i, Qt.UserRole) is True:
+            combo.removeItem(i)
+    label = value_to_label.get(value)
+    if label is None:
+        combo.addItem(value)
+        idx = combo.count() - 1
+        combo.setItemData(idx, True, Qt.UserRole)   # marks the extra item
+        combo.setCurrentIndex(idx)
+    else:
+        combo.setCurrentIndex(max(0, combo.findText(label)))
+    combo.blockSignals(False)
+
+
 # ---------------------------------------------------------------------------
 # Shared font-controls widget
 # ---------------------------------------------------------------------------
@@ -374,6 +406,12 @@ class _FontControls(QWidget):
     def _on_size_changed(self) -> None:
         self._size_timer.start()
 
+    def flush_pending(self) -> None:
+        """Commit a debounced size edit that is still pending, if any."""
+        if self._size_timer.isActive():
+            self._size_timer.stop()
+            self._emit_size()
+
     def _emit_size(self) -> None:
         self.size_committed.emit(float(self._size_spin.value()))
 
@@ -389,15 +427,35 @@ class _FontControls(QWidget):
 # Bipole label helpers
 # ---------------------------------------------------------------------------
 
+def _is_t_slot(segment: str) -> bool:
+    """True when a top-level option *segment* is the bipole ``t=…`` slot."""
+    key, eq, _val = segment.partition("=")
+    return bool(eq) and key.strip() == "t"
+
+
 def _extract_bipole_label(options: str) -> str:
-    """Return the value of the t= slot in a bipole options string."""
-    m = re.search(r'\bt\s*=\s*([^,]+)', options)
-    return m.group(1).strip() if m else ""
+    """Return the value of the t= slot in a bipole options string.
+
+    Splits at the **top level** (``split_top_level``) so a label containing a
+    comma inside math/braces — e.g. ``t=$f(a,b)$`` — is returned whole rather
+    than truncated at the comma.
+    """
+    for seg in split_top_level(options):
+        if _is_t_slot(seg):
+            return seg.partition("=")[2].strip()
+    return ""
+
+
+def _strip_bipole_label(options: str) -> str:
+    """*options* with the ``t=`` slot removed (top-level comma aware)."""
+    rest = [s.strip() for s in split_top_level(options)
+            if s.strip() and not _is_t_slot(s)]
+    return ", ".join(rest)
 
 
 def _replace_bipole_label(options: str, label: str) -> str:
     """Replace (or insert) the t= slot in options, returning the new string."""
-    stripped = re.sub(r'\bt\s*=\s*[^,]+(,\s*)?', '', options).strip(', ')
+    stripped = _strip_bipole_label(options)
     if label:
         return f"t={label}" + (f", {stripped}" if stripped else "")
     return stripped
@@ -421,6 +479,15 @@ class InspectorSection(QWidget):
     """
 
     title: str | None = None
+
+    # Whether this section is safe to bind across a **mixed-kind** multi-selection
+    # (e.g. a resistor + a capacitor). True only for sections that edit a uniform,
+    # kind-independent capability field (font, fill/border, stroke, rotation,
+    # layer). Sections that edit kind-specific free-text (options, t= label, text
+    # content) or kind-structural state (variants, param count) stay False — they
+    # bind only when the whole selection shares one kind. See
+    # ``PropertiesPanel.show_components``.
+    multi_kind_safe: bool = False
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -476,8 +543,27 @@ class InspectorSection(QWidget):
         self.show()
 
     def unbind(self) -> None:
+        # Commit any debounced edit still pending FIRST: clearing _comp_ids
+        # before the timer fired would silently drop the user's last keystrokes
+        # (and a save could then serialise stale state).
+        self.flush_pending_edits()
         self._comp_ids = []
         self.hide()
+
+    def flush_pending_edits(self) -> None:
+        """Commit a debounced edit whose timer is still pending, if any.
+
+        The convention across sections is a single-shot ``self._timer`` whose
+        timeout calls ``self._commit``; flush by stopping the timer and
+        committing immediately. Sections with extra debounced controls (e.g.
+        :class:`FontSection`) extend this.
+        """
+        timer = getattr(self, "_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+            commit = getattr(self, "_commit", None)
+            if callable(commit):
+                commit()
 
     def set_top_separator_visible(self, visible: bool) -> None:
         self._top_sep.setVisible(visible)
@@ -532,9 +618,13 @@ class OptionsSection(InspectorSection):
         return not isinstance(comp, DrawingComponent)
 
     def _load(self, comp: Component) -> None:
-        self._field.blockSignals(True)
-        self._field.setText(comp.options)
-        self._field.blockSignals(False)
+        # Don't clobber a field the user is actively typing in — a programmatic
+        # reload (any concurrent schematic change re-binds the section) would
+        # replace the text and jump the cursor to the end.
+        if not self._field.hasFocus():
+            self._field.blockSignals(True)
+            self._field.setText(comp.options)
+            self._field.blockSignals(False)
         slots = REGISTRY[comp.kind].label_slots
         self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
 
@@ -563,9 +653,11 @@ class TextContentSection(InspectorSection):
         return isinstance(comp, (TextNodeComponent, RectComponent, CircleComponent))
 
     def _load(self, comp: Component) -> None:
-        self._field.blockSignals(True)
-        self._field.setText(comp.options)
-        self._field.blockSignals(False)
+        # Same focus guard as OptionsSection: don't clobber in-progress typing.
+        if not self._field.hasFocus():
+            self._field.blockSignals(True)
+            self._field.setText(comp.options)
+            self._field.blockSignals(False)
 
     def _commit(self) -> None:
         text = self._field.text().strip()
@@ -605,8 +697,11 @@ class BipoleLabelSection(InspectorSection):
 
     def _load(self, comp: Component) -> None:
         label = _extract_bipole_label(comp.options)
-        other = re.sub(r'\bt\s*=\s*[^,]+(,\s*)?', '', comp.options).strip(', ')
+        other = _strip_bipole_label(comp.options)
         for field, val in ((self._label_field, label), (self._opts_field, other)):
+            # Same focus guard as OptionsSection: don't clobber in-progress typing.
+            if field.hasFocus():
+                continue
             field.blockSignals(True)
             field.setText(val)
             field.blockSignals(False)
@@ -646,7 +741,7 @@ class VariantSection(InspectorSection):
         self._checks.clear()
         for v in library.variant_specs(comp.kind):
             name = v["name"]
-            cb = QCheckBox(name.replace("_", " ").capitalize())
+            cb = QCheckBox(v.get("label") or name.replace("_", " ").capitalize())
             cb.setChecked(bool(comp.variants.get(name)))
             cb.stateChanged.connect(lambda state, n=name: self._on_changed(n, state))
             self._container.addWidget(cb)
@@ -658,16 +753,17 @@ class VariantSection(InspectorSection):
 
 
 class ParamSection(InspectorSection):
-    """A spinbox for the integer parameter a *parametric* kind declares (e.g. a
-    logic gate's input count).  Generic over the ``param`` block in
+    """One spinbox per integer parameter a *parametric* kind declares — a logic
+    gate's input count, or a mux/demux's data-line and select-line counts.
+    Generic over the ``param``/``params`` block(s) in
     ``components/definitions.json``; rebuilt on :meth:`_load` per kind."""
 
     title = None
 
     def _build(self) -> None:
-        self._row: "QWidget | None" = None
-        self._spin: "QSpinBox | None" = None
-        self._param_name: str | None = None
+        # One spinbox per parameter, keyed by parameter name.
+        self._spins: "dict[str, QSpinBox]" = {}
+        self._rows: "list[QWidget]" = []
         self._kind: str | None = None
         self._container = QVBoxLayout()
         self._container.setSpacing(6)
@@ -675,54 +771,60 @@ class ParamSection(InspectorSection):
 
     def applies_to(self, comp: Component) -> bool:
         from app.components import library
-        return library.param_spec(comp.kind) is not None
+        return library.is_parametric(comp.kind)
 
     def _load(self, comp: Component) -> None:
         from app.components import library
-        spec = library.param_spec(comp.kind)
-        if not spec:
+        specs = library.param_specs(comp.kind)
+        if not specs:
             self._teardown()
             return
-        # Same kind: just refresh the value.  Rebuilding on every re-bind (which
-        # happens after each spinner step, via the SetParamCommand) would leak a
-        # duplicate label/spinbox each time.
-        if self._kind == comp.kind and self._spin is not None:
-            self._spin.blockSignals(True)
-            self._spin.setValue(library.param_value(comp))
-            self._spin.blockSignals(False)
+        values = library.param_values(comp)
+        # Same kind: just refresh the values.  Rebuilding on every re-bind (which
+        # happens after each spinner step, via the SetParamCommand) would leak
+        # duplicate labels/spinboxes each time.
+        if self._kind == comp.kind and self._spins:
+            for name, spin in self._spins.items():
+                spin.blockSignals(True)
+                spin.setValue(values[name])
+                spin.blockSignals(False)
             return
         self._teardown()
         self._kind = comp.kind
-        self._param_name = spec["name"]
-        row_w = QWidget()
-        row = QHBoxLayout(row_w)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.addWidget(QLabel(spec["name"].capitalize()))
-        spin = QSpinBox()
-        spin.setRange(int(spec["min"]), int(spec["max"]))
-        spin.setValue(library.param_value(comp))
-        spin.valueChanged.connect(self._on_changed)
-        row.addWidget(spin)
-        self._container.addWidget(row_w)
-        self._row, self._spin = row_w, spin
+        for spec in specs:
+            name = spec["name"]
+            row_w = QWidget()
+            row = QHBoxLayout(row_w)
+            row.setContentsMargins(0, 0, 0, 0)
+            row.addWidget(QLabel(name.capitalize()))
+            spin = QSpinBox()
+            spin.setRange(int(spec["min"]), int(spec["max"]))
+            spin.setValue(values[name])
+            spin.valueChanged.connect(lambda v, nm=name: self._on_changed(nm, v))
+            row.addWidget(spin)
+            self._container.addWidget(row_w)
+            self._rows.append(row_w)
+            self._spins[name] = spin
 
     def _teardown(self) -> None:
-        if self._row is not None:
-            self._row.setParent(None)
-            self._row.deleteLater()
-        self._row = self._spin = None
-        self._param_name = self._kind = None
+        for row in self._rows:
+            row.setParent(None)
+            row.deleteLater()
+        self._rows = []
+        self._spins = {}
+        self._kind = None
 
-    def _on_changed(self, value: int) -> None:
-        if self._param_name:
-            name, n = self._param_name, int(value)
-            self._apply("Inputs", lambda s, cid: s.set_component_param(cid, name, n))
+    def _on_changed(self, name: str, value: int) -> None:
+        n = int(value)
+        self._apply(name.capitalize(),
+                    lambda s, cid: s.set_component_param(cid, name, n))
 
 
 class FontSection(InspectorSection):
     """Font controls for any FontedComponent (text_node, bipole)."""
 
     title = "Font"
+    multi_kind_safe = True
 
     def _build(self) -> None:
         self._font = _FontControls()
@@ -736,6 +838,12 @@ class FontSection(InspectorSection):
     def _load(self, comp: Component) -> None:
         self._font.load(comp.font_size, comp.font_bold, comp.font_italic, comp.font_family)
 
+    def flush_pending_edits(self) -> None:
+        # The debounce lives inside _FontControls (size spinbox), not a
+        # section-level _timer; flush it while _comp_ids is still bound.
+        if self._comp_ids:
+            self._font.flush_pending()
+
     def _on_size(self, size: float) -> None:
         self._apply("Font size", lambda s, cid: s.set_font_size(cid, size))
 
@@ -744,24 +852,22 @@ class FontSection(InspectorSection):
 
 
 class FillBorderSection(InspectorSection):
-    """Fill color, border width, and line style for any StyledComponent (rect, bipole).
+    """Fill color + line style for any StyledComponent (rect, circle, bipole).
 
     Reads/writes the StyledComponent fields directly via the generic per-field
-    scene setters — no string parsing, no per-type branching.
+    scene setters — no string parsing, no per-type branching. The outline
+    **width** is edited by the shared :class:`StrokeWidthSection` (the same
+    control circuit symbols use), so it is not duplicated here.
     """
 
-    title = "Fill & border"
+    title = "Fill & line style"
+    multi_kind_safe = True
 
     def _build(self) -> None:
         self._ls_row, self._line_style = _make_combo_row(
             "Line style", [lbl for lbl, _ in _LINE_STYLE_OPTIONS], lambda _i: self._timer.start()
         )
         self.body.addLayout(self._ls_row)
-
-        bw_row, self._width = _make_double_spin_row(
-            "Border width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
-        )
-        self.body.addLayout(bw_row)
 
         self._fill_row, self._fill = _make_combo_row(
             "Fill", [lbl for lbl, _ in _FILL_OPTIONS], lambda _i: self._timer.start()
@@ -777,25 +883,105 @@ class FillBorderSection(InspectorSection):
         return isinstance(comp, StyledComponent)
 
     def _load(self, comp: Component) -> None:
-        _set_combo(self._line_style, _TIKZ_TO_LABEL_STYLE.get(comp.line_style, "Solid"))
-        self._width.blockSignals(True)
-        self._width.setValue(comp.border_width)
-        self._width.blockSignals(False)
-        _set_combo(self._fill, _TIKZ_FILL_TO_LABEL.get(comp.fill_color, "None"))
+        # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
+        # as extra items so an unrelated edit in this section round-trips them.
+        _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
+        _set_combo_value(self._fill, comp.fill_color, _TIKZ_FILL_TO_LABEL)
 
     def _commit(self) -> None:
         # Per-field undoable commands (no-ops when unchanged); for a multi-select
-        # all three fields across all components collapse into one undo step.
-        style = _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), "")
-        width = self._width.value()
-        fill = _LABEL_TO_TIKZ_FILL.get(self._fill.currentText(), "")
+        # both fields across all components collapse into one undo step. An extra
+        # item's display text IS the raw TikZ value, so it maps to itself.
+        style_text = self._line_style.currentText()
+        fill_text = self._fill.currentText()
+        style = _LABEL_TO_TIKZ_STYLE.get(style_text, style_text)
+        fill = _LABEL_TO_TIKZ_FILL.get(fill_text, fill_text)
 
         def apply(s, cid):  # noqa: ANN001
             s.set_line_style(cid, style)
-            s.set_border_width(cid, width)
             s.set_fill_color(cid, fill)
 
         self._apply("Style", apply)
+
+
+class StrokeWidthSection(InspectorSection):
+    """Unified stroke/outline width (``line_width``, pt) for any drawable kind.
+
+    This is the single width control for **both** circuit symbols and block
+    components (rect/circle/bipole) — `border_width` was merged into
+    ``line_width`` — so a mixed selection of, say, a resistor and a rectangle can
+    set their widths together. It applies to every kind except pure text
+    (``text_node``), which has no stroke.
+    """
+
+    title = "Stroke"
+    multi_kind_safe = True
+
+    def _build(self) -> None:
+        sw_row, self._width = _make_double_spin_row(
+            "Stroke width (pt)", 0.1, 10.0, 0.2, 1, 0.4, lambda _v: self._timer.start()
+        )
+        self.body.addLayout(sw_row)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        return not isinstance(comp, TextNodeComponent)
+
+    def _load(self, comp: Component) -> None:
+        self._width.blockSignals(True)
+        self._width.setValue(comp.line_width)
+        self._width.blockSignals(False)
+
+    def _commit(self) -> None:
+        width = self._width.value()
+        self._apply(
+            "Stroke width", lambda s, cid: s.set_component_line_width(cid, width)
+        )
+
+
+class ScaleSection(InspectorSection):
+    """Size multiplier (``Component.scale``) as a dropdown, for scalable kinds —
+    logic gates and the digital blocks (flip-flops, mux/demux, ALU, adder).
+
+    A scalable symbol's pins are grid-aligned (best-effort) at 100 %; other
+    multipliers may push them off-grid, where a wire still connects via the pin
+    magnet (so any choice stays wire-connectable).
+    """
+
+    title = "Size"
+    multi_kind_safe = True
+
+    def _build(self) -> None:
+        self._row, self._combo = _make_combo_row("Scale", [], lambda _i: self._commit())
+        self.body.addLayout(self._row)
+        self._values: list[float] = []
+
+    def applies_to(self, comp: Component) -> bool:
+        from app.components import library
+        return library.is_scalable(comp.kind)
+
+    def _load(self, comp: Component) -> None:
+        from app.components import library
+        self._values = library.gate_scale_options(comp.kind)
+        self._combo.blockSignals(True)
+        self._combo.clear()
+        for v in self._values:
+            self._combo.addItem(f"{int(round(v * 100))}%")
+        if self._values:
+            idx = min(range(len(self._values)),
+                      key=lambda i: abs(self._values[i] - comp.scale))
+            self._combo.setCurrentIndex(idx)
+        self._combo.blockSignals(False)
+
+    def _commit(self) -> None:
+        i = self._combo.currentIndex()
+        if 0 <= i < len(self._values):
+            value = self._values[i]
+            self._apply("Scale", lambda s, cid: s.set_component_scale(cid, value))
 
 
 class WireStyleSection(InspectorSection):
@@ -942,7 +1128,10 @@ class WireStyleSection(InspectorSection):
         self._hop_mode.stateChanged.connect(self._on_hop_mode)
         self.body.addWidget(self._hop_mode)
 
-        self._wire_id: str | None = None
+        # Bound wire id(s). Single-select binds one; multi-select binds several
+        # and an edit applies to all of them as one undo step (see _apply_wires).
+        # Reads (bind_wires / _move) use the first as the representative.
+        self._wire_ids: list[str] = []
 
     def applies_to(self, comp: Component) -> bool:
         return False  # bound explicitly for wires, not via the component loop
@@ -950,10 +1139,25 @@ class WireStyleSection(InspectorSection):
     def _load(self, comp: Component) -> None:  # pragma: no cover - never called
         pass
 
+    def _apply_wires(self, label: str, fn) -> None:  # noqa: ANN001
+        """Apply ``fn(scene, wire_id)`` to every bound wire as one undo step."""
+        if self._scene is None or not self._wire_ids:
+            return
+        with self._scene.batch(label):
+            for wid in self._wire_ids:
+                fn(self._scene, wid)
+
     def bind_wire(self, wire, scene: SchematicScene) -> None:  # noqa: ANN001
+        self.bind_wires([wire], scene)
+
+    def bind_wires(self, wires: list, scene: SchematicScene) -> None:  # noqa: ANN001
+        """Bind one or more wires; edits apply to all of them. Widgets load from
+        the first wire as the representative (values may differ across the
+        selection, but editing a field writes it to every bound wire)."""
         self._scene = scene
-        self._wire_id = wire.id
-        _set_combo(self._line_style, _TIKZ_TO_LABEL_STYLE.get(wire.line_style, "Solid"))
+        self._wire_ids = [w.id for w in wires]
+        wire = wires[0]
+        _set_combo_value(self._line_style, wire.line_style, _TIKZ_TO_LABEL_STYLE)
         self._width.blockSignals(True)
         self._width.setValue(wire.line_width)
         self._width.blockSignals(False)
@@ -994,82 +1198,100 @@ class WireStyleSection(InspectorSection):
         self.show()
 
     def unbind(self) -> None:
-        self._wire_id = None
+        # Flush a pending debounced edit before the wire ids are cleared (same
+        # data-loss guard as the component sections).
+        self.flush_pending_edits()
+        self._wire_ids = []
         self.hide()
 
+    def flush_pending_edits(self) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+            self._commit()
+
     def _commit(self) -> None:
-        if self._scene is None or self._wire_id is None:
-            return
-        self._scene.set_wire_line_style(
-            self._wire_id, _LABEL_TO_TIKZ_STYLE.get(self._line_style.currentText(), "")
-        )
-        self._scene.set_wire_line_width(self._wire_id, self._width.value())
+        style_text = self._line_style.currentText()
+        style = _LABEL_TO_TIKZ_STYLE.get(style_text, style_text)
+        width = self._width.value()
+
+        def fn(s, wid):  # noqa: ANN001
+            s.set_wire_line_style(wid, style)
+            s.set_wire_line_width(wid, width)
+
+        self._apply_wires("Wire style", fn)
 
     def _on_no_dots(self, state: int) -> None:
         # Checkbox commits immediately (no debounce), like other boolean toggles.
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_no_junction_dots(self._wire_id, bool(state))
+        self._apply_wires(
+            "No junction dots",
+            lambda s, wid: s.set_wire_no_junction_dots(wid, bool(state)),
+        )
 
     def _on_no_term(self, state: int) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_no_termination_dots(self._wire_id, bool(state))
+        self._apply_wires(
+            "No termination dots",
+            lambda s, wid: s.set_wire_no_termination_dots(wid, bool(state)),
+        )
 
     def _on_z_changed(self, value: int) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_z_order(self._wire_id, value)
+        self._apply_wires("Z-order", lambda s, wid: s.set_wire_z_order(wid, value))
 
     def _move(self, *, to_front: bool) -> None:
-        if self._scene is None or self._wire_id is None:
+        if self._scene is None or not self._wire_ids:
             return
-        new_z = (
-            self._scene.bring_to_front(self._wire_id)
-            if to_front
-            else self._scene.send_to_back(self._wire_id)
-        )
+        new_z = 0
+        with self._scene.batch("Move to front" if to_front else "Move to back"):
+            for wid in self._wire_ids:
+                new_z = (
+                    self._scene.bring_to_front(wid)
+                    if to_front
+                    else self._scene.send_to_back(wid)
+                )
         self._z_spin.blockSignals(True)
         self._z_spin.setValue(new_z)
         self._z_spin.blockSignals(False)
 
     def _on_hop_mode(self, _state: int) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            mode = _HOP_STATE_TO_MODE.get(self._hop_mode.checkState(), "")
-            self._scene.set_wire_hop_mode(self._wire_id, mode)
+        mode = _HOP_STATE_TO_MODE.get(self._hop_mode.checkState(), "")
+        self._apply_wires("Line hops", lambda s, wid: s.set_wire_hop_mode(wid, mode))
 
     def _on_start_marker(self) -> None:
         # Combo selection is a discrete action — commit immediately (no debounce).
-        if self._scene is not None and self._wire_id is not None:
-            kind = _LABEL_TO_MARKER.get(self._start_marker.currentText(), "")
-            self._scene.set_wire_start_marker(self._wire_id, kind)
+        kind = _LABEL_TO_MARKER.get(self._start_marker.currentText(), "")
+        self._apply_wires("Start marker", lambda s, wid: s.set_wire_start_marker(wid, kind))
 
     def _on_end_marker(self) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            kind = _LABEL_TO_MARKER.get(self._end_marker.currentText(), "")
-            self._scene.set_wire_end_marker(self._wire_id, kind)
+        kind = _LABEL_TO_MARKER.get(self._end_marker.currentText(), "")
+        self._apply_wires("End marker", lambda s, wid: s.set_wire_end_marker(wid, kind))
 
     def _on_start_label(self) -> None:
         # editingFinished fires on Enter or focus-out; the scene setter is a
         # no-op when the text is unchanged, so the double-fire is harmless.
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_start_label(self._wire_id, self._start_label.text())
+        text = self._start_label.text()
+        self._apply_wires("Start label", lambda s, wid: s.set_wire_start_label(wid, text))
 
     def _on_end_label(self) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_end_label(self._wire_id, self._end_label.text())
+        text = self._end_label.text()
+        self._apply_wires("End label", lambda s, wid: s.set_wire_end_label(wid, text))
 
     def _on_mid_label(self) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            self._scene.set_wire_mid_label(self._wire_id, self._mid_label.text())
+        text = self._mid_label.text()
+        self._apply_wires("Middle label", lambda s, wid: s.set_wire_mid_label(wid, text))
 
     def _on_start_label_placement(self) -> None:
         # Combo selection is discrete — commit immediately (no debounce).
-        if self._scene is not None and self._wire_id is not None:
-            val = _LABEL_TO_PLACEMENT.get(self._start_label_pos.currentText(), "")
-            self._scene.set_wire_start_label_placement(self._wire_id, val)
+        val = _LABEL_TO_PLACEMENT.get(self._start_label_pos.currentText(), "")
+        self._apply_wires(
+            "Start label placement",
+            lambda s, wid: s.set_wire_start_label_placement(wid, val),
+        )
 
     def _on_end_label_placement(self) -> None:
-        if self._scene is not None and self._wire_id is not None:
-            val = _LABEL_TO_PLACEMENT.get(self._end_label_pos.currentText(), "")
-            self._scene.set_wire_end_label_placement(self._wire_id, val)
+        val = _LABEL_TO_PLACEMENT.get(self._end_label_pos.currentText(), "")
+        self._apply_wires(
+            "End label placement",
+            lambda s, wid: s.set_wire_end_label_placement(wid, val),
+        )
 
 
 class TransformSection(InspectorSection):
@@ -1081,6 +1303,7 @@ class TransformSection(InspectorSection):
     """
 
     title = "Rotation"
+    multi_kind_safe = True
 
     def _build(self) -> None:
         rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
@@ -1124,6 +1347,7 @@ class LayerSection(InspectorSection):
     """Z-order spinbox + move-to-front/back buttons for any DrawingComponent."""
 
     title = "Layer"
+    multi_kind_safe = True
 
     def _build(self) -> None:
         btn_row = QHBoxLayout()
@@ -1267,8 +1491,15 @@ class DocumentPropertiesPanel(QWidget):
         current = self._current.currentData()
         if voltage == sch.voltage_style and current == sch.current_style:
             return
-        sch.voltage_style = voltage
-        sch.current_style = current
+        # Undoable, like every other edit: route through the scene's stack (so
+        # Ctrl+Z reverts it and the modified-state tracking sees it) instead of
+        # mutating the schematic directly.
+        self._scene._push(SetDocumentPropertiesCommand(
+            new_voltage=voltage,
+            new_current=current,
+            old_voltage=sch.voltage_style,
+            old_current=sch.current_style,
+        ))
         self.document_changed.emit()
 
 
@@ -1339,6 +1570,8 @@ class PropertiesPanel(QWidget):
             ParamSection(),
             FontSection(),
             FillBorderSection(),
+            StrokeWidthSection(),
+            ScaleSection(),
             TransformSection(),
             LayerSection(),
         ]
@@ -1366,6 +1599,17 @@ class PropertiesPanel(QWidget):
 
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
+
+    def flush_pending_edits(self) -> None:
+        """Commit every section's pending debounced edit immediately.
+
+        Called by MainWindow before save / export / the unsaved-changes check so
+        an edit typed within the debounce window is never lost or serialised
+        stale (§10.3).
+        """
+        for sec in self._sections:
+            sec.flush_pending_edits()
+        self._wire_section.flush_pending_edits()
 
     def apply_theme(self) -> None:
         """Re-ink the inspector's themed text and refresh the scroll style for a
@@ -1398,30 +1642,60 @@ class PropertiesPanel(QWidget):
                 sec.unbind()
 
     def show_components(self, comp_ids: list[str]) -> None:
-        """Bind the inspector to several same-kind components; edits hit them all.
+        """Bind the inspector to several selected components; edits hit them all.
 
-        Used for a multi-selection of components that share a kind (so the same
-        sections apply). Widgets load from the first; each edit is applied to
-        every selected component as one undo step (see ``InspectorSection._apply``).
-        Falls back to a count-only view if the scene/components are unavailable or
-        the kinds differ.
+        Two cases, both editing every selected component as one undo step (see
+        ``InspectorSection._apply``):
+
+        * **Same kind** — every section that applies to the kind is shown, so the
+          full per-kind editor is available across the selection.
+        * **Mixed kinds** (e.g. a resistor + a capacitor) — only the *shared*,
+          kind-independent capability sections (``multi_kind_safe``: font,
+          fill/border, stroke, rotation, layer) are shown, and only those that
+          apply to **every** selected component. Kind-specific sections (options,
+          labels, variants, param count) are suppressed because their value has a
+          different meaning per kind.
+
+        Widgets load from the first component as the representative. Falls back to
+        a count-only view if the scene/components are unavailable, or for a mixed
+        selection that shares no editable capability.
         """
         if self._scene is None:
             self.clear()
             return
         by_id = {c.id: c for c in self._scene.schematic.components}
         comps = [by_id[cid] for cid in comp_ids if cid in by_id]
-        if len(comps) < 2 or len({c.kind for c in comps}) != 1:
+        if len(comps) < 2:
             self.show_multi_select(len(comp_ids))
             return
 
+        kinds = {c.kind for c in comps}
+        same_kind = len(kinds) == 1
+
+        def applicable(sec: InspectorSection) -> bool:
+            if same_kind:
+                return sec.applies_to(comps[0])
+            return sec.multi_kind_safe and all(sec.applies_to(c) for c in comps)
+
+        # A mixed selection with no shared capability has nothing to edit.
+        if not same_kind and not any(applicable(sec) for sec in self._sections):
+            self.show_multi_select(len(comps))
+            return
+
         self._wire_section.unbind()
-        defn = REGISTRY[comps[0].kind]
-        self._header.setText(f"{len(comps)} × {defn.display_name}\n({comps[0].kind})")
+        if same_kind:
+            defn = REGISTRY[comps[0].kind]
+            self._header.setText(
+                f"{len(comps)} × {defn.display_name}\n({comps[0].kind})"
+            )
+        else:
+            self._header.setText(
+                f"{len(comps)} items selected\n({len(kinds)} types — shared properties)"
+            )
 
         first_visible = True
         for sec in self._sections:
-            if sec.applies_to(comps[0]):
+            if applicable(sec):
                 sec.bind_multi(comps, self._scene)
                 sec.set_top_separator_visible(not first_visible)
                 first_visible = False
@@ -1442,6 +1716,22 @@ class PropertiesPanel(QWidget):
             sec.unbind()
         self._header.setText("Wire")
         self._wire_section.bind_wire(wire, self._scene)
+
+    def show_wires(self, wire_ids: list[str]) -> None:
+        """Bind the wire-style inspector to several selected wires; an edit applies
+        to all of them as one undo step. Widgets load from the first wire."""
+        if self._scene is None:
+            self.clear()
+            return
+        by_id = {w.id: w for w in self._scene.schematic.wires}
+        wires = [by_id[wid] for wid in wire_ids if wid in by_id]
+        if len(wires) < 2:
+            self.show_multi_select(len(wire_ids))
+            return
+        for sec in self._sections:
+            sec.unbind()
+        self._header.setText(f"{len(wires)} wires selected")
+        self._wire_section.bind_wires(wires, self._scene)
 
     def clear(self) -> None:
         """Show 'No selection' state."""

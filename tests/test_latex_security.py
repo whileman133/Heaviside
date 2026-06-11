@@ -10,7 +10,11 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from app.preview import latex, tools
+import pytest
+
+from app.components import render as comp_render
+from app.components.style import balance_braces, contains_dangerous_latex
+from app.preview import latex, mathrender, tools
 
 
 class _FakeCompleted:
@@ -69,3 +73,153 @@ def test_compile_tex_never_uses_shell(monkeypatch) -> None:
 
     assert isinstance(captured["cmd"], list)
     assert captured["shell"] is False
+
+
+def test_mathrender_disables_shell_escape(monkeypatch, tmp_path) -> None:
+    r"""The on-canvas math renderer must invoke ``latex`` with ``-no-shell-escape``.
+
+    This is the path that fires the instant a ``.hv`` file is opened — every label
+    is typeset with no user gesture, and the label text flows verbatim into the
+    document body. It is therefore *more* exposed than the preview/export compile,
+    so it must carry the same ``-no-shell-escape`` guard.
+    """
+    captured: dict = {}
+
+    def _fake_run(cmd, *args, **kwargs):
+        captured.setdefault("cmds", []).append(cmd)
+        cwd = Path(kwargs["cwd"])
+        if any("dvisvgm" in str(part) for part in cmd):
+            (cwd / "m.svg").write_text("<svg></svg>", encoding="utf-8")
+        else:
+            captured["latex_cmd"] = cmd
+            (cwd / "m.dvi").write_bytes(b"\x00")
+        return _FakeCompleted()
+
+    # Force a cache miss and a resolvable toolchain, with no real binaries run.
+    monkeypatch.setattr(mathrender, "_cache_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        mathrender._tools, "resolve",
+        lambda name: f"/usr/bin/{name}",
+    )
+    monkeypatch.setattr(mathrender.subprocess, "run", _fake_run)
+
+    mathrender._compile_svg(r"\strut $R_1$")
+
+    assert "-no-shell-escape" in captured["latex_cmd"]
+    assert isinstance(captured["latex_cmd"], list)
+
+
+def test_component_render_disables_shell_escape(monkeypatch, tmp_path) -> None:
+    """The offline component renderer must also pass ``-no-shell-escape``."""
+    captured: dict = {}
+
+    def _fake_run(cmd, *args, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        if any("dvisvgm" in str(part) for part in cmd):
+            (cwd / "sym.svg").write_text("<svg></svg>", encoding="utf-8")
+        else:
+            captured["latex_cmd"] = cmd
+            (cwd / "sym.dvi").write_bytes(b"\x00")
+
+        class _R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return _R()
+
+    monkeypatch.setattr(comp_render.subprocess, "run", _fake_run)
+
+    comp_render.render_svg(r"\draw (0,0) -- (1,0);")
+
+    assert "-no-shell-escape" in captured["latex_cmd"]
+
+
+# ---------------------------------------------------------------------------
+# Dangerous-token detector (pure helper shared with the UI load-time warning)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    r"\write18{rm -rf ~}",
+    r"$R_1$ \write18{evil}",          # after other text
+    r"\write0{x}",                     # bare \write is dangerous too
+    r"\immediate\write18{evil}",
+    r"\input{/etc/passwd}",
+    r"\include{secrets}",
+    r"\openin1=secrets.txt",
+    r"\openout5=out.txt",
+    r"\read1 to \x",
+    r"\csname write18\endcsname",
+    r"\catcode`\$=0",
+    r"\directlua{os.execute('id')}",
+    r"\ShellEscape{id}",
+])
+def test_contains_dangerous_latex_true(text) -> None:
+    assert contains_dangerous_latex(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    "",
+    "$R_1$",
+    r"$\frac{V_i}{R}$",
+    r"$\bar{R}_\mathrm{dl}$",
+    "plain label, no commands",
+    r"\includegraphics{fig.pdf}",      # \include must not match a longer command
+    r"\inputencoding{utf8}",           # \input must not match a longer command
+    r"\readline",                      # \read must not match a longer command
+    r"writes a value of 18",           # no backslash, no command
+    r"$\omega_0 = \frac{1}{\sqrt{LC}}$",
+])
+def test_contains_dangerous_latex_false(text) -> None:
+    assert contains_dangerous_latex(text) is False
+
+
+def test_contains_dangerous_latex_none_safe() -> None:
+    assert contains_dangerous_latex(None) is False  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Brace-balancing (structural containment for {…}-wrapped user text)
+# ---------------------------------------------------------------------------
+
+def test_balance_braces_neutralises_stray_close() -> None:
+    # The unmatched } is escaped, so it cannot close an enclosing brace group.
+    assert balance_braces(r"}\write18{evil}") == r"\}\write18{evil}"
+
+
+def test_balance_braces_neutralises_stray_open() -> None:
+    assert balance_braces("{unclosed") == r"\{unclosed"
+
+
+def test_balance_braces_keeps_balanced_latex() -> None:
+    for text in (r"\frac{a}{b}", r"$\bar{R}_\mathrm{dl}$", "plain",
+                 r"\theta_{s,0}", "{a{b}c}", ""):
+        assert balance_braces(text) == text
+
+
+def test_balance_braces_keeps_escaped_braces() -> None:
+    assert balance_braces(r"\{ \}") == r"\{ \}"
+    # An escaped close brace does not pair with a real open brace.
+    assert balance_braces(r"{a\}") == r"\{a\}"
+
+
+def test_balance_braces_mixed() -> None:
+    # One balanced pair survives; the extra close is escaped.
+    assert balance_braces(r"{ok}}tail") == r"{ok}\}tail"
+
+
+# ---------------------------------------------------------------------------
+# Exported full documents carry the raw-LaTeX warning header
+# ---------------------------------------------------------------------------
+
+def test_build_tex_carries_security_comment() -> None:
+    tex = latex.build_tex(r"\begin{circuitikz}\end{circuitikz}")
+    assert tex.lstrip().startswith("%")            # leading comment block
+    assert "shell-escape" in tex
+    dark = latex.build_tex(r"\begin{circuitikz}\end{circuitikz}", dark=True)
+    assert "shell-escape" in dark
+
+
+def test_build_snippet_carries_security_comment() -> None:
+    snippet = latex.build_snippet(r"\begin{circuitikz}\end{circuitikz}")
+    assert "shell-escape" in snippet

@@ -23,6 +23,7 @@ command-derived and keep their hand-coded ``ComponentDef`` in ``registry.py``.
 from __future__ import annotations
 
 import json
+import math
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,6 +35,24 @@ NON_LIBRARY_KINDS: frozenset[str] = frozenset(
     {"open", "short", "bipole", "rect", "circle", "text_node"}
 )
 
+#: Body-scale factor applied to every diode-family bipole, in both the emitted
+#: LaTeX (``\ctikzset{diodes/scale=…}`` in app/codegen/circuitikz.py) and the
+#: rendered canvas SVG assets (app/componenteditor/renderer.py).  Single-sourced
+#: here — the one Qt-free module both consumers already depend on — so the
+#: canvas and the compiled output can never drift apart.
+DIODE_SYMBOL_SCALE: float = 0.8
+
+
+def geometry_key(kind: str) -> str:
+    """Registry ``kind`` -> ``components/geometry.json`` key.
+
+    The generator sanitises spaces to underscores, so any kind whose CircuiTikZ
+    keyword contains a space (``op amp``, ``flipflop D``, …) maps the same way
+    everywhere.  Canonical definition — the canvas (``app/canvas/svgsym.py``)
+    and the component-editor renderer re-export it.
+    """
+    return kind.replace(" ", "_")
+
 
 def library_path() -> Path:
     return Path(resource_path("components", "definitions.json"))
@@ -41,7 +60,17 @@ def library_path() -> Path:
 
 @lru_cache(maxsize=1)
 def _data() -> dict:
-    return json.loads(library_path().read_text(encoding="utf-8"))
+    path = library_path()
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        # definitions.json is bundled data (heaviside.spec). If it is missing or
+        # truncated, the install is corrupt — fail with a clear message instead of
+        # an opaque JSONDecodeError/FileNotFoundError deep in REGISTRY building.
+        raise RuntimeError(
+            f"Heaviside installation is missing or corrupt: could not read the "
+            f"component library at {path} ({exc})."
+        ) from exc
 
 
 def load_library() -> dict[str, dict]:
@@ -69,11 +98,19 @@ def variant_specs(kind: str) -> list[dict]:
     return list(load_library().get(kind, {}).get("variants", []))
 
 
+def node_ctikzset(kind: str) -> list[str]:
+    """Static ``\\ctikzset`` settings a *kind*'s node must be drawn under — a
+    cute/european transformer's ``inductor=…`` shape choice. Codegen wraps such a
+    node in its own group so the setting reverts; empty for most kinds."""
+    return list(load_library().get(kind, {}).get("ctikzset", []))
+
+
 def variant_tikz(kind: str, variants: dict[str, bool]) -> tuple[str, list[str]]:
     """For a component's active variants, return ``(keyword_suffix, [node_opts])``.
 
     ``suffix`` mode appends a keyword suffix (``D`` -> ``D*``); ``option`` mode
-    adds a node option (``, bodydiode``).
+    adds a node option (``, bodydiode``).  ``dot`` mode (a transformer polarity
+    dot) affects neither — it is drawn separately (see :func:`dot_marks`).
     """
     suffix = ""
     opts: list[str] = []
@@ -81,7 +118,7 @@ def variant_tikz(kind: str, variants: dict[str, bool]) -> tuple[str, list[str]]:
         if variants.get(v["name"]):
             if v["mode"] == "suffix":
                 suffix += v["token"]
-            else:
+            elif v["mode"] == "option":
                 opts.append(v["token"])
     return suffix, opts
 
@@ -90,12 +127,26 @@ def variant_geometry_suffix(kind: str, variants: dict[str, bool]) -> str:
     """The geometry-key suffix for the active variant (e.g. ``"*"``/``"_bodydiode"``).
 
     Variants are mutually exclusive in practice (at most one active), so the
-    first active one wins.  Empty string when none is active.
+    first active one wins.  ``dot`` variants don't change the geometry (the base
+    symbol is rendered and the dots are overlaid), so they are skipped.  Empty
+    string when none is active.
     """
     for v in variant_specs(kind):
-        if variants.get(v["name"]):
+        if v["mode"] != "dot" and variants.get(v["name"]):
             return v["token"] if v["mode"] == "suffix" else "_" + v["token"]
     return ""
+
+
+def dot_marks(comp: "Component") -> list[dict]:
+    """The active **polarity-dot** marks for *comp* (a transformer): one record per
+    checked ``dot`` variant — its CircuiTikZ ``anchor`` (for codegen) and ``offset``
+    in GU from the component origin (for the canvas). Empty for other kinds / when
+    none is set."""
+    out: list[dict] = []
+    for v in variant_specs(comp.kind):
+        if v.get("mode") == "dot" and comp.variants.get(v["name"]):
+            out.append({"anchor": v["token"], "offset": tuple(v.get("offset", (0.0, 0.0)))})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -103,23 +154,55 @@ def variant_geometry_suffix(kind: str, variants: dict[str, bool]) -> str:
 # a ``param`` block; an instance carries an integer value in ``Component.params``.
 # ---------------------------------------------------------------------------
 
+def param_specs(kind: str) -> list[dict]:
+    """All parametric declarations a *kind* carries, in order. A logic gate has a
+    single ``param`` block (one input count); a mux/demux declares a ``params``
+    list (data inputs/outputs + select lines). Empty for fixed kinds."""
+    e = load_library().get(kind, {})
+    if "params" in e:
+        return list(e["params"])
+    p = e.get("param")
+    return [p] if p else []
+
+
 def param_spec(kind: str) -> dict | None:
-    """The parametric declaration a *kind* carries, or ``None`` for a fixed kind."""
+    """The *single* gate-style parametric declaration (the ``param`` block), or
+    ``None``. Multi-parameter kinds (mux/demux, which use ``params``) return
+    ``None`` here — they keep their per-instance geometry in ``n_data`` and are
+    handled via :func:`param_specs` / :func:`param_n_data`."""
     return load_library().get(kind, {}).get("param")
 
 
 def is_parametric(kind: str) -> bool:
-    return param_spec(kind) is not None
+    return bool(param_specs(kind))
+
+
+def _clamp_param(spec: dict, raw: object) -> int:
+    return max(int(spec["min"]), min(int(spec["max"]), int(raw)))
 
 
 def param_value(comp: "Component") -> int | None:
-    """The instance's parameter value, clamped to ``[min, max]``; ``None`` if the
-    kind is not parametric (empty/absent value means the declared default)."""
-    spec = param_spec(comp.kind)
-    if spec is None:
+    """The instance's value for its *first* (gate-style) parameter, clamped to
+    ``[min, max]``; ``None`` if the kind is not parametric. Used by the
+    single-parameter logic-gate paths."""
+    specs = param_specs(comp.kind)
+    if not specs:
         return None
-    n = comp.params.get(spec["name"], spec["default"])
-    return max(int(spec["min"]), min(int(spec["max"]), int(n)))
+    spec = specs[0]
+    return _clamp_param(spec, comp.params.get(spec["name"], spec["default"]))
+
+
+def param_values(comp: "Component") -> dict[str, int]:
+    """Every parameter value for *comp*, clamped, keyed by name."""
+    return {s["name"]: _clamp_param(s, comp.params.get(s["name"], s["default"]))
+            for s in param_specs(comp.kind)}
+
+
+def param_combo_key(comp: "Component") -> str:
+    """The ``n_data`` lookup key for this instance: the parameter values in
+    declaration order, comma-joined (``"3"`` for a gate, ``"4,2"`` for a mux)."""
+    vals = param_values(comp)
+    return ",".join(str(vals[s["name"]]) for s in param_specs(comp.kind))
 
 
 def param_pins(spec: dict, n: int) -> list[dict]:
@@ -137,35 +220,170 @@ def param_pins(spec: dict, n: int) -> list[dict]:
 
 
 def resolved_pins(comp: "Component") -> list[PinDef]:
-    """The pins for this instance — computed from the parameter for a parametric
-    kind, else the kind's static registry pins."""
-    spec = param_spec(comp.kind)
-    if spec is None:
+    """The pins for this instance — for a parametric kind computed from the
+    parameter(s), else the kind's static registry pins.
+
+    Multi-parameter kinds (mux/demux) carry their measured pins per value-combo in
+    ``n_data[...]["pins"]``; single-parameter logic gates compute theirs from the
+    input template (:func:`param_pins`)."""
+    specs = param_specs(comp.kind)
+    if not specs:
         from app.components.registry import REGISTRY
         defn = REGISTRY.get(comp.kind)
         return list(defn.pins) if defn else []
-    return [PinDef(name=p["name"], offset=tuple(p["offset"]))
-            for p in param_pins(spec, param_value(comp))]
+    nd = param_n_data(comp)
+    if nd and "pins" in nd:                      # measured-pins (mux/demux)
+        return [PinDef(name=p["name"], offset=tuple(p["offset"])) for p in nd["pins"]]
+    return [PinDef(name=p["name"], offset=tuple(p["offset"]))   # template (gates)
+            for p in param_pins(specs[0], param_value(comp))]
 
 
 def param_geometry_suffix(comp: "Component") -> str:
-    """Geometry-key suffix for a parametric instance (``":N"``), else ``""``."""
-    n = param_value(comp)
-    return f":{n}" if n is not None else ""
+    """Geometry-key suffix for a parametric instance: one ``":v"`` per parameter in
+    declaration order (``":3"`` for a gate, ``":4:2"`` for a mux); ``""`` for fixed
+    kinds."""
+    vals = param_values(comp)
+    return "".join(f":{vals[s['name']]}" for s in param_specs(comp.kind))
 
 
 def param_n_data(comp: "Component") -> dict | None:
-    """The per-value record (``scale``/``leads``/``bbox``) for this instance."""
-    spec = param_spec(comp.kind)
-    if spec is None:
+    """The per-combo record for this instance. Gates keep it under
+    ``param.n_data`` keyed by the single value; multi-parameter kinds keep it at
+    the entry's ``n_data`` keyed by the comma-joined value combo."""
+    if not is_parametric(comp.kind):
         return None
-    return spec.get("n_data", {}).get(str(param_value(comp)))
+    e = load_library().get(comp.kind, {})
+    nd = e.get("n_data") or e.get("param", {}).get("n_data", {})
+    return nd.get(param_combo_key(comp))
+
+
+# ── Logic-gate scaling (per-instance Component.scale) ───────────────────────
+# Logic gates can be uniformly scaled.  Their pins sit at the *true* scaled body
+# anchor (``base_offset * scale``), generally **off the 0.25-GU grid** — a wire
+# connects there directly because endpoints snap onto component pins (the magnet,
+# wiregeometry.py), so no grid-snapping lead stub is needed and the connection is
+# an ordinary, styleable wire (model.py Component.scale, spec §5.4).
+
+_QUARTER_GU = 0.25
+DEFAULT_GATE_SCALE = 1.0      # placed full size, matching the digital blocks
+MIN_GATE_SCALE = 0.25        # floor: smaller gates render too small to read/grab
+
+
+def is_logic_gate(kind: str) -> bool:
+    """True for logic-gate kinds (CircuiTikZ keyword ending in `` port``)."""
+    e = load_library().get(kind)
+    return bool(e) and str(e.get("tikz", "")).endswith(" port")
+
+
+# Block kinds (flip-flops, mux/demux, ALU, adder) that, like logic gates, carry a
+# per-instance :attr:`Component.scale`.  They additionally bake a best-effort
+# grid-alignment scale into their geometry (see :func:`block_scale`) so their pins
+# land on the grid at scale 1.0 where a uniform rescale can manage it; the rest
+# stay off-grid and connect via the magnet, exactly like a gate.  (Transformers
+# keep their baked alignment scale but are *not* user-scalable — they behave like
+# the other passive symbols.)
+_SCALABLE_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
+
+
+def is_scalable(kind: str) -> bool:
+    """True for every kind whose :attr:`Component.scale` is meaningful — logic
+    gates and the digital blocks."""
+    if is_logic_gate(kind):
+        return True
+    tk = str(load_library().get(kind, {}).get("tikz", ""))
+    return any(tk == t or tk.startswith(t + " ") for t in _SCALABLE_BLOCK_TIKZ)
+
+
+def block_scale(comp: "Component") -> list[float]:
+    """The baked **grid-alignment** scale ``[sx, sy]`` of *comp*'s symbol (the
+    uniform rescale applied at generation so its pins land on the grid). Lives in
+    the per-combo ``n_data`` for a parametric kind, else on the entry; ``[1, 1]``
+    when none."""
+    nd = param_n_data(comp)
+    if nd and nd.get("scale"):
+        return [float(s) for s in nd["scale"]]
+    e = load_library().get(comp.kind, {})
+    return [float(s) for s in (e.get("scale") or (1.0, 1.0))]
+
+
+def default_scale(kind: str) -> float:
+    """The :attr:`Component.scale` a freshly-placed *kind* gets: logic gates start
+    at :data:`DEFAULT_GATE_SCALE` (compact), everything else unscaled (1.0)."""
+    return DEFAULT_GATE_SCALE if is_logic_gate(kind) else 1.0
+
+
+def snap_quarter(v: float) -> float:
+    """Round *v* to the nearest 0.25 GU, ties **away from zero** so a symmetric
+    pair of input pins stays distinct and symmetric after snapping."""
+    if v == 0.0:
+        return 0.0
+    sign = 1.0 if v > 0 else -1.0
+    return sign * math.floor(abs(v) / _QUARTER_GU + 0.5) * _QUARTER_GU
+
+
+def _pin_anchor_map(comp: "Component") -> dict[str, str]:
+    """Map each pin name to its CircuiTikZ anchor name for *comp*'s kind."""
+    nd = param_n_data(comp)
+    if nd and "pins" in nd:                  # measured-pins (mux/demux)
+        return {p["name"]: p.get("anchor", p["name"]) for p in nd["pins"]}
+    spec = param_spec(comp.kind)
+    if spec is not None:                     # template (logic gates)
+        return {p["name"]: p["anchor"] for p in param_pins(spec, param_value(comp))}
+    e = load_library().get(comp.kind, {})
+    return {p["name"]: p.get("anchor", p["name"]) for p in e.get("pins", [])}
+
+
+def gate_layout(comp: "Component") -> list[dict] | None:
+    """Per-pin scaled layout for a **scaled** gate/digital-block instance, else
+    ``None``.
+
+    Returns ``None`` for non-scalable kinds and at scale 1.0 (the base pins —
+    already grid-aligned where possible — are used as-is). Otherwise returns one
+    entry per pin (in :func:`resolved_pins` order):
+
+    * ``name`` / ``anchor`` — pin name and its CircuiTikZ anchor.
+    * ``anchor_offset`` / ``pin_offset`` — the base pin ``× scale``; these are
+      **equal** (the pin sits at the true scaled anchor, generally off the 0.25-GU
+      grid, reached directly by a wire endpoint via the pin magnet — no lead).
+
+    The body is scaled about the placement origin (a gate's ``out`` pin, a block's
+    centre)."""
+    if not is_scalable(comp.kind):
+        return None
+    s = float(getattr(comp, "scale", 1.0))
+    if abs(s - 1.0) < 1e-9:
+        return None
+    anchors = _pin_anchor_map(comp)
+    out: list[dict] = []
+    for p in resolved_pins(comp):
+        ax, ay = p.offset[0] * s, p.offset[1] * s
+        out.append({
+            "name": p.name,
+            "anchor": anchors.get(p.name, p.name),
+            "anchor_offset": (ax, ay),
+            "pin_offset": (ax, ay),     # pin = true scaled anchor (magnet connects)
+        })
+    return out
+
+
+def gate_scale_options(kind: str) -> list[float]:
+    """The `scale` choices offered for a scalable *kind* in the inspector: 25 %–
+    200 % (floored at :data:`MIN_GATE_SCALE`). Pins sit at the true scaled anchor
+    and are reached by the magnet, so any scale is grid-connectable. Empty for
+    non-scalable kinds."""
+    if not is_scalable(kind):
+        return []
+    return [s for s in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0)
+            if s >= MIN_GATE_SCALE - 1e-9]
 
 
 def to_component_def(kind: str, entry: dict) -> ComponentDef:
     """Build a registry :class:`ComponentDef` from one library entry."""
     pins = [PinDef(name=p["name"], offset=tuple(p["offset"])) for p in entry["pins"]]
-    if len(pins) == 2:
+    # A path (``to[…]``) bipole spans between its two axial terminals (pins[0] →
+    # pins[1]); any further pins are off-axis taps (e.g. the thyristor/triac gate)
+    # and don't affect the span. Node-placed kinds don't use default_span.
+    if entry.get("emission") == "path" and len(pins) >= 2:
         (x0, y0), (x1, y1) = pins[0].offset, pins[1].offset
         default_span = (x1 - x0, y1 - y0)
     else:

@@ -31,6 +31,112 @@ from app.canvas.style import GEOMETRY_PATH  # noqa: E402
 from app.canvas.svgsym import geometry_key, symbol_paths  # noqa: E402
 
 
+def test_every_library_kind_resolves_to_geometry() -> None:
+    """Every SVG-symbol registry kind maps to a present, non-empty geometry entry.
+
+    Regression: a kind whose CircuiTikZ keyword contains a space (``flipflop D``,
+    ``op amp``) must have its space sanitised to an underscore so the geometry
+    lookup hits. A mismatch silently paints *nothing* (only pin dots), since the
+    canvas item still builds from the registry bbox — so guard it here, across the
+    whole library, rather than per kind.
+    """
+    from app.components.library import NON_LIBRARY_KINDS, load_library
+
+    with open(GEOMETRY_PATH, encoding="utf-8") as fh:
+        geometry = json.load(fh)
+    for kind in load_library():
+        if kind in NON_LIBRARY_KINDS:
+            continue
+        key = geometry_key(kind)
+        assert key in geometry, f"{kind!r}: geometry key {key!r} not in geometry.json"
+        assert symbol_paths(kind), f"{kind!r}: resolved to no symbol paths"
+
+
+def test_geometry_key_reexports_library_definition() -> None:
+    """svgsym's geometry_key is the canonical library function, not a copy."""
+    from app.components import library
+
+    assert geometry_key is library.geometry_key
+
+
+def _expected_geometry_keys() -> list[tuple[str, str]]:
+    """Every geometry key any canvas instance can request: ``(kind, key)``.
+
+    Mirrors how the canvas builds its lookup (items.py: kind + param suffix +
+    variant suffix, then geometry_key): the base symbol, every non-``dot``
+    variant (``D`` -> ``D*``, ``nigfete`` -> ``nigfete_bodydiode``), and every
+    supported parameter value/combo of every parametric kind (``and:2``…
+    ``and:16``, ``mux:2:1``…``mux:8:3``).
+    """
+    from itertools import product
+
+    from app.components.library import geometry_key as gk, load_library
+
+    expected: list[tuple[str, str]] = []
+    for kind, entry in load_library().items():
+        expected.append((kind, gk(kind)))
+        # Variants: suffix mode appends the token; option mode appends _token;
+        # dot variants overlay marks on the base geometry (no key of their own).
+        for v in entry.get("variants", []):
+            if v.get("mode") == "dot":
+                continue
+            if v["mode"] == "suffix":
+                expected.append((kind, gk(kind) + v["token"]))
+            else:
+                expected.append((kind, gk(kind) + "_" + v["token"]))
+        # Single-parameter kinds (logic gates): kind:N for every declared value.
+        p = entry.get("param")
+        if p:
+            for n in range(int(p["min"]), int(p["max"]) + 1):
+                expected.append((kind, f"{gk(kind)}:{n}"))
+        # Multi-parameter kinds (mux/demux): kind:v1:v2 for every value combo,
+        # in declaration order.
+        specs = entry.get("params")
+        if specs:
+            ranges = [range(int(s["min"]), int(s["max"]) + 1) for s in specs]
+            for combo in product(*ranges):
+                expected.append(
+                    (kind, gk(kind) + "".join(f":{v}" for v in combo))
+                )
+    return expected
+
+
+def test_every_variant_and_param_combo_has_geometry() -> None:
+    """Every variant key and every supported parameter value/combo of every
+    library kind resolves to a present, non-empty geometry entry.
+
+    The base-kind sweep above misses these: a missing variant key (``D*``) or
+    param key (``and:7``, ``mux:4:2``) silently paints nothing when that variant/
+    value is selected, and the byte-equality re-render test is slow and
+    toolchain-gated. This fast sweep enumerates them all from the library data.
+    """
+    with open(GEOMETRY_PATH, encoding="utf-8") as fh:
+        geometry = json.load(fh)
+    for kind, key in _expected_geometry_keys():
+        assert key in geometry, f"{kind!r}: geometry key {key!r} not in geometry.json"
+        entry = geometry[key]
+        assert entry.get("paths"), f"{kind!r}: geometry {key!r} has no paths"
+
+
+def test_parametric_n_data_covers_every_combo() -> None:
+    """Every parametric kind's ``n_data`` carries a record for every declared
+    value/combo (the codegen and canvas read scale/leads/pins from it)."""
+    from itertools import product
+
+    from app.components.library import load_library
+
+    for kind, entry in load_library().items():
+        p = entry.get("param")
+        if p:
+            want = {str(n) for n in range(int(p["min"]), int(p["max"]) + 1)}
+            assert set(p.get("n_data", {})) == want, kind
+        specs = entry.get("params")
+        if specs:
+            ranges = [range(int(s["min"]), int(s["max"]) + 1) for s in specs]
+            want = {",".join(str(v) for v in combo) for combo in product(*ranges)}
+            assert set(entry.get("n_data", {})) == want, kind
+
+
 def test_geometry_is_self_contained_for_glyph_kind() -> None:
     """The controlled-source's +/- marks are baked into the geometry (`glyphs`),
     so the app needs no .svg access at run time."""

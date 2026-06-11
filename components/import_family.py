@@ -1,5 +1,13 @@
 #!/usr/bin/env python3
 r"""
+*** ONE-SHOT BOOTSTRAP TOOL — review output, never paste blindly ***
+
+This prototype generates *candidate* entries from its own authored tables. It
+does not write ``components/definitions.json`` itself, but pasting its output
+over existing entries reverts any later component-editor GUI or hand edits.
+``components/generate_components.py`` is the sanctioned re-render path: it
+treats definitions.json as the source of truth and only regenerates geometry.
+
 Prototype family importer (offline / dry-run).
 
 Demonstrates how much of a CircuiTikZ component *family* can be imported into

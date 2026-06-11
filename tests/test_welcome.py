@@ -37,6 +37,18 @@ from app.ui.mainwindow import (  # noqa: E402
 _ALL_GROUPS = _HELP_SHORTCUT_GROUPS + _HELP_GESTURE_GROUPS
 
 
+@pytest.fixture(autouse=True)
+def _no_startup_modals(monkeypatch):
+    """Neutralise MainWindow's startup dependency warning and the first-run
+    update-check disclosure so a headless run never blocks on a modal, and the
+    live update probe never hits the network."""
+    import app.ui.mainwindow as mw
+    monkeypatch.setattr(mw, "check_dependencies", lambda: [])
+    monkeypatch.setattr(
+        mw.MainWindow, "_maybe_check_for_updates_on_startup", lambda self: None
+    )
+
+
 def test_component_editor_menu_gated_on_toolchain(monkeypatch):
     """The Component Editor (a developer tool needing latex/dvisvgm) is surfaced
     only when that toolchain is present — so a packaged end-user build hides it."""
@@ -151,3 +163,55 @@ def test_report_bug_opens_github_issues(monkeypatch):
     finally:
         win._preview_worker.shutdown()
         win.close()
+
+
+def test_welcome_screen_renders_dark_with_theme_tokens():
+    """The welcome diagram reads its inks from the theme palette at paint time,
+    so it renders (readably) over the dark canvas background too."""
+    from app.canvas import style
+    from app.ui import theme
+
+    try:
+        theme.set_dark(True)
+        style.set_dark(True)
+        screen = _WelcomeScreen()
+        screen.resize(640, 420)
+        assert not screen.grab().isNull()
+    finally:
+        style.set_dark(False)
+        theme.set_dark(False)
+
+
+def test_help_table_inks_follow_theme():
+    """The Help reference table takes its description/header colours from the
+    theme tokens (hardcoded light inks were unreadable in dark mode)."""
+    import app.ui.mainwindow as mw
+    from PySide6.QtGui import QColor
+    from app.ui import theme
+
+    try:
+        theme.set_dark(True)
+        table = mw._RefTable(_HELP_SHORTCUT_GROUPS[:1], mono=True)
+        # Row 0 is the group header; row 1 is the first key/description row.
+        desc_item = table.item(1, 1)
+        assert desc_item.foreground().color() == QColor(theme._DARK["TEXT"])
+        head_item = table.item(0, 0)
+        assert head_item.background().color() == QColor(theme._DARK["TABLE_HEADER_BG"])
+    finally:
+        theme.set_dark(False)
+
+
+def test_about_dialog_inks_follow_theme():
+    """The About dialog's secondary text uses theme tokens, not hardcoded greys."""
+    import app.ui.mainwindow as mw
+    from PySide6.QtWidgets import QLabel
+    from app.ui import theme
+
+    try:
+        theme.set_dark(True)
+        dlg = mw._AboutDialog()
+        sheets = [l.styleSheet() for l in dlg.findChildren(QLabel)]
+        assert any(theme._DARK["TEXT_MUTED"] in s for s in sheets)
+        assert not any("#666" in s or "#888" in s or "#999" in s for s in sheets)
+    finally:
+        theme.set_dark(False)

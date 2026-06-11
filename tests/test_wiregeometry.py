@@ -73,6 +73,35 @@ def test_wire_snap_target_excludes_own_wire():
     assert connectable is False  # its own wire is ignored -> grid fallback
 
 
+def test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor():
+    """A scaled logic gate's input pin sits off the 0.25-GU grid; its nearest grid
+    node can be farther than PIN_SNAP_GU, so the magnet must use the RAW cursor.
+    With raw_gu the off-grid pin is grabbed; with only the grid-snapped cursor it
+    is missed (the point that motivates threading raw_gu through)."""
+    from app.schematic.model import component_pin_positions
+    # OR at 0.5 has an input at (-0.75, 0.125) relative to a position — both axes
+    # land off-grid once placed at a fractional spot.
+    g = Component(id="g", kind="or", position=(5.0, 5.0), rotation=0, options="",
+                  scale=0.5, params={"inputs": 4})
+    in_pin = component_pin_positions(g)[1]          # off-grid (y = 5.125)
+    assert abs(round(in_pin[1] / 0.25) * 0.25 - in_pin[1]) > 1e-9   # truly off-grid
+    wg = _wg(g)
+    # Raw cursor right on the pin → grabbed exactly at the off-grid pin.
+    pt, connectable = wg.wire_snap_target(
+        (round(in_pin[0]), round(in_pin[1])), raw_gu=in_pin)
+    assert pt == in_pin and connectable is True
+
+
+def test_unconnected_pin_at_grabs_offgrid_gate_pin():
+    """Auto-starting a wire from a free off-grid gate pin works (raw-cursor grab)."""
+    from app.schematic.model import component_pin_positions
+    g = Component(id="g", kind="or", position=(5.0, 5.0), rotation=0, options="",
+                  scale=0.5, params={"inputs": 4})
+    in_pin = component_pin_positions(g)[1]
+    wg = _wg(g)
+    assert wg.unconnected_pin_at(_scene_pt(*in_pin)) == in_pin
+
+
 def test_vertex_is_draggable_endpoint_on_pin_still_draggable():
     w = Wire(id="w1", points=[(0.0, 0.0), (0.0, 4.0)])
     wg = _wg(_r("r1", (0.0, 0.0)), wires=[w])

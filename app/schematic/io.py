@@ -1,7 +1,9 @@
 """
 Schematic file I/O.
 
-save(schematic, path) — serializes a Schematic to a UTF-8 JSON .hv file.
+save(schematic, path) — validates then serializes a Schematic to a UTF-8 JSON
+                        .hv file, raising SchematicSaveError if the in-memory
+                        document is invalid (nothing is written).
 load(path)            — deserializes and validates a .hv file, returning a
                         Schematic or raising SchematicLoadError on any problem.
 
@@ -11,7 +13,9 @@ No Qt dependency. No side effects beyond filesystem access.
 from __future__ import annotations
 
 import json
+import math
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -31,10 +35,19 @@ from app.schematic.validate import validate
 # are no earlier formats to migrate from.
 #: 0.2 added the top-level ``config`` object (document voltage/current label
 #: styles). 0.1 files load unchanged with american defaults.
-_FORMAT_VERSION: str = "0.2"
+#: 0.3 covers the optional wire/component fields added since 0.2 (start_marker,
+#: end_marker, start/end/mid labels and placements, hop_mode, z_order,
+#: line_width, scale, params, variants, span_override) so an older build that
+#: would silently strip them refuses the file instead. 0.1/0.2 files load
+#: unchanged.
+_FORMAT_VERSION: str = "0.3"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3"}
+
+# Refuse to parse implausibly large files (a real schematic is a few hundred KB
+# at most). Checked via stat() before the file is read into memory.
+_MAX_FILE_BYTES: int = 32 * 1024 * 1024  # 32 MB
 
 # Component-kind migration map: ``{old_kind: current_kind}``.  A ``.hv`` file
 # stores only a component's ``kind`` string (never its geometry), so the kind is
@@ -48,25 +61,76 @@ class SchematicLoadError(Exception):
     """Raised when a .hv file cannot be loaded for any reason."""
 
 
+class SchematicSaveError(Exception):
+    """Raised when a schematic cannot be saved (e.g. it fails validation).
+
+    save() raises this *before* touching the destination file, so an invalid
+    in-memory document can never overwrite a good file on disk.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
 def save(schematic: Schematic, path: str | Path) -> None:
-    """Serialise *schematic* to a UTF-8 JSON file at *path*.
+    """Validate then serialise *schematic* to a UTF-8 JSON file at *path*.
 
-    The file is written atomically (written to a temp name then renamed) so a
-    failed write never corrupts an existing file.
+    The schematic is validated first; an invalid document raises
+    SchematicSaveError and nothing is written (writing it would produce a file
+    that refuses to load — permanent data loss). The file is then written
+    atomically: the JSON is written to a sibling per-process temp file, flushed
+    and fsync'd, an existing destination is copied to ``<name>.bak``
+    (best-effort), and the temp file replaces the destination via os.replace.
+    On any failure after the temp file is created it is removed.
     """
     path = Path(path)
+
+    # 1. Refuse to persist an invalid document.
+    try:
+        errors = validate(schematic)
+    except Exception as exc:  # validate() crashed on corrupt in-memory state
+        raise SchematicSaveError(
+            f"Cannot save: schematic could not be validated: {exc}"
+        ) from exc
+    if errors:
+        raise SchematicSaveError(
+            f"Cannot save: schematic invariant violated: {errors[0]}"
+            + (f" (and {len(errors) - 1} more)" if len(errors) > 1 else "")
+        )
+
+    # 2. Serialise. allow_nan=False so a stray NaN/Infinity in a numeric field
+    # can never produce a file the loader rejects.
     data = _schematic_to_dict(schematic)
-    text = json.dumps(data, ensure_ascii=False, indent=2)
-    # Write to a sibling temp file, then atomically replace the target so a
-    # failed/interrupted write never corrupts an existing file. Write without
-    # BOM; explicitly UTF-8.
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    try:
+        text = json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise SchematicSaveError(f"Cannot save: schematic is not serialisable: {exc}") from exc
+
+    # 3. Write to a sibling temp file (unique per process, so two instances
+    # saving the same path cannot collide), then atomically replace the target
+    # so a failed/interrupted write never corrupts an existing file. Write
+    # without BOM; explicitly UTF-8.
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        # Keep a best-effort backup of the file being replaced; failure to
+        # write the .bak must not block the save itself.
+        if path.exists():
+            try:
+                shutil.copy2(path, path.with_name(path.name + ".bak"))
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def load(path: str | Path) -> Schematic:
@@ -80,26 +144,48 @@ def load(path: str | Path) -> Schematic:
     """
     path = Path(path)
 
-    # 1. Read raw bytes and decode as UTF-8.
+    # 1. Bound the input size (checked via stat, before reading into memory),
+    # then read raw bytes and decode as UTF-8.
     try:
-        text = path.read_text(encoding="utf-8")
+        size = path.stat().st_size
     except OSError as exc:
         raise SchematicLoadError(f"Cannot read file: {exc}") from exc
-
-    # 2. Parse JSON.
+    if size > _MAX_FILE_BYTES:
+        raise SchematicLoadError(
+            f"File is too large to be a schematic "
+            f"({size} bytes; the limit is {_MAX_FILE_BYTES} bytes)"
+        )
     try:
-        data = json.loads(text)
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SchematicLoadError(f"Cannot read file: {exc}") from exc
+
+    # 2. Parse JSON. NaN/Infinity/-Infinity literals (which json.loads would
+    # otherwise accept) are rejected here — they are not valid JSON and the
+    # model cannot represent them.
+    def _reject_constant(name: str) -> float:
+        raise SchematicLoadError(
+            f"Invalid JSON: non-finite number literal {name!r} is not allowed"
+        )
+
+    try:
+        data = json.loads(text, parse_constant=_reject_constant)
     except json.JSONDecodeError as exc:
         raise SchematicLoadError(f"Invalid JSON: {exc}") from exc
 
     if not isinstance(data, dict):
         raise SchematicLoadError("Top-level JSON value must be an object")
 
-    # 3. Validate schema structure and build the model objects.
-    schematic = _dict_to_schematic(data)
-
-    # 4. Validate schematic invariants.
-    errors = validate(schematic)
+    # 3+4. Build the model objects and validate schematic invariants. Any
+    # unexpected exception (a malformed value the field-level checks missed)
+    # is re-raised as SchematicLoadError so no raw exception ever escapes.
+    try:
+        schematic = _dict_to_schematic(data)
+        errors = validate(schematic)
+    except SchematicLoadError:
+        raise
+    except Exception as exc:
+        raise SchematicLoadError(f"Malformed .hv file: {exc}") from exc
     if errors:
         raise SchematicLoadError(
             f"Schematic invariant violated: {errors[0]}"
@@ -151,11 +237,16 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # none set (the kind's default applies).
     if c.params:
         d["params"] = {name: int(v) for name, v in c.params.items()}
+    # Unified stroke/outline width (symbols and block kinds), omitted at the
+    # CircuiTikZ default (0.4 pt).
+    if abs(c.line_width - 0.4) > 1e-6:
+        d["line_width"] = c.line_width
+    # Per-instance logic-gate size multiplier, omitted at the default (1.0).
+    if abs(c.scale - 1.0) > 1e-6:
+        d["scale"] = c.scale
     if isinstance(c, StyledComponent):
         if c.fill_color:
             d["fill_color"] = c.fill_color
-        if abs(c.border_width - 0.4) > 1e-6:
-            d["border_width"] = c.border_width
         if c.line_style:
             d["line_style"] = c.line_style
     if isinstance(c, FontedComponent):
@@ -219,6 +310,18 @@ def _require(data: dict, key: str, context: str) -> Any:
     if key not in data:
         raise SchematicLoadError(f"Missing required field '{key}' in {context}")
     return data[key]
+
+
+def _finite(value: float, what: str) -> float:
+    """Return *value* or raise SchematicLoadError if it is NaN/±Infinity.
+
+    Belt-and-braces alongside the parse_constant rejection in load(): every
+    numeric field that reaches the model must be a finite float (a non-finite
+    coordinate would crash grid validation and the canvas).
+    """
+    if not math.isfinite(value):
+        raise SchematicLoadError(f"{what} must be a finite number")
+    return value
 
 
 def _dict_to_schematic(data: dict) -> Schematic:
@@ -293,13 +396,24 @@ def _dict_to_component(data: Any, index: int) -> Component:
     kind = _KIND_ALIASES.get(kind, kind)
     if not (isinstance(pos_raw, list) and len(pos_raw) == 2):
         raise SchematicLoadError(f"{ctx}.position must be a two-element array")
-    if not isinstance(rot_raw, int):
+    # Rotation must be integral but, like every other numeric field, an
+    # integral float (e.g. 90.0) is coerced rather than rejected. Bools and
+    # non-integral values are rejected.
+    if isinstance(rot_raw, bool):
+        raise SchematicLoadError(f"{ctx}.rotation must be an integer")
+    if isinstance(rot_raw, int):
+        rotation = rot_raw
+    elif isinstance(rot_raw, float) and math.isfinite(rot_raw) and rot_raw.is_integer():
+        rotation = int(rot_raw)
+    else:
         raise SchematicLoadError(f"{ctx}.rotation must be an integer")
 
     try:
         position = (float(pos_raw[0]), float(pos_raw[1]))
     except (TypeError, ValueError) as exc:
         raise SchematicLoadError(f"{ctx}.position values must be numbers") from exc
+    _finite(position[0], f"{ctx}.position")
+    _finite(position[1], f"{ctx}.position")
 
     mirror = bool(data.get("mirror", False))
 
@@ -321,6 +435,8 @@ def _dict_to_component(data: Any, index: int) -> Component:
             raise SchematicLoadError(
                 f"{ctx}.label_offset values must be numbers"
             ) from exc
+        _finite(label_offset[0], f"{ctx}.label_offset")
+        _finite(label_offset[1], f"{ctx}.label_offset")
 
     span_override: tuple[float, float] | None = None
     raw_so = data.get("span_override")
@@ -333,6 +449,8 @@ def _dict_to_component(data: Any, index: int) -> Component:
             raise SchematicLoadError(
                 f"{ctx}.span_override values must be numbers"
             ) from exc
+        _finite(span_override[0], f"{ctx}.span_override")
+        _finite(span_override[1], f"{ctx}.span_override")
 
     defn = REGISTRY.get(kind)
     cls = defn.component_class if defn is not None else Component
@@ -354,35 +472,46 @@ def _dict_to_component(data: Any, index: int) -> Component:
         raise SchematicLoadError(f"{ctx}.params must be an object")
     try:
         params = {str(name): int(v) for name, v in raw_params.items()}
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise SchematicLoadError(f"{ctx}.params values must be integers") from exc
+
+    # Unified stroke/outline width. Legacy files stored a block's outline width
+    # under "border_width" (now merged into line_width), so fall back to it.
+    raw_lw = data.get("line_width", data.get("border_width", 0.4))
+    try:
+        line_width = _finite(float(raw_lw), f"{ctx}.line_width")
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.line_width must be a number") from exc
+
+    raw_scale = data.get("scale", 1.0)
+    try:
+        scale = _finite(float(raw_scale), f"{ctx}.scale")
+    except (TypeError, ValueError) as exc:
+        raise SchematicLoadError(f"{ctx}.scale must be a number") from exc
 
     kwargs: dict = {
         "id": comp_id,
         "kind": kind,
         "position": position,
-        "rotation": rot_raw,
+        "rotation": rotation,
         "mirror": mirror,
         "options": options,
         "label_offset": label_offset,
         "span_override": span_override,
         "variants": variants,
         "params": params,
+        "line_width": line_width,
+        "scale": scale,
     }
 
     if issubclass(cls, DrawingComponent):
         raw_z = data.get("z_order", 0)
-        if not isinstance(raw_z, int):
+        if not isinstance(raw_z, int) or isinstance(raw_z, bool):
             raise SchematicLoadError(f"{ctx}.z_order must be an integer")
         kwargs["z_order"] = raw_z
 
     if issubclass(cls, StyledComponent):
         kwargs["fill_color"] = str(data.get("fill_color", ""))
-        raw_bw = data.get("border_width", 0.4)
-        try:
-            kwargs["border_width"] = float(raw_bw)
-        except (TypeError, ValueError) as exc:
-            raise SchematicLoadError(f"{ctx}.border_width must be a number") from exc
         kwargs["line_style"] = str(data.get("line_style", ""))
 
     if issubclass(cls, FontedComponent):
@@ -393,7 +522,14 @@ def _dict_to_component(data: Any, index: int) -> Component:
         kwargs["font_italic"] = bool(data.get("font_italic", False))
         kwargs["font_family"] = raw_ff
         if "font_size" in data:
-            kwargs["font_size"] = float(data["font_size"])
+            try:
+                kwargs["font_size"] = _finite(
+                    float(data["font_size"]), f"{ctx}.font_size"
+                )
+            except (TypeError, ValueError) as exc:
+                raise SchematicLoadError(
+                    f"{ctx}.font_size must be a number"
+                ) from exc
 
     return cls(**kwargs)
 
@@ -421,6 +557,8 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
             raise SchematicLoadError(
                 f"{ctx}.points[{j}] values must be numbers"
             ) from exc
+        _finite(points[-1][0], f"{ctx}.points[{j}]")
+        _finite(points[-1][1], f"{ctx}.points[{j}]")
 
     line_style = data.get("line_style", "")
     if not isinstance(line_style, str):
@@ -428,7 +566,7 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
 
     raw_lw = data.get("line_width", 0.4)
     try:
-        line_width = float(raw_lw)
+        line_width = _finite(float(raw_lw), f"{ctx}.line_width")
     except (TypeError, ValueError) as exc:
         raise SchematicLoadError(f"{ctx}.line_width must be a number") from exc
 
@@ -468,7 +606,7 @@ def _dict_to_wire(data: Any, index: int) -> Wire:
 
     raw_mid_pos = data.get("mid_label_pos", 0.5)
     try:
-        mid_label_pos = float(raw_mid_pos)
+        mid_label_pos = _finite(float(raw_mid_pos), f"{ctx}.mid_label_pos")
     except (TypeError, ValueError) as exc:
         raise SchematicLoadError(f"{ctx}.mid_label_pos must be a number") from exc
     mid_label_pos = max(0.0, min(1.0, mid_label_pos))

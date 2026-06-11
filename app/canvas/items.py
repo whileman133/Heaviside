@@ -182,7 +182,7 @@ _EDIT_Z = 10_000.0
 _LABEL_FONT_PT = 10.0
 _LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
 _LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
-_LABEL_GAP = 4       # px gap between bbox top edge and bottom of label block
+_LABEL_GAP = 8       # px gap between bbox top edge and bottom of label block
 # Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
 # annotation line does not appear to run into the text.
 _LABEL_BG_PAD = 3.0
@@ -192,16 +192,27 @@ _LABEL_BG_PAD = 3.0
 # passive default and are NOT listed.
 _VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
 
+# Bodyless components: a current (`i=`) arrow is centred on the wire's midpoint
+# (like CircuiTikZ) rather than ridden out on the exit lead, since there is no
+# body in the middle to clear. ``open`` also centres its label; ``short`` does not.
+_CURRENT_CENTERED_KINDS = frozenset({"short", "open"})
+
 # Annotation decoration geometry (canvas px) — the CircuiTikZ-style ± signs and
 # direction arrows drawn alongside the v=/i= text labels (§5.8). Sizes are in
 # screen pixels (the decoration is counter-rotated so ± glyphs stay upright).
 _SIGN_LEN = 8.0          # arm length of a drawn + / - glyph
-_SIGN_STROKE = 2.0       # ± glyph stroke width
+# ± glyph and arrow-shaft strokes track the wire width so they read at the same
+# weight as CircuiTikZ's annotations (base line width), not bolder.
+_SIGN_STROKE = LINE_W    # ± glyph stroke width
 _SIGN_OFFSET = 7.0       # ± glyph clearance off the body, toward the label side
 _SIGN_INSET = 0.80       # ± glyphs sit at ±inset·half-span (just inside the pins)
-_ARROW_STROKE = 2.0      # voltage/current arrow shaft width
-_ARROW_HEAD = 8.0        # arrowhead length
+_ARROW_STROKE = LINE_W   # voltage arrow shaft width
+_ARROW_HEAD = 8.0        # arrowhead length (european voltage arrow)
 _ARROW_HEAD_W = 6.0      # arrowhead full width
+# The current (`i=`) arrowhead is drawn larger than the voltage arrow to match
+# CircuiTikZ's prominent current-flow arrow.
+_CUR_ARROW_HEAD = 13.0   # current arrowhead length
+_CUR_ARROW_HEAD_W = 11.0 # current arrowhead full width
 _ARROW_SPAN = 0.62       # voltage arrow shaft spans ±span·half-length about centre
 # Perpendicular band the european-voltage arrow reserves between the body and its
 # text label so the two never overlap.
@@ -659,6 +670,8 @@ class _AnnotationDecoration(QGraphicsItem):
         self._side = QPointF(0.0, -1.0)  # unit vector toward the annotation side
         self._half_len = 0.0             # half the on-screen terminal span
         self._perp = 0.0                 # distance from the lead axis to the glyphs
+        self._reversed = False           # `<` modifier: flip current dir / v polarity
+        self._centered = False           # current arrow centred on the line (open)
 
     def configure(
         self,
@@ -669,17 +682,24 @@ class _AnnotationDecoration(QGraphicsItem):
         perp: float,
         center_rel: QPointF,
         inv: QTransform,
+        reversed: bool = False,
+        centered: bool = False,
     ) -> None:
         """Place this decoration. ``center_rel`` is the component centre and
         ``inv`` the screen→parent-local transform (both from ``_slot_geometry``);
         the decoration is counter-rotated and pinned at the centre, drawing its
-        glyphs at screen-space offsets from there."""
+        glyphs at screen-space offsets from there. ``reversed`` flips the current
+        arrow direction / the voltage polarity (the CircuiTikZ ``<`` modifier);
+        ``centered`` draws the current arrowhead at the line's midpoint (the
+        ``open`` annotation) instead of out on the exit lead."""
         self.prepareGeometryChange()
         self._mode = mode
         self._axis = axis_unit
         self._half_len = half_len
         self._side = side
         self._perp = perp
+        self._reversed = reversed
+        self._centered = centered
         self.setTransform(inv)
         self.setPos(inv.map(center_rel))
         self.setVisible(bool(mode))
@@ -688,7 +708,8 @@ class _AnnotationDecoration(QGraphicsItem):
     def boundingRect(self) -> QRectF:  # noqa: N802
         if not self._mode:
             return QRectF()
-        ext = self._half_len + self._perp + _DEC_BAND + _ARROW_HEAD + 4.0
+        ext = (self._half_len + self._perp + _DEC_BAND
+               + max(_ARROW_HEAD, _CUR_ARROW_HEAD) + 4.0)
         return QRectF(-ext, -ext, 2.0 * ext, 2.0 * ext)
 
     def _draw_plus(self, painter: QPainter, c: QPointF) -> None:
@@ -701,11 +722,13 @@ class _AnnotationDecoration(QGraphicsItem):
         painter.drawLine(QPointF(c.x() - h, c.y()), QPointF(c.x() + h, c.y()))
 
     def _draw_arrowhead(self, painter: QPainter, color: QColor,
-                        tip: QPointF, ux: float, uy: float) -> None:
+                        tip: QPointF, ux: float, uy: float, *,
+                        length: float = _ARROW_HEAD,
+                        width: float = _ARROW_HEAD_W) -> None:
         """Filled triangular arrowhead at *tip*, pointing along unit (ux, uy)."""
         px, py = -uy, ux  # perpendicular
-        base = QPointF(tip.x() - ux * _ARROW_HEAD, tip.y() - uy * _ARROW_HEAD)
-        hw = _ARROW_HEAD_W / 2.0
+        base = QPointF(tip.x() - ux * length, tip.y() - uy * length)
+        hw = width / 2.0
         left = QPointF(base.x() + px * hw, base.y() + py * hw)
         right = QPointF(base.x() - px * hw, base.y() - py * hw)
         head_path = QPainterPath(tip)
@@ -714,15 +737,21 @@ class _AnnotationDecoration(QGraphicsItem):
         head_path.closeSubpath()
         painter.fillPath(head_path, QBrush(color))
 
-    def _draw_arrow(self, painter: QPainter, color: QColor,
-                    tail: QPointF, head: QPointF) -> None:
+    def _draw_curved_arrow(self, painter: QPainter, color: QColor,
+                           tail: QPointF, head: QPointF, ctrl: QPointF) -> None:
+        """A quadratic-Bézier arc from *tail* to *head* bowing through *ctrl*, with
+        a filled arrowhead at *head* tangent to the curve — CircuiTikZ's european
+        voltage arrow shape."""
         pen = QPen(color)
         pen.setWidthF(_ARROW_STROKE)
         pen.setCapStyle(Qt.RoundCap)
         pen.setJoinStyle(Qt.RoundJoin)
         painter.setPen(pen)
-        painter.drawLine(tail, head)
-        d = head - tail
+        painter.setBrush(Qt.NoBrush)
+        path = QPainterPath(tail)
+        path.quadTo(ctrl, head)
+        painter.drawPath(path)
+        d = head - ctrl  # tangent at the head end
         ln = math.hypot(d.x(), d.y()) or 1.0
         self._draw_arrowhead(painter, color, head, d.x() / ln, d.y() / ln)
 
@@ -746,23 +775,45 @@ class _AnnotationDecoration(QGraphicsItem):
             pen.setCapStyle(Qt.RoundCap)
             painter.setPen(pen)
             d = _SIGN_INSET * L
-            plus = QPointF(-a.x() * d + off.x(), -a.y() * d + off.y())    # first pin
-            minus = QPointF(a.x() * d + off.x(), a.y() * d + off.y())     # second pin
-            self._draw_plus(painter, plus)
-            self._draw_minus(painter, minus)
+            first = QPointF(-a.x() * d + off.x(), -a.y() * d + off.y())   # first pin
+            second = QPointF(a.x() * d + off.x(), a.y() * d + off.y())    # second pin
+            # Default polarity: + at the first pin, − at the second. `v<` (reversed)
+            # swaps them, matching CircuiTikZ.
+            if self._reversed:
+                self._draw_minus(painter, first)
+                self._draw_plus(painter, second)
+            else:
+                self._draw_plus(painter, first)
+                self._draw_minus(painter, second)
         elif self._mode == "v_european":
-            # Points from the + terminal (first pin) to the − (second pin).
-            d = _ARROW_SPAN * L
-            tail = QPointF(-a.x() * d + off.x(), -a.y() * d + off.y())
-            head = QPointF(a.x() * d + off.x(), a.y() * d + off.y())
-            self._draw_arrow(painter, color, tail, head)
+            # CircuiTikZ draws the european voltage as a curved arc bowing toward
+            # the label side, the arrowhead at the head end (toward the − terminal;
+            # `v<` reverses it). The endpoints sit near the body and the arc bows
+            # out to the decoration's perpendicular depth (`self._perp`) at the
+            # middle.
+            span = _ARROW_SPAN * L
+            perp_end = self._perp * 0.4                 # endpoints near the body
+            end_off = QPointF(s.x() * perp_end, s.y() * perp_end)
+            ctrl_perp = 2.0 * self._perp - perp_end     # quad midpoint -> self._perp
+            ctrl = QPointF(s.x() * ctrl_perp, s.y() * ctrl_perp)
+            p_first = QPointF(-a.x() * span + end_off.x(), -a.y() * span + end_off.y())
+            p_second = QPointF(a.x() * span + end_off.x(), a.y() * span + end_off.y())
+            if self._reversed:
+                self._draw_curved_arrow(painter, color, p_second, p_first, ctrl)
+            else:
+                self._draw_curved_arrow(painter, color, p_first, p_second, ctrl)
         elif self._mode == "current":
-            # A bare arrowhead on the wire near the exit lead, pointing toward the
-            # second pin (current direction) — no shaft, so it never overlaps the
-            # body. The label is centred over the head (see _layout_slots).
-            tip = QPointF(a.x() * _CUR_ARROW_TIP * L + off.x(),
-                          a.y() * _CUR_ARROW_TIP * L + off.y())
-            self._draw_arrowhead(painter, color, tip, a.x(), a.y())
+            # A bare arrowhead on the wire (no shaft, so it never overlaps the
+            # body). Default: near the exit lead, pointing toward the second pin.
+            # `i<` reverses the direction and moves it to the entry lead; the
+            # `open` annotation centres the head on the line instead (_centered).
+            # The label is centred over the head (see _layout_slots).
+            sign = -1.0 if self._reversed else 1.0
+            along = sign * (_CUR_ARROW_HEAD / 2.0 if self._centered
+                            else _CUR_ARROW_TIP * L)
+            tip = QPointF(a.x() * along + off.x(), a.y() * along + off.y())
+            self._draw_arrowhead(painter, color, tip, sign * a.x(), sign * a.y(),
+                                 length=_CUR_ARROW_HEAD, width=_CUR_ARROW_HEAD_W)
 
 
 # ---------------------------------------------------------------------------
@@ -848,6 +899,14 @@ class ComponentItem(QGraphicsItem):
         return c.kind + library.param_geometry_suffix(c) + library.variant_geometry_suffix(
             c.kind, c.variants)
 
+    def _gate_scale(self) -> float:
+        """The body size multiplier (``Component.scale``) for a scalable kind — a
+        logic gate or digital block; 1.0 for every other kind. The body is scaled
+        about the placement origin (a gate's ``out`` pin, a block's centre)."""
+        from app.components import library
+        c = self._component
+        return float(getattr(c, "scale", 1.0)) if library.is_scalable(c.kind) else 1.0
+
     @component.setter
     def component(self, comp: "Component") -> None:
         if self._options_item.is_editing:
@@ -923,15 +982,15 @@ class ComponentItem(QGraphicsItem):
 
     def _decoration_mode(self, key: str, centered: bool,
                          v_style: str, i_style: str) -> str:
-        """The decoration to draw for a slot key: the american ± signs / european
-        arrow for a voltage slot, an arrow for a current slot, nothing otherwise.
-        Centred (axis-pinned) labels draw their own connecting line and get none."""
-        if centered:
-            return ""
+        """The voltage decoration to draw for a non-current slot key: the american
+        ± signs / european arrow for a `v=` slot, nothing otherwise. Drawn for both
+        side-placed voltages and the centred `open` annotation (which shows ± at
+        its terminals, like CircuiTikZ's ``to[open, v=…]``); the value label stays
+        centred on the line either way. Current (`i=`) is handled directly in
+        ``_layout_slots`` (its arrow is drawn even for `open`), so it never reaches
+        here."""
         if key.startswith("v"):
             return "v_european" if v_style == "european" else "v_american"
-        if key.startswith("i"):
-            return "current"
         return ""
 
     def _layout_slots(self) -> None:
@@ -942,7 +1001,7 @@ class ComponentItem(QGraphicsItem):
         (`v=`) and current (`i=`) slots also get a CircuiTikZ-style decoration —
         ± signs / a voltage arrow / a current arrow (:class:`_AnnotationDecoration`).
         """
-        from app.preview.mathrender import slot_fragments
+        from app.preview.mathrender import _slot_family, slot_fragments, slot_reversed
 
         slots = [] if self._ghost else slot_fragments(self._component.options)
         while len(self._slot_items) < len(slots):
@@ -971,25 +1030,35 @@ class ComponentItem(QGraphicsItem):
 
             key, latex = slots[idx]
             direction = self._slot_direction(key, geom)
-            mode = self._decoration_mode(key, centered, v_style, i_style)
             item.setTransform(counter)
 
-            if mode == "current":
-                # CircuiTikZ draws `i=` as an arrowhead on the wire near the exit
-                # (second-pin) lead, with the label centred over that head — not
-                # centred on the body or stacked above the other labels. Place the
-                # label over the arrowhead at body clearance.
+            if _slot_family(key) == "i":
+                # CircuiTikZ draws `i=` as an arrowhead on the wire, with the label
+                # centred over that head. The head sits on the thin lead (perp
+                # offset 0), so the label clears the ARROWHEAD, not the component
+                # body (using body half-thickness floated it above the wire). The
+                # `<` modifier reverses the direction and moves the arrow to the
+                # *entry* lead; for the centred `open` annotation it stays on the
+                # midpoint and only flips direction (label always above the head).
+                rev = slot_reversed(key)
+                sign = -1.0 if rev else 1.0
                 axis = geom["axis_unit"]
-                shift = _CUR_ARROW_TIP * geom["half_len"]
-                cur_center = QPointF(geom["center_rel"].x() + axis.x() * shift,
-                                     geom["center_rel"].y() + axis.y() * shift)
+                # Bodyless parts (short/open) centre the arrow on the midpoint;
+                # a component with a body rides the entry/exit lead.
+                cur_centered = self._component.kind in _CURRENT_CENTERED_KINDS
+                along = 0.0 if cur_centered else sign * _CUR_ARROW_TIP * geom["half_len"]
+                cur_center = QPointF(geom["center_rel"].x() + axis.x() * along,
+                                     geom["center_rel"].y() + axis.y() * along)
                 item.configure(latex, direction, cur_center,
-                               geom["perp_thickness"] + _LABEL_GAP, 0.0,
+                               _CUR_ARROW_HEAD_W / 2.0 + _LABEL_GAP, 0.0,
                                geom["inv"], False)
                 item.setVisible(True)
                 dec.configure("current", geom["axis_unit"], geom["half_len"],
-                              direction, 0.0, geom["center_rel"], geom["inv"])
+                              direction, 0.0, geom["center_rel"], geom["inv"],
+                              reversed=rev, centered=cur_centered)
                 continue
+
+            mode = self._decoration_mode(key, centered, v_style, i_style)
 
             dk = (round(direction.x(), 3), round(direction.y(), 3))
             preferred = 0.0 if centered else geom["perp_thickness"] + _LABEL_GAP
@@ -999,17 +1068,25 @@ class ComponentItem(QGraphicsItem):
             band = _DEC_BAND if mode == "v_european" else 0.0
             label_base = base + band
             outer_edge[dk] = label_base + _LABEL_LINE_H
+            # A european voltage label sits *beside* its curved arrow, even on the
+            # otherwise axis-centred `open` annotation (where an american label
+            # stays centred on the line between the ± signs).
+            label_centered = centered and mode != "v_european"
             item.configure(latex, direction, geom["center_rel"],
-                           label_base, 0.0, geom["inv"], centered)
+                           label_base, 0.0, geom["inv"], label_centered)
             item.setVisible(True)
             if mode == "v_american":
-                perp = geom["perp_thickness"] + _SIGN_OFFSET
+                # `open` has no body, so the ± signs sit just off the line (at its
+                # terminals); a real component clears its body's perpendicular edge.
+                perp = (_SIGN_OFFSET if centered
+                        else geom["perp_thickness"] + _SIGN_OFFSET)
             elif mode == "v_european":
                 perp = base + band / 2.0
             else:
                 perp = 0.0
             dec.configure(mode, geom["axis_unit"], geom["half_len"],
-                          direction, perp, geom["center_rel"], geom["inv"])
+                          direction, perp, geom["center_rel"], geom["inv"],
+                          reversed=slot_reversed(key))
 
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
@@ -1043,16 +1120,19 @@ class ComponentItem(QGraphicsItem):
         components (open/short/bipole) override this so the centre tracks the
         *actual* span, not the default registry bbox.
         """
+        # A scaled logic gate's visible body shrinks about its origin, so the
+        # label-centring terminals scale with it.
+        s = self._gate_scale()
         pins = self._defn.pins
         if len(pins) >= 2:
             (x0, y0), (x1, y1) = pins[0].offset, pins[1].offset
             return (
-                QPointF(x0 * GRID_PX, y0 * GRID_PX),
-                QPointF(x1 * GRID_PX, y1 * GRID_PX),
+                QPointF(x0 * GRID_PX * s, y0 * GRID_PX * s),
+                QPointF(x1 * GRID_PX * s, y1 * GRID_PX * s),
             )
         bx0, by0, bx1, by1 = self._defn.bbox
-        c = QPointF((bx0 + bx1) / 2 * GRID_PX, (by0 + by1) / 2 * GRID_PX)
-        return c, QPointF(c.x() + GRID_PX, c.y())
+        c = QPointF((bx0 + bx1) / 2 * GRID_PX * s, (by0 + by1) / 2 * GRID_PX * s)
+        return c, QPointF(c.x() + GRID_PX * s, c.y())
 
     def _slot_geometry(self) -> dict:
         """Screen-space placement basis for the slot labels.
@@ -1083,7 +1163,8 @@ class ComponentItem(QGraphicsItem):
         # bbox half-height for horizontal leads, half-width for vertical ones —
         # so resizable/rotated bodies stay tight (the default bbox width is not
         # projected onto the perpendicular).
-        hw, hh = (x1 - x0) / 2 * GRID_PX, (y1 - y0) / 2 * GRID_PX
+        s = self._gate_scale()
+        hw, hh = (x1 - x0) / 2 * GRID_PX * s, (y1 - y0) / 2 * GRID_PX * s
         pins = self._defn.pins
         vertical_leads = (
             len(pins) >= 2
@@ -1236,7 +1317,20 @@ class ComponentItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         x0, y0, x1, y1 = self._instance_bbox()
-        margin = LINE_W_THICK
+        s = self._gate_scale()
+        if s != 1.0:
+            # Scaled gate: the body shrinks about the origin, but the scaled pins
+            # may sit just outside the scaled body — include them so nothing is
+            # clipped.
+            from app.components import library
+            x0, y0, x1, y1 = x0 * s, y0 * s, x1 * s, y1 * s
+            gate = library.gate_layout(self._component)
+            if gate is not None:
+                xs = [g["pin_offset"][0] for g in gate] + [x0, x1]
+                ys = [g["pin_offset"][1] for g in gate] + [y0, y1]
+                x0, x1 = min(xs), max(xs)
+                y0, y1 = min(ys), max(ys)
+        margin = LINE_W_THICK * max(1.0, self._component.line_width / 0.4)
         return QRectF(
             x0 * GRID_PX - margin,
             y0 * GRID_PX - margin,
@@ -1247,24 +1341,56 @@ class ComponentItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
         color = self._body_color()
+        from app.components import library
+
+        # Per-component stroke width scales the canvas pen relative to the
+        # CircuiTikZ default (0.4 pt), mirroring the emitted `line width=` option.
+        lw_scale = self._component.line_width / 0.4
+        s = self._gate_scale()
+        gate = library.gate_layout(self._component)
 
         # --- symbol body: stroke/fill each SVG-derived path ---------------
+        # A scaled logic gate draws its body shrunk about the origin (out pin);
+        # its pins sit at the true scaled anchor (no lead stubs — a wire connects
+        # there directly via the magnet).
+        painter.save()
+        if s != 1.0:
+            painter.scale(s, s)
         for sym in symbol_paths(self._geometry_kind()):
-            lw = LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W
-            pen = _pen(color, lw)
+            lw = (LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W) * lw_scale
+            # Counter the body scale so the stroke keeps its on-screen weight.
+            pen = _pen(color, lw / s)
             painter.setPen(pen)
             if sym.filled:
                 painter.setBrush(QBrush(QColor(color)))
             else:
                 painter.setBrush(Qt.NoBrush)
             painter.drawPath(sym.path)
+        painter.restore()
+
+        # --- transformer polarity dots -----------------------------------
+        # A checked dot variant (§5.4) draws a filled circle (CircuiTikZ ``circ``)
+        # at its inner-dot anchor; the offsets are in GU at the symbol's scale.
+        marks = library.dot_marks(self._component)
+        if marks:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QBrush(QColor(color)))
+            for m in marks:
+                dx, dy = m["offset"]
+                painter.drawEllipse(QPointF(dx * GRID_PX * s, dy * GRID_PX * s),
+                                    PIN_R, PIN_R)
+            painter.setPen(Qt.NoPen)
 
         # --- pin indicator dots ------------------------------------------
         if not self._ghost:
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
-            for pdef in self._resolved_pins():
-                dx, dy = pdef.offset
+            # Use the snapped grid pins for a scaled gate, else the base offsets.
+            if gate is not None:
+                pin_offsets = [g["pin_offset"] for g in gate]
+            else:
+                pin_offsets = [pdef.offset for pdef in self._resolved_pins()]
+            for dx, dy in pin_offsets:
                 painter.drawEllipse(
                     QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R
                 )
@@ -2468,8 +2594,9 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 
     ``component.position`` is the first corner; ``component.span_override`` (or
     ``default_span``) gives the offset (dx, dy) to the opposite corner.
-    Fill, border width, and line style come from the StyledComponent fields
-    (``fill_color``, ``border_width``, ``line_style``).  No circuit pins.
+    Fill and line style come from the StyledComponent fields (``fill_color``,
+    ``line_style``); the outline width is the unified ``Component.line_width``.
+    No circuit pins.
     """
 
     def _sync_options_item(self) -> None:
@@ -2521,7 +2648,7 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         """Return (pen_style, line_width_px, fill_color_name) from the style fields."""
         comp = self._component
         # Convert pt to pixels: 1 pt ≈ 1.333 px at 96 dpi; keep proportional.
-        line_width_px = comp.border_width * 1.333
+        line_width_px = comp.line_width * 1.333
         return _resolve_pen_style(comp.line_style), line_width_px, comp.fill_color
 
     def shape(self) -> QPainterPath:
@@ -2794,7 +2921,7 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         rect = QRectF(x0, -h, x1 - x0, 2 * h)
         comp = self._component
         assert isinstance(comp, _BipoleComponent)
-        bw_px = comp.border_width * GRID_PX / _PT_PER_GU
+        bw_px = comp.line_width * GRID_PX / _PT_PER_GU
         painter.setPen(_pen(color, bw_px, _resolve_pen_style(comp.line_style)))
         if comp.fill_color and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(comp.fill_color)))

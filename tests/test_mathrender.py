@@ -296,3 +296,201 @@ def test_render_latex_uses_ziamath_when_forced() -> None:
     """render_latex routes through the forced engine and returns a path."""
     set_force_ziamath(True)
     assert render_latex(r"$R_1$") is not None
+
+
+def test_pyinstaller_spec_bundles_ziamath_fonts() -> None:
+    """The frozen app must bundle ziamath/ziafont package data (their fonts).
+
+    ziamath/ziafont load STIX Two Math / DejaVu Sans at import time, so without
+    these collect_data_files() lines the no-LaTeX math fallback is dead in the
+    PyInstaller bundle even though it works in the dev venv. This guards the
+    heaviside.spec lines from silently regressing.
+    """
+    from pathlib import Path
+
+    spec = (Path(__file__).resolve().parent.parent / "heaviside.spec").read_text(
+        encoding="utf-8"
+    )
+    assert 'collect_data_files("ziamath")' in spec
+    assert 'collect_data_files("ziafont")' in spec
+
+
+def test_slot_reversed_detects_direction_modifier() -> None:
+    """`<` means reversed; `>` and no modifier are forward."""
+    from app.preview.mathrender import slot_reversed
+    assert slot_reversed("i<") is True
+    assert slot_reversed("i>") is False
+    assert slot_reversed("i") is False
+    assert slot_reversed("v<") is True
+    assert slot_reversed("i^<") is True
+
+
+def test_slot_side_ignores_direction_modifier() -> None:
+    """`^`/`_` set the side; `<`/`>` set direction only and must not affect side."""
+    assert slot_side("i<") == "above"     # i defaults above
+    assert slot_side("i_>") == "below"    # _ forces below
+    assert slot_side("v<") == "below"     # v defaults below
+    assert slot_side("v^<") == "above"    # ^ forces above
+
+
+def test_slot_fragments_and_display_accept_direction_modifiers() -> None:
+    """`i<=`/`v>=` keys still contribute their value (with the modifier kept)."""
+    assert slot_fragments(r"i<=$i$, v>=$V$") == [("i<", "$i$"), ("v>", "$V$")]
+    assert label_display_latex(r"i<=$i$, v>=$V$") == r"$i$\ \ $V$"
+
+
+# ---------------------------------------------------------------------------
+# Caching robustness (all mocked — no latex/dvisvgm needed)
+# ---------------------------------------------------------------------------
+
+# A minimal dvisvgm-style SVG: one direct rule path, bottom ink edge at y=12.
+_FAKE_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">'
+    '<path d="M0 2L10 12"/></svg>'
+)
+
+
+@pytest.fixture()
+def _clean_memos():
+    """Isolate the in-memory render/baseline memos around a test."""
+    render_path.cache_clear()   # clears the render memo AND the baseline memo
+    yield
+    render_path.cache_clear()
+
+
+def test_baseline_failure_not_memoised(monkeypatch, _clean_memos) -> None:
+    """A failed baseline calibration falls back to 0.0 for that call only.
+
+    Regression: ``_baseline_y`` was ``lru_cache(1)``, so one transient failure
+    at startup pinned 0.0 for the session and vertically shifted every label.
+    """
+    calls = {"n": 0}
+
+    def _fail_then_succeed(fragment, **kw):  # noqa: ANN001
+        calls["n"] += 1
+        return None if calls["n"] == 1 else _FAKE_SVG
+
+    monkeypatch.setattr(_mr, "_compile_svg", _fail_then_succeed)
+    assert _mr._baseline_y() == 0.0          # transient failure -> fallback
+    assert _mr._baseline_y() == 12.0         # retried and recovered
+    # The success IS memoised: a later failure does not regress the value.
+    monkeypatch.setattr(_mr, "_compile_svg", lambda *a, **k: None)
+    assert _mr._baseline_y() == 12.0
+
+
+def test_render_path_does_not_cache_transient_failure(monkeypatch, _clean_memos) -> None:
+    """A ``None`` render is never memoised, so the next request retries.
+
+    Regression: ``lru_cache`` stored the ``None`` of a transient tool failure,
+    blanking that fragment for the whole session.
+    """
+    calls = {"n": 0}
+
+    def _fail_then_succeed(fragment, **kw):  # noqa: ANN001
+        calls["n"] += 1
+        return None if calls["n"] <= 2 else _FAKE_SVG  # fragment+baseline fail first
+
+    monkeypatch.setattr(_mr, "_compile_svg", _fail_then_succeed)
+    assert render_path("$R_1$", "latex") is None          # transient failure
+    path = render_path("$R_1$", "latex")                  # retried -> succeeds
+    assert path is not None and path.elementCount() > 0
+
+
+def test_render_path_memoises_success(monkeypatch, _clean_memos) -> None:
+    """A successful render is served from the memo (no recompile)."""
+    calls = {"n": 0}
+
+    def _count(fragment, **kw):  # noqa: ANN001
+        calls["n"] += 1
+        return _FAKE_SVG
+
+    monkeypatch.setattr(_mr, "_compile_svg", _count)
+    first = render_path("$R_1$", "latex")
+    n_after_first = calls["n"]
+    second = render_path("$R_1$", "latex")
+    assert first is not None and second is not None
+    assert calls["n"] == n_after_first       # no further compiles
+    assert second is first                   # served from the memo
+
+
+def test_render_memo_is_bounded(monkeypatch, _clean_memos) -> None:
+    """The manual memo evicts oldest entries past its cap (no unbounded growth)."""
+    monkeypatch.setattr(_mr, "_RENDER_MEMO_MAX", 4)
+    monkeypatch.setattr(_mr, "_compile_svg", lambda fragment, **kw: _FAKE_SVG)
+    for i in range(10):
+        assert render_path(f"$x_{i}$", "latex") is not None
+    assert len(_mr._render_memo) <= 4
+
+
+def test_corrupt_disk_cache_entry_recompiles(monkeypatch, tmp_path, _clean_memos) -> None:
+    """A corrupted (non-empty, unparseable) cached SVG is discarded and the
+    fragment recompiled — instead of being trusted forever and raising
+    ``ET.ParseError`` out of every render of that fragment (regression)."""
+    import subprocess as _sp
+    from pathlib import Path as _P
+
+    frag = r"$R_\mathrm{corrupt}$"
+    monkeypatch.setattr(_mr, "_cache_dir", lambda: tmp_path)
+    cache_file = tmp_path / f"{_mr._cache_key(frag)}.svg"
+    cache_file.write_text("<svg><unclosed", encoding="utf-8")   # corrupt, non-empty
+
+    def _fake_run(cmd, *args, **kwargs):  # noqa: ANN001
+        cwd = _P(kwargs["cwd"])
+        if any("dvisvgm" in str(part) for part in cmd):
+            (cwd / "m.svg").write_text(_FAKE_SVG, encoding="utf-8")
+        else:
+            (cwd / "m.dvi").write_bytes(b"\x00")
+
+        class _R:
+            returncode = 0
+            stdout = b""
+            stderr = b""
+        return _R()
+
+    monkeypatch.setattr(_mr._tools, "resolve", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(_mr.subprocess, "run", _fake_run)
+
+    svg = _mr._compile_svg(frag)
+    assert svg == _FAKE_SVG                                   # recompiled, not the junk
+    assert cache_file.read_text(encoding="utf-8") == _FAKE_SVG  # cache healed
+
+
+# ---------------------------------------------------------------------------
+# Per-user disk cache directory (security)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def _fresh_cache_dir():
+    """Clear the lru-cached directory around a test so patches take effect."""
+    _mr._cache_dir.cache_clear()
+    yield
+    _mr._cache_dir.cache_clear()
+
+
+def test_cache_dir_is_per_user_and_private(monkeypatch, tmp_path, _fresh_cache_dir) -> None:
+    """The disk cache lives in a per-user, 0700 directory — not the old shared
+    world-writable ``heaviside-mathcache`` path another local user could seed."""
+    monkeypatch.setattr(_mr.tempfile, "gettempdir", lambda: str(tmp_path))
+    d = _mr._cache_dir()
+    assert d.parent == tmp_path
+    assert d.name == f"heaviside-mathcache-{_mr._cache_user()}"
+    assert d.name != "heaviside-mathcache"
+    if hasattr(os, "getuid"):                       # POSIX-only assertions
+        assert d.stat().st_uid == os.getuid()
+        assert (d.stat().st_mode & 0o777) == 0o700
+
+
+def test_cache_dir_falls_back_when_squatted(monkeypatch, tmp_path, _fresh_cache_dir) -> None:
+    """On POSIX, a pre-existing directory owned by another uid is never trusted:
+    the cache falls back to a fresh private mkdtemp."""
+    if not hasattr(os, "getuid"):
+        pytest.skip("POSIX-only ownership check")
+    monkeypatch.setattr(_mr.tempfile, "gettempdir", lambda: str(tmp_path))
+    squatted = tmp_path / f"heaviside-mathcache-{_mr._cache_user()}"
+    squatted.mkdir()
+    # Simulate foreign ownership: pretend our uid differs from the dir's owner.
+    real_uid = os.getuid()
+    monkeypatch.setattr(_mr.os, "getuid", lambda: real_uid + 1)
+    d = _mr._cache_dir()
+    assert d != squatted
+    assert d.name.startswith("heaviside-mathcache-")

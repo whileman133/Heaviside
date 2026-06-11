@@ -1,18 +1,20 @@
 """
 Fill/border style helpers shared by StyledComponent consumers.
 
-A StyledComponent carries its appearance as three fields — ``fill_color``,
-``border_width`` (pt), and ``line_style`` (raw TikZ draw tokens such as
-``"dashed"``).  The canvas and the code generator turn those fields into a TikZ
-draw-options string; these pure functions are the single source of truth for
-that mapping.
+A StyledComponent carries its appearance as ``fill_color`` and ``line_style``
+(raw TikZ draw tokens such as ``"dashed"``), and its outline width as the shared
+``Component.line_width`` (pt).  The canvas and the code generator turn those into
+a TikZ draw-options string; these pure functions are the single source of truth
+for that mapping.
 
 No Qt dependency.
 """
 
 from __future__ import annotations
 
-_DEFAULT_BORDER_WIDTH = 0.4  # pt — matches the TikZ default and StyledComponent
+import re
+
+_DEFAULT_LINE_WIDTH = 0.4  # pt — matches the TikZ default and Component.line_width
 
 
 def split_top_level(options: str) -> list[str]:
@@ -53,6 +55,71 @@ def split_top_level(options: str) -> list[str]:
     return segs
 
 
+def balance_braces(text: str) -> str:
+    r"""Neutralise unmatched braces in user text destined for a ``{…}`` argument.
+
+    Generated CircuiTikZ wraps user-authored label/text values in a brace group
+    (``\node … {text};``, ``label=above:{text}``).  A stray unmatched ``}`` would
+    close that group early and inject the remainder of the text as raw TeX into
+    the document — a LaTeX-injection vector when the ``.hv`` file came from an
+    untrusted source.  This is **structural containment, not escaping**: math
+    labels are raw LaTeX by design, so balanced groups (``\frac{a}{b}``,
+    ``\theta_{s,0}``) and backslash-escaped braces (``\{``/``\}``) pass through
+    untouched; only the *unmatched* ``{``/``}`` are rewritten to their escaped
+    literal forms, which keeps the brace group intact and renders a visible
+    brace character instead of executing the tail.
+    """
+    # First pass: find the indices of unmatched braces (escape-aware).
+    unmatched: set[int] = set()
+    open_stack: list[int] = []
+    escaped = False
+    for i, ch in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if ch == "\\":
+            escaped = True
+        elif ch == "{":
+            open_stack.append(i)
+        elif ch == "}":
+            if open_stack:
+                open_stack.pop()
+            else:
+                unmatched.add(i)        # closes a group it never opened
+    unmatched.update(open_stack)        # opens that never close
+    if not unmatched:
+        return text
+    # Second pass: rewrite just those characters.
+    return "".join(
+        ("\\{" if ch == "{" else "\\}") if i in unmatched else ch
+        for i, ch in enumerate(text)
+    )
+
+
+#: TeX primitives/commands that can read or write files, reach the shell, or
+#: rebind catcodes — none of which a schematic label has any business using.
+#: ``\write18`` is listed before ``\write`` so the alternation matches it whole;
+#: the lookahead stops ``\include`` matching ``\includegraphics`` etc.
+_DANGEROUS_LATEX_RE = re.compile(
+    r"\\(?:write18|write|immediate|input|include|openin|openout|read|"
+    r"csname|catcode|directlua|ShellEscape)(?![a-zA-Z])"
+)
+
+
+def contains_dangerous_latex(text: str) -> bool:
+    r"""True when *text* contains a high-risk TeX primitive.
+
+    Detects ``\write18``/``\write``, ``\immediate``, ``\input``, ``\include``,
+    ``\openin``/``\openout``, ``\read``, ``\csname``, ``\catcode``,
+    ``\directlua`` and ``\ShellEscape`` anywhere in the text.  Benign math
+    (``$\frac{V_i}{R}$``) does not trigger.  Pure and Qt-free, so both the code
+    generator and the UI's load-time warning can share it.  This is a *warning*
+    heuristic — the real defence is that every compile runs with
+    ``-no-shell-escape`` (see app/preview/latex.py, app/preview/mathrender.py).
+    """
+    return bool(_DANGEROUS_LATEX_RE.search(text or ""))
+
+
 def _is_single_brace_group(value: str) -> bool:
     """True if *value* is wholly enclosed in one matching ``{...}`` group."""
     if not (value.startswith("{") and value.endswith("}")):
@@ -90,19 +157,19 @@ def protect_label_commas(options: str) -> str:
 
 
 def compose_style_options(
-    *, fill_color: str = "", border_width: float = _DEFAULT_BORDER_WIDTH, line_style: str = ""
+    *, fill_color: str = "", line_width: float = _DEFAULT_LINE_WIDTH, line_style: str = ""
 ) -> str:
     """Build a TikZ draw-options string from style fields.
 
-    Order is ``line_style, line width, fill``.  A border width equal to the
+    Order is ``line_style, line width, fill``.  A line width equal to the
     TikZ default (0.4 pt) and empty fill/line_style are omitted, so a fully
     default style composes to ``""`` (no brackets emitted by callers).
     """
     parts: list[str] = []
     if line_style:
         parts.append(line_style)
-    if abs(border_width - _DEFAULT_BORDER_WIDTH) > 1e-6:
-        bw = border_width
+    if abs(line_width - _DEFAULT_LINE_WIDTH) > 1e-6:
+        bw = line_width
         bw_str = (
             str(int(bw)) if bw == int(bw)
             else (f"{bw:.1f}" if bw == round(bw, 1) else f"{bw:.2f}")

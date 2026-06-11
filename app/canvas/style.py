@@ -23,14 +23,17 @@ LEAD_LEN: float = 15.0
 # Stroke and pin geometry
 # ---------------------------------------------------------------------------
 
-LINE_W: float = 2.0
+LINE_W: float = GRID_PX * (0.3985 / 28.34765)   # ≈ 0.84 px
 """Default stroke width for component bodies and wires, in pixels.
 
-Maps from the thin (~0.3985 pt) strokes in the SVG geometry.
+**Matched to the CircuiTikZ output.** The SVG geometry's thin strokes are
+~0.3985 pt and the canvas renders ``SVG_PT_PER_GU`` (≈28.35) pt per ``GRID_PX``
+px, so a thin stroke maps to ~0.84 px. This keeps the on-canvas line weight equal
+to the compiled figure rather than the earlier (≈2.4×) bolder strokes.
 """
 
 LINE_W_THICK: float = LINE_W * 2.0
-"""Stroke width for thick SVG strokes (~0.797 pt) such as device bodies."""
+"""Stroke width for thick SVG strokes (~0.797 pt) such as device bodies (2× LINE_W)."""
 
 PIN_R: float = 3.0
 """Radius of pin indicator dots, in pixels."""

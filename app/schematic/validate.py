@@ -10,14 +10,22 @@ This module has no Qt dependency and no side effects.
 
 from __future__ import annotations
 
+import math
+
 from app.components.registry import REGISTRY
-from app.schematic.model import Schematic
+from app.schematic.model import Schematic, component_connection_points
 
 _VALID_ROTATIONS = {0, 90, 180, 270}
 
 
 def _is_on_grid(value: float) -> bool:
-    """Return True if value is a multiple of the 0.25 GU grid (spec §3.1)."""
+    """Return True if value is a multiple of the 0.25 GU grid (spec §3.1).
+
+    Non-finite values (NaN/±Infinity) are never on the grid; they must report
+    an error rather than crash the int() conversion.
+    """
+    if not math.isfinite(value):
+        return False
     return (value * 4) == int(value * 4)
 
 
@@ -49,13 +57,41 @@ def validate(schematic: Schematic) -> list[str]:
             )
 
     # ------------------------------------------------------------------
-    # Invariant 3: all Wire.points vertices lie on 0.25 GU boundaries.
-    # Every pin offset is a multiple of 0.25 and components snap to the 0.25
-    # grid, so a wire endpoint that follows a moved pin stays on grid (spec §3.1).
+    # Invariant 2b: every wire has at least two points (a single segment).
+    # A degenerate wire (0 or 1 points) draws nothing and index-errors the
+    # canvas/codegen paths that assume points[0]/points[-1] exist.
     # ------------------------------------------------------------------
     for wire in schematic.wires:
+        if len(wire.points) < 2:
+            errors.append(
+                f"Wire '{wire.id}': has {len(wire.points)} point(s) "
+                f"(a wire must have at least two points)"
+            )
+
+    # ------------------------------------------------------------------
+    # Invariant 3: all Wire.points vertices lie on 0.25 GU boundaries, with one
+    # principled exception for off-grid component pins. A scaled logic gate's
+    # pins sit at the true scaled anchor (generally off-grid); a wire endpoint
+    # snaps onto such a pin (the magnet), and the Manhattan leg approaching it may
+    # carry that pin's off-grid coordinate into the adjacent corner. So an
+    # off-grid coordinate on a wire vertex is allowed **only when it lines up with
+    # a component pin's off-grid coordinate** (the same off-grid x, or the same
+    # off-grid y). Any other off-grid value — a stray vertex unrelated to a pin —
+    # is still an error (spec §3.1).
+    # ------------------------------------------------------------------
+    offgrid_pin_xs: set[float] = set()
+    offgrid_pin_ys: set[float] = set()
+    for comp in schematic.components:
+        for px, py in component_connection_points(comp):
+            if not _is_on_grid(px):
+                offgrid_pin_xs.add(round(px, 6))
+            if not _is_on_grid(py):
+                offgrid_pin_ys.add(round(py, 6))
+    for wire in schematic.wires:
         for i, (x, y) in enumerate(wire.points):
-            if not _is_on_grid(x) or not _is_on_grid(y):
+            bad_x = not _is_on_grid(x) and round(x, 6) not in offgrid_pin_xs
+            bad_y = not _is_on_grid(y) and round(y, 6) not in offgrid_pin_ys
+            if bad_x or bad_y:
                 errors.append(
                     f"Wire '{wire.id}': point[{i}] ({x}, {y}) is not on a 0.25 GU boundary"
                 )

@@ -20,7 +20,8 @@ from app.codegen.circuitikz import generate
 from app.schematic.io import _FORMAT_VERSION, load
 
 _EXAMPLES_DIR = Path(__file__).resolve().parent.parent / "examples"
-_EXAMPLE_FILES = sorted(_EXAMPLES_DIR.glob("*.hv"))
+# Recurse: examples are grouped into category sub-folders (File → Open Example).
+_EXAMPLE_FILES = sorted(_EXAMPLES_DIR.rglob("*.hv"))
 
 
 def test_examples_directory_is_not_empty() -> None:
@@ -29,7 +30,8 @@ def test_examples_directory_is_not_empty() -> None:
 
 
 @pytest.mark.parametrize(
-    "path", _EXAMPLE_FILES, ids=[p.name for p in _EXAMPLE_FILES]
+    "path", _EXAMPLE_FILES,
+    ids=[str(p.relative_to(_EXAMPLES_DIR)) for p in _EXAMPLE_FILES],
 )
 def test_example_loads_and_generates(path: Path) -> None:
     """Every bundled example loads under the current loader, declares the current

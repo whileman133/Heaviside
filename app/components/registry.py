@@ -145,28 +145,56 @@ _BESPOKE: dict[str, ComponentDef] = {
 # than the CircuiTikZ bipole/tripole classification.
 _DISPLAY_ORDER: list[str] = [
     # Resistors / Capacitors / Inductors
-    "R", "vR", "thermistor", "memristor",
-    "C", "eC", "pC", "varcap",
-    "L",
-    # Diodes
-    "D", "zD", "sD", "tD", "zzD", "leD", "photodiode",
+    "R", "vR", "thermistor", "thermistor ntc", "thermistor ptc",
+    "photoresistor", "varistor", "memristor",
+    "C", "eC", "pC", "vC", "feC", "cC", "sC", "varcap", "piezoelectric", "cpe",
+    # Inductors group: inductors, then transformers, then the choke.
+    "L", "cuteL", "eL", "vL", "sL",
+    "transformer", "transformer core",
+    "cute transformer", "cute transformer core",
+    "european transformer", "european transformer core",
+    "choke",
+    # Diodes (incl. the two-terminal thyristors)
+    "D", "zD", "sD", "tD", "zzD", "leD", "photodiode", "thyristor", "triac",
     # Transistors
     "npn", "pnp",
     "nigfete", "nigfetd", "pigfete", "pigfetd",
-    "nfet", "pfet",
+    "nfet", "pfet", "nmos", "pmos", "nmosd", "pmosd",
     "njfet", "pjfet",
+    "nigbt", "pigbt", "isfet",
+    # Tubes
+    "triode", "diodetube", "tetrode", "pentode",
+    # Logic — gates, then flip-flops, multiplexers, ALU/adder
+    "not", "buffer", "and", "nand", "or", "nor", "xor", "xnor",
+    "enot", "ebuffer", "eand", "enand", "eor", "enor", "exor", "exnor",
+    "flipflop D", "flipflop T", "flipflop SR", "flipflop JK",
+    "mux", "demux", "ALU", "adder",
     # Amplifiers
-    "op amp",
+    "op amp", "fd op amp", "gmamp", "instamp", "schmitt", "invschmitt",
+    # Blocks (signal-processing / RF)
+    "amp", "adc", "dac",
+    "lowpass", "highpass", "bandpass", "allpass", "phaseshifter", "detector",
+    "vco", "gyrator",
     # Sources
-    "V", "I", "vsourcesin", "isourcesin", "cV", "cI", "battery1",
+    "V", "I", "vsourcesin", "isourcesin", "vsourcesquare", "vsourcetri",
+    "vsourceN", "dcvsource", "dcisource", "cV", "cI", "battery1",
     # Instruments
-    "ammeter", "voltmeter", "ohmmeter",
+    "ammeter", "voltmeter", "ohmmeter", "oscope", "rmeter",
+    # Switches
+    "nos", "ncs", "closing", "opening", "spst", "pushbutton", "spdt",
+    "cute open switch", "cute closed switch",
+    "cute spdt up", "cute spdt down", "cute spdt mid", "rotaryswitch",
+    "reed", "toggle switch",
     # Grounds
     "ground", "rground", "sground", "nground", "pground", "cground", "eground",
     # Supplies
     "vcc", "vdd", "vee", "vss",
+    # Transducers
+    "loudspeaker", "mic", "buzzer",
+    # Antennas
+    "antenna",
     # Misc
-    "fuse", "lamp", "jumper", "tline", "bipole",
+    "fuse", "afuse", "lamp", "bulb", "squid", "jumper", "tline", "bipole",
     # Annotations
     "open", "short",
     # Drawing
@@ -183,6 +211,14 @@ _ALL: dict[str, ComponentDef] = {**_BESPOKE, **library_component_defs()}
 def _order_key(kind: str) -> tuple[int, str]:
     return (_DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else len(_DISPLAY_ORDER),
             kind)
+
+
+def display_rank(kind: str) -> int | None:
+    """The kind's position in the preferred display order, or ``None`` if it is
+    not explicitly listed. The palette uses this so an explicit order (e.g. the
+    Inductors group's inductors → transformers → choke) wins over its heuristic
+    american-then-european grouping, which then applies only to unlisted kinds."""
+    return _DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else None
 
 
 REGISTRY: dict[str, ComponentDef] = {

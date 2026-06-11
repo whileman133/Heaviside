@@ -32,12 +32,28 @@ from app.ui.preferences import Preferences  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _no_dependency_modal(monkeypatch):
-    """Stop MainWindow's startup dependency check from popping a *modal*
-    QMessageBox when a tool (e.g. pdflatex) is absent — on a headless CI runner
-    that dialog blocks forever and hangs the whole suite. Tests don't assert on
-    it, so neutralise the check for every MainWindow built here.
+    """Stop MainWindow's startup checks from popping a *modal* QMessageBox that
+    blocks a headless run: the dependency warning (when a tool like pdflatex is
+    absent) and the first-run update-check disclosure. Also keeps the live update
+    probe off the network. Tests don't assert on either, so neutralise both for
+    every MainWindow built here.
     """
     monkeypatch.setattr(mw, "check_dependencies", lambda: [])
+    monkeypatch.setattr(
+        mw.MainWindow, "_maybe_check_for_updates_on_startup", lambda self: None
+    )
+
+
+@pytest.fixture(autouse=True)
+def _restore_light_theme():
+    """Building a MainWindow sets the global light/dark theme tokens (from the OS
+    or a persisted override). Restore light after each test so the dark state does
+    not leak into other modules' palette-default assertions."""
+    yield
+    from app.canvas import style as _style
+    from app.ui import theme as _theme
+    _style.set_dark(False)
+    _theme.set_dark(False)
 
 
 def _win(tmp_path):
@@ -47,20 +63,39 @@ def _win(tmp_path):
     return win
 
 
+def _wait_auto_export(win, timeout=10.0):
+    """Pump the event loop until the background auto-export pipeline drains."""
+    import time
+
+    deadline = time.time() + timeout
+    while ((win._auto_export_busy or win._auto_export_pending is not None)
+           and time.time() < deadline):
+        QApplication.processEvents()
+        time.sleep(0.01)
+    QApplication.processEvents()
+    assert not win._auto_export_busy, "auto-export did not finish in time"
+
+
 def test_auto_export_tex_needs_no_latex(tmp_path, monkeypatch):
     """TeX auto-export writes the snippet without ever invoking the compiler."""
     win = _win(tmp_path)
     win._prefs.auto_export_tex = True
+    # Isolate the TeX branch: SVG/PNG default on and would invoke the compiler.
+    win._prefs.auto_export_pdf = False
+    win._prefs.auto_export_eps = False
+    win._prefs.auto_export_svg = False
+    win._prefs.auto_export_png = False
 
     # If the TeX branch ever reaches the image-compile path, fail loudly: the
     # whole point is that a .tex snippet needs no pdflatex.
     def _boom(*a, **k):  # noqa: ANN002, ANN003
-        raise AssertionError("_compile_to_pdf must not be called for TeX-only export")
+        raise AssertionError("compile_tex must not be called for TeX-only export")
 
-    monkeypatch.setattr(win, "_compile_to_pdf", _boom)
+    monkeypatch.setattr(mw, "compile_tex", _boom)
 
     out = tmp_path / "demo.hv"
     win._auto_export(out)
+    _wait_auto_export(win)
 
     tex = out.with_suffix(".tex")
     assert tex.exists()
@@ -70,10 +105,85 @@ def test_auto_export_tex_needs_no_latex(tmp_path, monkeypatch):
 
 def test_auto_export_disabled_writes_nothing(tmp_path):
     """With every auto-export preference off, no sibling files are written."""
-    win = _win(tmp_path)  # fresh store → all defaults off
+    win = _win(tmp_path)
+    for attr in ("auto_export_tex", "auto_export_pdf", "auto_export_eps",
+                 "auto_export_svg", "auto_export_png"):
+        setattr(win._prefs, attr, False)  # TeX/SVG/PNG now default on; force all off
     out = tmp_path / "demo.hv"
     win._auto_export(out)
-    assert not any(out.with_suffix(s).exists() for s in (".tex", ".pdf", ".eps", ".svg"))
+    _wait_auto_export(win)
+    assert not any(
+        out.with_suffix(s).exists() for s in (".tex", ".pdf", ".eps", ".svg", ".png")
+    )
+
+
+def test_auto_export_runs_off_the_ui_thread(tmp_path, monkeypatch):
+    """The compile/convert work runs on a worker thread (the UI thread only
+    snapshots the source), so Ctrl+S never blocks on pdflatex."""
+    import threading
+
+    from PySide6.QtGui import QImage
+
+    win = _win(tmp_path)
+    for attr in ("auto_export_tex", "auto_export_pdf", "auto_export_eps",
+                 "auto_export_svg"):
+        setattr(win._prefs, attr, False)
+    win._prefs.auto_export_png = True
+
+    seen = {}
+
+    def fake_compile(tex):
+        seen["thread"] = threading.current_thread()
+        return b"%PDF-1.4"
+
+    img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
+    monkeypatch.setattr(mw, "compile_tex", fake_compile)
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
+
+    win._auto_export(tmp_path / "demo.hv")
+    _wait_auto_export(win)
+    assert (tmp_path / "demo.png").exists()
+    assert seen["thread"] is not threading.main_thread()
+
+
+def test_auto_export_is_single_flight(tmp_path, monkeypatch):
+    """A save while an export runs queues (and replaces) the pending job rather
+    than overlapping; the newest queued job runs when the current one ends."""
+    import threading
+
+    from PySide6.QtGui import QImage
+
+    win = _win(tmp_path)
+    for attr in ("auto_export_tex", "auto_export_pdf", "auto_export_eps",
+                 "auto_export_svg"):
+        setattr(win._prefs, attr, False)
+    win._prefs.auto_export_png = True
+
+    gate = threading.Event()
+    compiles = []
+
+    def slow_compile(tex):
+        compiles.append(threading.current_thread())
+        gate.wait(5)
+        return b"%PDF-1.4"
+
+    img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
+    monkeypatch.setattr(mw, "compile_tex", slow_compile)
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
+
+    win._auto_export(tmp_path / "a.hv")          # dispatched, blocks on the gate
+    assert win._auto_export_busy
+    win._auto_export(tmp_path / "b.hv")          # queued
+    win._auto_export(tmp_path / "c.hv")          # replaces the queued job
+    assert win._auto_export_pending is not None
+    assert win._auto_export_pending.path == tmp_path / "c.hv"
+
+    gate.set()
+    _wait_auto_export(win)
+    assert (tmp_path / "a.png").exists()
+    assert (tmp_path / "c.png").exists()
+    assert not (tmp_path / "b.png").exists()     # superseded job never ran
+    assert len(compiles) == 2                    # one per dispatched job
 
 
 def test_document_panel_writes_styles_live():
@@ -257,19 +367,18 @@ def test_apply_theme_switches_both_palettes(tmp_path):
         theme.set_dark(False)
 
 
-def test_toolbar_dark_toggle(tmp_path):
-    """The toolbar light/dark toggle flips the theme and pins it: once toggled it
-    stops following the OS appearance (a one-way opt-out within the session)."""
+def test_toolbar_theme_button_pins_dark(tmp_path):
+    """Setting the theme to Dark flips the palettes and pins it: an OS change is
+    then ignored (the manual choice wins)."""
     from app.canvas import style
     from app.ui import theme
 
     win = _win(tmp_path)
     try:
-        win._dark = False
-        win._follow_system = True
-        win._sync_dark_action()
+        win._set_theme_mode("light")
+        assert win._dark is False and win._follow_system is False
 
-        win._act_dark.setChecked(True)  # user flips it on
+        win._set_theme_mode("dark")
         assert win._dark is True
         assert style.is_dark() and theme.is_dark()
         assert win._follow_system is False  # no longer tracks the OS
@@ -283,13 +392,73 @@ def test_toolbar_dark_toggle(tmp_path):
         assert theme._DARK["SURFACE_ALT"] in win._palette._search.styleSheet()
         assert "QScrollBar" in win._view.styleSheet()
 
-        win._act_dark.setChecked(False)  # flip back to light
+        win._set_theme_mode("light")  # back to light
         assert win._dark is False
         assert not style.is_dark() and not theme.is_dark()
         assert theme._LIGHT["SURFACE_ALT"] in win._palette._search.styleSheet()
     finally:
         style.set_dark(False)
         theme.set_dark(False)
+
+
+def test_theme_radio_group_selects_mode(tmp_path):
+    """The toolbar exposes System / Light / Dark as an exclusive radio group:
+    triggering one selects and persists that mode and leaves the others unchecked
+    (System clears the override; Light/Dark pin it)."""
+    win = _win(tmp_path)
+    acts = win._theme_actions
+    assert set(acts) == {"system", "light", "dark"}
+    # Exactly one button is active at a time (exclusive group).
+    assert win._theme_group.isExclusive()
+
+    acts["light"].trigger()
+    assert win._theme_mode == "light" and win._prefs.dark_override is False
+    assert acts["light"].isChecked()
+    assert not acts["system"].isChecked() and not acts["dark"].isChecked()
+
+    acts["dark"].trigger()
+    assert win._theme_mode == "dark" and win._prefs.dark_override is True
+    assert acts["dark"].isChecked()
+    assert not acts["system"].isChecked() and not acts["light"].isChecked()
+
+    acts["system"].trigger()
+    assert win._theme_mode == "system" and win._prefs.dark_override is None
+    assert win._follow_system is True
+    assert acts["system"].isChecked()
+    assert not acts["light"].isChecked() and not acts["dark"].isChecked()
+
+
+def test_theme_radio_group_is_flat_icon_trio(tmp_path):
+    """The three theme buttons render as plain flat toolbar buttons (no pill, no
+    caption), grouped only by tight spacing inside their container, with a dotted
+    divider separating them from the help/bug buttons."""
+    from PySide6.QtWidgets import QToolButton
+
+    win = _win(tmp_path)
+    grp = win._theme_group_box
+    btns = grp.findChildren(QToolButton)
+    assert len(btns) == 3
+    # Each button drives one theme action.
+    assert {b.defaultAction() for b in btns} == set(win._theme_actions.values())
+    # Flat, like the other toolbar buttons (auto-raised, no bordered-pill object name).
+    assert all(b.autoRaise() for b in btns)
+    assert grp.objectName() == ""
+    # Tighter than the toolbar's own 3px spacing → reads as a group.
+    assert grp.layout().spacing() == 0
+    # A dotted divider separates the theme group from the help/bug buttons.
+    div = win._theme_divider
+    assert div.objectName() == "toolbarDottedDivider"
+    assert "dotted" in div.styleSheet()
+
+
+def test_theme_radio_group_reflects_persisted_mode(tmp_path):
+    """The active radio button is checked on launch to match the persisted mode."""
+    win = _win(tmp_path)
+    win._set_theme_mode("dark")
+    assert win._theme_actions["dark"].isChecked()
+    win._set_theme_mode("system")
+    assert win._theme_actions["system"].isChecked()
+    assert not win._theme_actions["dark"].isChecked()
 
 
 def test_palette_keyboard_shortcuts(tmp_path, monkeypatch):
@@ -342,10 +511,531 @@ def test_auto_export_png_writes_file(tmp_path, monkeypatch):
 
     win = _win(tmp_path)
     win._prefs.auto_export_png = True
+    win._prefs.auto_export_svg = False     # would need pdftocairo
     img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
-    monkeypatch.setattr(win, "_compile_to_pdf", lambda *a, **k: b"%PDF-1.4")
+    monkeypatch.setattr(mw, "compile_tex", lambda *a, **k: b"%PDF-1.4")
     monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
 
     out = tmp_path / "demo.hv"
     win._auto_export(out)
+    _wait_auto_export(win)
     assert out.with_suffix(".png").exists()
+
+
+def test_manual_update_up_to_date_shows_info(tmp_path, monkeypatch):
+    """Help ▸ Check for Updates with no newer release shows an info box and
+    re-enables the menu action."""
+    win = _win(tmp_path)
+    seen = {}
+    monkeypatch.setattr(mw.QMessageBox, "information",
+                        lambda *a, **k: seen.setdefault("info", True))
+    win._act_check_updates.setEnabled(False)
+    win._on_manual_update_result(None)
+    assert seen.get("info") is True
+    assert win._act_check_updates.isEnabled()
+
+
+def test_startup_update_respects_skipped_version(tmp_path, monkeypatch):
+    """The startup result prompts only for a version the user hasn't skipped."""
+    from app.update import UpdateInfo
+
+    win = _win(tmp_path)
+    prompted = []
+    monkeypatch.setattr(win, "_show_update_available",
+                        lambda info, **k: prompted.append(info.version))
+    win._prefs.skipped_update_version = "0.3.0"
+
+    win._on_startup_update_result(UpdateInfo("0.3.0", "v0.3.0", "u", "n", False))
+    assert prompted == []  # skipped → no prompt
+
+    win._on_startup_update_result(UpdateInfo("0.4.0", "v0.4.0", "u", "n", False))
+    assert prompted == ["0.4.0"]  # not skipped → prompt
+
+
+def test_auto_export_failure_in_one_format_does_not_block_others(tmp_path, monkeypatch):
+    """A failing image export (e.g. SVG without Poppler) must not skip PNG.
+
+    Regression for the shared-try block that bailed on the first failure once
+    TeX/SVG/PNG became on-by-default.
+    """
+    from PySide6.QtGui import QImage
+    from app.preview.latex import CompileError
+
+    win = _win(tmp_path)
+    for attr in ("auto_export_tex", "auto_export_pdf", "auto_export_eps"):
+        setattr(win._prefs, attr, False)
+    win._prefs.auto_export_svg = True
+    win._prefs.auto_export_png = True
+
+    monkeypatch.setattr(mw, "compile_tex", lambda *a, **k: b"%PDF-1.4")
+    def _svg_boom(*a, **k):
+        raise CompileError("pdftocairo missing")
+    monkeypatch.setattr(mw, "pdf_to_svg", _svg_boom)
+    img = QImage(8, 8, QImage.Format_RGB32); img.fill(0xFFFFFFFF)
+    monkeypatch.setattr(mw, "pdf_to_qimage", lambda *a, **k: img)
+
+    win._auto_export(tmp_path / "demo.hv")
+    _wait_auto_export(win)
+    assert (tmp_path / "demo.png").exists()        # PNG written despite SVG failure
+    assert not (tmp_path / "demo.svg").exists()    # SVG failed
+    assert "failed" in win._status_compile.text()  # reported via the status bar
+
+
+def test_examples_menu_groups_by_category(tmp_path):
+    """Open Example shows category submenus mirroring the examples/ sub-folders,
+    and every bundled .hv appears exactly once."""
+    from app.resources import resource_path
+
+    win = _win(tmp_path)
+    # Traverse inline in one pass — holding a QMenu wrapper across loop scopes
+    # trips a PySide lifetime quirk, so process each submenu where it is live.
+    leaves: list[str] = []
+    n_categories = 0
+    found = False
+    for top in win.menuBar().actions():
+        top_menu = top.menu()
+        if top_menu is None:
+            continue
+        for act in top_menu.actions():
+            ex_menu = act.menu()
+            if ex_menu is None or ex_menu.title().replace("&", "") != "Open Example":
+                continue
+            found = True
+            for ex_act in ex_menu.actions():
+                cat_menu = ex_act.menu()
+                if cat_menu is not None:                 # a category submenu
+                    n_categories += 1
+                    leaves += [it.text() for it in cat_menu.actions()]
+                elif not ex_act.isSeparator() and ex_act.isEnabled():
+                    leaves.append(ex_act.text())         # a loose example
+
+    assert found, "Open Example submenu not found"
+    assert n_categories >= 1, "expected at least one category submenu"
+    expected = sorted(p.stem for p in resource_path("examples").rglob("*.hv"))
+    assert sorted(leaves) == expected
+
+
+def test_load_path_opens_a_schematic(tmp_path):
+    """load_path() loads a saved .hv into the editor (the shared loader behind
+    File ▸ Open and the command-line / file-association launch)."""
+    from app.schematic import io
+    from app.schematic.model import Schematic
+
+    win = _win(tmp_path)
+    src = tmp_path / "demo.hv"
+    io.save(Schematic(version="0.2", name="demo"), src)
+    assert win.load_path(src) is True
+    assert win._current_path == src
+    assert win._modified is False
+
+
+def test_load_path_reports_a_bad_file(tmp_path, monkeypatch):
+    """A corrupt/unreadable file surfaces an error and load_path returns False
+    (the dialog is stubbed so the headless run doesn't block)."""
+    win = _win(tmp_path)
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    bad = tmp_path / "broken.hv"
+    bad.write_text("{ not valid json", encoding="utf-8")
+    assert win.load_path(bad) is False
+
+
+def test_schematic_arg_picks_the_hv_file(tmp_path):
+    """main._schematic_arg finds an existing .hv among the CLI args (what the
+    Windows file association passes), ignoring flags and missing paths."""
+    import main as entry
+
+    f = tmp_path / "x.hv"
+    f.write_text("{}", encoding="utf-8")
+    assert entry._schematic_arg(["heaviside.exe", str(f)]) == str(f)
+    assert entry._schematic_arg(["heaviside.exe", "--flag", str(f)]) == str(f)
+    assert entry._schematic_arg(["heaviside.exe"]) is None
+    assert entry._schematic_arg(["heaviside.exe", str(tmp_path / "missing.hv")]) is None
+    assert entry._schematic_arg(["heaviside.exe", str(tmp_path)]) is None  # dir, not file
+
+
+def test_file_open_event_loads_schematic(tmp_path):
+    """The macOS QFileOpenEvent filter routes a .hv open to load_path (the Finder
+    'open with' path, the counterpart of the Windows argv association)."""
+    from PySide6.QtGui import QFileOpenEvent
+    from app.schematic import io
+    from app.schematic.model import Schematic
+    import main as entry
+
+    win = _win(tmp_path)
+    src = tmp_path / "doc.hv"
+    io.save(Schematic(version="0.2", name="doc"), src)
+    filt = entry._FileOpenFilter(win)
+    handled = filt.eventFilter(win, QFileOpenEvent(str(src)))
+    assert handled is True
+    assert win._current_path == src
+
+
+def test_theme_mode_persists_choice(tmp_path):
+    """Setting the theme to dark/light pins the choice into Preferences (so it is
+    restored next launch); System clears it (follow the OS again)."""
+    win = _win(tmp_path)
+    win._set_theme_mode("dark")
+    assert win._dark is True and win._follow_system is False
+    assert win._prefs.dark_override is True
+    win._set_theme_mode("light")
+    assert win._prefs.dark_override is False
+    win._set_theme_mode("system")
+    assert win._prefs.dark_override is None and win._follow_system is True
+
+
+def test_launch_honors_persisted_dark(tmp_path, monkeypatch):
+    """A MainWindow built with a stored dark override comes up dark (not following
+    the OS) — the relaunch behaviour the persisted theme choice gives."""
+    from PySide6.QtCore import QSettings
+
+    seeded = Preferences(QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat))
+    seeded.set_dark_override(True)
+    # MainWindow.__init__ resolves the theme from Preferences() before building UI.
+    monkeypatch.setattr(mw, "Preferences", lambda *a, **k: seeded)
+    win = MainWindow()
+    assert win._dark is True
+    assert win._theme_mode == "dark"
+    assert win._follow_system is False
+
+
+# ---------------------------------------------------------------------------
+# Unsaved-changes dialog (Save / Don't Save / Cancel) — data-loss fix
+# ---------------------------------------------------------------------------
+
+def _all_auto_export_off(win) -> None:
+    for attr in ("auto_export_tex", "auto_export_pdf", "auto_export_eps",
+                 "auto_export_svg", "auto_export_png"):
+        setattr(win._prefs, attr, False)
+
+
+def test_confirm_discard_offers_save_and_saves(tmp_path, monkeypatch):
+    """The unsaved-changes dialog offers Save (default) / Discard / Cancel;
+    choosing Save writes the file and proceeds."""
+    win = _win(tmp_path)
+    _all_auto_export_off(win)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    win._scene.place_component("R", (2.0, 2.0))
+    assert win._modified
+    target = tmp_path / "kept.hv"
+    win._current_path = target
+
+    seen = {}
+
+    def fake_question(parent, title, text, buttons, default):
+        seen["buttons"] = buttons
+        seen["default"] = default
+        return mw.QMessageBox.Save
+
+    monkeypatch.setattr(mw.QMessageBox, "question", staticmethod(fake_question))
+    assert win._confirm_discard() is True
+    assert target.exists()                          # Save actually saved
+    assert win._modified is False
+    assert seen["default"] == mw.QMessageBox.Save   # Save is the default button
+    for btn in (mw.QMessageBox.Save, mw.QMessageBox.Discard, mw.QMessageBox.Cancel):
+        assert seen["buttons"] & btn
+
+
+def test_confirm_discard_save_cancelled_treated_as_cancel(tmp_path, monkeypatch):
+    """Untitled document + Save → the Save As dialog; cancelling it must abort
+    the whole operation (treated as Cancel — nothing is lost)."""
+    win = _win(tmp_path)
+    _all_auto_export_off(win)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    win._scene.place_component("R", (2.0, 2.0))
+    assert win._current_path is None and win._modified
+
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: mw.QMessageBox.Save))
+    monkeypatch.setattr(mw.QFileDialog, "getSaveFileName",
+                        staticmethod(lambda *a, **k: ("", "")))   # user cancels
+    assert win._confirm_discard() is False
+    assert win._modified  # still dirty — nothing was discarded
+
+
+def test_confirm_discard_discard_and_cancel(tmp_path, monkeypatch):
+    """Discard proceeds without saving; Cancel aborts."""
+    win = _win(tmp_path)
+    _all_auto_export_off(win)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    win._scene.place_component("R", (2.0, 2.0))
+
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: mw.QMessageBox.Discard))
+    assert win._confirm_discard() is True
+
+    monkeypatch.setattr(mw.QMessageBox, "question",
+                        staticmethod(lambda *a, **k: mw.QMessageBox.Cancel))
+    assert win._confirm_discard() is False
+
+
+# ---------------------------------------------------------------------------
+# Save-error handling
+# ---------------------------------------------------------------------------
+
+def test_do_save_reports_schematic_save_error(tmp_path, monkeypatch):
+    """io.save raising SchematicSaveError shows the error dialog (noting the
+    on-disk file is untouched) and _do_save returns False."""
+    from app.schematic.io import SchematicSaveError
+
+    win = _win(tmp_path)
+    _all_auto_export_off(win)
+
+    def bad_save(schematic, path):
+        raise SchematicSaveError("schematic invariant violated: boom")
+
+    seen = {}
+    monkeypatch.setattr(mw, "save", bad_save)
+    monkeypatch.setattr(
+        mw.QMessageBox, "critical",
+        staticmethod(lambda parent, title, text: seen.setdefault("text", text)),
+    )
+    assert win._do_save(tmp_path / "x.hv") is False
+    assert "not modified" in seen["text"]
+    assert not (tmp_path / "x.hv").exists()
+
+
+# ---------------------------------------------------------------------------
+# Action enabled-state + modified-state tracking
+# ---------------------------------------------------------------------------
+
+def test_undo_redo_actions_track_stack(tmp_path):
+    """Undo/Redo enable/disable follows the stack instead of being always on."""
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    assert not win._act_undo.isEnabled()
+    assert not win._act_redo.isEnabled()
+
+    win._scene.place_component("R", (2.0, 2.0))
+    assert win._act_undo.isEnabled()
+    assert not win._act_redo.isEnabled()
+
+    win._scene.undo()
+    assert not win._act_undo.isEnabled()
+    assert win._act_redo.isEnabled()
+
+    win._scene.redo()
+    assert win._act_undo.isEnabled()
+    assert not win._act_redo.isEnabled()
+
+
+def test_modified_state_follows_undo_stack_save_point(tmp_path):
+    """Undoing back to the saved state clears the dirty marker (and the title
+    dot), instead of staying modified forever."""
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    assert win._modified is False
+
+    win._scene.place_component("R", (2.0, 2.0))
+    assert win._modified is True
+
+    win._scene.undo()                  # back at the (initial) save point
+    assert win._modified is False
+    assert "•" not in win.windowTitle()
+
+    win._scene.redo()
+    assert win._modified is True
+
+    win._modified = False              # simulates a successful save
+    assert win._modified is False
+    win._scene.undo()                  # diverges from the new save point
+    assert win._modified is True
+
+
+def test_manual_update_check_reenables_after_timeout(tmp_path, monkeypatch):
+    """If the async update probe never reports back, the fallback timer
+    re-enables Help ▸ Check for Updates so it can't stay dead all session."""
+    win = _win(tmp_path)
+    monkeypatch.setattr(mw, "_UPDATE_CHECK_REENABLE_MS", 0)
+    monkeypatch.setattr(mw._update, "check_async", lambda *a, **k: None)  # lost
+    win._on_check_updates_manual()
+    assert not win._act_check_updates.isEnabled()
+    for _ in range(20):
+        QApplication.processEvents()
+    assert win._act_check_updates.isEnabled()
+
+
+# ---------------------------------------------------------------------------
+# New documents / load behaviour
+# ---------------------------------------------------------------------------
+
+def test_new_document_declares_current_format_version(tmp_path, monkeypatch):
+    """File ▸ New creates a document at the current .hv format version."""
+    from app.schematic import io
+
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    monkeypatch.setattr(win, "_confirm_discard", lambda: True)
+    win._on_new()
+    assert win._scene.schematic.version == io._FORMAT_VERSION
+
+
+def test_load_path_warns_about_dangerous_latex(tmp_path):
+    """Loading a file whose labels contain risky LaTeX primitives shows a
+    non-blocking warning (status bar + message box), once per load."""
+    from app.schematic import io
+
+    author = _win(tmp_path)
+    author._preview_worker.request_compile = lambda *a, **k: None
+    r = author._scene.place_component("R", (2.0, 2.0))
+    author._scene.edit_component_options(r.id, "l=\\write18{evil}")
+    evil = tmp_path / "evil.hv"
+    io.save(author._scene.schematic, evil)
+
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    assert win.load_path(evil) is True
+    assert win._latex_warning_box is not None
+    assert "dangerous" in win._status_compile.text().lower()
+    win._latex_warning_box.close()
+
+    # A clean file shows no warning.
+    clean = tmp_path / "clean.hv"
+    author._scene.edit_component_options(r.id, "l=$R_1$")
+    io.save(author._scene.schematic, clean)
+    win2 = _win(tmp_path)
+    win2._preview_worker.request_compile = lambda *a, **k: None
+    win2._latex_warning_box = None
+    assert win2.load_path(clean) is True
+    assert win2._latex_warning_box is None
+
+
+def test_load_path_survives_unexpected_exception(tmp_path, monkeypatch):
+    """An unexpected (non-SchematicLoadError) failure in load shows the error
+    dialog instead of crashing (belt & suspenders over io's own conversion)."""
+    win = _win(tmp_path)
+    seen = {}
+    monkeypatch.setattr(mw, "load", lambda p: (_ for _ in ()).throw(ValueError("boom")))
+    monkeypatch.setattr(
+        mw.QMessageBox, "critical",
+        staticmethod(lambda parent, title, text: seen.setdefault("text", text)),
+    )
+    assert win.load_path(tmp_path / "whatever.hv") is False
+    assert "boom" in seen["text"]
+
+
+# ---------------------------------------------------------------------------
+# Inspector flush-on-save + auto-compile failure visibility
+# ---------------------------------------------------------------------------
+
+def test_save_flushes_pending_inspector_edit(tmp_path):
+    """An options edit still inside the 300 ms debounce window is committed by
+    the save (not lost / serialised stale)."""
+    import json
+
+    win = _win(tmp_path)
+    _all_auto_export_off(win)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    r = win._scene.place_component("R", (2.0, 2.0))
+    win._props.show_component(r.id)
+
+    from app.ui.properties import OptionsSection
+    sec = next(s for s in win._props._sections if isinstance(s, OptionsSection))
+    sec._field.setText("l=$R_{99}$")          # starts the debounce timer
+    assert sec._timer.isActive()
+
+    target = tmp_path / "flush.hv"
+    win._current_path = target
+    assert win._on_save() is True
+    data = json.loads(target.read_text(encoding="utf-8"))
+    assert data["components"][0]["options"] == "l=$R_{99}$"
+
+
+def test_auto_compile_failure_is_visible_in_status_bar(tmp_path, monkeypatch):
+    """A generate() crash during auto-compile is no longer swallowed silently."""
+    win = _win(tmp_path)
+
+    def boom(*a, **k):
+        raise RuntimeError("codegen bug")
+
+    monkeypatch.setattr(mw, "generate", boom)
+    win._on_auto_compile()
+    assert "Preview update failed" in win._status_compile.text()
+
+
+# ---------------------------------------------------------------------------
+# Document properties through the undo stack
+# ---------------------------------------------------------------------------
+
+def test_document_properties_are_undoable(tmp_path):
+    """A Document-tab edit is one undoable step; undo reverts the model and the
+    panel's combos reload to match."""
+    win = _win(tmp_path)
+    win._preview_worker.request_compile = lambda *a, **k: None
+    win._doc_props._voltage.setCurrentIndex(
+        win._doc_props._voltage.findData("european")
+    )
+    assert win._scene.schematic.voltage_style == "european"
+    assert win._modified is True
+
+    win._scene.undo()
+    assert win._scene.schematic.voltage_style == "american"
+    assert win._doc_props._voltage.currentData() == "american"  # panel reloaded
+    assert win._modified is False
+
+    win._scene.redo()
+    assert win._scene.schematic.voltage_style == "european"
+    assert win._doc_props._voltage.currentData() == "european"
+
+
+# ---------------------------------------------------------------------------
+# Crash guard (main.py excepthook)
+# ---------------------------------------------------------------------------
+
+def test_excepthook_logs_and_informs_without_exiting(tmp_path, monkeypatch):
+    """The uncaught-exception handler writes the traceback to the app-data log,
+    shows a message box (QApplication exists), and never raises or exits."""
+    import sys
+
+    import main as entry
+
+    log = tmp_path / "errors.log"
+    monkeypatch.setattr(entry, "_crash_log_path", lambda: log)
+    seen = {}
+    from PySide6.QtWidgets import QMessageBox
+    monkeypatch.setattr(
+        QMessageBox, "critical",
+        staticmethod(lambda *a, **k: seen.setdefault("box", a[2] if len(a) > 2 else "")),
+    )
+    try:
+        raise ValueError("kaboom-for-test")
+    except ValueError:
+        entry._handle_uncaught(*sys.exc_info())
+
+    assert "kaboom-for-test" in log.read_text(encoding="utf-8")
+    assert "box" in seen
+    assert str(log) in seen["box"]
+
+
+def test_install_excepthooks_sets_both_hooks(monkeypatch):
+    import sys
+    import threading
+
+    import main as entry
+
+    monkeypatch.setattr(sys, "excepthook", sys.excepthook)
+    monkeypatch.setattr(threading, "excepthook", threading.excepthook)
+    entry._install_excepthooks()
+    assert sys.excepthook is entry._handle_uncaught
+    assert threading.excepthook is not None
+
+
+def test_excepthook_handler_never_raises(tmp_path, monkeypatch):
+    """Even when logging and the message box both fail, the handler swallows it."""
+    import sys
+
+    import main as entry
+
+    def bad_path():
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(entry, "_crash_log_path", bad_path)
+    from PySide6.QtWidgets import QMessageBox
+
+    def bad_box(*a, **k):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(QMessageBox, "critical", staticmethod(bad_box))
+    try:
+        raise ValueError("quiet")
+    except ValueError:
+        entry._handle_uncaught(*sys.exc_info())   # must not raise

@@ -124,7 +124,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.2"
+    assert data["version"] == "0.3"
     assert data["config"] == {"voltage_style": "european", "current_style": "american"}
 
 
@@ -332,9 +332,74 @@ def test_save_is_atomic_overwrite(tmp_path: Path) -> None:
 
     # Target reflects the latest write...
     assert load(p).name == "second"
-    # ...and the sibling temp file used during the atomic replace is gone.
-    assert not (tmp_path / "atomic.hv.tmp").exists()
-    assert {f.name for f in tmp_path.iterdir()} == {"atomic.hv"}
+    # ...the sibling temp file used during the atomic replace is gone, and the
+    # only extra artefact is the backup of the replaced file.
+    assert not list(tmp_path.glob("*.tmp*"))
+    assert {f.name for f in tmp_path.iterdir()} == {"atomic.hv", "atomic.hv.bak"}
+
+
+def test_save_overwrite_keeps_backup_of_previous_file(tmp_path: Path) -> None:
+    """Replacing an existing .hv leaves the prior contents in <name>.hv.bak."""
+    p = tmp_path / "doc.hv"
+
+    first = _empty_schematic()
+    first.name = "first"
+    save(first, p)
+    assert not (tmp_path / "doc.hv.bak").exists()   # no backup on first save
+
+    second = _empty_schematic()
+    second.name = "second"
+    save(second, p)
+
+    backup = tmp_path / "doc.hv.bak"
+    assert backup.exists()
+    assert load(backup).name == "first"             # the replaced contents
+    assert load(p).name == "second"
+
+
+def test_save_invalid_schematic_raises_and_writes_nothing(tmp_path: Path) -> None:
+    """save() of an invalid schematic raises SchematicSaveError and leaves the
+    filesystem untouched (no destination, no temp file)."""
+    from app.schematic.io import SchematicSaveError
+
+    bad = Schematic(version="0.1", name="bad", wires=[
+        Wire(id=_uid(), points=[(0.0, 0.0), (1.0, 1.0)]),   # diagonal
+    ])
+    p = tmp_path / "bad.hv"
+    with pytest.raises(SchematicSaveError, match="invariant"):
+        save(bad, p)
+    assert list(tmp_path.iterdir()) == []           # nothing written at all
+
+
+def test_save_does_not_clobber_existing_file_with_invalid_schematic(tmp_path: Path) -> None:
+    """An invalid in-memory document can never overwrite a good file on disk."""
+    from app.schematic.io import SchematicSaveError
+
+    p = tmp_path / "doc.hv"
+    good = _empty_schematic()
+    good.name = "good"
+    save(good, p)
+
+    bad = Schematic(version="0.1", name="bad", wires=[
+        Wire(id=_uid(), points=[]),                 # empty wire → invalid
+    ])
+    with pytest.raises(SchematicSaveError):
+        save(bad, p)
+    assert load(p).name == "good"                   # untouched
+
+
+def test_save_cleans_up_tmp_file_on_failure(tmp_path: Path, monkeypatch) -> None:
+    """If the final atomic replace fails, the temp file is removed."""
+    import os as _os
+
+    def _boom(src, dst):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(_os, "replace", _boom)
+    p = tmp_path / "doc.hv"
+    with pytest.raises(OSError, match="simulated"):
+        save(_empty_schematic(), p)
+    assert list(tmp_path.iterdir()) == []           # tmp file cleaned up
 
 
 # ---------------------------------------------------------------------------
@@ -446,7 +511,7 @@ def test_label_offset_bad_type_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# BipoleComponent fill_color / border_width round-trip
+# BipoleComponent fill_color / line_width round-trip (+ legacy border_width load)
 # ---------------------------------------------------------------------------
 
 def test_bipole_fill_color_roundtrip(tmp_path: Path) -> None:
@@ -466,13 +531,13 @@ def test_bipole_fill_color_roundtrip(tmp_path: Path) -> None:
     assert loaded.fill_color == "cyan!15"
 
 
-def test_bipole_border_width_roundtrip(tmp_path: Path) -> None:
-    """BipoleComponent.border_width survives a save/load cycle."""
+def test_bipole_line_width_roundtrip(tmp_path: Path) -> None:
+    """BipoleComponent.line_width (the unified outline width) survives save/load."""
     from app.components.model import BipoleComponent
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
         rotation=0, mirror=False, options="",
-        span_override=(2.0, 0.0), border_width=1.5,
+        span_override=(2.0, 0.0), line_width=1.5,
     )
     s = Schematic(version="0.1", name="bipole-bw", components=[comp])
     p = tmp_path / "bipole_bw.hv"
@@ -480,11 +545,34 @@ def test_bipole_border_width_roundtrip(tmp_path: Path) -> None:
     s2 = load(p)
     loaded = s2.components[0]
     assert isinstance(loaded, BipoleComponent)
-    assert abs(loaded.border_width - 1.5) < 1e-6
+    assert abs(loaded.line_width - 1.5) < 1e-6
+
+
+def test_legacy_border_width_loads_as_line_width(tmp_path: Path) -> None:
+    """A legacy file that stored a block's outline width under "border_width"
+    (pre-unification) loads it into the unified `line_width` field."""
+    from app.components.model import BipoleComponent
+    data = {
+        "version": "0.1",
+        "name": "legacy-bw",
+        "components": [
+            {
+                "id": _uid(), "kind": "bipole", "position": [0.0, 0.0],
+                "rotation": 0, "mirror": False, "options": "t=Z",
+                "span_override": [2.0, 0.0], "border_width": 1.5,
+            }
+        ],
+        "wires": [], "metadata": {},
+    }
+    p = tmp_path / "legacy_bw.hv"
+    p.write_text(json.dumps(data), encoding="utf-8")
+    loaded = load(p).components[0]
+    assert isinstance(loaded, BipoleComponent)
+    assert abs(loaded.line_width - 1.5) < 1e-6
 
 
 def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
-    """fill_color='' and border_width=0.4 are omitted from the saved JSON."""
+    """fill_color='' and line_width=0.4 are omitted from the saved JSON."""
     from app.components.model import BipoleComponent
     comp = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0),
@@ -498,6 +586,7 @@ def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
     comp_dict = raw["components"][0]
     assert "fill_color" not in comp_dict
     assert "border_width" not in comp_dict
+    assert "line_width" not in comp_dict
 
 
 # ---------------------------------------------------------------------------
@@ -505,13 +594,13 @@ def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
-    """RectComponent fill_color/border_width/line_style survive a save/load cycle."""
+    """RectComponent fill_color/line_width/line_style survive a save/load cycle."""
     from app.components.model import RectComponent
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
         rotation=0, mirror=False, options="",
         span_override=(2.0, 2.0),
-        fill_color="yellow!20", border_width=1.5, line_style="dashed",
+        fill_color="yellow!20", line_width=1.5, line_style="dashed",
     )
     s = Schematic(version="0.1", name="rect-style", components=[comp])
     p = tmp_path / "rect_style.hv"
@@ -519,7 +608,7 @@ def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
     loaded = load(p).components[0]
     assert isinstance(loaded, RectComponent)
     assert loaded.fill_color == "yellow!20"
-    assert abs(loaded.border_width - 1.5) < 1e-6
+    assert abs(loaded.line_width - 1.5) < 1e-6
     assert loaded.line_style == "dashed"
     assert loaded.options == ""
 
@@ -591,8 +680,27 @@ def test_bipole_line_style_roundtrip(tmp_path: Path) -> None:
     assert loaded.line_style == "dashed"
 
 
+def test_component_scale_roundtrip(tmp_path: Path) -> None:
+    """A logic gate's non-default scale survives save/load; the default (1.0) is
+    omitted from the JSON, and a legacy gate file without `scale` loads at 1.0."""
+    from app.components.model import Component
+    gate = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+                     options="", params={"inputs": 3}, scale=0.5)
+    plain = Component(id=_uid(), kind="or", position=(4.0, 0.0), rotation=0,
+                      options="", params={"inputs": 2})  # scale defaults to 1.0
+    s = Schematic(version="0.1", name="scale", components=[gate, plain])
+    p = tmp_path / "scale.hv"
+    save(s, p)
+    raw = json.loads(p.read_text())["components"]
+    assert raw[0]["scale"] == 0.5
+    assert "scale" not in raw[1]                    # default omitted
+    loaded = load(p).components
+    assert abs(loaded[0].scale - 0.5) < 1e-9
+    assert abs(loaded[1].scale - 1.0) < 1e-9        # absent → 1.0 (back-compat)
+
+
 def test_styled_defaults_not_saved(tmp_path: Path) -> None:
-    """Default fill_color/border_width/line_style are omitted from saved JSON."""
+    """Default fill_color/line_width/line_style are omitted from saved JSON."""
     from app.components.model import RectComponent
     comp = RectComponent(
         id=_uid(), kind="rect", position=(0.0, 0.0),
@@ -604,6 +712,7 @@ def test_styled_defaults_not_saved(tmp_path: Path) -> None:
     comp_dict = json.loads(p.read_text())["components"][0]
     assert "fill_color" not in comp_dict
     assert "border_width" not in comp_dict
+    assert "line_width" not in comp_dict
     assert "line_style" not in comp_dict
 
 
@@ -949,3 +1058,210 @@ def test_wire_hop_mode_invalid_raises(tmp_path: Path) -> None:
     p.write_text(json.dumps(data), encoding="utf-8")
     with pytest.raises(SchematicLoadError, match="hop_mode"):
         load(p)
+
+
+# ---------------------------------------------------------------------------
+# Component stroke width (line_width) round-trip
+# ---------------------------------------------------------------------------
+
+def test_component_line_width_roundtrip(tmp_path: Path) -> None:
+    """A component's stroke width is serialised and restored; the default is omitted."""
+    from app.components.model import Component
+    wide = Component(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0,
+                     options="", line_width=0.9)
+    plain = Component(id=_uid(), kind="R", position=(2.0, 0.0), rotation=0, options="")
+    p = tmp_path / "lw.hv"
+    save(Schematic(version="0.1", name="lw", components=[wide, plain]), p)
+    raw = json.loads(p.read_text())
+    assert raw["components"][0]["line_width"] == 0.9
+    assert "line_width" not in raw["components"][1]   # default omitted
+    loaded = load(p)
+    assert loaded.components[0].line_width == 0.9
+    assert loaded.components[1].line_width == 0.4
+
+
+# ---------------------------------------------------------------------------
+# Robustness — non-finite numbers, raw-exception wrapping, size bound,
+# degenerate wires, type strictness, format version (audit fixes)
+# ---------------------------------------------------------------------------
+
+def test_load_nan_literal_in_position_raises_load_error(tmp_path: Path) -> None:
+    """A NaN literal in a coordinate raises SchematicLoadError, not a crash."""
+    p = tmp_path / "nan.hv"
+    p.write_text(
+        '{"version": "0.1", "name": "n", "wires": [], "metadata": {}, '
+        '"components": [{"id": "c1", "kind": "R", "position": [NaN, 0], '
+        '"rotation": 0, "mirror": false, "options": ""}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(SchematicLoadError, match="non-finite|NaN"):
+        load(p)
+
+
+def test_load_infinity_literal_in_wire_points_raises_load_error(tmp_path: Path) -> None:
+    """Infinity/-Infinity literals in wire points raise SchematicLoadError."""
+    p = tmp_path / "inf.hv"
+    p.write_text(
+        '{"version": "0.1", "name": "i", "components": [], "metadata": {}, '
+        '"wires": [{"id": "w1", "points": [[0, 0], [Infinity, 0]]}]}',
+        encoding="utf-8",
+    )
+    with pytest.raises(SchematicLoadError, match="non-finite|Infinity"):
+        load(p)
+
+
+def test_load_nan_via_string_coercion_raises_load_error(tmp_path: Path) -> None:
+    """A numeric field given as the string "nan" (which float() accepts) is
+    still rejected with SchematicLoadError by the finiteness check."""
+    doc = {
+        "version": "0.1", "name": "n", "components": [], "metadata": {},
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
+                   "line_width": "nan"}],
+    }
+    p = tmp_path / "nanstr.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="finite"):
+        load(p)
+
+
+def test_load_bad_font_size_raises_load_error_not_value_error(tmp_path: Path) -> None:
+    """font_size "12pt" raises SchematicLoadError, not a raw ValueError."""
+    doc = {
+        "version": "0.1", "name": "f", "wires": [], "metadata": {},
+        "components": [{
+            "id": _uid(), "kind": "rect", "position": [0.0, 0.0],
+            "rotation": 0, "mirror": False, "options": "x",
+            "span_override": [2.0, 1.0], "font_size": "12pt",
+        }],
+    }
+    p = tmp_path / "fontsize.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="font_size"):
+        load(p)
+
+
+def test_load_never_leaks_a_raw_exception(tmp_path: Path) -> None:
+    """Any malformed value the field checks miss is re-raised as
+    SchematicLoadError (catch-all wrapper around parse/convert/validate)."""
+    # metadata is accepted as any dict; a params dict with a list value raises
+    # TypeError inside int() — the wrapper must convert it.
+    doc = {
+        "version": "0.1", "name": "x", "wires": [], "metadata": {},
+        "components": [{
+            "id": _uid(), "kind": "and", "position": [0.0, 0.0],
+            "rotation": 0, "mirror": False, "options": "",
+            "params": {"inputs": [1, 2]},
+        }],
+    }
+    p = tmp_path / "weird.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError):
+        load(p)
+
+
+def test_load_rejects_oversized_file(tmp_path: Path, monkeypatch) -> None:
+    """A .hv file above the size bound is rejected before parsing."""
+    import app.schematic.io as io
+
+    monkeypatch.setattr(io, "_MAX_FILE_BYTES", 64)
+    p = tmp_path / "big.hv"
+    p.write_text('{"version": "0.1", "name": "' + "x" * 200 + '", '
+                 '"components": [], "wires": []}', encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="too large"):
+        load(p)
+
+
+def test_load_empty_points_wire_raises_load_error(tmp_path: Path) -> None:
+    """A wire with an empty points list fails the >=2-points invariant."""
+    doc = {
+        "version": "0.1", "name": "w", "components": [], "metadata": {},
+        "wires": [{"id": _uid(), "points": []}],
+    }
+    p = tmp_path / "empty_wire.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="at least two points"):
+        load(p)
+
+
+def test_load_single_point_wire_raises_load_error(tmp_path: Path) -> None:
+    """A wire with a single point fails the >=2-points invariant."""
+    doc = {
+        "version": "0.1", "name": "w", "components": [], "metadata": {},
+        "wires": [{"id": _uid(), "points": [[1.0, 1.0]]}],
+    }
+    p = tmp_path / "one_point_wire.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="at least two points"):
+        load(p)
+
+
+def test_rotation_integral_float_accepted(tmp_path: Path) -> None:
+    """rotation 90.0 (a JSON float that is integral) is coerced to int 90."""
+    doc = {
+        "version": "0.1", "name": "r", "wires": [], "metadata": {},
+        "components": [{"id": _uid(), "kind": "R", "position": [0.0, 0.0],
+                        "rotation": 90.0, "mirror": False, "options": ""}],
+    }
+    p = tmp_path / "rot.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    loaded = load(p).components[0]
+    assert loaded.rotation == 90
+    assert isinstance(loaded.rotation, int)
+
+
+def test_rotation_non_integral_float_rejected(tmp_path: Path) -> None:
+    """rotation 45.5 raises SchematicLoadError."""
+    doc = {
+        "version": "0.1", "name": "r", "wires": [], "metadata": {},
+        "components": [{"id": _uid(), "kind": "R", "position": [0.0, 0.0],
+                        "rotation": 45.5, "mirror": False, "options": ""}],
+    }
+    p = tmp_path / "rot_bad.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="rotation"):
+        load(p)
+
+
+def test_rotation_bool_rejected(tmp_path: Path) -> None:
+    """rotation true (a JSON boolean) raises SchematicLoadError."""
+    doc = {
+        "version": "0.1", "name": "r", "wires": [], "metadata": {},
+        "components": [{"id": _uid(), "kind": "R", "position": [0.0, 0.0],
+                        "rotation": True, "mirror": False, "options": ""}],
+    }
+    p = tmp_path / "rot_bool.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="rotation"):
+        load(p)
+
+
+def test_component_z_order_bool_rejected(tmp_path: Path) -> None:
+    """A boolean component z_order is rejected (bool is not an integer here),
+    matching the wire path's strictness."""
+    doc = {
+        "version": "0.1", "name": "z", "wires": [], "metadata": {},
+        "components": [{"id": _uid(), "kind": "rect", "position": [0.0, 0.0],
+                        "rotation": 0, "mirror": False, "options": "",
+                        "span_override": [2.0, 1.0], "z_order": True}],
+    }
+    p = tmp_path / "z_bool.hv"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(SchematicLoadError, match="z_order"):
+        load(p)
+
+
+def test_format_version_03_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.3; files declaring 0.1, 0.2 and 0.3 all load."""
+    p = tmp_path / "v.hv"
+    save(_empty_schematic(), p)
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.3"
+    assert load(p).version == "0.3"
+
+    for old in ("0.1", "0.2"):
+        q = tmp_path / f"v{old}.hv"
+        q.write_text(
+            json.dumps({"version": old, "name": "old",
+                        "components": [], "wires": []}),
+            encoding="utf-8",
+        )
+        assert load(q).version == old

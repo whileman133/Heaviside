@@ -67,6 +67,24 @@ def test_geometry_parsed():
     assert geo["viewBox"]
 
 
+def test_parse_geometry_captures_rect_as_glyph():
+    """A dvisvgm TeX rule (``<rect>``) — e.g. the overline of ``\\ctikztextnot{Q}``,
+    the flip-flop's Q̄ — is captured as a filled glyph (a closed rectangle path +
+    its transform) rather than silently dropped. Pure parse, no toolchain."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+        "<g transform='matrix(2 0 0 2 1 1)'>"
+        "<rect x='1' y='2' width='4' height='0.4'/>"
+        "</g></svg>"
+    )
+    geo = render.parse_geometry(svg)
+    assert len(geo["glyphs"]) == 1, "the rect rule must be captured as a glyph"
+    g = geo["glyphs"][0]
+    assert g["matrix"] == [2.0, 0.0, 0.0, 2.0, 1.0, 1.0]
+    assert g["d"].startswith("M") and g["d"].endswith("Z")   # a closed rectangle
+    assert g["d"].count("L") == 3                            # 4 corners
+
+
 def test_render_is_deterministic():
     svg1, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
     svg2, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)

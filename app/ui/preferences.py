@@ -26,11 +26,13 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from app.preview import tools as _tools
+from app.ui import theme
 
 # QSettings keys.
 _KEY_AUTO_TEX = "export/auto_tex_on_save"
@@ -42,9 +44,26 @@ _KEY_PNG_DPI = "export/png_dpi"
 
 #: Default raster resolution for PNG copy/export — 300 dpi is publication grade.
 _DEFAULT_PNG_DPI = 300
+#: Valid PNG DPI range (matches the Preferences dialog's spinbox bounds).
+_PNG_DPI_MIN = 72
+_PNG_DPI_MAX = 1200
 _KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
 _KEY_LINE_HOPS = "display/line_hops"
+_KEY_DARK_OVERRIDE = "display/dark_override"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
+_KEY_CHECK_UPDATES = "updates/check_on_startup"
+_KEY_SKIPPED_VERSION = "updates/skipped_version"
+_KEY_UPDATE_DISCLOSED = "updates/disclosed"
+
+
+def _hint_qss() -> str:
+    """Stylesheet for the dialog's small hint labels.
+
+    Reads the active theme token at call time so a dialog opened in dark mode
+    gets readable (light) hint ink instead of the old hardcoded ``#666``. The
+    dialog is constructed fresh on every open, so this tracks theme switches.
+    """
+    return f"color: {theme.ICON_MUTED}; font-size: 11px;"
 
 
 def _to_bool(value: object, default: bool = False) -> bool:
@@ -71,7 +90,9 @@ class Preferences:
 
     @property
     def auto_export_tex(self) -> bool:
-        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=False)
+        # On by default: the .tex snippet needs no LaTeX install, so keeping the
+        # paper's \input figure current on every save is free. See also SVG/PNG.
+        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=True)
 
     @auto_export_tex.setter
     def auto_export_tex(self, value: bool) -> None:
@@ -95,7 +116,10 @@ class Preferences:
 
     @property
     def auto_export_svg(self) -> bool:
-        return _to_bool(self._settings.value(_KEY_AUTO_SVG), default=False)
+        # On by default: SVG is the most broadly embeddable vector format. Needs
+        # pdflatex + pdftocairo (Poppler); a missing tool fails the save's export
+        # non-fatally (status-bar notice), never blocking the save itself.
+        return _to_bool(self._settings.value(_KEY_AUTO_SVG), default=True)
 
     @auto_export_svg.setter
     def auto_export_svg(self, value: bool) -> None:
@@ -103,7 +127,9 @@ class Preferences:
 
     @property
     def auto_export_png(self) -> bool:
-        return _to_bool(self._settings.value(_KEY_AUTO_PNG), default=False)
+        # On by default: a raster preview for quick sharing/slides. Needs pdflatex
+        # (same non-fatal failure handling as SVG). PDF and EPS stay off by default.
+        return _to_bool(self._settings.value(_KEY_AUTO_PNG), default=True)
 
     @auto_export_png.setter
     def auto_export_png(self, value: bool) -> None:
@@ -111,11 +137,16 @@ class Preferences:
 
     @property
     def png_dpi(self) -> int:
-        """Raster resolution (dots per inch) for PNG copy and export."""
+        """Raster resolution (dots per inch) for PNG copy and export.
+
+        Clamped to the dialog's 72–1200 range so a corrupt/hand-edited settings
+        value can never trigger an absurd (multi-GB) render on every save.
+        """
         try:
-            return int(self._settings.value(_KEY_PNG_DPI, _DEFAULT_PNG_DPI))
+            dpi = int(self._settings.value(_KEY_PNG_DPI, _DEFAULT_PNG_DPI))
         except (TypeError, ValueError):
             return _DEFAULT_PNG_DPI
+        return max(_PNG_DPI_MIN, min(_PNG_DPI_MAX, dpi))
 
     @png_dpi.setter
     def png_dpi(self, value: int) -> None:
@@ -141,6 +172,27 @@ class Preferences:
     def line_hops(self, value: bool) -> None:
         self._settings.setValue(_KEY_LINE_HOPS, bool(value))
 
+    @property
+    def dark_override(self) -> bool | None:
+        """The user's pinned theme, or ``None`` to follow the OS appearance.
+
+        ``None`` (the unset default) means "track the system light/dark setting";
+        once the user flips the toolbar toggle, an explicit ``True`` (dark) /
+        ``False`` (light) is stored and restored on the next launch."""
+        val = self._settings.value(_KEY_DARK_OVERRIDE)
+        if val is None or val == "":
+            return None
+        if isinstance(val, str) and val.lower() in ("dark", "light"):
+            return val.lower() == "dark"
+        return _to_bool(val, default=False)
+
+    def set_dark_override(self, value: bool | None) -> None:
+        """Pin the theme to dark/light, or pass ``None`` to clear it (follow OS)."""
+        if value is None:
+            self._settings.remove(_KEY_DARK_OVERRIDE)
+        else:
+            self._settings.setValue(_KEY_DARK_OVERRIDE, "dark" if value else "light")
+
     # -- Rendering -----------------------------------------------------------
 
     @property
@@ -152,6 +204,38 @@ class Preferences:
     @force_ziamath.setter
     def force_ziamath(self, value: bool) -> None:
         self._settings.setValue(_KEY_FORCE_ZIAMATH, bool(value))
+
+    # -- Updates -------------------------------------------------------------
+
+    @property
+    def check_updates_on_startup(self) -> bool:
+        # Defaults on: a single read-only GitHub Releases check at launch keeps
+        # alpha users current. Opt out here or via Help ▸ Check for Updates.
+        return _to_bool(self._settings.value(_KEY_CHECK_UPDATES), default=True)
+
+    @check_updates_on_startup.setter
+    def check_updates_on_startup(self, value: bool) -> None:
+        self._settings.setValue(_KEY_CHECK_UPDATES, bool(value))
+
+    @property
+    def skipped_update_version(self) -> str:
+        """A version the user chose to skip; the startup check won't re-prompt
+        for it (a manual check still will)."""
+        return str(self._settings.value(_KEY_SKIPPED_VERSION, "") or "")
+
+    @skipped_update_version.setter
+    def skipped_update_version(self, value: str) -> None:
+        self._settings.setValue(_KEY_SKIPPED_VERSION, str(value or ""))
+
+    @property
+    def update_check_disclosed(self) -> bool:
+        """Whether the one-time "this app checks GitHub on startup" notice has
+        been shown."""
+        return _to_bool(self._settings.value(_KEY_UPDATE_DISCLOSED), default=False)
+
+    @update_check_disclosed.setter
+    def update_check_disclosed(self, value: bool) -> None:
+        self._settings.setValue(_KEY_UPDATE_DISCLOSED, bool(value))
 
     # -- External tool paths -------------------------------------------------
     #
@@ -187,6 +271,20 @@ class PreferencesDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 16)
         layout.setSpacing(12)
 
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        def _page(*widgets: QWidget) -> QWidget:
+            """A tab page that stacks *widgets* at the top with trailing stretch."""
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(6, 12, 6, 6)
+            page_layout.setSpacing(12)
+            for w in widgets:
+                page_layout.addWidget(w)
+            page_layout.addStretch(1)
+            return page
+
         group = QGroupBox("Auto-export on save")
         group_layout = QVBoxLayout(group)
         group_layout.setSpacing(6)
@@ -216,7 +314,7 @@ class PreferencesDialog(QDialog):
         dpi_row.setContentsMargins(0, 0, 0, 0)
         dpi_row.addWidget(QLabel("PNG resolution:"))
         self._spin_dpi = QSpinBox()
-        self._spin_dpi.setRange(72, 1200)
+        self._spin_dpi.setRange(_PNG_DPI_MIN, _PNG_DPI_MAX)
         self._spin_dpi.setSingleStep(50)
         self._spin_dpi.setSuffix(" dpi")
         self._spin_dpi.setValue(prefs.png_dpi)
@@ -233,10 +331,8 @@ class PreferencesDialog(QDialog):
             "(300 dpi is publication grade)."
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666; font-size: 11px;")
+        hint.setStyleSheet(_hint_qss())
         group_layout.addWidget(hint)
-
-        layout.addWidget(group)
 
         display_group = QGroupBox("Display")
         display_layout = QVBoxLayout(display_group)
@@ -251,7 +347,7 @@ class PreferencesDialog(QDialog):
             "has no wire attached, in the preview, source, and exports."
         )
         pins_hint.setWordWrap(True)
-        pins_hint.setStyleSheet("color: #666; font-size: 11px;")
+        pins_hint.setStyleSheet(_hint_qss())
         display_layout.addWidget(pins_hint)
 
         self._chk_line_hops = QCheckBox("Draw line-hops where wires cross without connecting")
@@ -264,10 +360,8 @@ class PreferencesDialog(QDialog):
             "with the higher z-order hops over the other."
         )
         hops_hint.setWordWrap(True)
-        hops_hint.setStyleSheet("color: #666; font-size: 11px;")
+        hops_hint.setStyleSheet(_hint_qss())
         display_layout.addWidget(hops_hint)
-
-        layout.addWidget(display_group)
 
         render_group = QGroupBox("Rendering")
         render_layout = QVBoxLayout(render_group)
@@ -286,13 +380,27 @@ class PreferencesDialog(QDialog):
             "even when LaTeX is installed."
         )
         ziamath_hint.setWordWrap(True)
-        ziamath_hint.setStyleSheet("color: #666; font-size: 11px;")
+        ziamath_hint.setStyleSheet(_hint_qss())
         render_layout.addWidget(ziamath_hint)
 
-        layout.addWidget(render_group)
+        # Single-section tab: the tab label is the heading, so no group box.
+        self._chk_check_updates = QCheckBox("Check for updates on startup")
+        self._chk_check_updates.setChecked(prefs.check_updates_on_startup)
 
-        tools_group = QGroupBox("Tools")
+        updates_hint = QLabel(
+            "On launch, make a single read-only request to the GitHub Releases "
+            "page to see whether a newer version exists, and notify you if so. "
+            "Heaviside never downloads or installs anything automatically, and "
+            "sends no information about you. You can also check any time from "
+            "Help ▸ Check for Updates."
+        )
+        updates_hint.setWordWrap(True)
+        updates_hint.setStyleSheet(_hint_qss())
+
+        # Single-section tab: the tab label is the heading, so no group box.
+        tools_group = QWidget()
         tools_grid = QGridLayout(tools_group)
+        tools_grid.setContentsMargins(0, 0, 0, 0)
         tools_grid.setHorizontalSpacing(8)
         tools_grid.setVerticalSpacing(4)
         tools_grid.setColumnStretch(1, 1)  # the path field column takes the slack
@@ -302,7 +410,7 @@ class PreferencesDialog(QDialog):
             "a specific install."
         )
         tools_intro.setWordWrap(True)
-        tools_intro.setStyleSheet("color: #666; font-size: 11px;")
+        tools_intro.setStyleSheet(_hint_qss())
         tools_grid.addWidget(tools_intro, 0, 0, 1, 3)
 
         self._tool_edits: dict[str, QLineEdit] = {}
@@ -318,7 +426,7 @@ class PreferencesDialog(QDialog):
             browse = QPushButton("Browse…")
             browse.clicked.connect(lambda _checked=False, n=name: self._browse_tool(n))
             status = QLabel()
-            status.setStyleSheet("color: #666; font-size: 11px;")
+            status.setStyleSheet(_hint_qss())
             tools_grid.addWidget(QLabel(name), r, 0, Qt.AlignRight)
             tools_grid.addWidget(edit, r, 1)
             tools_grid.addWidget(browse, r, 2)
@@ -328,7 +436,10 @@ class PreferencesDialog(QDialog):
             edit.textChanged.connect(lambda _t="", n=name: self._update_tool_status(n))
             self._update_tool_status(name)
 
-        layout.addWidget(tools_group)
+        tabs.addTab(_page(group), "Export")
+        tabs.addTab(_page(display_group, render_group), "Appearance")
+        tabs.addTab(_page(tools_group), "Tools")
+        tabs.addTab(_page(self._chk_check_updates, updates_hint), "Updates")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self._on_accept)
@@ -369,6 +480,7 @@ class PreferencesDialog(QDialog):
         self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
         self._prefs.line_hops = self._chk_line_hops.isChecked()
         self._prefs.force_ziamath = self._chk_force_ziamath.isChecked()
+        self._prefs.check_updates_on_startup = self._chk_check_updates.isChecked()
         for name, edit in self._tool_edits.items():
             self._prefs.set_tool_path(name, edit.text())
         self.accept()

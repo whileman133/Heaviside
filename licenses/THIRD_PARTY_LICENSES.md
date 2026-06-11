@@ -101,8 +101,59 @@ Data-model validation library.
 - **License:** MIT
 - **Source:** https://github.com/pydantic/pydantic
 
+## ziamath — MIT License
+
+Pure-Python math typesetter. Powers the no-LaTeX on-canvas equation labels.
+
+- **License:** MIT
+- **Source:** https://github.com/cdelker/ziamath
+
+## ziafont — MIT License
+
+Pure-Python font rendering used by ziamath.
+
+- **License:** MIT
+- **Source:** https://github.com/cdelker/ziafont
+
 ---
 
-*Bundled fonts shipped by qtawesome (e.g. Font Awesome, Material Design Icons)
-carry their own SIL OFL / other licenses; see the qtawesome distribution for
-their full terms.*
+## Bundled fonts
+
+The distributed application redistributes the font files below. They are shipped
+inside the bundle by their parent Python packages (ziamath, ziafont, qtawesome)
+and are loaded at runtime. The full text of the SIL Open Font License 1.1 is in
+`OFL-1.1.txt`, and the Apache License 2.0 is in `Apache-2.0.txt`, both in this
+folder.
+
+### Math/text fonts (via ziamath / ziafont)
+
+- **STIX Two Math** — used to typeset on-canvas math labels when LaTeX is not
+  installed. License: **SIL Open Font License 1.1** (see `OFL-1.1.txt`).
+  Copyright © 2001–2021 by the STI Pub Companies, with Reserved Font Name
+  "STIX Two". Source: https://github.com/stipub/stixfonts
+- **DejaVu Sans** — used by ziafont for plain text in labels. License: the
+  permissive **DejaVu Fonts License** (a Bitstream Vera derivative; the DejaVu
+  additions are in the public domain). Copyright © 2003 Bitstream, Inc.; DejaVu
+  changes © Tavmjong Bah and contributors. Full terms:
+  https://dejavu-fonts.github.io/License.html
+
+### Icon fonts (via qtawesome)
+
+qtawesome registers its full set of bundled icon fonts at startup, so the
+application redistributes all of them:
+
+- **Font Awesome 5 & 6 Free** (the set Heaviside actually draws toolbar/ribbon
+  glyphs from). Fonts: **SIL OFL 1.1** (see `OFL-1.1.txt`); icons:
+  **CC BY 4.0** (https://creativecommons.org/licenses/by/4.0/); code: MIT.
+  Copyright © Fonticons, Inc. License summary: https://fontawesome.com/license/free
+- **Material Design Icons** — **SIL OFL 1.1** (see `OFL-1.1.txt`).
+  Copyright © Pictogrammers. Source: https://github.com/Templarian/MaterialDesign
+- **Elusive Icons** — **SIL OFL 1.1** (see `OFL-1.1.txt`).
+  Copyright © Aristeides Stathopoulos. Source: https://github.com/dovy/elusive-icons
+- **Phosphor Icons** — **MIT License**. Copyright © Phosphor Icons.
+  Source: https://github.com/phosphor-icons/web
+- **Remix Icon** — **Apache License 2.0** (see `Apache-2.0.txt`).
+  Copyright © Remix Design. Source: https://github.com/Remix-Design/RemixIcon
+- **Codicon** (VS Code icons) — **CC BY 4.0**
+  (https://creativecommons.org/licenses/by/4.0/); code: MIT.
+  Copyright © Microsoft Corporation. Source: https://github.com/microsoft/vscode-codicons

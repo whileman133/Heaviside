@@ -85,12 +85,13 @@ def test_component_mixin_composition() -> None:
 
     bipole = BipoleComponent(
         id=_uid(), kind="bipole", position=(0.0, 0.0), rotation=0, options="",
-        fill_color="red!20", border_width=1.5, line_style="dashed", font_bold=True,
+        fill_color="red!20", line_width=1.5, line_style="dashed", font_bold=True,
     )
     assert isinstance(bipole, FontedComponent)
     assert isinstance(bipole, StyledComponent)
     assert isinstance(bipole, DrawingComponent)
     assert (bipole.fill_color, bipole.line_style, bipole.font_bold) == ("red!20", "dashed", True)
+    assert bipole.line_width == 1.5  # unified outline width (no separate border_width)
     assert bipole.font_size == 7.0  # bipole override of FontedComponent's 12.0
 
     rect = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
@@ -254,6 +255,40 @@ def test_wire_on_quarter_grid_is_valid() -> None:
     src = component_pin_positions(fet)[2]    # source pin at (1.0, 0.25) — on the 0.25 grid
     wire = _wire([src, (src[0], 2.0)])
     assert validate(_make_schematic(fet, wires=[wire])) == []
+
+
+def test_wire_endpoint_on_offgrid_gate_pin_is_valid() -> None:
+    """A scaled logic gate's input pin sits off the 0.25-GU grid; a wire endpoint
+    resting exactly on it validates (the principled exception to invariant 3)."""
+    g = Component(id=_uid(), kind="or", position=(5.0, 5.0), rotation=0, options="",
+                  scale=0.5, params={"inputs": 4})
+    in1 = component_pin_positions(g)[1]               # off-grid (y = 5.125)
+    assert abs(round(in1[1] / 0.25) * 0.25 - in1[1]) > 1e-9
+    # Approach vertically at the on-grid x; only the pin endpoint is off-grid.
+    wire = _wire([(in1[0], 5.0), in1])
+    assert validate(_make_schematic(g, wires=[wire])) == []
+
+
+def test_wire_offgrid_vertex_not_on_a_pin_is_invalid() -> None:
+    """An off-grid vertex that does NOT line up with any component pin coordinate
+    is still a validation error — the relaxation is pin-specific, not blanket."""
+    wire = _wire([(0.3, 0.0), (2.0, 0.0)])            # 0.3 lines up with nothing
+    errors = validate(_make_schematic(wires=[wire]))
+    assert any("0.25 GU boundary" in e for e in errors), errors
+
+
+def test_wire_corner_aligned_with_offgrid_pin_is_valid() -> None:
+    """When a pin is off-grid in both axes, the Manhattan corner that carries the
+    pin's off-grid coordinate validates (it lines up with that pin's coordinate)."""
+    # OR at 0.75 → input x = -1.125 and y off-grid too (both axes off-grid).
+    g = Component(id=_uid(), kind="or", position=(5.0, 5.0), rotation=0, options="",
+                  scale=0.75, params={"inputs": 4})
+    in1 = component_pin_positions(g)[1]
+    assert abs(round(in1[0] / 0.25) * 0.25 - in1[0]) > 1e-9   # x off-grid
+    # Corner shares the pin's off-grid x; final leg is vertical into the pin.
+    corner = (in1[0], 5.0)                            # off-grid x, on-grid y
+    wire = _wire([(3.0, 5.0), corner, in1])
+    assert validate(_make_schematic(g, wires=[wire])) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1037,3 +1072,118 @@ def test_wire_contained_by_others() -> None:
     assert wire_contained_by_others([(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)], legs[:1]) is False
     # A single-point (other-degenerate) wire is not handled here.
     assert wire_contained_by_others([(0.0, 0.0)], [long_h]) is False
+
+
+# ---------------------------------------------------------------------------
+# point_key / grid helpers / is_box_kind — the single connectivity convention
+# ---------------------------------------------------------------------------
+
+def test_point_key_rounds_float_noise():
+    from app.schematic.model import point_key
+    noisy = (0.1 + 0.2, 1.0)                    # 0.30000000000000004
+    assert noisy[0] != 0.3
+    assert point_key(noisy) == (0.3, 1.0)
+    assert point_key((0.3, 1.0)) == point_key(noisy)
+
+
+def test_grid_helpers_shared_constants():
+    from app.canvas.geometry import SNAP_GU
+    from app.schematic.model import (
+        GRID_GU, coord_on_grid, point_on_grid, snap_coord, snap_point,
+    )
+    assert SNAP_GU == GRID_GU == 0.25           # one source of truth
+    assert snap_coord(0.37) == 0.25 and snap_coord(0.38) == 0.5
+    assert snap_point((0.37, 1.13)) == (0.25, 1.25)
+    assert coord_on_grid(1.25) and not coord_on_grid(1.3)
+    assert point_on_grid((0.25, -3.5)) and not point_on_grid((0.25, 0.1))
+
+
+def test_is_box_kind_accepts_kind_or_component():
+    from app.components.model import CircleComponent, RectComponent
+    from app.schematic.model import is_box_kind
+    assert is_box_kind("rect") and is_box_kind("circle")
+    assert not is_box_kind("R") and not is_box_kind("text_node")
+    rect = RectComponent(id="r", kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    circ = CircleComponent(id="c", kind="circle", position=(0.0, 0.0), rotation=0, options="")
+    assert is_box_kind(rect) and is_box_kind(circ)
+    assert not is_box_kind(_resistor())
+
+
+def test_junction_points_tolerates_float_noise():
+    """Wire vertices that coincide only up to float noise still count as one
+    coordinate (degree sums through point_key)."""
+    noisy = 0.1 + 0.2
+    s = _make_schematic(wires=[
+        _wire([(0.0, 0.0), (0.3, 0.0), (0.3, 2.0)]),   # interior vertex at clean 0.3
+        _wire([(noisy, 0.0), (2.0, 0.0)]),             # endpoint at noisy 0.3
+    ])
+    assert junction_points(s) == {(0.3, 0.0)}
+
+
+def test_wire_splits_at_tolerates_float_noise():
+    from app.schematic.model import wire_splits_at
+    s = _make_schematic(wires=[_wire([(0.0, 0.0), (4.0, 0.0)], id="w")])
+    noisy = (2.0 + 1e-9, 0.0)                  # rounds to (2.0, 0.0)
+    assert wire_splits_at(s, noisy) == [("w", 1)]
+    # A point that already keys to a vertex is not a split site.
+    assert wire_splits_at(s, (4.0 - 1e-9, 0.0)) == []
+
+
+# ---------------------------------------------------------------------------
+# Override hooks — junction_points / unconnected_pins (drag-preview parity)
+# ---------------------------------------------------------------------------
+
+def test_junction_points_points_override_substitutes_geometry():
+    bus = _wire([(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)], id="bus")   # vertex at (2,0)
+    tap = _wire([(2.0, 0.0), (2.0, 3.0)], id="tap")
+    s = _make_schematic(wires=[bus, tap])
+    assert junction_points(s) == {(2.0, 0.0)}
+    # Substituting preview geometry moves the junction with the drag.
+    moved = junction_points(s, points_override={
+        "bus": [(0.0, 0.0), (3.0, 0.0), (4.0, 0.0)],
+        "tap": [(3.0, 0.0), (3.0, 3.0)],
+    })
+    assert moved == {(3.0, 0.0)}
+    # Sliding the tap off the bus vertex dissolves the junction.
+    assert junction_points(
+        s, points_override={"tap": [(2.5, 0.0), (2.5, 3.0)]}
+    ) == set()
+
+
+def test_junction_points_pin_positions_override():
+    bus = _wire([(0.0, 0.0), (2.0, 0.0)], id="bus")
+    tap = _wire([(2.0, 0.0), (2.0, 3.0)], id="tap")
+    s = _make_schematic(_resistor(position=(2.0, 0.0)), wires=[bus, tap])
+    # Model pins: R pin at (2,0) joins the two wire ends → degree 3 → dot.
+    assert junction_points(s) == {(2.0, 0.0)}
+    # Overridden (live, dragged) pins replace the derived ones entirely: with
+    # the pin elsewhere the two wire ends alone are degree 2 — no dot.
+    assert junction_points(s, pin_positions=[(1.0, 0.0)]) == set()
+    assert junction_points(s, pin_positions=[(2.0, 0.0)]) == {(2.0, 0.0)}
+
+
+def test_junction_points_override_respects_no_junction_dots():
+    """The drag preview delegates here, so the per-wire opt-out must hold under
+    overrides too (regression: the hand-rolled preview ignored it)."""
+    bus = _wire([(0.0, 0.0), (2.0, 0.0), (4.0, 0.0)], id="bus",
+                no_junction_dots=True)
+    tap = _wire([(2.0, 0.0), (2.0, 3.0)], id="tap")
+    s = _make_schematic(wires=[bus, tap])
+    # Without the opt-out this T would be degree 3 (dot); the annotation bus
+    # contributes nothing, with or without override hooks in play.
+    assert junction_points(s) == set()
+    assert junction_points(s, points_override={}, pin_positions=[]) == set()
+
+
+def test_unconnected_pins_override_hooks():
+    r = _resistor(position=(0.0, 0.0))          # pins (0,0) and (2,0)
+    s = _make_schematic(r, wires=[_wire([(2.0, 0.0), (4.0, 0.0)], id="w")])
+    assert unconnected_pins(s) == {(0.0, 0.0)}
+    # Preview geometry override: the wire slides off the pin → both pins open.
+    assert unconnected_pins(
+        s, points_override={"w": [(3.0, 0.0), (4.0, 0.0)]}
+    ) == {(0.0, 0.0), (2.0, 0.0)}
+    # Live pin override (dragged component): pins supplied by the caller.
+    assert unconnected_pins(
+        s, pin_positions=[(2.0, 0.0), (4.0, 0.0)]
+    ) == set()                                  # both supplied pins touch the wire

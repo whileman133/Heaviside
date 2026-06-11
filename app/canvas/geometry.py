@@ -16,14 +16,16 @@ from __future__ import annotations
 from PySide6.QtCore import QPointF
 
 from app.canvas.style import GRID_PX
+from app.schematic.model import GRID_GU
 
 # ---------------------------------------------------------------------------
 # Snap / proximity constants (spec §3.1, §6.4)
 # ---------------------------------------------------------------------------
 
-SNAP_GU: float = 0.25
+SNAP_GU: float = GRID_GU
 """Grid snap granularity — the minor grid (spec §3.1). Components, wire vertices,
-and junctions all live on this 0.25 GU lattice."""
+and junctions all live on this 0.25 GU lattice. Aliases the Qt-free
+``app.schematic.model.GRID_GU`` so the pitch has a single source of truth."""
 
 NUDGE_GU: float = 0.25
 """Arrow-key nudge step (one minor-grid cell)."""

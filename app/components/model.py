@@ -71,6 +71,37 @@ class Component:
     declared default.  Surfaced via :mod:`app.components.library`; persisted in
     ``schematic/io.py`` only when it differs from the default."""
 
+    scale: float = 1.0
+    """Uniform size multiplier for the component's symbol, **meaningful for logic
+    gates only** (``and``/``or``/``not``/``buffer``/… — every kind whose CircuiTikZ
+    keyword ends in `` port``).
+
+    Scales the gate body about its ``out`` pin; the input/output pins move to the
+    **true scaled anchor** (``base_offset * scale``), generally off the 0.25-GU
+    grid (see :func:`app.components.library.gate_layout`). A wire connects there
+    directly — endpoints snap onto component pins (the magnet), so no lead stub is
+    needed and the connection is an ordinary, styleable wire. Logic gates default
+    to **0.5** at placement (compact); other kinds keep ``1.0`` and ignore this
+    field. Persisted (``schematic/io.py``) only when it differs from 1.0."""
+
+    line_width: float = 0.4
+    """Stroke/outline width (pt) for the component, **CircuiTikZ default 0.4**.
+
+    The single, unified width property for every drawable kind: the **stroke** of a
+    circuit symbol *and* the **outline** of a block component (rect/circle/bipole).
+    It lives on the base so all kinds share one field — there is no separate
+    ``border_width``. (A dedicated mixin can't host it: a defaulted mixin field
+    would have to precede ``Component``'s required ``id``/``kind``/… fields and
+    raise the dataclass "non-default argument follows default argument" error.)
+
+    Drawn proportionally on the canvas and emitted as a ``line width=<w>pt`` option
+    — for symbols via :func:`app.codegen.circuitikz._line_width_opt` in the
+    ``to[]`` / ``node[]``, and for block kinds via
+    :func:`app.components.style.compose_style_options` in their ``\\draw`` / node
+    option list. Meaningful for every kind except pure text (``text_node`` has no
+    stroke). Persisted (``schematic/io.py``) only when it differs from 0.4; a legacy
+    file's ``border_width`` on a block is read back into this field."""
+
 
 @dataclass
 class DrawingComponent(Component):
@@ -121,13 +152,15 @@ class FontedComponent:
 
 @dataclass
 class StyledComponent:
-    """Mixin: fill + border styling (shared by rect and bipole)."""
+    """Mixin: fill + line style (shared by rect, circle, and bipole).
+
+    The outline **width** is not here — it is the unified ``Component.line_width``
+    (see its docstring), shared with circuit symbols, so one inspector control and
+    one command edit the stroke/border width of every kind.
+    """
 
     fill_color: str = ""
     """TikZ fill color string (e.g. ``"yellow!20"``).  Empty = no fill (transparent)."""
-
-    border_width: float = 0.4
-    """Border/line width in points.  Default matches the TikZ default (0.4 pt)."""
 
     line_style: str = ""
     """Raw TikZ line-style tokens (e.g. ``"dashed"``, ``"dotted"``).  Empty = solid."""

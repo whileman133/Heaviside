@@ -7,7 +7,206 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **A stray `}` in a label can no longer inject raw TeX.** Every user
+  label/text field emitted inside a brace group in the generated CircuiTikZ
+  (component options, node text, wire endpoint/mid labels, bipole `t=`) is now
+  brace-balanced, so an unmatched `}` cannot escape its group and splice raw
+  TeX into the document. Exported `.tex` documents and snippets also begin
+  with a header comment warning that label fields are raw LaTeX taken verbatim
+  from the `.hv` file and should be compiled **without** shell-escape.
+- **Warning when a file's labels contain dangerous LaTeX.** Opening a `.hv`
+  whose label/text fields contain potentially dangerous LaTeX commands
+  (`\write18`, `\input`, …) now shows a warning, so an untrusted file can't
+  smuggle them in silently.
+- **The update notifier validates the release URL.** The download URL returned
+  by the GitHub API is opened only when it is `https` on `github.com`;
+  anything else falls back to the official releases page.
+- **Private math-label disk cache.** The on-disk cache of compiled label SVGs
+  moved from a shared temp directory to a per-user private (0700) directory,
+  so another local user cannot pre-plant cache entries the app would trust.
+- **Corrupt `.hv` files fail with a clean error.** NaN/Infinity numbers,
+  malformed fields, and implausibly large files (over 32 MB) are now rejected
+  with a descriptive load error instead of crashing the app.
+
 ### Added
+- **The unsaved-changes prompt now offers Save.** Closing or replacing a
+  modified document asks **Save / Don't Save / Cancel** (Save is the default)
+  instead of only offering to discard.
+- **`.hv.bak` backups and safer saves.** Saving keeps a `.hv.bak` copy of the
+  file being replaced, and writes are fsync'd before the atomic rename, so a
+  crash or power loss mid-save can't cost you both the new and the old file.
+- **Crash guard.** An internal error is logged to `heaviside-errors.log` in
+  the app-data folder and reported in a dialog without quitting — you keep
+  your session and can save your work.
+
+### Changed
+- **`.hv` format version bumped to 0.3.** The new version covers the optional
+  wire/component fields added since 0.2 (endpoint markers and labels, scale,
+  params, variants, line width, …) so an older build that would silently strip
+  them refuses the file instead. 0.1/0.2 files still load unchanged; new
+  documents declare 0.3.
+- **Saving validates the document first** and refuses to overwrite a good file
+  with a corrupt one — an invalid in-memory schematic raises a clear error and
+  nothing is written.
+- **Post-save auto-export runs in the background.** The auto-exported
+  TeX/PDF/EPS/SVG/PNG siblings are now produced on a worker thread
+  (single-flight; results reported in the status bar), so saving no longer
+  freezes the UI while LaTeX runs.
+- **Undo/Redo menu items track the edit history** (disabled when there is
+  nothing to undo/redo), and the window's dirty marker clears when you undo
+  back to the last-saved state.
+- **Document-tab voltage/current style edits are undoable.**
+
+### Fixed
+- **Wires connected to off-grid pins could silently detach.** Connectivity
+  comparisons against a scaled gate's off-grid pins used exact float equality,
+  so float noise during moves/rotations could quietly disconnect a wire; every
+  coincidence test now goes through one rounded comparison convention.
+- **Wire splits during a move/nudge could corrupt the wire.** A split site was
+  computed against the wire's pre-move geometry but applied after the move had
+  reshaped it; the split now re-resolves against the wire's current geometry
+  at execution time.
+- **Undo restores a removed wire completely.** Undoing a resize, vertex drag,
+  junction drag, or group rotation that removed a wire now restores its
+  labels, markers, line style, and stacking position verbatim — not just its
+  points.
+- **Group-rotating a mirrored component no longer detaches its wires.** The
+  rotation step now accounts for the mirror being applied outermost, so the
+  mirrored component's pins land where the rotation moved the wires.
+- **Deleting both taps of a bus merges the rail back into one wire.**
+  Sequential junction dissolves in one delete now compose instead of leaving
+  the remaining segments split.
+- **Releasing a resize or endpoint handle without moving no longer leaves a
+  stale preview** on the canvas.
+- **Junction dots suppressed via "no junction dots" no longer flicker during
+  drags** — the live drag preview honours the same suppression as the final
+  render.
+- **Multi-edit inspector changes are computed against the live document.**
+  Each edit in a bulk apply now reads the current state (not a stale
+  snapshot), and a composite edit that fails part-way rolls back entirely
+  instead of half-applying.
+- **Inspector edits typed just before a save/export are no longer lost.**
+  Pending debounced edits are flushed before Save / Save As / every export and
+  the unsaved-changes prompt, and a programmatic reload no longer clobbers a
+  field you are typing in.
+- **Bipole labels with commas inside math are no longer mangled** (e.g.
+  `t=$f(a,b)$` survives a round-trip through the inspector).
+- **Hand-authored fill and line-style values survive unrelated inspector
+  edits** instead of being snapped to the nearest preset.
+- **Dark-mode readability** of the Help/About dialogs, the Preferences hint
+  text, the welcome screen, and the status bar.
+- **Preview update failures now show in the status bar** instead of failing
+  silently.
+- **A corrupt PNG-resolution setting is clamped** to the dialog's 72–1200 dpi
+  range instead of being used verbatim.
+- **`.hv` tolerance fixes:** a rotation stored as `90.0` (a float) is accepted
+  and normalised; a boolean `z_order` is rejected as the type error it is.
+
+### Added
+- **~60 new components — a big library build-out.** Filled out the symbol library
+  with previously-missing CircuiTikZ parts (every one verified to render):
+  - **Resistors/sensors:** varistor, photoresistor (LDR), NTC/PTC thermistors.
+  - **Capacitors:** variable, ferroelectric, curved, capacitive-sensor, and
+    piezoelectric/crystal.
+  - **Inductors:** variable inductor and inductive sensor.
+  - **Diodes:** thyristor (SCR) and TRIAC — each with a wireable **gate** terminal
+    in addition to anode/cathode.
+  - **Transistors:** N/P **IGBTs**, simplified N/P **MOS** (enhancement & depletion),
+    and the **ISFET**.
+  - **Tubes** (new category): triode, vacuum diode, pentode, tetrode — the
+    multi-grid tubes expose their extra grid taps (tetrode: screen; pentode:
+    screen + suppressor).
+  - **Amplifiers:** fully-differential op-amp and Schmitt triggers (normal + inverting).
+  - **Blocks** (new category): generic amplifier, ADC, DAC, low/high/band/all-pass
+    filters, phase shifter, detector, VCO, and gyrator.
+  - **Sources:** DC voltage/current, square-wave, triangle-wave, and noise sources.
+  - **Switches:** SPST, cute NO/NC, cute SPDT (up/down/mid), rotary, reed, toggle.
+  - **Instruments:** oscilloscope and a generic meter.
+  - **Transducers** (new category): loudspeaker, microphone, buzzer.
+  - **Antennas** (new category) and misc parts (asymmetric fuse, SQUID, light bulb).
+
+  Four new palette categories were added — **Tubes**, **Blocks**, **Transducers**,
+  **Antennas** — each with its own card icon and keyboard shortcut.
+- **Transformer components for power electronics.** Two-winding **transformer**
+  (air-core) and **transformer (iron core)** symbols in the **Inductors** palette
+  group, with four grid-aligned terminals (primary + secondary) — each in
+  **american**, **cute**, and **European** coil styles (six in all). The properties
+  inspector has checkboxes to place a **winding-polarity dot** at any of the four
+  winding ends, so you can set the transformer's dot convention.
+- **MIPS datapath example.** A new bundled example (**Logic Circuits → MIPS
+  Datapath**) showing a simple single-cycle datapath — PC, instruction/data
+  memory, register file, sign-extend, the new **ALU**, an **adder** (PC+4), and
+  **ALUSrc/MemtoReg multiplexers** — wired end to end.
+- **Digital logic blocks for building processors/datapaths.** New components in the
+  **Logic** palette group, drawn with authentic CircuiTikZ shapes: **D / SR / JK / T
+  flip-flops**, a **multiplexer** and **demultiplexer**, an **ALU** (the classic
+  notched trapezoid), and an **adder**. Their pins are grid-aligned where the symbol
+  can be rescaled to manage it (flip-flops fully; mux/demux data lines), so wires
+  snap onto them cleanly; the few that can't (a mux's select lines, the ALU
+  operands) stay just off-grid and still connect. They have a **Size** dropdown in
+  the inspector (25 %–200 %), like the logic gates, and render identically on-canvas
+  and in LaTeX export.
+- **Configurable multiplexer / demultiplexer.** The mux and demux have **Inputs**
+  (or **Outputs**) and **Selects** spinboxes in the properties inspector — set the
+  number of data lines (2–16) and select/control lines (1–4) independently, and the
+  symbol resizes to match (just like a logic gate's input count).
+- **Theme: System / Light / Dark.** The toolbar now offers three theme buttons —
+  **System** (follow the OS appearance, a monitor icon), **Light** (sun), and
+  **Dark** (moon) — rendered as a **segmented control** (one bordered pill with
+  the active cell highlighted) so all three are visible and read as a grouped set
+  with exactly one active at a time. Your choice is remembered between launches;
+  **System** tracks the OS live.
+- **Windows installer.** Releases now include `Heaviside-windows-x64-setup.exe`,
+  an installer that sets Heaviside up (no admin required), adds a Start Menu
+  shortcut and an uninstaller, and associates `.hv` files so you can
+  double-click a schematic to open it. The portable `.zip` is still provided.
+- **Linux AppImage.** Releases now include `Heaviside-linux-x86_64.AppImage`, a
+  single run-anywhere file (no install, no root): `chmod +x` it and run. It
+  carries a desktop menu entry and a `.hv` file association, and the portable
+  `.tar.gz` is still provided.
+- **Double-click a `.hv` file to open it.** Opening a schematic from the OS now
+  loads it into the editor — via the Windows file association, a macOS Finder
+  "open with", or a path on the command line.
+- **Wire routing follows your cursor's path.** When you draw a wire out in one
+  direction and then move perpendicular, the elbow now keeps the direction you
+  first went (e.g. right-then-down stays right-then-down) instead of flipping once
+  the second leg grows longer. The router remembers the leg's out-direction until
+  you drop the next corner.
+- **Move whole wires.** Select a wire and drag its body to reposition it. The
+  wire translates rigidly and any wire joined to it at a junction follows at the
+  shared point (so taps stay connected), as a single undoable step.
+- **Edit several wires at once.** Select multiple wires (Shift-click or
+  rubber-band) and the properties inspector edits their shared wire properties —
+  line style, width, endpoint markers/labels, junction/termination dots, z-order,
+  line-hops — applying each change to every selected wire as one undo step.
+- **Resize logic gates.** Logic gates (AND/OR/NAND/…/inverter/buffer) now have a
+  **Size** control in the properties inspector (25 %–200 %) and are placed compact
+  by default (half size) — the placement preview already shows the compact size.
+  A gate's pins sit exactly at its terminals at every size, with no extra stubs:
+  wires connect to a scaled gate's pins directly, and that connection is an
+  ordinary wire you can style. Existing files load unchanged (gates without a
+  saved size stay full-size).
+- **Wires snap to a component pin even when it is off-grid.** A wire endpoint
+  snaps onto a pin that does not lie on the 0.25-GU grid — a scaled logic gate's
+  terminal — so you can wire to gates at any size and the connection is a normal,
+  styleable wire (instead of an unstyleable lead drawn by the gate). The router
+  keeps the rest of the wire on the grid, so only the pin end is off-grid.
+- **Bulk-edit shared properties across mixed component types.** Selecting
+  components of different kinds together (e.g. a resistor and a capacitor) now
+  shows the properties they have in common — stroke width, rotation, font, fill,
+  line style, layer — and editing one applies it to every selected component as a
+  single undo step. (Previously a mixed-kind selection showed only a count.)
+  Kind-specific fields like the CircuiTikZ options string stay editable only when
+  the whole selection is one kind.
+- **Unified stroke / outline width.** A single **Stroke** control in the
+  properties inspector sets the line width of any component — a circuit symbol's
+  stroke *and* a block's (rectangle / circle / bipole) outline — replacing the
+  former separate "Border width". Because it is one property, you can select a mix
+  of symbols and blocks (e.g. a resistor and a rectangle) and set their widths
+  together in one undo step. It renders proportionally on the canvas and emits a
+  `line width=` option in the generated CircuiTikZ. (Older `.hv` files that stored
+  a block's `border_width` load transparently into the unified width.)
 - **Document properties tab.** The properties inspector is now split into two
   tabs: **Properties** (the per-object inspector) and **Document** (per-document
   CircuiTikZ voltage/current label conventions). The Document tab **replaces the
@@ -57,6 +256,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a single undo step. (A mixed-kind selection shows just a count.)
 
 ### Fixed
+- **Wires can now leave a thyristor/TRIAC gate vertically, not just horizontally.**
+  Routing a wire from the gate (a pin that sits off-grid in both directions) always
+  elbowed horizontally first, so dragging up or down didn't follow the cursor. The
+  router now honours the drawing direction for these pins — vertical routing works
+  just like horizontal — while pins that sit on a single lead line still extend
+  along that lead.
+- **Thyristor and TRIAC now render correctly in the CircuiTikZ output.** With their
+  new gate terminal they have three pins, which tripped a two-pin assumption in the
+  span calculation and collapsed the device to a zero-length `to[thyristor] (x,y)
+  (x,y)` — so the exported figure showed only stray dots while the canvas looked
+  fine. The span is now taken from the two main (anode/cathode) terminals, so the
+  output matches the canvas.
+- **Rotary and cute SPDT switches now match between the canvas and the LaTeX
+  output.** Their switch blade was sheared (drawn thick and slanted) in the
+  exported CircuiTikZ because the symbol was being stretched by a non-uniform
+  scale to force its throws onto the grid; it now uses a uniform scale, so the
+  rendered output matches what you see on the canvas.
+- **Connected wires follow a gate's pins when you change its size or input count.**
+  Rescaling a logic gate — or changing its number of inputs — moves its pins; wires
+  connected to them now re-route to follow, keeping the schematic valid. (When you
+  reduce the input count, a wire on a removed input is left snapped to the grid as
+  a disconnected end you can rewire.) Previously the wires kept their old endpoints
+  — which no longer landed on a pin or the grid — and the CircuiTikZ export failed
+  with an "invalid schematic" error. Undo restores the original wiring exactly.
+- **Off-grid pin connections survive a vertex drag.** Dragging a wire endpoint
+  onto a scaled logic gate's (off-grid) pin now snaps the live preview onto the
+  pin and commits there — instead of snapping to the nearest grid node and
+  detaching. Dropping a vertex anywhere else still snaps to the grid as before.
+- **Routing from an off-grid pin keeps the first jog off-grid.** A wire drawn from
+  (or into) a scaled gate's off-grid pin now extends along the pin's own lead line
+  and elbows onto the grid one segment later, instead of immediately snapping to
+  the grid at the pin.
+- **Wire vertices slide along an off-grid pin's axis.** Dragging a vertex that is
+  collinear with an off-grid pin now keeps the off-grid coordinate (the segment
+  into the pin stays straight) while the other coordinate snaps to the grid —
+  instead of forcing the whole vertex to the grid and introducing a jog. Dragging
+  away from the axis snaps to the grid as before, and the on-grid line *between*
+  two adjacent off-grid pins is reachable (a pin only captures the vertex when the
+  cursor is genuinely closer to it than to that grid line).
+- **Suppressed terminal dots no longer reappear when you drag.** A wire with
+  "No termination dots" (or a custom end marker) kept its open-circle terminals
+  hidden when set, but any subsequent drag of *any* component or wire re-added
+  them until the wire was clicked. The drag-time preview now honours the same
+  opt-outs as the final render.
+- **Wire labels no longer disappear when a wire is connected.** Connecting to the
+  middle of a labelled wire (which splits it) — or dissolving a T-junction, or a
+  move that collapses a wire — now preserves the wire's start/end labels, markers,
+  line style, and other properties on the resulting wire(s), and restores them
+  exactly on undo. (Previously a split/merge rebuilt the wire from scratch and
+  dropped them.)
+- **Shift-click now extends the selection.** Shift (or Ctrl/Cmd) clicking a
+  component or wire adds it to — or toggles it in — the current selection instead
+  of replacing it, so you can build a multi-selection by clicking.
+- **Shift-click under a voltage/current annotation selects the element, not the
+  annotation.** When an `open`/`short` annotation's arrow and label float across
+  the elements it measures (e.g. the cell-voltage arrow in the porous-electrode
+  example), a modifier-click on one of those elements now adds *that element* to
+  the selection — matching a plain click — instead of the annotation on top of it.
+- **European voltage arrows are drawn curved** on the canvas (a bowed arc with the
+  arrowhead at the head end), matching CircuiTikZ, instead of a straight line.
+- **European voltage/current convention no longer restyles component symbols.** It
+  is now applied as a local `voltage=european` / `current=european` option on each
+  annotated component rather than a global `\ctikzset`, so it only affects the
+  v=/i= arrows — Heaviside already provides separate American/European *symbols* as
+  distinct components.
+- **Open annotation's European voltage label** now sits beside its curved arrow
+  instead of centered on the line crossing it.
 - **Current (`i=`) label now matches the LaTeX output.** The on-canvas current
   annotation is drawn the way CircuiTikZ draws it — a single **arrowhead** on the
   wire near the exit terminal (pointing in the current direction) with the value
@@ -112,7 +378,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sentinel — once `$R$` failed to compile once, it never rendered again. Failures
   are no longer cached (an empty/missing entry is retried and self-heals), and
   successful renders are written atomically so a partial write can't poison the
-  cache either. Existing poisoned entries recover automatically.
+  cache either. Existing poisoned entries recover automatically. The in-memory
+  render and **baseline memos** likewise no longer store a transient failure —
+  so a one-off compile hiccup can't blank a label or shift label baselines for
+  the rest of the session — and a **corrupted cached label SVG** on disk is
+  detected, discarded, and recompiled instead of being trusted forever.
 - **Copy PDF / Copy SVG now paste into Word, PowerPoint, and Google Docs.**
   Copy PDF placed the figure only under the `application/pdf` MIME type, which
   macOS wraps in a flavor Office doesn't recognize — so nothing pasted; Copy SVG
@@ -146,6 +416,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the Copy PDF/SVG buttons show a pointer cursor and hover highlight.
 
 ### Changed
+- **Logic gates now place at full size (100 %).** Newly placed gates default to
+  100 % instead of 50 %, to match the scale of the new digital blocks. Existing
+  schematics are unaffected (the saved size is preserved); you can still resize any
+  gate with the inspector's **Size** dropdown.
 - **Dotted canvas grid.** The background grid is now a subtle pattern of **dots**
   at the grid intersections instead of full ruled lines, so it orients the eye
   without competing with the schematic. The fine 0.25-GU dots appear only when
@@ -157,10 +431,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of a representative component (rendered from the component itself) instead of a
   generic icon that often didn't fit; the component previews are **larger** (3
   columns); and the keyboard badges are subtle (no boxes).
-- **Split two palette categories.** **Logic** is now **Logic (Am)** and
-  **Logic (Eu)**, and the power rails (VCC/VDD/VEE/VSS) and batteries split
-  out of **Sources** into a new **Supplies** category (the actual sources, incl.
-  the european ones, stay in Sources).
+- **Reorganized the Logic palette.** The boolean gates split by symbol style into
+  **Gates (Am)** and **Gates (Eu)**, and the digital blocks (flip-flops, mux/demux,
+  ALU, adder) get their own **Logic** category — so gates and building blocks no
+  longer share one crowded group. The power rails (VCC/VDD/VEE/VSS) and batteries
+  also split out of **Sources** into a **Supplies** category (the actual sources,
+  incl. the european ones, stay in Sources).
 - **Copy to clipboard is PNG-only now.** Copy PDF and Copy SVG were dropped: the
   common paste targets (Word, PowerPoint, Google Docs) rasterize a pasted figure
   anyway, so the extra buttons were misleading. Copy PNG renders at the **PNG
@@ -260,6 +536,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type. This affects only `components/definitions.json` and the Component Editor;
   saved `.hv` files are unaffected (they never stored emission). The generated
   LaTeX output is byte-for-byte unchanged.
+
+### Security
+- **`-no-shell-escape` now also guards the on-canvas math-label renderer.** Math
+  labels are typeset the instant a `.hv` file is opened (no preview or export
+  gesture needed) and label text flows verbatim into LaTeX, so this is the most
+  exposed compile path. It now passes `-no-shell-escape` like the
+  preview/export pipeline already did, so a crafted label in an untrusted `.hv`
+  file can never invoke `\write18` / external commands regardless of the local
+  TeX installation's default. The offline component renderer was hardened the
+  same way (and given a compile timeout). Covered by `tests/test_latex_security.py`.
+
+### Added
+- **Current/voltage direction modifiers on the canvas.** The CircuiTikZ `<`/`>`
+  modifiers now render correctly on the canvas (they already worked in the
+  exported figure): `i<=` reverses the current arrow and draws it on the entry
+  lead (the other side of the component), `v<=` swaps the voltage polarity, and
+  `i>=`/`v>=` are the forward defaults. Position (`^`/`_`) and direction (`<`/`>`)
+  combine, e.g. `i_<=`.
+- **Open annotation decorations.** The `open` annotation component now draws its
+  decoration like CircuiTikZ's `to[open, …]`: a current arrow **centered on the
+  line** (label above) for `i=`, and `±` voltage signs at the terminals (label
+  centered) for `v=`. `i<=` flips the arrow in place; `v<=` swaps the polarity.
+- **Current on a `short`** is now centered on the middle of the wire on the
+  canvas (matching the LaTeX output) rather than sitting out on the exit lead —
+  a `short` has no body in the middle for the arrow to clear.
+- **Larger current arrowheads** on the canvas, to better match CircuiTikZ's
+  prominent current-flow arrow (the voltage arrow is unchanged).
+- **Update notifier.** On startup (default on) Heaviside makes a single
+  read-only check of the GitHub Releases page and tells you if a newer version
+  is available — it never downloads or installs anything itself, and sends no
+  information about you. Includes a one-time disclosure, a **Skip This Version**
+  option, a **Help ▸ Check for Updates** menu item, and a **Preferences ▸
+  Updates** toggle to turn it off.
+- **macOS app now ships as a `.dmg`.** The macOS download is a
+  drag-to-Applications disk image (with branded background art) instead of a zip,
+  the conventional install experience. When signing is configured the release
+  workflow signs, notarizes, and staples the `.dmg`; it also sidesteps macOS App
+  Translocation by encouraging installation into `/Applications`.
+- **Third-Party Licenses in the About dialog.** Help ▸ About now lists the key
+  third-party components and adds a **Third-Party Licenses…** button that opens
+  the bundled `licenses/` folder, so attributions are discoverable from the GUI.
+- **Getting Started guide** in the README — a short first-run walkthrough
+  (place, wire, label, preview, save/export).
+
+### Changed
+- **Canvas line weight now matches the CircuiTikZ output.** Wire and component
+  stroke widths (and the ±/arrow annotation strokes) were ~2.4× bolder than the
+  compiled figure; they are now scaled to the CircuiTikZ thin-stroke weight so the
+  on-canvas drawing reads the same as the exported PDF.
+- **Bundled examples are now grouped into categories.** The **File → Open
+  Example** menu mirrors sub-folders under `examples/` (Battery Models, Control
+  Systems, Power Electronics) as category submenus. Adding a sub-folder of `.hv`
+  files creates a new category automatically — no code changes needed.
+- **Auto-export TeX, SVG, and PNG on save are now on by default** (PDF and EPS
+  remain off). A fresh install keeps the `.tex`, `.svg`, and `.png` siblings of
+  your schematic current on every save. SVG/PNG need pdflatex (SVG also Poppler);
+  a missing tool fails that export non-fatally without blocking the save. Turn
+  any of them off in Preferences ▸ Export.
+- **Preferences are now organised into tabs** (Export, Appearance, Tools,
+  Updates) so the dialog stays compact instead of stacking every group
+  vertically.
+- **More breathing room for on-canvas component labels.** The gap between a
+  component body and its typeset label was increased so labels no longer crowd
+  tall symbols like inductors (the boost example's `L` sat right on the coil).
+  Canvas display only — the exported CircuiTikZ figure is unchanged.
+- **Complete third-party font attribution.** `licenses/THIRD_PARTY_LICENSES.md`
+  now attributes the bundled math fonts (STIX Two Math, DejaVu Sans, via
+  ziamath/ziafont) and every icon font qtawesome ships (Font Awesome, Material
+  Design Icons, Phosphor, Remix, Elusive, Codicon), with the SIL OFL 1.1 and
+  Apache-2.0 license texts added to the `licenses/` folder.
+
+### Fixed
+- **Current (`i=`) labels no longer float away from their components on the
+  canvas.** The current label now clears the arrowhead on the lead (where the `i=`
+  arrow actually sits) instead of the component body, so it hugs the wire as in
+  the compiled figure — most visible on `short` segments and the current-annotation
+  component. Canvas display only; the exported figure was already correct.
+- **No-LaTeX math labels now work in packaged builds.** The PyInstaller bundle
+  now ships the ziamath/ziafont font data (STIX Two Math, DejaVu Sans). Without
+  it, the pure-Python math-label fallback — the feature that renders typeset
+  labels with no TeX installed — was broken in the frozen app even though it
+  worked from source. The fallback also degrades to raw text instead of raising
+  if its fonts are ever missing.
+- **Clearer error for a corrupt install.** A missing or truncated bundled
+  component library (`definitions.json`) now raises a clear "installation is
+  missing or corrupt" message instead of an opaque `JSONDecodeError` at startup.
+- The math-render thread pool now drains on app quit, avoiding a possible
+  "QThreadPool destroyed while threads are still running" warning.
+
+### Removed
+- Dead `scripts/make_ico.py` (superseded by the cross-platform
+  `scripts/make_icons.py`).
 
 ## [0.2.0] - 2026-06-07
 

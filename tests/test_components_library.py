@@ -245,6 +245,28 @@ def test_diode_kinds_golden():
     assert cg._DIODE_KINDS == frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
 
 
+def test_diode_scale_single_sourced():
+    """The diode body scale is defined once (library) and shared by the codegen
+    and the component-editor renderer — the canvas SVG assets and the emitted
+    ``\\ctikzset{diodes/scale=…}`` can never drift apart."""
+    from app.componenteditor import renderer
+
+    assert library.DIODE_SYMBOL_SCALE == 0.8           # golden value
+    assert cg.DIODE_SYMBOL_SCALE == library.DIODE_SYMBOL_SCALE
+    assert renderer.DIODE_SCALE == library.DIODE_SYMBOL_SCALE
+
+
+def test_geometry_key_single_sourced():
+    """``geometry_key`` is canonical in the library; svgsym and the renderer
+    re-export the same function (byte-identical duplicates are gone)."""
+    from app.componenteditor import renderer
+
+    assert renderer.geometry_key is library.geometry_key
+    assert library.geometry_key("op amp") == "op_amp"
+    assert library.geometry_key("flipflop D") == "flipflop_D"
+    assert library.geometry_key("R") == "R"
+
+
 # ---------------------------------------------------------------------------
 # Variants reflect filled / body_diode
 # ---------------------------------------------------------------------------

@@ -23,11 +23,17 @@ The preview occupies the lower-right of the bottom strip, beside the source.
 from __future__ import annotations
 
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
 import qtawesome as qta
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
+from shiboken6 import isValid as _qt_is_valid
+
+from PySide6.QtCore import (
+    QObject, QPointF, QRectF, QRunnable, QSize, Qt, QThreadPool, QTimer, QUrl,
+    Signal,
+)
 from PySide6.QtGui import (
     QAction, QActionGroup, QColor, QDesktopServices, QFont, QGuiApplication,
     QImage, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut,
@@ -59,6 +65,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import update as _update
 from app.resources import resource_path
 from app.version import __version__
 from app.canvas.scene import Mode, SchematicScene  # noqa: F401 (Mode used in type hints)
@@ -75,9 +82,11 @@ from app.preview.latex import (
     pdf_to_qimage,
     pdf_to_svg,
 )
+from app.components.style import contains_dangerous_latex
 from app.preview import mathrender, tools
 from app.preview.worker import PreviewWorker
-from app.schematic.io import SchematicLoadError, load, save
+from app.schematic import io as schematic_io
+from app.schematic.io import SchematicLoadError, SchematicSaveError, load, save
 from app.schematic.model import Schematic
 from app.ui.palette import ComponentPalette
 from app.ui import theme
@@ -88,6 +97,9 @@ from app.ui.sourcepanel import SourcePanel
 _WINDOW_TITLE = "Heaviside — CircuiTikZ Editor"
 #: GitHub issues page — opened by Help ▸ Report a Bug and the toolbar bug button.
 _ISSUES_URL = "https://github.com/whileman133/Heaviside/issues"
+#: Fallback delay before re-enabling Help ▸ Check for Updates if the async
+#: probe never reports back (it normally re-enables in the result callback).
+_UPDATE_CHECK_REENABLE_MS = 30_000
 
 
 def _system_is_dark() -> bool:
@@ -114,6 +126,105 @@ def _component_editor_available() -> bool:
     return bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
 
+# ---------------------------------------------------------------------------
+# Background auto-export (runs the post-save sibling-file exports off the UI
+# thread; see MainWindow._auto_export)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _AutoExportJob:
+    """An immutable snapshot of everything one auto-export run needs.
+
+    Captured on the UI thread at save time so the worker never reads the live
+    schematic or preferences (which the user may be mutating meanwhile).
+    """
+
+    path: Path
+    source: str          # generated CircuiTikZ source (pure data)
+    want_tex: bool
+    want_pdf: bool
+    want_eps: bool
+    want_svg: bool
+    want_png: bool
+    png_dpi: int
+
+
+def _run_auto_export_job(job: _AutoExportJob) -> str:
+    """Execute *job* (worker thread) and return the status-bar message.
+
+    Each format is independent: with several enabled (TeX/SVG/PNG default on),
+    a failure in one — e.g. SVG when Poppler is absent — must not skip the
+    others (PNG needs only pdflatex). Outcomes are collected and reported once.
+    """
+    written: list[str] = []
+    failed: list[str] = []
+
+    def _export(suffix: str, produce) -> None:  # noqa: ANN001
+        target = job.path.with_suffix(suffix)
+        try:
+            produce(target)
+            written.append(target.name)
+        except (OSError, ValueError, CompileError, RuntimeError) as exc:
+            failed.append(f"{target.name} ({exc})")
+
+    # TeX snippet: written directly, no LaTeX install needed.
+    if job.want_tex:
+        _export(".tex", lambda t: t.write_text(build_snippet(job.source),
+                                               encoding="utf-8"))
+
+    # Image formats share a single pdflatex compile.
+    if job.want_pdf or job.want_eps or job.want_svg or job.want_png:
+        try:
+            pdf_bytes = compile_tex(build_tex(job.source))
+        except (CompileError, OSError, RuntimeError) as exc:
+            if written:
+                return ("Auto-exported " + ", ".join(written)
+                        + f" · compile failed ({exc})")
+            return f"Auto-export failed ({exc})"
+        if job.want_pdf:
+            _export(".pdf", lambda t: t.write_bytes(pdf_bytes))
+        if job.want_eps:
+            _export(".eps", lambda t: t.write_bytes(pdf_to_eps(pdf_bytes)))
+        if job.want_svg:
+            _export(".svg", lambda t: t.write_bytes(pdf_to_svg(pdf_bytes)))
+        if job.want_png:
+            def _png(target: Path) -> None:
+                image = pdf_to_qimage(pdf_bytes, dpi=job.png_dpi)
+                if not image.save(str(target), "PNG"):
+                    raise OSError(f"could not write {target.name}")
+            _export(".png", _png)
+
+    msg = "Auto-exported " + ", ".join(written) if written else ""
+    if failed:
+        msg = (msg + " · " if msg else "") + "failed: " + "; ".join(failed)
+    return msg or "Auto-export: nothing written"
+
+
+class _AutoExportSignals(QObject):
+    """Queued bridge from the worker task back to the UI thread."""
+
+    finished = Signal(str)   # the status-bar message
+
+
+class _AutoExportTask(QRunnable):
+    """QRunnable wrapper running one :func:`_run_auto_export_job`."""
+
+    def __init__(self, job: _AutoExportJob, signals: _AutoExportSignals) -> None:
+        super().__init__()
+        self._job = job
+        self._signals = signals
+
+    def run(self) -> None:  # noqa: D102 — QRunnable hook
+        try:
+            message = _run_auto_export_job(self._job)
+        except Exception as exc:  # noqa: BLE001 — never let a job kill the pool
+            message = f"Auto-export failed ({exc})"
+        try:
+            self._signals.finished.emit(message)
+        except RuntimeError:
+            pass   # signals object destroyed during app shutdown
+
+
 class MainWindow(QMainWindow):
     """Top-level application window."""
 
@@ -128,10 +239,20 @@ class MainWindow(QMainWindow):
         # (§10). Form controls (dialogs, message boxes, spin/combo boxes, line
         # edits) keep their **native** look — on macOS those already follow the OS
         # appearance — so only our themed chrome and the canvas are switched here.
-        self._dark = _system_is_dark()
-        # Until the user flips the toolbar toggle, the theme tracks the OS
-        # appearance live; a manual toggle pins it and stops following the OS.
-        self._follow_system = True
+        # Theme mode is three-state: "system" (follow the OS appearance live),
+        # "light", or "dark". It is persisted as dark_override (None / False /
+        # True) and resolved here, before the UI is built, so chrome/canvas
+        # construct with the right tokens. The user's saved choice wins; absent
+        # one, the app follows the OS — restored on the next launch.
+        self._prefs = Preferences()
+        _override = self._prefs.dark_override
+        self._theme_mode = (
+            "system" if _override is None else ("dark" if _override else "light")
+        )
+        self._follow_system = self._theme_mode == "system"
+        self._dark = (
+            _system_is_dark() if self._follow_system else self._theme_mode == "dark"
+        )
         theme.set_dark(self._dark)
         style.set_dark(self._dark)
         # Records (QAction, qtawesome-name) so toolbar/ribbon icons can be
@@ -147,8 +268,17 @@ class MainWindow(QMainWindow):
         self._preview_worker = PreviewWorker(self, dpi=300)
         self._preview_worker.set_dark(self._dark)  # render the preview dark to match
         self._current_path: Path | None = None
-        self._modified = False
-        self._prefs = Preferences()
+        # Modified state is derived from the undo stack's save point (see the
+        # _modified property); _manual_dirty is OR'd in for any mutation that
+        # bypasses the stack (none known today — kept as a safety net).
+        self._manual_dirty = False
+        # Background auto-export bookkeeping (single-flight; see _auto_export).
+        self._auto_export_busy = False
+        self._auto_export_pending: _AutoExportJob | None = None
+        self._auto_export_signals: _AutoExportSignals | None = None
+        # Non-blocking "this file contains risky LaTeX" box (kept referenced).
+        self._latex_warning_box: QMessageBox | None = None
+        # (self._prefs is created above, before the theme is resolved.)
         # Apply configured external-tool paths before any discovery (dependency
         # check, preview, math-label engine) so they honour the user's settings.
         tools.set_tool_paths(self._prefs.tool_paths)
@@ -176,6 +306,7 @@ class MainWindow(QMainWindow):
 
         # -- Wire signals ---------------------------------------------------
         self._connect_signals()
+        self._refresh_action_states()   # Undo/Redo start disabled (empty stack)
 
         # -- Follow the OS light/dark appearance live (§10) -----------------
         QGuiApplication.styleHints().colorSchemeChanged.connect(
@@ -184,6 +315,39 @@ class MainWindow(QMainWindow):
 
         # -- Dependency warnings (non-blocking) ----------------------------
         self._check_and_warn_dependencies()
+
+        # -- Update check (non-blocking, opt-out) --------------------------
+        # Deferred so it never delays first paint; the network probe itself runs
+        # on a worker thread (app.update.check_async).
+        QTimer.singleShot(0, self._maybe_check_for_updates_on_startup)
+
+    # ------------------------------------------------------------------
+    # Modified state (derived from the undo stack's save point)
+    # ------------------------------------------------------------------
+
+    @property
+    def _modified(self) -> bool:
+        """True when the document differs from its last-saved state.
+
+        Derived from the undo stack's save point, so undoing back to the saved
+        state clears the dirty dot (spec §10.1). ``_manual_dirty`` is OR'd in as
+        a safety net for any mutation that bypasses the stack.
+        """
+        return self._manual_dirty or self._scene.undo_stack.is_modified()
+
+    @_modified.setter
+    def _modified(self, value: bool) -> None:
+        if value:
+            self._manual_dirty = True
+        else:
+            self._manual_dirty = False
+            self._scene.undo_stack.mark_save_point()
+
+    def _refresh_action_states(self) -> None:
+        """Enable/disable Undo & Redo to match the stack's actual state."""
+        stack = self._scene.undo_stack
+        self._act_undo.setEnabled(stack.can_undo())
+        self._act_redo.setEnabled(stack.can_redo())
 
     # ------------------------------------------------------------------
     # Theme (light / dark, follows the OS appearance) — §10
@@ -215,41 +379,55 @@ class MainWindow(QMainWindow):
             self._dark = dark
             self._apply_theme()
 
-    def _toggle_dark(self, checked: bool) -> None:
-        """Toolbar light/dark toggle: pin the chosen mode and stop following the
-        OS appearance (a one-way opt-out — there is no 'auto' state to return to
-        within a session)."""
-        self._follow_system = False
-        if checked != self._dark:
-            self._dark = checked
-            self._apply_theme()
-        else:
-            self._sync_dark_action()
+    #: Display order for the toolbar theme radio group.
+    _THEME_MODE_ORDER = ("system", "light", "dark")
+    _THEME_MODE_ICON = {"system": "fa5s.desktop", "light": "fa5s.sun", "dark": "fa5s.moon"}
+    _THEME_MODE_LABEL = {"system": "System", "light": "Light", "dark": "Dark"}
 
-    def _sync_dark_action(self) -> None:
-        """Reflect the current dark state on the toolbar toggle: a sun icon (to
-        switch back to light) when dark, a moon (to switch to dark) when light."""
-        act = getattr(self, "_act_dark", None)
-        if act is None:
+    def _set_theme_mode(self, mode: str) -> None:
+        """Apply and persist a theme *mode* (``"system"``/``"light"``/``"dark"``).
+
+        ``"system"`` follows the OS appearance live (and is restored if the OS
+        later changes); ``"light"``/``"dark"`` pin it. The choice is saved
+        (`dark_override`: ``None``/``False``/``True``) so it survives a relaunch.
+        """
+        self._theme_mode = mode
+        self._follow_system = mode == "system"
+        self._prefs.set_dark_override(None if mode == "system" else (mode == "dark"))
+        new_dark = _system_is_dark() if self._follow_system else (mode == "dark")
+        if new_dark != self._dark:
+            self._dark = new_dark
+            self._apply_theme()          # full re-theme (also re-syncs the button)
+        else:
+            # The light/dark ink didn't change (e.g. Light → System while the OS
+            # is light), but native-widget following and the button still must.
+            self._apply_color_scheme()
+            self._sync_theme_action()
+
+    def _sync_theme_action(self) -> None:
+        """Check the toolbar radio button matching the active theme mode, leaving
+        the other two unchecked (the exclusive group enforces this, but a
+        programmatic mode change must drive it explicitly)."""
+        acts = getattr(self, "_theme_actions", None)
+        if not acts:
             return
-        act.blockSignals(True)
-        act.setChecked(self._dark)
-        act.blockSignals(False)
-        name = "fa5s.sun" if self._dark else "fa5s.moon"
-        act.setIcon(qta.icon(name, color=theme.ICON))
-        act.setToolTip("Switch to light mode" if self._dark else "Switch to dark mode")
+        act = acts.get(self._theme_mode)
+        if act is not None and not act.isChecked():
+            act.setChecked(True)
 
     def _apply_color_scheme(self) -> None:
         """Drive the **application colour scheme** so all **native** widgets — form
         controls, dialogs, message boxes, tooltips, scrollbars, tab bars, and the
         window background — follow the chosen light/dark mode natively, instead of
-        being restyled (which looked non-native). While following the OS we leave it
-        ``Unknown`` (the OS already drives native widgets directly); a manual toggle
-        pins ``Dark``/``Light``. Requires Qt 6.8+ (``QStyleHints.setColorScheme``)."""
-        if self._follow_system:
-            return  # the OS appearance drives native widgets; don't override it
+        being restyled (which looked non-native). In **System** mode we set it back
+        to ``Unknown`` so the OS drives native widgets directly (and a previously
+        pinned scheme is released); **Light**/**Dark** pin it. Requires Qt 6.8+
+        (``QStyleHints.setColorScheme``)."""
         sh = QGuiApplication.styleHints()
-        target = Qt.ColorScheme.Dark if self._dark else Qt.ColorScheme.Light
+        target = (
+            Qt.ColorScheme.Unknown if self._follow_system
+            else (Qt.ColorScheme.Dark if self._dark else Qt.ColorScheme.Light)
+        )
         if sh.colorScheme() != target:
             sh.setColorScheme(target)
 
@@ -265,9 +443,12 @@ class MainWindow(QMainWindow):
             self._toolbar.setStyleSheet(theme.top_toolbar_qss())
         if self._ribbon is not None:
             self._ribbon.setStyleSheet(theme.ribbon_qss())
+        divider = getattr(self, "_theme_divider", None)
+        if divider is not None:
+            divider.setStyleSheet(theme.toolbar_dotted_divider_qss())
         for action, name in self._themed_icons:
             action.setIcon(qta.icon(name, color=theme.ICON))
-        self._sync_dark_action()  # state-dependent icon (sun/moon), re-tinted too
+        self._sync_theme_action()  # state-dependent icon (monitor/sun/moon), re-tinted
         self._view.setStyleSheet(theme.scrollbar_qss())  # canvas scrollbars
         # Side panels rebuild their own theme-token stylesheets.
         for panel in (self._palette, self._props, self._doc_props,
@@ -279,16 +460,26 @@ class MainWindow(QMainWindow):
         self._preview_worker.set_dark(self._dark)
         if self._preview_panel.has_image():
             self._on_auto_compile()
-        # Repaint the canvas (items read style.COLOR_* at paint time).
+        # Status-bar separators carry a pinned stylesheet — re-ink them.
+        sb = self.statusBar()
+        if sb is not None:
+            for sep in sb.findChildren(QWidget, "statusSeparator"):
+                sep.setStyleSheet(f"background: {theme.DIVIDER};")
+        # Repaint the canvas (items read style.COLOR_* at paint time) and the
+        # welcome screen (its diagram inks read theme tokens at paint time).
         self._scene.update()
         self._view.viewport().update()
+        welcome = self._canvas_stack.widget(0)
+        if welcome is not None:
+            welcome.update()
 
     def _on_document_props_changed(self) -> None:
         """A live edit in the Document inspector changed a style: re-place the
-        on-canvas ± signs / arrows and refresh the source panel + preview (same
-        flow the old Document Settings dialog used)."""
+        on-canvas ± signs / arrows. The edit itself is now an undoable command
+        pushed through the scene (which already emitted ``schematic_changed``,
+        refreshing source/preview/modified-state), so only the annotation
+        relayout remains here."""
         self._scene.relayout_annotations()
-        self._scene.schematic_changed.emit()
 
     # ------------------------------------------------------------------
     # Palette keyboard shortcuts (§10.2)
@@ -492,6 +683,10 @@ class MainWindow(QMainWindow):
         self._act_report_bug.setToolTip("Open the GitHub issues page to report a bug")
         self._act_report_bug.triggered.connect(self._on_report_bug)
         help_menu.addAction(self._act_report_bug)
+        self._act_check_updates = QAction("Check for &Updates…", self)
+        self._act_check_updates.setToolTip("Check GitHub for a newer version")
+        self._act_check_updates.triggered.connect(self._on_check_updates_manual)
+        help_menu.addAction(self._act_check_updates)
         help_menu.addSeparator()
         act_about = QAction("&About Heaviside", self)
         act_about.triggered.connect(self._on_about)
@@ -534,13 +729,51 @@ class MainWindow(QMainWindow):
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
 
-        # Light/dark toggle. Its icon/tooltip track the state (sun↔moon), so it is
-        # refreshed via _sync_dark_action rather than the name-based re-tint list.
-        self._act_dark = QAction("Toggle dark mode", self)
-        self._act_dark.setCheckable(True)
-        self._act_dark.toggled.connect(self._toggle_dark)
-        tb.addAction(self._act_dark)
-        self._sync_dark_action()
+        # Theme radio group: System / Light / Dark — all three icons (monitor/sun/
+        # moon) are visible, grouped in an exclusive QActionGroup so exactly one is
+        # active at a time. They render as plain *flat* toolbar buttons, identical to
+        # the others, with the active one carrying the standard soft-blue :checked
+        # tint; only the tight spacing inside their container reads them as a set.
+        # The icons re-tint via the standard _themed_icon list; _sync_theme_action
+        # only flips which is checked.
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self._theme_actions: dict[str, QAction] = {}
+
+        group_box = QWidget()
+        group_layout = QHBoxLayout(group_box)
+        group_layout.setContentsMargins(0, 0, 0, 0)
+        group_layout.setSpacing(0)   # tighter than the toolbar's 3px → reads as a group
+        for mode in self._THEME_MODE_ORDER:
+            act = QAction(self._THEME_MODE_LABEL[mode], self)
+            self._themed_icon(act, self._THEME_MODE_ICON[mode])
+            act.setCheckable(True)
+            act.setChecked(mode == self._theme_mode)
+            act.setToolTip(f"Theme: {self._THEME_MODE_LABEL[mode]}")
+            act.triggered.connect(lambda _checked, m=mode: self._set_theme_mode(m))
+            self._theme_group.addAction(act)
+            self._theme_actions[mode] = act
+
+            btn = QToolButton(group_box)
+            btn.setDefaultAction(act)
+            btn.setAutoRaise(True)
+            btn.setIconSize(tb.iconSize())   # match the toolbar's own action buttons
+            btn.setCursor(Qt.PointingHandCursor)
+            group_layout.addWidget(btn)
+        self._theme_group_box = group_box
+        tb.addWidget(group_box)
+        self._sync_theme_action()
+
+        # Dotted vertical divider separating the theme group from the help/bug
+        # buttons on its right (distinct from the solid separators elsewhere).
+        divider = QWidget()
+        divider.setObjectName("toolbarDottedDivider")
+        divider.setFixedWidth(9)
+        # Stretch the dotted line to almost the full toolbar height.
+        divider.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self._theme_divider = divider
+        tb.addWidget(divider)
+        divider.setStyleSheet(theme.toolbar_dotted_divider_qss())
 
         self._themed_icon(self._act_help, "fa5s.question-circle")
         self._act_help.setToolTip("Keyboard shortcuts & gestures (F1)")
@@ -552,7 +785,7 @@ class MainWindow(QMainWindow):
 
         for action in (self._act_new, self._act_open, self._act_save,
                        self._act_undo, self._act_redo, compile_btn,
-                       self._act_dark, self._act_help, self._act_report_bug):
+                       self._act_help, self._act_report_bug):
             btn = tb.widgetForAction(action)
             if btn:
                 btn.setCursor(Qt.PointingHandCursor)
@@ -785,8 +1018,13 @@ class MainWindow(QMainWindow):
         self._canvas_stack.setCurrentIndex(1)
 
     def _on_schematic_changed(self) -> None:
-        self._modified = True
+        # Modified state is derived from the undo stack (see _modified), so a
+        # change only needs the title + action states refreshed — undoing back
+        # to the save point correctly clears the dirty dot.
         self._update_title()
+        self._refresh_action_states()
+        # Undo/redo can also revert Document-tab edits; reload its combos.
+        self._doc_props.refresh()
         # Keep the properties panel in sync when a single component is selected
         # (e.g. after an in-place options edit that doesn't change the selection).
         comp_ids = self._scene.selected_component_ids()
@@ -795,6 +1033,8 @@ class MainWindow(QMainWindow):
             self._props.show_component(comp_ids[0])
         elif len(wire_ids) == 1 and not comp_ids:
             self._props.show_wire(wire_ids[0])
+        elif len(wire_ids) >= 2 and not comp_ids:
+            self._props.show_wires(wire_ids)
 
     def _on_selection_changed(self, comp_ids: list[str]) -> None:
         # comp_ids comes from the signal; query wires directly (the signal only
@@ -813,9 +1053,13 @@ class MainWindow(QMainWindow):
         elif total == 1 and len(wire_ids) == 1:
             self._props.show_wire(wire_ids[0])
         elif len(comp_ids) >= 2 and not wire_ids:
-            # Several components, no wires → bulk-edit if they're all one kind
-            # (show_components falls back to a count for a mixed selection).
+            # Several components, no wires → bulk-edit. Same kind shows the full
+            # per-kind editor; mixed kinds show the shared capability sections
+            # (show_components falls back to a count when nothing is shared).
             self._props.show_components(comp_ids)
+        elif len(wire_ids) >= 2 and not comp_ids:
+            # Several wires, no components → bulk-edit their shared wire properties.
+            self._props.show_wires(wire_ids)
         else:
             self._props.show_multi_select(total)
 
@@ -829,7 +1073,8 @@ class MainWindow(QMainWindow):
             source = generate(self._scene.schematic, y_flip=True,
                             mark_unconnected_pins=self._prefs.mark_unconnected_pins,
                             mark_line_hops=self._prefs.line_hops)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — keep the preview alive, but visible
+            self._status_compile.setText(f"Preview update failed: {exc}")
             return
         self._preview_worker.request_compile(source)
 
@@ -860,7 +1105,9 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         self._show_canvas()
-        self._scene.set_schematic(Schematic(version="0.1", name="untitled"))
+        self._scene.set_schematic(
+            Schematic(version=schematic_io._FORMAT_VERSION, name="untitled")
+        )
         self._current_path = None
         self._modified = False
         self._update_title()
@@ -876,11 +1123,28 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self.load_path(path)
+
+    def load_path(self, path: str | Path) -> bool:
+        """Load the schematic at *path* into the editor (no discard prompt).
+
+        Shared by **File ▸ Open** and the **command-line / file-association** launch
+        (double-clicking a ``.hv`` file passes its path as ``argv[1]``; see
+        ``main.py``). Shows a load-error dialog and returns ``False`` on failure,
+        ``True`` on success. Callers that need to guard unsaved work should call
+        :meth:`_confirm_discard` first (the menu path does; a fresh-launch open
+        has nothing to discard).
+        """
         try:
-            schematic = load(path)
+            schematic = load(str(path))
         except SchematicLoadError as exc:
             QMessageBox.critical(self, "Load Error", str(exc))
-            return
+            return False
+        except Exception as exc:  # noqa: BLE001 — belt & suspenders: io should
+            # convert everything to SchematicLoadError, but an unexpected bug
+            # must show the error dialog rather than crash the app.
+            QMessageBox.critical(self, "Load Error", f"Unexpected error: {exc}")
+            return False
         self._show_canvas()
         self._scene.set_schematic(schematic)
         self._current_path = Path(path)
@@ -893,30 +1157,85 @@ class MainWindow(QMainWindow):
         # welcome→canvas switch and layout pass, when the viewport has its final
         # size (fitInView needs a valid viewport size to compute the zoom).
         QTimer.singleShot(0, self._view.fit_to_schematic)
+        # Security heads-up (once per load): labels are compiled as raw LaTeX
+        # outside Heaviside (exports), so flag risky primitives in the file.
+        self._warn_dangerous_latex(schematic)
+        return True
+
+    def _warn_dangerous_latex(self, schematic: Schematic) -> bool:
+        """Warn (non-blocking) when any label/text/option field of *schematic*
+        contains a high-risk LaTeX primitive (``\\write18``, ``\\input``, …).
+
+        Heaviside itself always compiles with ``-no-shell-escape``, but an
+        exported snippet may be compiled elsewhere — so a file from an untrusted
+        source deserves a review prompt. Returns True when a warning was shown.
+        """
+        fields = [c.options for c in schematic.components]
+        for w in schematic.wires:
+            fields += [w.start_label, w.end_label, w.mid_label]
+        if not any(contains_dangerous_latex(f or "") for f in fields):
+            return False
+        self._status_compile.setText(
+            "Warning: this file's labels contain potentially dangerous LaTeX"
+        )
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Potentially Dangerous LaTeX")
+        box.setText(
+            "This file's labels contain LaTeX commands (such as \\write18 or "
+            "\\input) that could execute code or read files when compiled "
+            "outside Heaviside — review them before exporting.\n\n"
+            "Previews inside Heaviside always compile with shell escape "
+            "disabled."
+        )
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setAttribute(Qt.WA_DeleteOnClose, True)
+        box.open()   # non-blocking: the user can keep working
+        self._latex_warning_box = box
+        return True
 
     def _build_examples_menu(self, file_menu) -> None:
-        """Add an **Open Example ▸** submenu listing the bundled example files.
+        """Add an **Open Example ▸** submenu listing the bundled examples.
 
         Examples ship under ``examples/`` (bundled into the .app via
         heaviside.spec) and are resolved through ``resource_path`` so the same
-        code works from a source checkout and when frozen. Each ``*.hv`` becomes
-        a menu item that loads it as a starting point (see ``_open_example``).
+        code works from a source checkout and when frozen. Each **subdirectory**
+        becomes a category submenu of its ``*.hv`` files; any ``*.hv`` directly
+        under ``examples/`` is listed (uncategorised) at the top level. Loading an
+        example uses it as a starting template (see ``_open_example``).
         """
         examples_dir = resource_path("examples")
-        try:
-            files = sorted(examples_dir.glob("*.hv")) if examples_dir.is_dir() else []
-        except OSError:
-            files = []
-
         submenu = file_menu.addMenu("Open &Example")
-        if not files:
+
+        def _add(menu, files) -> None:
+            for path in sorted(files):
+                # Bind the path per-iteration (default-arg avoids the late-binding
+                # trap); escape '&' so it isn't taken as a menu mnemonic.
+                act = menu.addAction(path.stem.replace("&", "&&"))
+                act.triggered.connect(
+                    lambda _checked=False, p=path: self._open_example(p)
+                )
+
+        added = False
+        try:
+            if examples_dir.is_dir():
+                for cat in sorted(d for d in examples_dir.iterdir() if d.is_dir()):
+                    files = list(cat.glob("*.hv"))
+                    if files:
+                        _add(submenu.addMenu(cat.name.replace("&", "&&")), files)
+                        added = True
+                loose = list(examples_dir.glob("*.hv"))
+                if loose:
+                    if added:
+                        submenu.addSeparator()
+                    _add(submenu, loose)
+                    added = True
+        except OSError:
+            pass
+
+        if not added:
             placeholder = submenu.addAction("(no examples available)")
             placeholder.setEnabled(False)
-            return
-        for path in files:
-            act = submenu.addAction(path.stem)
-            # Bind the path per-iteration (default-arg avoids the late-binding trap).
-            act.triggered.connect(lambda _checked=False, p=path: self._open_example(p))
 
     def _open_example(self, path: Path) -> None:
         """Load a bundled example as a fresh, unsaved document.
@@ -942,41 +1261,69 @@ class MainWindow(QMainWindow):
         self._status_compile.setText(f"Loaded example: {path.stem}")
         QTimer.singleShot(0, self._view.fit_to_schematic)
 
-    def _on_save(self) -> None:
-        if self._current_path is None:
-            self._on_save_as()
-        else:
-            self._do_save(self._current_path)
+    def _flush_inspector_edits(self) -> None:
+        """Commit any pending (debounced) inspector edit before serialising.
 
-    def _on_save_as(self) -> None:
+        Called at the start of save/export and before the unsaved-changes check
+        so the last keystrokes within the debounce window are never lost or
+        written stale (§10.3).
+        """
+        self._props.flush_pending_edits()
+
+    def _on_save(self) -> bool:
+        """Save (Save As when untitled). Returns True when the file was written."""
+        self._flush_inspector_edits()
+        if self._current_path is None:
+            return self._on_save_as()
+        return self._do_save(self._current_path)
+
+    def _on_save_as(self) -> bool:
+        """Prompt for a path and save. Returns False when cancelled or failed."""
+        self._flush_inspector_edits()
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Schematic", "", "Heaviside Schematics (*.hv);;All Files (*)"
         )
         if not path:
-            return
+            return False
         if not path.endswith(".hv"):
             path += ".hv"
-        self._do_save(Path(path))
+        return self._do_save(Path(path))
 
-    def _do_save(self, path: Path) -> None:
+    def _do_save(self, path: Path) -> bool:
+        """Write the .hv synchronously; report success. Auto-export runs in the
+        background afterwards (it must never block or fail the save itself)."""
+        self._flush_inspector_edits()
         try:
             save(self._scene.schematic, path)
+        except SchematicSaveError as exc:
+            # save() validates before writing, so the file on disk is untouched.
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                f"{exc}\n\nThe existing file was not modified.",
+            )
+            return False
         except OSError as exc:
             QMessageBox.critical(self, "Save Error", str(exc))
-            return
+            return False
         self._current_path = path
         self._modified = False
         self._update_title()
         self._auto_export(path)
+        return True
 
     def _auto_export(self, path: Path) -> None:
-        """Write sibling TeX/PDF/EPS/SVG files next to *path* if enabled in Preferences.
+        """Write sibling TeX/PDF/EPS/SVG/PNG files next to *path* if enabled in
+        Preferences — on a **background thread**.
 
         Runs after a successful save so an ``\\includegraphics`` (or ``\\input``)
-        of the sibling file stays in sync with the schematic (§10.8).  The ``.tex``
-        snippet is pure Python (no compile); the image formats share a single
-        ``pdflatex`` compile.  Failures are reported in the status bar only — a
-        modal dialog on every save would be intrusive — and never block the save.
+        of the sibling file stays in sync with the schematic (§10.8). The
+        CircuiTikZ source and all settings are snapshotted **here, on the UI
+        thread**; the pdflatex compile and format conversions then run in a
+        ``QThreadPool`` task so Ctrl+S never freezes the UI. Jobs are
+        single-flight: a save while an export is running queues (and replaces)
+        the pending job rather than overlapping. Failures are reported in the
+        status bar only and never block or fail the save itself.
         """
         want_tex = self._prefs.auto_export_tex
         want_pdf = self._prefs.auto_export_pdf
@@ -986,52 +1333,48 @@ class MainWindow(QMainWindow):
         if not (want_tex or want_pdf or want_eps or want_svg or want_png):
             return
 
+        # Snapshot on the UI thread — the worker never touches the live model.
+        try:
+            source = generate(self._scene.schematic, y_flip=True,
+                              mark_unconnected_pins=self._prefs.mark_unconnected_pins,
+                              mark_line_hops=self._prefs.line_hops)
+        except Exception as exc:  # noqa: BLE001 — never block the save
+            self._status_compile.setText(f"Auto-export failed ({exc})")
+            return
+
+        job = _AutoExportJob(
+            path=Path(path), source=source,
+            want_tex=want_tex, want_pdf=want_pdf, want_eps=want_eps,
+            want_svg=want_svg, want_png=want_png,
+            png_dpi=self._prefs.png_dpi,
+        )
+        if self._auto_export_busy:
+            # Single-flight: keep only the newest job; it is dispatched when
+            # the running one finishes (see _on_auto_export_finished).
+            self._auto_export_pending = job
+            return
+        self._dispatch_auto_export(job)
+
+    def _dispatch_auto_export(self, job: _AutoExportJob) -> None:
+        self._auto_export_busy = True
         self._status_compile.setText("Auto-exporting…")
-        written: list[str] = []
+        signals = _AutoExportSignals()
+        signals.finished.connect(self._on_auto_export_finished)
+        self._auto_export_signals = signals   # keep alive until the task reports
+        QThreadPool.globalInstance().start(_AutoExportTask(job, signals))
 
-        # TeX snippet: generated directly, no LaTeX install needed.
-        if want_tex:
-            try:
-                source = generate(self._scene.schematic, y_flip=True,
-                                mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                                mark_line_hops=self._prefs.line_hops)
-                tex_path = path.with_suffix(".tex")
-                tex_path.write_text(build_snippet(source), encoding="utf-8")
-                written.append(tex_path.name)
-            except (OSError, ValueError) as exc:
-                self._status_compile.setText(f"Auto-export failed: {exc}")
-                return
-
-        # Image formats: one compile shared by PDF/EPS/SVG/PNG.
-        if want_pdf or want_eps or want_svg or want_png:
-            pdf_bytes = self._compile_to_pdf(quiet=True)
-            if pdf_bytes is None:
-                self._status_compile.setText("Auto-export failed (see Compile)")
-                return
-            try:
-                if want_pdf:
-                    pdf_path = path.with_suffix(".pdf")
-                    pdf_path.write_bytes(pdf_bytes)
-                    written.append(pdf_path.name)
-                if want_eps:
-                    eps_path = path.with_suffix(".eps")
-                    eps_path.write_bytes(pdf_to_eps(pdf_bytes))
-                    written.append(eps_path.name)
-                if want_svg:
-                    svg_path = path.with_suffix(".svg")
-                    svg_path.write_bytes(pdf_to_svg(pdf_bytes))
-                    written.append(svg_path.name)
-                if want_png:
-                    png_path = path.with_suffix(".png")
-                    image = pdf_to_qimage(pdf_bytes, dpi=self._prefs.png_dpi)
-                    if not image.save(str(png_path), "PNG"):
-                        raise OSError(f"could not write {png_path.name}")
-                    written.append(png_path.name)
-            except (OSError, CompileError, RuntimeError) as exc:
-                self._status_compile.setText(f"Auto-export failed: {exc}")
-                return
-
-        self._status_compile.setText("Auto-exported " + ", ".join(written))
+    def _on_auto_export_finished(self, message: str) -> None:
+        # The app may be closing while a job runs: never touch destroyed widgets.
+        if not _qt_is_valid(self):
+            return
+        self._auto_export_busy = False
+        self._auto_export_signals = None
+        pending = self._auto_export_pending
+        if pending is not None:
+            self._auto_export_pending = None
+            self._dispatch_auto_export(pending)
+            return
+        self._status_compile.setText(message)
 
     def _on_preferences(self) -> None:
         """Open the modal Preferences dialog (§10.8).
@@ -1060,6 +1403,7 @@ class MainWindow(QMainWindow):
         The snippet uses ``y_flip=True`` so the included figure renders in the
         same orientation as the canvas (see §8.5).
         """
+        self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
                             mark_unconnected_pins=self._prefs.mark_unconnected_pins,
@@ -1088,9 +1432,10 @@ class MainWindow(QMainWindow):
 
         Returns the PDF bytes, or None on failure (invalid schematic or
         ``pdflatex`` error).  When *quiet* is False, failures raise a modal
-        error dialog; when True (auto-export on save), they are silent so the
-        caller can report via the status bar instead.
+        error dialog; when True, they are silent so the caller can report via
+        the status bar instead.
         """
+        self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
                             mark_unconnected_pins=self._prefs.mark_unconnected_pins,
@@ -1245,16 +1590,27 @@ class MainWindow(QMainWindow):
         )
 
     def _confirm_discard(self) -> bool:
-        """Return True if it is safe to discard the current document."""
+        """Return True if it is safe to replace/close the current document.
+
+        Offers the standard **Save / Don't Save / Cancel** triad (Save is the
+        default). Save runs the normal save flow — including Save As for an
+        untitled document; if the user cancels that dialog or the save fails,
+        the whole operation is treated as Cancel so no work is lost.
+        """
+        # A pending debounced inspector edit counts as a modification — commit
+        # it before evaluating the modified state.
+        self._flush_inspector_edits()
         if not self._modified:
             return True
         result = QMessageBox.question(
             self,
             "Unsaved changes",
-            "The current schematic has unsaved changes. Discard them?",
-            QMessageBox.Discard | QMessageBox.Cancel,
-            QMessageBox.Cancel,
+            "The current schematic has unsaved changes.",
+            QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel,
+            QMessageBox.Save,
         )
+        if result == QMessageBox.Save:
+            return self._on_save()
         return result == QMessageBox.Discard
 
     def _update_title(self) -> None:
@@ -1283,6 +1639,88 @@ class MainWindow(QMainWindow):
     def _on_report_bug(self) -> None:
         """Open the project's GitHub issues page in the default browser."""
         QDesktopServices.openUrl(QUrl(_ISSUES_URL))
+
+    # ------------------------------------------------------------------
+    # Update check (opt-out; see app/update.py)
+    # ------------------------------------------------------------------
+
+    def _maybe_check_for_updates_on_startup(self) -> None:
+        """Run the startup update probe when the preference is on (default)."""
+        if not self._prefs.check_updates_on_startup:
+            return
+        # One-time, plain-language disclosure that we contact GitHub on launch.
+        if not self._prefs.update_check_disclosed:
+            self._prefs.update_check_disclosed = True
+            QMessageBox.information(
+                self,
+                "Checking for Updates",
+                "Heaviside checks GitHub for a newer version when it starts, and "
+                "tells you if one is available. It never downloads or installs "
+                "anything automatically, and sends no information about you.\n\n"
+                "You can turn this off in Preferences ▸ Updates.",
+            )
+        _update.check_async(__version__, self._on_startup_update_result)
+
+    def _on_startup_update_result(self, info) -> None:  # noqa: ANN001
+        """Startup probe finished. Notify only for a not-yet-skipped version."""
+        if info is None or info.version == self._prefs.skipped_update_version:
+            return
+        self._show_update_available(info, allow_skip=True)
+
+    def _on_check_updates_manual(self) -> None:
+        """Help ▸ Check for Updates — always probes and always reports."""
+        self._act_check_updates.setEnabled(False)
+        # Safety net: if the async result is ever lost (worker crash, dropped
+        # signal), re-enable the menu item after a timeout so it can't stay
+        # dead for the whole session.
+        QTimer.singleShot(_UPDATE_CHECK_REENABLE_MS, self._reenable_check_updates)
+        _update.check_async(__version__, self._on_manual_update_result)
+
+    def _reenable_check_updates(self) -> None:
+        if _qt_is_valid(self) and _qt_is_valid(self._act_check_updates):
+            self._act_check_updates.setEnabled(True)
+
+    def _on_manual_update_result(self, info) -> None:  # noqa: ANN001
+        if not _qt_is_valid(self):
+            return   # window closed while the probe ran
+        # Re-enable first (and unconditionally), so a failure below — or an
+        # exception while showing the result — can't leave the action disabled.
+        self._act_check_updates.setEnabled(True)
+        if info is None:
+            QMessageBox.information(
+                self,
+                "Check for Updates",
+                f"You're up to date.\n\nHeaviside {__version__} is the latest "
+                f"version (or no newer release could be reached).",
+            )
+            return
+        # A manual check honours the user's explicit request over any earlier skip.
+        self._show_update_available(info, allow_skip=False)
+
+    def _show_update_available(self, info, *, allow_skip: bool) -> None:  # noqa: ANN001
+        """Non-blocking 'update available' prompt with Download / Skip / Later."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Information)
+        box.setWindowTitle("Update Available")
+        label = f"Heaviside {info.version}" + (" (pre-release)" if info.prerelease else "")
+        box.setText(f"{label} is available.")
+        box.setInformativeText(
+            f"You have {__version__}. Heaviside does not update itself — the "
+            f"Download button opens the release page in your browser."
+        )
+        download_btn = box.addButton("Download…", QMessageBox.AcceptRole)
+        skip_btn = (
+            box.addButton("Skip This Version", QMessageBox.DestructiveRole)
+            if allow_skip else None
+        )
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is download_btn:
+            QDesktopServices.openUrl(QUrl(info.url or _update.RELEASES_PAGE_URL))
+        elif skip_btn is not None and clicked is skip_btn:
+            self._prefs.skipped_update_version = info.version
 
     # ------------------------------------------------------------------
     # Dependency check
@@ -1401,12 +1839,9 @@ _HELP_GESTURE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ]),
 ]
 
-# Colours for the welcome screen
-_C_BG    = QColor(245, 247, 250)        # solid background
-_C_STEP  = QColor( 80, 120, 175, 200)   # step-function line
-_C_AXIS  = QColor(160, 175, 190, 180)   # axis lines
-_C_LABEL = QColor(100, 130, 170, 210)   # H(t) / 1 / t annotations
-_C_HINT  = QColor(120, 140, 165, 200)   # hint line
+# Welcome-screen colours come from the active theme palette (read at paint
+# time, so a light/dark switch repaints correctly — the background already
+# follows style.COLOR_BACKGROUND, and now the diagram inks follow too).
 
 
 class _WelcomeScreen(QWidget):
@@ -1426,9 +1861,13 @@ class _WelcomeScreen(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
 
         w, h = float(self.width()), float(self.height())
-        # Background follows the canvas paper colour (light/dark); the muted-blue
-        # step graphic reads on either.
+        # Background follows the canvas paper colour (light/dark); the diagram
+        # inks read the theme tokens live so they flip with it.
         painter.fillRect(self.rect(), QColor(style.COLOR_BACKGROUND))
+        c_step = QColor(theme.WELCOME_STEP)
+        c_axis = QColor(theme.WELCOME_AXIS)
+        c_label = QColor(theme.WELCOME_LABEL)
+        c_hint = QColor(theme.WELCOME_HINT)
 
         # ---- step function (centred) -----------------------------------
         step_w  = min(w * 0.40, 260.0)
@@ -1441,27 +1880,27 @@ class _WelcomeScreen(QWidget):
         right_x  = cx + step_w / 2
         origin_x = cx
 
-        ax_pen = QPen(_C_AXIS, 1.2, Qt.SolidLine, Qt.RoundCap)
+        ax_pen = QPen(c_axis, 1.2, Qt.SolidLine, Qt.RoundCap)
         painter.setPen(ax_pen)
         painter.drawLine(QPointF(left_x - 10, zero_y), QPointF(right_x + 20, zero_y))
         painter.drawLine(QPointF(origin_x, zero_y + 12), QPointF(origin_x, one_y - 20))
-        _arrow_right(painter, _C_AXIS, QPointF(right_x + 20, zero_y), size=7)
-        _arrow_up   (painter, _C_AXIS, QPointF(origin_x, one_y - 20), size=7)
+        _arrow_right(painter, c_axis, QPointF(right_x + 20, zero_y), size=7)
+        _arrow_up   (painter, c_axis, QPointF(origin_x, one_y - 20), size=7)
         painter.drawLine(QPointF(origin_x - 5, one_y), QPointF(origin_x + 5, one_y))
 
-        step_pen = QPen(_C_STEP, 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+        step_pen = QPen(c_step, 3.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
         painter.setPen(step_pen)
         painter.drawLine(QPointF(left_x,   zero_y), QPointF(origin_x, zero_y))
         painter.drawLine(QPointF(origin_x, zero_y), QPointF(origin_x, one_y))
         painter.drawLine(QPointF(origin_x, one_y),  QPointF(right_x,  one_y))
-        _open_dot  (painter, _C_STEP, QPointF(origin_x, zero_y), r=4.5)
-        _filled_dot(painter, _C_STEP, QPointF(origin_x, one_y),  r=4.5)
+        _open_dot  (painter, c_step, QPointF(origin_x, zero_y), r=4.5)
+        _filled_dot(painter, c_step, QPointF(origin_x, one_y),  r=4.5)
 
         ann_font = QFont()
         ann_font.setPointSizeF(12.5)
         ann_font.setItalic(True)
         painter.setFont(ann_font)
-        painter.setPen(QPen(_C_LABEL))
+        painter.setPen(QPen(c_label))
         painter.drawText(QPointF(right_x + 8, one_y + 5), "H(t)")
         ann_font.setItalic(False)
         ann_font.setPointSizeF(11.0)
@@ -1473,7 +1912,7 @@ class _WelcomeScreen(QWidget):
         hint_font = QFont()
         hint_font.setPointSizeF(10.0)
         painter.setFont(hint_font)
-        painter.setPen(QPen(_C_HINT))
+        painter.setPen(QPen(c_hint))
         painter.drawText(
             QRectF(0, zero_y + 40, w, 20),
             Qt.AlignHCenter | Qt.AlignTop,
@@ -1560,10 +1999,12 @@ class _RefTable(QTableWidget):
             key_font.setStyleHint(QFont.TypeWriter)
         else:
             key_font.setWeight(QFont.DemiBold)
-        key_color = QColor("#4a6f9c")
-        desc_color = QColor("#333333")
-        hdr_color = QColor("#7b8aa0")
-        hdr_bg = QColor(235, 240, 246)
+        # Theme tokens (read at construction; the dialog is rebuilt on every
+        # open, so a light/dark switch is picked up the next time it shows).
+        key_color = QColor(theme.TABLE_KEY)
+        desc_color = QColor(theme.TEXT)
+        hdr_color = QColor(theme.ICON_MUTED)
+        hdr_bg = QColor(theme.TABLE_HEADER_BG)
         hdr_font = QFont()
         hdr_font.setPointSizeF(hdr_font.pointSizeF() - 1)
         hdr_font.setWeight(QFont.DemiBold)
@@ -1653,7 +2094,7 @@ class _HelpDialog(QDialog):
     def _add_section_title(layout: QVBoxLayout, text: str) -> None:
         lbl = QLabel(text)
         lbl.setStyleSheet(
-            "font-size: 15px; font-weight: bold; color: #2c3e57;"
+            f"font-size: 15px; font-weight: bold; color: {theme.HEADING};"
             " margin-top: 6px; margin-bottom: 2px;"
         )
         layout.addWidget(lbl)
@@ -1696,7 +2137,7 @@ class _AboutDialog(QDialog):
             f"CircuiTikZ Schematic Editor  ·  v{_APP_VERSION}"
         )
         sub_label.setAlignment(Qt.AlignCenter)
-        sub_label.setStyleSheet("font-size: 12px; color: #666;")
+        sub_label.setStyleSheet(f"font-size: 12px; color: {theme.TEXT_MUTED};")
         layout.addWidget(sub_label)
 
         layout.addSpacing(16)
@@ -1712,15 +2153,29 @@ class _AboutDialog(QDialog):
 
         llm_label = QLabel("Built with the assistance of Large Language Models (LLMs),\nincluding Claude Sonnet 4.6 and Claude Opus 4.8.")
         llm_label.setAlignment(Qt.AlignCenter)
-        llm_label.setStyleSheet("font-size: 11px; color: #888;")
+        llm_label.setStyleSheet(f"font-size: 11px; color: {theme.ICON_MUTED};")
         layout.addWidget(llm_label)
+
+        layout.addSpacing(12)
+
+        # Third-party acknowledgements. The full notices (Qt/PySide6 LGPLv3,
+        # bundled math/icon fonts, etc.) ship in the licenses/ folder inside the
+        # application; the button opens it.
+        ack_label = QLabel(
+            "Uses Qt/PySide6 (LGPLv3), ziamath, qtawesome, and bundled fonts "
+            "(STIX Two Math, DejaVu Sans, Font Awesome, and others)."
+        )
+        ack_label.setWordWrap(True)
+        ack_label.setAlignment(Qt.AlignCenter)
+        ack_label.setStyleSheet(f"font-size: 10px; color: {theme.ICON_MUTED};")
+        layout.addWidget(ack_label)
 
         layout.addSpacing(20)
 
         # Divider
         divider = QWidget()
         divider.setFixedHeight(1)
-        divider.setStyleSheet("background: #ddd;")
+        divider.setStyleSheet(f"background: {theme.DIVIDER};")
         layout.addWidget(divider)
 
         layout.addSpacing(16)
@@ -1729,15 +2184,27 @@ class _AboutDialog(QDialog):
         quote_label = QLabel(_HEAVISIDE_QUOTE)
         quote_label.setWordWrap(True)
         quote_label.setAlignment(Qt.AlignCenter)
-        quote_label.setStyleSheet("font-size: 11px; color: #555; font-style: italic;")
+        quote_label.setStyleSheet(f"font-size: 11px; color: {theme.TEXT_MUTED}; font-style: italic;")
         layout.addWidget(quote_label)
 
         layout.addSpacing(20)
 
-        # OK button
+        # OK button, plus a button that reveals the bundled third-party license
+        # texts (Qt/PySide6 LGPLv3, fonts, etc.) so attributions are discoverable
+        # from the GUI, not only on disk.
         buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        licenses_btn = buttons.addButton(
+            "Third-Party Licenses…", QDialogButtonBox.ActionRole
+        )
+        licenses_btn.clicked.connect(self._open_licenses)
         buttons.accepted.connect(self.accept)
         layout.addWidget(buttons)
+
+    @staticmethod
+    def _open_licenses() -> None:
+        """Open the bundled licenses/ folder in the platform file browser."""
+        licenses_dir = resource_path("licenses")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(licenses_dir)))
 
 
 # ---------------------------------------------------------------------------
@@ -1745,10 +2212,12 @@ class _AboutDialog(QDialog):
 # ---------------------------------------------------------------------------
 
 def _separator() -> QWidget:
-    """A thin vertical separator for the status bar."""
+    """A thin vertical separator for the status bar (theme-aware; restyled on a
+    light/dark switch by MainWindow._apply_theme)."""
     sep = QWidget()
+    sep.setObjectName("statusSeparator")
     sep.setFixedWidth(1)
-    sep.setStyleSheet("background: #ccc;")
+    sep.setStyleSheet(f"background: {theme.DIVIDER};")
     return sep
 
 

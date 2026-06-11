@@ -6,12 +6,18 @@ the README. It mirrors the "Opening the app on macOS" section of the README.
 
 ---
 
+### Installing on macOS
+
+Open the `.dmg` and drag **Heaviside** onto the **Applications** folder, then
+launch it from Applications.
+
 ### ⚠️ Opening the app the first time
 
-**macOS:** This app is open-source and **not notarized by Apple**, so on first
-launch macOS shows a warning like *"Apple could not verify 'Heaviside.app' is
-free of malware…"*. Nothing is wrong with the app — that is just how macOS
-treats un-notarized downloads. To open it:
+**macOS:** If this build is **not notarized by Apple** (e.g. signing wasn't
+configured), the first launch shows a warning like *"Apple could not verify
+'Heaviside.app' is free of malware…"*. Nothing is wrong with the app — that is
+just how macOS treats un-notarized downloads. A signed + notarized `.dmg` opens
+normally and you can ignore this. To open an un-notarized build:
 
 - Try to open the app once (dismiss the warning), then go to **System Settings →
   Privacy & Security**, scroll to the **Security** section, and click **"Open

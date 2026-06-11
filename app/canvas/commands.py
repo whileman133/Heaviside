@@ -42,10 +42,16 @@ from app.schematic.model import (
     Component,
     Schematic,
     Wire,
+    _point_strictly_on_segment,
     component_connection_points as _component_connection_points,
     component_pin_positions as _component_pin_positions,
+    coord_on_grid,
+    is_box_kind,
+    point_key,
     route,
+    route_pin_aware,
     simplify_points,
+    snap_point,
     wire_contained_by_others,
 )
 
@@ -60,7 +66,8 @@ __all__ = [
     "SetTextStyleCommand",
     "SetVariantCommand",
     "SetFillColorCommand",
-    "SetBorderWidthCommand",
+    "SetComponentLineWidthCommand",
+    "SetComponentScaleCommand",
     "SetLineStyleCommand",
     "SetWireLineStyleCommand",
     "SetWireLineWidthCommand",
@@ -92,12 +99,138 @@ def _find_component(schematic: Schematic, comp_id: str) -> Component:
     raise KeyError(f"no component with id {comp_id!r} in schematic")
 
 
-def _find_wire(schematic: Schematic, wire_id: str) -> Wire:
-    """Return the live wire with *wire_id* or raise KeyError."""
+def _find_wire(schematic: Schematic, wire_id: str) -> Wire | None:
+    """Return the live wire with *wire_id*, or None if it no longer exists.
+
+    Every caller handles None explicitly (a missing wire makes the command a
+    clean no-op rather than corrupting the undo machinery mid-macro).
+    """
     for wire in schematic.wires:
         if wire.id == wire_id:
             return wire
-    raise KeyError(f"no wire with id {wire_id!r} in schematic")
+    return None
+
+
+def _set_wire_attr(schematic: Schematic, wire_id: str, attr: str, value) -> None:
+    """Set *attr* on the wire with *wire_id*; a missing wire is a no-op.
+
+    Shared body of the simple per-attribute wire commands (style, markers,
+    labels, …) so each handles a vanished wire identically.
+    """
+    wire = _find_wire(schematic, wire_id)
+    if wire is not None:
+        setattr(wire, attr, value)
+
+
+# Wire fields that describe the *whole* wire (not a specific endpoint). When a
+# wire is split into halves or two wires are merged, the new wire(s) inherit
+# these so style/line-hops/z-order/dot-suppression survive the operation.
+_WIRE_BODY_FIELDS = (
+    "line_style", "line_width", "z_order", "hop_mode",
+    "no_junction_dots", "no_termination_dots",
+)
+
+
+def _carry_wire_body(dst: Wire, src: Wire) -> None:
+    """Copy whole-wire style/behaviour fields from *src* onto *dst* (in place)."""
+    for f in _WIRE_BODY_FIELDS:
+        setattr(dst, f, getattr(src, f))
+
+
+def _polyline_length(points: list[tuple[float, float]]) -> float:
+    """Total Manhattan path length of *points* (0 for <2 points)."""
+    total = 0.0
+    for (x0, y0), (x1, y1) in zip(points, points[1:]):
+        total += abs(x1 - x0) + abs(y1 - y0)
+    return total
+
+
+def _point_on_polyline(pt: tuple[float, float], points: list[tuple[float, float]]) -> bool:
+    """True if *pt* is a vertex of, or lies on any (axis-aligned) segment of, the
+    polyline *points* (inclusive of vertices). Used to detect a wire endpoint that
+    sits on another wire — a junction that must follow when that wire is moved.
+    All coordinate comparisons go through :func:`point_key` (float-noise guard)."""
+    px, py = point_key(pt)
+    if any(point_key(p) == (px, py) for p in points):
+        return True
+    for a, b in zip(points, points[1:]):
+        (ax, ay), (bx, by) = point_key(a), point_key(b)
+        if ax == bx and px == ax and min(ay, by) <= py <= max(ay, by):
+            return True
+        if ay == by and py == ay and min(ax, bx) <= px <= max(ax, bx):
+            return True
+    return False
+
+
+def _split_wire_into_halves(orig: Wire, half1_pts, half2_pts, id1, id2):
+    """Build the two halves of a split *orig* wire, distributing its decorations.
+
+    ``half1`` keeps the original first point (so it inherits the start marker/
+    label/placement); ``half2`` keeps the original last point (end marker/label/
+    placement). Both inherit the whole-wire body fields. A mid-label is assigned
+    to whichever half contains its fractional arc-length position (rescaled to the
+    half), defaulting to the longer half when it cannot be localised.
+    """
+    half1 = Wire(id=id1, points=list(half1_pts))
+    half2 = Wire(id=id2, points=list(half2_pts))
+    _carry_wire_body(half1, orig)
+    _carry_wire_body(half2, orig)
+    half1.start_marker = orig.start_marker
+    half1.start_label = orig.start_label
+    half1.start_label_placement = orig.start_label_placement
+    half2.end_marker = orig.end_marker
+    half2.end_label = orig.end_label
+    half2.end_label_placement = orig.end_label_placement
+    if orig.mid_label:
+        total = _polyline_length(orig.points)
+        frac = (_polyline_length(half1.points) / total) if total > 0 else 0.5
+        if 0.0 < frac < 1.0 and orig.mid_label_pos <= frac:
+            half1.mid_label = orig.mid_label
+            half1.mid_label_pos = orig.mid_label_pos / frac
+        elif 0.0 < frac < 1.0:
+            half2.mid_label = orig.mid_label
+            half2.mid_label_pos = (orig.mid_label_pos - frac) / (1.0 - frac)
+        else:
+            target = half1 if frac >= 0.5 else half2
+            target.mid_label = orig.mid_label
+            target.mid_label_pos = 0.5
+    return half1, half2
+
+
+def _merge_wire_decorations(merged: Wire, w1: Wire, rev1: bool, w2: Wire, rev2: bool) -> None:
+    """Carry style + endpoint decorations onto a *merged* wire (in place).
+
+    The merge orients w1 so the join point is its last vertex (``rev1`` true when
+    w1 was reversed) and w2 so the join point is its first vertex. So the merged
+    wire's start is w1's *far* end and its end is w2's *far* end; pull each end's
+    marker/label/placement from the corresponding original endpoint. Body style is
+    taken from w1. A surviving mid-label (preferring w1) is re-centred within its
+    wire's arc-length share of the merged path.
+    """
+    _carry_wire_body(merged, w1)
+    # Merged start = w1's far end: its original start if w1 wasn't reversed, else end.
+    if rev1:
+        merged.start_marker, merged.start_label, merged.start_label_placement = (
+            w1.end_marker, w1.end_label, w1.end_label_placement)
+    else:
+        merged.start_marker, merged.start_label, merged.start_label_placement = (
+            w1.start_marker, w1.start_label, w1.start_label_placement)
+    # Merged end = w2's far end: its original end if w2 wasn't reversed, else start.
+    if rev2:
+        merged.end_marker, merged.end_label, merged.end_label_placement = (
+            w2.start_marker, w2.start_label, w2.start_label_placement)
+    else:
+        merged.end_marker, merged.end_label, merged.end_label_placement = (
+            w2.end_marker, w2.end_label, w2.end_label_placement)
+    l1, l2 = _polyline_length(w1.points), _polyline_length(w2.points)
+    total = l1 + l2
+    share1 = (l1 / total) if total > 0 else 0.5
+    if w1.mid_label:
+        merged.mid_label = w1.mid_label
+        merged.mid_label_pos = share1 * 0.5
+    elif w2.mid_label:
+        merged.mid_label = w2.mid_label
+        merged.mid_label_pos = share1 + (1.0 - share1) * 0.5
 
 
 _C = TypeVar("_C", bound=Component)
@@ -106,11 +239,15 @@ _C = TypeVar("_C", bound=Component)
 def _typed_component(schematic: Schematic, comp_id: str, cls: type[_C]) -> _C:
     """Find the component with *comp_id* and assert it is an instance of *cls*.
 
-    Collapses the recurring ``comp = _find_component(...); assert isinstance(...)``
-    pair while preserving the narrowed type for static checkers.
+    Collapses the recurring find-and-type-check pair while preserving the
+    narrowed type for static checkers. Raises ``TypeError`` (not an ``assert``,
+    which vanishes under ``-O``) when the component is of the wrong class.
     """
     comp = _find_component(schematic, comp_id)
-    assert isinstance(comp, cls)
+    if not isinstance(comp, cls):
+        raise TypeError(
+            f"component {comp_id!r} is {type(comp).__name__}, expected {cls.__name__}"
+        )
     return comp
 
 
@@ -119,12 +256,14 @@ def _wire_touches_position(wire: Wire, pos: tuple[float, float]) -> bool:
 
     Connectivity in the v1 model is purely geometric: a wire is "connected" to
     a component if one of the wire's two endpoints coincides with a pin
-    coordinate of that component. Deleting the component therefore also deletes
-    any wire whose start or end touches one of its pins.
+    coordinate of that component (compared through :func:`point_key`). Deleting
+    the component therefore also deletes any wire whose start or end touches
+    one of its pins.
     """
     if not wire.points:
         return False
-    return wire.points[0] == pos or wire.points[-1] == pos
+    key = point_key(pos)
+    return point_key(wire.points[0]) == key or point_key(wire.points[-1]) == key
 
 
 
@@ -371,6 +510,13 @@ class MoveCommand(Command):
         self._explicit_wire_ids: frozenset[str] = frozenset(wire_ids or [])
         # wire id -> original points, captured at first do() for exact undo.
         self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
+        # wire id -> pristine original wire (deepcopy), so a wire removed by this
+        # move is restored verbatim on undo (labels/markers/style intact), not as
+        # a bare points-only wire.
+        self._orig_wires: dict[str, Wire] = {}
+        # wire id -> original position in schematic.wires, so a removed wire is
+        # re-inserted where it was (z-order tie-breaks depend on list order).
+        self._orig_wire_index: dict[str, int] = {}
         # wire ids that were removed because they collapsed; restored on undo.
         self._removed_wire_ids: set[str] = set()
         # Fresh "re-stretch" leads created when a pin moves off a multi-wire
@@ -390,13 +536,14 @@ class MoveCommand(Command):
     # -- connectivity -----------------------------------------------------
 
     def _connected_pin_set(self, schematic: Schematic) -> set[tuple[float, float]]:
-        """Absolute pin coordinates of the moving components, BEFORE the move."""
+        """Absolute pin coordinates (point_key'd) of the moving components,
+        BEFORE the move."""
         ids = set(self._component_ids)
         pins: set[tuple[float, float]] = set()
         for comp in schematic.components:
             if comp.id in ids:
                 for p in _component_connection_points(comp):
-                    pins.add(p)
+                    pins.add(point_key(p))
         return pins
 
     # -- wire reshaping ---------------------------------------------------
@@ -413,7 +560,12 @@ class MoveCommand(Command):
         coordinate) are removed from the schematic. Their original points are
         still captured so undo can restore them.
         """
-        all_dragged = (
+        # "Move the whole circuit" only when components are actually being moved
+        # and they are *all* of them. Guard against the empty-set case: a wire-only
+        # move (no component_ids) would otherwise satisfy ``set() >= set()`` and
+        # rigidly translate every wire, dragging junction taps bodily instead of
+        # letting them follow at the shared vertex.
+        all_dragged = bool(self._component_ids) and (
             set(self._component_ids) >= {c.id for c in schematic.components}
         )
         pins = self._connected_pin_set(schematic)
@@ -432,10 +584,22 @@ class MoveCommand(Command):
         for w in schematic.wires:
             if len(w.points) < 2:
                 continue
-            endpoint_count[w.points[0]] = endpoint_count.get(w.points[0], 0) + 1
-            endpoint_count[w.points[-1]] = endpoint_count.get(w.points[-1], 0) + 1
+            for end in (point_key(w.points[0]), point_key(w.points[-1])):
+                endpoint_count[end] = endpoint_count.get(end, 0) + 1
+        # Snapshot the pre-move geometry of explicitly-translated wires (whole-wire
+        # drag). Any OTHER wire joined at one of their vertices/segments — a
+        # junction tap — must follow at that shared point when the explicit wire
+        # moves rigidly, so the connection is preserved (spec §6.3 "keep connected").
+        explicit_orig = [
+            list(w.points) for w in schematic.wires
+            if w.id in self._explicit_wire_ids and len(w.points) >= 2
+        ]
+
+        def _on_explicit(p: tuple[float, float]) -> bool:
+            return any(_point_on_polyline(p, poly) for poly in explicit_orig)
+
         to_remove: list[str] = []
-        for wire in schematic.wires:
+        for w_idx, wire in enumerate(schematic.wires):
             pts = wire.points
             if len(pts) < 2:
                 continue
@@ -443,14 +607,24 @@ class MoveCommand(Command):
             if all_dragged or wire.id in self._explicit_wire_ids:
                 start_hit = end_hit = True
             else:
-                start_hit = pts[0] in pins and endpoint_count.get(pts[0], 0) == 1
-                end_hit = pts[-1] in pins and endpoint_count.get(pts[-1], 0) == 1
+                s_key, e_key = point_key(pts[0]), point_key(pts[-1])
+                start_hit = (
+                    (s_key in pins and endpoint_count.get(s_key, 0) == 1)
+                    or _on_explicit(pts[0])
+                )
+                end_hit = (
+                    (e_key in pins and endpoint_count.get(e_key, 0) == 1)
+                    or _on_explicit(pts[-1])
+                )
                 if not start_hit and not end_hit:
                     continue
 
-            # Capture the pristine path once, for undo.
+            # Capture the pristine path (and full wire + list position, for
+            # verbatim restore of a wire this move removes) once, for undo.
             if wire.id not in self._orig_wire_points:
                 self._orig_wire_points[wire.id] = list(wire.points)
+                self._orig_wires[wire.id] = copy.deepcopy(wire)
+                self._orig_wire_index[wire.id] = w_idx
 
             new_pts = reshape_wire_points(
                 pts,
@@ -501,8 +675,12 @@ class MoveCommand(Command):
                 ]
             else:
                 if wid not in self._orig_wire_points:
-                    w = next(w for w in schematic.wires if w.id == wid)
+                    idx, w = next(
+                        (i, w) for i, w in enumerate(schematic.wires) if w.id == wid
+                    )
                     self._orig_wire_points[wid] = list(w.points)
+                    self._orig_wires[wid] = copy.deepcopy(w)
+                    self._orig_wire_index[wid] = idx
                 self._removed_wire_ids.add(wid)
         schematic.wires[:] = [w for w in schematic.wires if w.id not in removed]
 
@@ -554,12 +732,22 @@ class MoveCommand(Command):
             orig = self._orig_wire_points.get(wire.id)
             if orig is not None:
                 wire.points = list(orig)
-        # Re-add any wires that were removed because they collapsed.
+        # Re-add any wires that were removed because they collapsed — restore the
+        # pristine wire verbatim (labels/markers/style intact), not points-only,
+        # at its original list position (ascending order so earlier insertions
+        # don't shift later target indices).
         existing_ids = {w.id for w in schematic.wires}
-        for wid in self._removed_wire_ids:
-            orig = self._orig_wire_points.get(wid)
-            if orig is not None and wid not in existing_ids:
-                schematic.wires.append(Wire(id=wid, points=list(orig)))
+        for wid in sorted(
+            self._removed_wire_ids,
+            key=lambda wid: self._orig_wire_index.get(wid, 0),
+        ):
+            orig_wire = self._orig_wires.get(wid)
+            if orig_wire is not None and wid not in existing_ids:
+                idx = min(
+                    self._orig_wire_index.get(wid, len(schematic.wires)),
+                    len(schematic.wires),
+                )
+                schematic.wires.insert(idx, copy.deepcopy(orig_wire))
 
     def redo(self, schematic: Schematic) -> None:
         # On redo the original points are already captured; reapply directly so
@@ -591,6 +779,10 @@ class ResizeCommand(Command):
         self._old_span = old_span
         # wire id -> original points list, captured on first do().
         self._orig_wire_points: dict[str, list[tuple[float, float]]] = {}
+        # wire id -> pristine original (deepcopy) + list position, so a wire this
+        # resize removes is restored verbatim at its original index on undo.
+        self._orig_wires: dict[str, Wire] = {}
+        self._orig_wire_index: dict[str, int] = {}
         self._removed_wire_ids: set[str] = set()
 
     def _terminal_pin_pos(
@@ -615,17 +807,20 @@ class ResizeCommand(Command):
         dx: float,
         dy: float,
     ) -> None:
+        pin_key = point_key(old_pin)
         to_remove: list[str] = []
-        for wire in schematic.wires:
+        for w_idx, wire in enumerate(schematic.wires):
             pts = wire.points
             if len(pts) < 2:
                 continue
-            start_hit = pts[0] == old_pin
-            end_hit = pts[-1] == old_pin
+            start_hit = point_key(pts[0]) == pin_key
+            end_hit = point_key(pts[-1]) == pin_key
             if not start_hit and not end_hit:
                 continue
             if wire.id not in self._orig_wire_points:
                 self._orig_wire_points[wire.id] = list(pts)
+                self._orig_wires[wire.id] = copy.deepcopy(wire)
+                self._orig_wire_index[wire.id] = w_idx
             new_pts = reshape_wire_points(
                 pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy
             )
@@ -663,33 +858,32 @@ class ResizeCommand(Command):
         # Connection points under the OLD span (comp.span_override is already new).
         orig_so = comp.span_override
         comp.span_override = old_span
-        old_perim = _component_connection_points(comp)
+        old_perim = {point_key(p) for p in _component_connection_points(comp)}
         comp.span_override = orig_so
-
-        def _snap(v: float) -> float:
-            return round(v / 0.25) * 0.25
 
         def _map(p: tuple[float, float]) -> tuple[float, float]:
             px, py = p
             fx = (px - x0) / odx if odx else 0.0
             fy = (py - y0) / ody if ody else 0.0
-            return (_snap(x0 + fx * ndx), _snap(y0 + fy * ndy))
+            return snap_point((x0 + fx * ndx, y0 + fy * ndy))
 
         to_remove: list[str] = []
-        for wire in schematic.wires:
+        for w_idx, wire in enumerate(schematic.wires):
             pts = wire.points
             if len(pts) < 2:
                 continue
-            start_hit = pts[0] in old_perim
-            end_hit = pts[-1] in old_perim
+            start_hit = point_key(pts[0]) in old_perim
+            end_hit = point_key(pts[-1]) in old_perim
             start_tgt = _map(pts[0]) if start_hit else None
             end_tgt = _map(pts[-1]) if end_hit else None
-            start_moves = start_tgt is not None and start_tgt != pts[0]
-            end_moves = end_tgt is not None and end_tgt != pts[-1]
+            start_moves = start_tgt is not None and point_key(start_tgt) != point_key(pts[0])
+            end_moves = end_tgt is not None and point_key(end_tgt) != point_key(pts[-1])
             if not start_moves and not end_moves:
                 continue
             if wire.id not in self._orig_wire_points:
                 self._orig_wire_points[wire.id] = list(pts)
+                self._orig_wires[wire.id] = copy.deepcopy(wire)
+                self._orig_wire_index[wire.id] = w_idx
             new_pts = list(pts)
             if start_moves:
                 new_pts = reshape_wire_points(
@@ -713,7 +907,7 @@ class ResizeCommand(Command):
 
     def do(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        if comp.kind in ("rect", "circle"):
+        if is_box_kind(comp):
             comp.span_override = self._new_span
             self._reshape_wires_scaled(schematic, self._old_span, self._new_span)
             return
@@ -725,8 +919,6 @@ class ResizeCommand(Command):
         self._reshape_wires(schematic, old_pin, dx, dy)
 
     def undo(self, schematic: Schematic) -> None:
-        # Find old terminal position under new span so we can compute delta.
-        new_pin = self._terminal_pin_pos(schematic, use_old=False)
         comp = _find_component(schematic, self._component_id)
         comp.span_override = self._old_span
         # Restore wire geometry exactly.
@@ -734,15 +926,24 @@ class ResizeCommand(Command):
             orig = self._orig_wire_points.get(wire.id)
             if orig is not None:
                 wire.points = list(orig)
+        # Re-add removed wires verbatim (labels/markers/style intact) at their
+        # original list positions (ascending so indices stay valid).
         existing_ids = {w.id for w in schematic.wires}
-        for wid in self._removed_wire_ids:
-            orig = self._orig_wire_points.get(wid)
-            if orig is not None and wid not in existing_ids:
-                schematic.wires.append(Wire(id=wid, points=list(orig)))
+        for wid in sorted(
+            self._removed_wire_ids,
+            key=lambda wid: self._orig_wire_index.get(wid, 0),
+        ):
+            orig_wire = self._orig_wires.get(wid)
+            if orig_wire is not None and wid not in existing_ids:
+                idx = min(
+                    self._orig_wire_index.get(wid, len(schematic.wires)),
+                    len(schematic.wires),
+                )
+                schematic.wires.insert(idx, copy.deepcopy(orig_wire))
 
     def redo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
-        if comp.kind in ("rect", "circle"):
+        if is_box_kind(comp):
             comp.span_override = self._new_span
             self._reshape_wires_scaled(schematic, self._old_span, self._new_span)
             return
@@ -848,13 +1049,21 @@ class WireCommand(Command):
 
 
 class SplitWireCommand(Command):
-    """Split an existing wire into two at a mid-segment point.
+    """Split an existing wire into two at a point on the wire.
 
     Used when a new wire connects to the middle of an existing wire's segment:
     the existing wire is replaced by two new wires that meet at the connection
     point, so each half is independently selectable and deletable.  Pairs with
     a :class:`WireCommand` inside a :class:`MacroCommand` so the split + add is
     one undoable action.
+
+    The split site is resolved from the stored *point* against the wire's
+    **current** geometry at :meth:`do` time. The constructor's *index* is only a
+    hint and never trusted: inside a macro (move + split, nudge + split) the
+    wire may have been reshaped/simplified by an earlier command, so an index
+    computed against the pre-move geometry would corrupt the polyline. When the
+    point is no longer on the wire, or sits at one of its endpoints, the
+    command is a clean no-op (and so is its undo).
 
     Inverse: remove the two halves and restore the original wire.
     """
@@ -870,12 +1079,13 @@ class SplitWireCommand(Command):
         new_id2: str | None = None,
     ) -> None:
         self._wire_id = wire_id
-        self._index = index
+        self._index = index            # hint only; do() re-resolves (see class doc)
         self._point = point
         self._new_id1 = new_id1 or str(uuid.uuid4())
         self._new_id2 = new_id2 or str(uuid.uuid4())
-        self._orig_points: list[tuple[float, float]] | None = None
+        self._orig_wire: Wire | None = None    # pristine original, for verbatim undo
         self._orig_index: int | None = None   # position in schematic.wires
+        self._applied = False          # whether the last do() actually split
 
     def _find(self, schematic: Schematic, wire_id: str) -> tuple[int, Wire] | None:
         for i, w in enumerate(schematic.wires):
@@ -884,43 +1094,64 @@ class SplitWireCommand(Command):
         return None
 
     def do(self, schematic: Schematic) -> None:
+        self._applied = False
         result = self._find(schematic, self._wire_id)
         if result is None:
             return
         pos, wire = result
         pts = list(wire.points)
-        idx = max(0, min(self._index, len(pts)))
-        if 0 < idx < len(pts) - 1 and pts[idx] == self._point:
-            # Point is a genuine *intermediate* vertex at idx (corner split):
-            # split without inserting a duplicate.
-            split_pts = pts
-        elif self._point in pts:
-            # Point coincides with an endpoint (or a stale index now at one) —
-            # nothing to split. This guards the case where the index was computed
-            # against the wire's pre-move geometry but the move reshaped an
-            # endpoint onto the split point (which would otherwise carve off a
-            # degenerate single-point half).
+        if len(pts) < 2:
             return
+        # Resolve the insertion index from the point against CURRENT geometry.
+        key = point_key(self._point)
+        keys = [point_key(p) for p in pts]
+        if key in keys:
+            idx = keys.index(key)
+            if not (0 < idx < len(pts) - 1):
+                # The point sits at an endpoint (e.g. a move reshaped an endpoint
+                # onto the split site) — nothing to split.
+                return
+            # Genuine *intermediate* vertex (corner split): split without
+            # inserting a duplicate.
+            split_pts = pts
         else:
-            # Normal mid-segment case: insert the new vertex.
+            seg = next(
+                (
+                    i
+                    for i in range(len(pts) - 1)
+                    if _point_strictly_on_segment(self._point, pts[i], pts[i + 1])
+                ),
+                None,
+            )
+            if seg is None:
+                # The point is no longer on this wire (it was reshaped away) —
+                # a clean no-op.
+                return
+            idx = seg + 1
             split_pts = pts[:idx] + [self._point] + pts[idx:]
         half1_pts = split_pts[:idx + 1]
         half2_pts = split_pts[idx:]
-        # Belt-and-suspenders: never carve off a degenerate (<2 point) half. If a
-        # split would produce one, the point is effectively at an end — no-op.
+        # Belt-and-suspenders: never carve off a degenerate (<2 point) half.
         if len(half1_pts) < 2 or len(half2_pts) < 2:
             return
-        # Capture the pristine wire for undo only now that a real split happens,
-        # so the no-op branches above leave undo a clean no-op (orig stays None).
-        self._orig_points = list(wire.points)
-        self._orig_index = pos
-        half1 = Wire(id=self._new_id1, points=half1_pts)
-        half2 = Wire(id=self._new_id2, points=half2_pts)
+        # Capture the pristine wire for undo only now that a real split happens
+        # (first time only — redo re-splits the identical restored wire).
+        if self._orig_wire is None:
+            self._orig_wire = copy.deepcopy(wire)
+            self._orig_index = pos
+        self._applied = True
+        # Carry the original's labels/markers/style onto the two halves so a split
+        # (e.g. a connection landing mid-segment of a labelled bus wire) preserves
+        # them instead of resetting to defaults.
+        half1, half2 = _split_wire_into_halves(
+            wire, half1_pts, half2_pts, self._new_id1, self._new_id2
+        )
         schematic.wires[pos:pos + 1] = [half1, half2]
 
     def undo(self, schematic: Schematic) -> None:
-        if self._orig_points is None:
+        if not self._applied or self._orig_wire is None:
             return
+        self._applied = False
         # Remove both halves (they may be anywhere in the list now).
         new_ids = {self._new_id1, self._new_id2}
         pos = next(
@@ -928,7 +1159,7 @@ class SplitWireCommand(Command):
             None,
         )
         schematic.wires[:] = [w for w in schematic.wires if w.id not in new_ids]
-        orig = Wire(id=self._wire_id, points=list(self._orig_points))
+        orig = copy.deepcopy(self._orig_wire)
         insert_at = pos if pos is not None else self._orig_index or 0
         insert_at = min(insert_at, len(schematic.wires))
         schematic.wires.insert(insert_at, orig)
@@ -942,7 +1173,14 @@ class MergeWireCommand(Command):
     Bundled after a :class:`DeleteCommand` inside a :class:`MacroCommand` so
     the delete + merge is one undoable action.
 
-    Inverse: split the merged wire back into the two originals.
+    The two wires are re-resolved at :meth:`do` time: when a referenced wire id
+    no longer exists (an **earlier merge in the same macro** consumed it — two
+    dissolved junctions can share a wire), the merge falls back to whichever
+    wire currently ends at the merge point, so sequential merges compose
+    instead of silently no-opping and leaving an unmerged junction.
+
+    Inverse: split the merged wire back into the two originals (the wires
+    actually consumed, captured at first do()).
     """
 
     label = "Merge wires"
@@ -958,8 +1196,8 @@ class MergeWireCommand(Command):
         self._wire_id2 = wire_id2
         self._merge_point = merge_point
         self._new_id = new_id or str(uuid.uuid4())
-        self._orig_pts1: list[tuple[float, float]] | None = None
-        self._orig_pts2: list[tuple[float, float]] | None = None
+        self._orig_wire1: Wire | None = None   # pristine originals, for verbatim undo
+        self._orig_wire2: Wire | None = None
         self._orig_index: int | None = None
 
     def _find(self, schematic: Schematic, wire_id: str) -> tuple[int, Wire] | None:
@@ -968,38 +1206,60 @@ class MergeWireCommand(Command):
                 return i, w
         return None
 
+    def _resolve(
+        self, schematic: Schematic, wire_id: str, exclude: set[str]
+    ) -> tuple[int, Wire] | None:
+        """Find *wire_id*, or — if it was consumed by an earlier merge — the
+        wire that now ends at the merge point (excluding *exclude*)."""
+        r = self._find(schematic, wire_id)
+        if r is not None:
+            return r
+        key = point_key(self._merge_point)
+        for i, w in enumerate(schematic.wires):
+            if w.id in exclude or len(w.points) < 2:
+                continue
+            if point_key(w.points[0]) == key or point_key(w.points[-1]) == key:
+                return i, w
+        return None
+
     def do(self, schematic: Schematic) -> None:
-        r1 = self._find(schematic, self._wire_id1)
-        r2 = self._find(schematic, self._wire_id2)
-        if r1 is None or r2 is None:
+        r1 = self._resolve(schematic, self._wire_id1, {self._wire_id2})
+        if r1 is None:
             return
         pos1, w1 = r1
-        _,   w2 = r2
-        if self._orig_pts1 is None:
-            self._orig_pts1 = list(w1.points)
-            self._orig_pts2 = list(w2.points)
+        r2 = self._resolve(schematic, self._wire_id2, {w1.id})
+        if r2 is None or r2[1].id == w1.id:
+            return
+        w2 = r2[1]
+        if self._orig_wire1 is None:
+            self._orig_wire1 = copy.deepcopy(w1)
+            self._orig_wire2 = copy.deepcopy(w2)
             self._orig_index = pos1
         p = self._merge_point
-        # Orient w1 so that p is its last point.
-        pts1 = list(w1.points) if w1.points[-1] == p else list(reversed(w1.points))
-        # Orient w2 so that p is its first point.
-        pts2 = list(w2.points) if w2.points[0] == p else list(reversed(w2.points))
+        # Orient w1 so that p is its last point, w2 so that p is its first point.
+        rev1 = point_key(w1.points[-1]) != point_key(p)
+        rev2 = point_key(w2.points[0]) != point_key(p)
+        pts1 = list(reversed(w1.points)) if rev1 else list(w1.points)
+        pts2 = list(reversed(w2.points)) if rev2 else list(w2.points)
         merged_pts = simplify_points(pts1 + pts2[1:])
         merged = Wire(id=self._new_id, points=merged_pts)
+        # Carry the originals' style and endpoint decorations onto the merged wire
+        # so a delete-dissolved T-junction doesn't strip labels/markers/line style.
+        _merge_wire_decorations(merged, w1, rev1, w2, rev2)
         # Remove both originals and insert the merged wire where w1 was.
-        old_ids = {self._wire_id1, self._wire_id2}
+        old_ids = {w1.id, w2.id}
         schematic.wires[:] = [w for w in schematic.wires if w.id not in old_ids]
         insert_at = min(pos1, len(schematic.wires))
         schematic.wires.insert(insert_at, merged)
 
     def undo(self, schematic: Schematic) -> None:
-        if self._orig_pts1 is None:
+        if self._orig_wire1 is None:
             return
         result = self._find(schematic, self._new_id)
         pos = result[0] if result is not None else (self._orig_index or 0)
         schematic.wires[:] = [w for w in schematic.wires if w.id != self._new_id]
-        w1 = Wire(id=self._wire_id1, points=list(self._orig_pts1))
-        w2 = Wire(id=self._wire_id2, points=list(self._orig_pts2))
+        w1 = copy.deepcopy(self._orig_wire1)
+        w2 = copy.deepcopy(self._orig_wire2)
         insert_at = min(pos, len(schematic.wires))
         schematic.wires.insert(insert_at, w1)
         schematic.wires.insert(insert_at + 1, w2)
@@ -1111,20 +1371,22 @@ class MoveWireVertexCommand(Command):
         self._index = index
         self._new_point = new_point
         self._orig_points: list[tuple[float, float]] | None = None
+        # Pristine original (deepcopy) + list position, so a collapsed-and-removed
+        # wire is restored verbatim (labels/markers/style intact) at its index.
+        self._orig_wire: Wire | None = None
+        self._orig_index: int | None = None
         self._removed = False   # set when the drag collapses the wire to a point
 
-    def _find_wire(self, schematic: Schematic) -> Wire | None:
-        for w in schematic.wires:
-            if w.id == self._wire_id:
-                return w
-        return None
-
     def do(self, schematic: Schematic) -> None:
-        wire = self._find_wire(schematic)
+        wire = _find_wire(schematic, self._wire_id)
         if wire is None:
             return
         if self._orig_points is None:
             self._orig_points = list(wire.points)
+            self._orig_wire = copy.deepcopy(wire)
+            self._orig_index = next(
+                i for i, w in enumerate(schematic.wires) if w.id == self._wire_id
+            )
 
         if not (0 <= self._index < len(self._orig_points)):
             return
@@ -1143,14 +1405,17 @@ class MoveWireVertexCommand(Command):
         if self._orig_points is None:
             return
         if self._removed:
-            # Re-add the collapsed wire with its original geometry.
+            # Re-add the collapsed wire verbatim at its original position.
             if not any(w.id == self._wire_id for w in schematic.wires):
-                schematic.wires.append(
-                    Wire(id=self._wire_id, points=list(self._orig_points))
+                idx = min(
+                    self._orig_index if self._orig_index is not None
+                    else len(schematic.wires),
+                    len(schematic.wires),
                 )
+                schematic.wires.insert(idx, copy.deepcopy(self._orig_wire))
             self._removed = False
             return
-        wire = self._find_wire(schematic)
+        wire = _find_wire(schematic, self._wire_id)
         if wire is not None:
             wire.points = list(self._orig_points)
 
@@ -1177,32 +1442,72 @@ class MoveJunctionCommand(Command):
         self._targets = list(targets)
         self._new_point = new_point
         self._orig: dict[str, list[tuple[float, float]]] = {}
+        # Pristine originals (deepcopy) + list positions for verbatim restore of
+        # wires this move removes (labels/markers/style and z-order intact).
+        self._orig_wire: dict[str, Wire] = {}
+        self._orig_index: dict[str, int] = {}
         self._removed: set[str] = set()
 
     def do(self, schematic: Schematic) -> None:
+        # Group targets by wire and apply every index move to ONE evolving copy
+        # of the pristine points: a wire with BOTH endpoints at the junction
+        # would otherwise have its second reshape computed from the pristine
+        # list, overwriting the first.
+        by_wire: dict[str, list[int]] = {}
         for wire_id, idx in self._targets:
+            by_wire.setdefault(wire_id, []).append(idx)
+        for wire_id, idxs in by_wire.items():
             wire = _find_wire(schematic, wire_id)
-            if wire is None and wire_id not in self._orig:
+            if wire is None:
                 continue
             if wire_id not in self._orig:
                 self._orig[wire_id] = list(wire.points)
-            new_pts = reshape_junction_wire(self._orig[wire_id], idx, self._new_point)
-            if len(new_pts) < 2:
+                self._orig_wire[wire_id] = copy.deepcopy(wire)
+                self._orig_index[wire_id] = next(
+                    i for i, w in enumerate(schematic.wires) if w.id == wire_id
+                )
+            orig = self._orig[wire_id]
+            if not (0 <= idxs[0] < len(orig)):
+                continue
+            # All targets share the junction coordinate; reshaping may renumber
+            # vertices, so locate each remaining coincident vertex by coordinate
+            # in the evolving copy rather than by its pristine index.
+            old_key = point_key(orig[idxs[0]])
+            pts = list(orig)
+            for _ in idxs:
+                j = next(
+                    (i for i, p in enumerate(pts) if point_key(p) == old_key),
+                    None,
+                )
+                if j is None:
+                    break
+                pts = reshape_junction_wire(pts, j, self._new_point)
+                if point_key(self._new_point) == old_key:
+                    break       # zero-distance move; avoid re-finding forever
+            if len(pts) < 2:
                 self._removed.add(wire_id)
                 schematic.wires[:] = [w for w in schematic.wires if w.id != wire_id]
-            elif wire is not None:
-                wire.points = new_pts
+            else:
+                wire.points = pts
 
     def undo(self, schematic: Schematic) -> None:
         existing = {w.id for w in schematic.wires}
-        for wire_id, orig in self._orig.items():
+        for wire_id in sorted(
+            self._orig, key=lambda wid: self._orig_index.get(wid, 0)
+        ):
             if wire_id in self._removed:
                 if wire_id not in existing:
-                    schematic.wires.append(Wire(id=wire_id, points=list(orig)))
+                    idx = min(
+                        self._orig_index.get(wire_id, len(schematic.wires)),
+                        len(schematic.wires),
+                    )
+                    schematic.wires.insert(
+                        idx, copy.deepcopy(self._orig_wire[wire_id])
+                    )
             else:
                 w = _find_wire(schematic, wire_id)
                 if w is not None:
-                    w.points = list(orig)
+                    w.points = list(self._orig[wire_id])
         self._removed.clear()
 
     def redo(self, schematic: Schematic) -> None:
@@ -1346,7 +1651,14 @@ class SetVariantCommand(Command):
 
 class SetParamCommand(Command):
     """Set an integer parameter on a parametric component (e.g. a logic gate's
-    input count).  Generic over any parameter the component's kind declares."""
+    input count).  Generic over any parameter the component's kind declares.
+
+    Changing the value relocates the pins (a gate's inputs redistribute about the
+    output) and may add or remove some, so connected wires **follow** their pins
+    (`_follow_pins`), keyed by pin name: a pin that still exists moves to its new
+    position; a pin that is removed (fewer inputs) leaves its wire snapped to the
+    grid (a valid, disconnected end the user can rewire). Undo restores wiring.
+    """
 
     label = "Set Parameter"
 
@@ -1357,13 +1669,29 @@ class SetParamCommand(Command):
         self._new_value = int(new_value)
         self._old_value = old_value
         self._had_value = had_value
+        self._orig_wires: dict[str, Wire] = {}
+
+    def _named_pins(self, schematic: Schematic) -> dict[str, tuple[float, float]]:
+        from app.components import library
+        comp = _find_component(schematic, self._component_id)
+        names = [p.name for p in library.resolved_pins(comp)]
+        return dict(zip(names, _component_pin_positions(comp)))
 
     def do(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
         if self._had_value is None:
             self._had_value = self._name in comp.params
             self._old_value = comp.params.get(self._name)
+        old_named = self._named_pins(schematic)
         comp.params[self._name] = self._new_value
+        new_named = self._named_pins(schematic)
+        # Map by pin NAME: a surviving pin moves to its new position; a removed pin
+        # sends its wire to the nearest grid node (valid, disconnected).
+        old_to_new: dict[tuple[float, float], tuple[float, float]] = {}
+        for name, opos in old_named.items():
+            tgt = new_named.get(name, snap_point(opos))
+            old_to_new[point_key(opos)] = tgt
+        _follow_pins(schematic, old_to_new, self._orig_wires)
 
     def undo(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
@@ -1371,6 +1699,7 @@ class SetParamCommand(Command):
             comp.params[self._name] = int(self._old_value)
         else:
             comp.params.pop(self._name, None)
+        _restore_followed_wires(schematic, self._orig_wires)
 
 
 class SetFillColorCommand(Command):
@@ -1394,10 +1723,13 @@ class SetFillColorCommand(Command):
         comp.fill_color = self._old_fill
 
 
-class SetBorderWidthCommand(Command):
-    """Set border_width on a StyledComponent (bipole or rect)."""
+class SetComponentLineWidthCommand(Command):
+    """Set the unified stroke/outline width (``line_width``) on any component.
 
-    label = "Set Border Width"
+    One command for both circuit symbols and block outlines (rect/circle/bipole)
+    — there is no separate border-width command."""
+
+    label = "Set Stroke Width"
 
     def __init__(self, component_id: str, new_width: float, old_width: float) -> None:
         self._component_id = component_id
@@ -1405,14 +1737,120 @@ class SetBorderWidthCommand(Command):
         self._old_width = old_width
 
     def do(self, schematic: Schematic) -> None:
-        from app.components.model import StyledComponent
-        comp = _typed_component(schematic, self._component_id, StyledComponent)
-        comp.border_width = self._new_width
+        from app.components.model import Component
+        _typed_component(schematic, self._component_id, Component).line_width = self._new_width
 
     def undo(self, schematic: Schematic) -> None:
-        from app.components.model import StyledComponent
-        comp = _typed_component(schematic, self._component_id, StyledComponent)
-        comp.border_width = self._old_width
+        from app.components.model import Component
+        _typed_component(schematic, self._component_id, Component).line_width = self._old_width
+
+
+def _refollow_wire_end(
+    pts: list[tuple[float, float]], at_start: bool, new_pin: tuple[float, float]
+) -> list[tuple[float, float]]:
+    """Re-route the pin end of *pts* to *new_pin*.
+
+    Drops the old pin vertex (and any trailing off-grid approach vertices that
+    belonged to it), then routes from the remaining on-grid anchor to the new pin
+    with :func:`route_pin_aware` (extend along the pin's lead line, elbow onto the
+    grid). Keeps every interior vertex valid for the *new* geometry.
+    """
+    work = list(reversed(pts)) if at_start else list(pts)
+    work = work[:-1]                                      # drop the old pin vertex
+    while len(work) >= 2 and not (
+        coord_on_grid(work[-1][0]) and coord_on_grid(work[-1][1])
+    ):
+        work = work[:-1]                                  # drop the old approach
+    anchor = work[-1]
+    work = work[:-1] + route_pin_aware(anchor, new_pin)
+    return list(reversed(work)) if at_start else work
+
+
+def _follow_pins(
+    schematic: Schematic,
+    old_to_new: dict[tuple[float, float], tuple[float, float]],
+    orig_wires: dict[str, Wire],
+) -> None:
+    """Re-route every wire whose endpoint sits on a relocated pin.
+
+    *old_to_new* maps a rounded old pin coordinate to its new position. Each
+    affected wire is re-routed (:func:`_refollow_wire_end`) and its pristine
+    original is captured into *orig_wires* (for exact undo). A wire that collapses
+    to a single point is removed (its original is still in *orig_wires*)."""
+    to_remove: list[str] = []
+    for wire in schematic.wires:
+        pts = wire.points
+        if len(pts) < 2:
+            continue
+        start_new = old_to_new.get(point_key(pts[0]))
+        end_new = old_to_new.get(point_key(pts[-1]))
+        if start_new is None and end_new is None:
+            continue
+        if wire.id not in orig_wires:
+            orig_wires[wire.id] = copy.deepcopy(wire)
+        new_pts = list(pts)
+        if end_new is not None and end_new != pts[-1]:
+            new_pts = _refollow_wire_end(new_pts, at_start=False, new_pin=end_new)
+        if start_new is not None and start_new != pts[0]:
+            new_pts = _refollow_wire_end(new_pts, at_start=True, new_pin=start_new)
+        new_pts = simplify_points(new_pts)
+        if len(new_pts) < 2:
+            to_remove.append(wire.id)
+        else:
+            wire.points = new_pts
+    if to_remove:
+        rm = set(to_remove)
+        schematic.wires[:] = [w for w in schematic.wires if w.id not in rm]
+
+
+def _restore_followed_wires(schematic: Schematic, orig_wires: dict[str, Wire]) -> None:
+    """Undo a :func:`_follow_pins`: restore each touched wire from its pristine
+    original (geometry and style/labels), re-adding any that were removed."""
+    present = {w.id for w in schematic.wires}
+    for wid, orig in orig_wires.items():
+        if wid in present:
+            next(x for x in schematic.wires if x.id == wid).points = list(orig.points)
+        else:
+            schematic.wires.append(copy.deepcopy(orig))
+    orig_wires.clear()
+
+
+class SetComponentScaleCommand(Command):
+    """Set a logic gate's size multiplier (``scale``) on a component.
+
+    Scaling a gate relocates its pins (each by a different, non-uniform amount —
+    a scaled gate's pins sit at ``base_offset × scale``), so any wire connected to
+    a pin **follows** it (`_follow_pins`), just as it follows a moved/resized
+    component, keeping the schematic valid. Undo restores the original wiring.
+    """
+
+    label = "Set Scale"
+
+    def __init__(self, component_id: str, new_scale: float, old_scale: float) -> None:
+        self._component_id = component_id
+        self._new_scale = new_scale
+        self._old_scale = old_scale
+        self._orig_wires: dict[str, Wire] = {}
+
+    def _pin_positions(self, schematic: Schematic, scale: float) -> list[tuple[float, float]]:
+        comp = _typed_component(schematic, self._component_id, Component)
+        orig = comp.scale
+        comp.scale = scale
+        pins = _component_pin_positions(comp)
+        comp.scale = orig
+        return pins
+
+    def do(self, schematic: Schematic) -> None:
+        old_pins = self._pin_positions(schematic, self._old_scale)
+        comp = _typed_component(schematic, self._component_id, Component)
+        comp.scale = self._new_scale
+        new_pins = self._pin_positions(schematic, self._new_scale)
+        old_to_new = {point_key(o): n for o, n in zip(old_pins, new_pins)}
+        _follow_pins(schematic, old_to_new, self._orig_wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        _typed_component(schematic, self._component_id, Component).scale = self._old_scale
+        _restore_followed_wires(schematic, self._orig_wires)
 
 
 class SetLineStyleCommand(Command):
@@ -1447,10 +1885,10 @@ class SetWireLineStyleCommand(Command):
         self._old_style = old_style
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).line_style = self._new_style
+        _set_wire_attr(schematic, self._wire_id, "line_style", self._new_style)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).line_style = self._old_style
+        _set_wire_attr(schematic, self._wire_id, "line_style", self._old_style)
 
 
 class SetWireLineWidthCommand(Command):
@@ -1464,10 +1902,10 @@ class SetWireLineWidthCommand(Command):
         self._old_width = old_width
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).line_width = self._new_width
+        _set_wire_attr(schematic, self._wire_id, "line_width", self._new_width)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).line_width = self._old_width
+        _set_wire_attr(schematic, self._wire_id, "line_width", self._old_width)
 
 
 class SetWireNoJunctionDotsCommand(Command):
@@ -1481,10 +1919,10 @@ class SetWireNoJunctionDotsCommand(Command):
         self._old_value = old_value
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).no_junction_dots = self._new_value
+        _set_wire_attr(schematic, self._wire_id, "no_junction_dots", self._new_value)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).no_junction_dots = self._old_value
+        _set_wire_attr(schematic, self._wire_id, "no_junction_dots", self._old_value)
 
 
 class SetWireNoTerminationDotsCommand(Command):
@@ -1498,10 +1936,10 @@ class SetWireNoTerminationDotsCommand(Command):
         self._old_value = old_value
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).no_termination_dots = self._new_value
+        _set_wire_attr(schematic, self._wire_id, "no_termination_dots", self._new_value)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).no_termination_dots = self._old_value
+        _set_wire_attr(schematic, self._wire_id, "no_termination_dots", self._old_value)
 
 
 class SetWireHopModeCommand(Command):
@@ -1515,10 +1953,10 @@ class SetWireHopModeCommand(Command):
         self._old_value = old_value
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).hop_mode = self._new_value
+        _set_wire_attr(schematic, self._wire_id, "hop_mode", self._new_value)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).hop_mode = self._old_value
+        _set_wire_attr(schematic, self._wire_id, "hop_mode", self._old_value)
 
 
 class SetWireZOrderCommand(Command):
@@ -1532,10 +1970,10 @@ class SetWireZOrderCommand(Command):
         self._old_value = old_value
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).z_order = self._new_value
+        _set_wire_attr(schematic, self._wire_id, "z_order", self._new_value)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).z_order = self._old_value
+        _set_wire_attr(schematic, self._wire_id, "z_order", self._old_value)
 
 
 class SetWireStartMarkerCommand(Command):
@@ -1549,10 +1987,10 @@ class SetWireStartMarkerCommand(Command):
         self._old_marker = old_marker
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_marker = self._new_marker
+        _set_wire_attr(schematic, self._wire_id, "start_marker", self._new_marker)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_marker = self._old_marker
+        _set_wire_attr(schematic, self._wire_id, "start_marker", self._old_marker)
 
 
 class SetWireEndMarkerCommand(Command):
@@ -1566,10 +2004,10 @@ class SetWireEndMarkerCommand(Command):
         self._old_marker = old_marker
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_marker = self._new_marker
+        _set_wire_attr(schematic, self._wire_id, "end_marker", self._new_marker)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_marker = self._old_marker
+        _set_wire_attr(schematic, self._wire_id, "end_marker", self._old_marker)
 
 
 class SetWireStartLabelCommand(Command):
@@ -1583,10 +2021,10 @@ class SetWireStartLabelCommand(Command):
         self._old_label = old_label
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_label = self._new_label
+        _set_wire_attr(schematic, self._wire_id, "start_label", self._new_label)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_label = self._old_label
+        _set_wire_attr(schematic, self._wire_id, "start_label", self._old_label)
 
 
 class SetWireEndLabelCommand(Command):
@@ -1600,10 +2038,10 @@ class SetWireEndLabelCommand(Command):
         self._old_label = old_label
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_label = self._new_label
+        _set_wire_attr(schematic, self._wire_id, "end_label", self._new_label)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_label = self._old_label
+        _set_wire_attr(schematic, self._wire_id, "end_label", self._old_label)
 
 
 class SetWireMidLabelCommand(Command):
@@ -1617,10 +2055,10 @@ class SetWireMidLabelCommand(Command):
         self._old_label = old_label
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).mid_label = self._new_label
+        _set_wire_attr(schematic, self._wire_id, "mid_label", self._new_label)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).mid_label = self._old_label
+        _set_wire_attr(schematic, self._wire_id, "mid_label", self._old_label)
 
 
 class SetWireMidLabelPosCommand(Command):
@@ -1634,10 +2072,10 @@ class SetWireMidLabelPosCommand(Command):
         self._old_pos = old_pos
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).mid_label_pos = self._new_pos
+        _set_wire_attr(schematic, self._wire_id, "mid_label_pos", self._new_pos)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).mid_label_pos = self._old_pos
+        _set_wire_attr(schematic, self._wire_id, "mid_label_pos", self._old_pos)
 
 
 class SetWireStartLabelPlacementCommand(Command):
@@ -1651,10 +2089,10 @@ class SetWireStartLabelPlacementCommand(Command):
         self._old_placement = old_placement
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_label_placement = self._new_placement
+        _set_wire_attr(schematic, self._wire_id, "start_label_placement", self._new_placement)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).start_label_placement = self._old_placement
+        _set_wire_attr(schematic, self._wire_id, "start_label_placement", self._old_placement)
 
 
 class SetWireEndLabelPlacementCommand(Command):
@@ -1668,10 +2106,10 @@ class SetWireEndLabelPlacementCommand(Command):
         self._old_placement = old_placement
 
     def do(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_label_placement = self._new_placement
+        _set_wire_attr(schematic, self._wire_id, "end_label_placement", self._new_placement)
 
     def undo(self, schematic: Schematic) -> None:
-        _find_wire(schematic, self._wire_id).end_label_placement = self._old_placement
+        _set_wire_attr(schematic, self._wire_id, "end_label_placement", self._old_placement)
 
 
 class GroupRotateCommand(Command):
@@ -1705,6 +2143,10 @@ class GroupRotateCommand(Command):
         # Captured at first do() — never overwritten on redo.
         self._orig_comp: dict[str, tuple] = {}
         self._orig_wire: dict[str, list] = {}
+        # Pristine originals (deepcopy) + list positions, so a wire removed by
+        # this rotation is restored verbatim at its original index on undo.
+        self._orig_wire_obj: dict[str, Wire] = {}
+        self._orig_wire_index: dict[str, int] = {}
         # Boundary wires that collapsed to a point under the rotation and were
         # removed (recomputed each do(); restored on undo).
         self._removed_wire_ids: set[str] = set()
@@ -1728,13 +2170,14 @@ class GroupRotateCommand(Command):
         schematic: Schematic,
         comp_id_set: set[str],
     ) -> dict[tuple[float, float], tuple[float, float]]:
-        """Map old_pin_pos → new_pin_pos for every pin of every selected component."""
+        """Map old_pin_pos → new_pin_pos for every pin of every selected
+        component (keys are :func:`point_key`-rounded for noise-safe lookups)."""
         mapping: dict[tuple[float, float], tuple[float, float]] = {}
         for comp in schematic.components:
             if comp.id not in comp_id_set:
                 continue
             for pin_pos in _component_pin_positions(comp):
-                mapping[pin_pos] = self._rot90cw(
+                mapping[point_key(pin_pos)] = self._rot90cw(
                     pin_pos[0], pin_pos[1], self._cx, self._cy
                 )
         return mapping
@@ -1752,7 +2195,7 @@ class GroupRotateCommand(Command):
         for wire in schematic.wires:
             if wire.id in wire_id_set:
                 continue
-            s, e = wire.points[0], wire.points[-1]
+            s, e = point_key(wire.points[0]), point_key(wire.points[-1])
             sh, eh = s in pin_motion, e in pin_motion
             if sh and eh:
                 fully_rotate_extra.add(wire.id)
@@ -1765,7 +2208,7 @@ class GroupRotateCommand(Command):
                 self._orig_comp[comp.id] = (
                     comp.position, comp.rotation, comp.mirror, comp.label_offset
                 )
-        for wire in schematic.wires:
+        for w_idx, wire in enumerate(schematic.wires):
             wid = wire.id
             if wid not in self._orig_wire and (
                 wid in wire_id_set
@@ -1773,6 +2216,8 @@ class GroupRotateCommand(Command):
                 or wid in boundary
             ):
                 self._orig_wire[wid] = list(wire.points)
+                self._orig_wire_obj[wid] = copy.deepcopy(wire)
+                self._orig_wire_index[wid] = w_idx
 
         # Rotate components.
         for comp in schematic.components:
@@ -1782,7 +2227,13 @@ class GroupRotateCommand(Command):
                 comp.position[0], comp.position[1], self._cx, self._cy
             )
             comp.position = (nx, ny)
-            comp.rotation = (comp.rotation + 90) % 360
+            # Mirror is a global Flip-X applied OUTERMOST (after the stored
+            # rotation), so a visual 90° CW turn corresponds to rotation−90 for
+            # a mirrored component (R90·M·R(r) = M·R(r−90)). Using +90 would
+            # send the pins to the mirror-image of where _rot90cw moved the
+            # component and its wires, detaching every connection.
+            step = -90 if comp.mirror else 90
+            comp.rotation = (comp.rotation + step) % 360
             comp.label_offset = None
 
         # Rotate selected + internal wire vertices.
@@ -1802,7 +2253,7 @@ class GroupRotateCommand(Command):
             sh, eh = boundary[wire.id]
             orig = self._orig_wire[wire.id]
             moving_pt = orig[0] if sh else orig[-1]
-            new_pt = pin_motion.get(moving_pt)
+            new_pt = pin_motion.get(point_key(moving_pt))
             if new_pt is None:
                 continue
             dx = new_pt[0] - moving_pt[0]
@@ -1835,13 +2286,59 @@ class GroupRotateCommand(Command):
         for wire in schematic.wires:
             if wire.id in self._orig_wire:
                 wire.points = list(self._orig_wire[wire.id])
-        # Re-add any boundary wires that collapsed (and were removed) under do().
+        # Re-add any boundary wires that collapsed (and were removed) under
+        # do() — verbatim (labels/markers/style intact) at their original list
+        # positions (ascending so earlier insertions don't shift later ones).
         existing = {w.id for w in schematic.wires}
-        for wid in self._removed_wire_ids:
-            orig = self._orig_wire.get(wid)
-            if orig is not None and wid not in existing:
-                schematic.wires.append(Wire(id=wid, points=list(orig)))
+        for wid in sorted(
+            self._removed_wire_ids,
+            key=lambda wid: self._orig_wire_index.get(wid, 0),
+        ):
+            orig_wire = self._orig_wire_obj.get(wid)
+            if orig_wire is not None and wid not in existing:
+                idx = min(
+                    self._orig_wire_index.get(wid, len(schematic.wires)),
+                    len(schematic.wires),
+                )
+                schematic.wires.insert(idx, copy.deepcopy(orig_wire))
         self._removed_wire_ids = set()
+
+
+class SetDocumentPropertiesCommand(Command):
+    """Set the per-document CircuiTikZ label-style conventions (spec §7.2).
+
+    Edits the :class:`Schematic`'s ``voltage_style`` / ``current_style`` fields
+    (the Document inspector tab) as one undoable step. Only the fields whose
+    new value differs from the captured old value are written, so undo restores
+    exactly what changed.
+    """
+
+    label = "Document Properties"
+
+    def __init__(
+        self,
+        *,
+        new_voltage: str,
+        new_current: str,
+        old_voltage: str,
+        old_current: str,
+    ) -> None:
+        self._new_voltage = new_voltage
+        self._new_current = new_current
+        self._old_voltage = old_voltage
+        self._old_current = old_current
+
+    def do(self, schematic: Schematic) -> None:
+        if self._new_voltage != self._old_voltage:
+            schematic.voltage_style = self._new_voltage
+        if self._new_current != self._old_current:
+            schematic.current_style = self._new_current
+
+    def undo(self, schematic: Schematic) -> None:
+        if self._new_voltage != self._old_voltage:
+            schematic.voltage_style = self._old_voltage
+        if self._new_current != self._old_current:
+            schematic.current_style = self._old_current
 
 
 class MacroCommand(Command):
@@ -1863,8 +2360,18 @@ class MacroCommand(Command):
         return list(self._commands)
 
     def do(self, schematic: Schematic) -> None:
-        for cmd in self._commands:
-            cmd.do(schematic)
+        """Run the children in order. If a child raises, the already-executed
+        children are unwound (undone in reverse order) before the exception
+        propagates, so a failed macro never leaves a half-applied document."""
+        done: list[Command] = []
+        try:
+            for cmd in self._commands:
+                cmd.do(schematic)
+                done.append(cmd)
+        except BaseException:
+            for cmd in reversed(done):
+                cmd.undo(schematic)
+            raise
 
     def undo(self, schematic: Schematic) -> None:
         for cmd in reversed(self._commands):
@@ -1889,6 +2396,10 @@ class UndoStack:
         self._schematic = schematic
         self._undo: list[Command] = []
         self._redo: list[Command] = []
+        # Undo-list length at the last save (mark_save_point); None when the
+        # saved state has become unreachable (divergent edits truncated the
+        # redo tail that contained it). A fresh stack is at its save point.
+        self._save_point: int | None = 0
 
     # -- properties --------------------------------------------------------
 
@@ -1916,14 +2427,49 @@ class UndoStack:
     def redo_label(self) -> str | None:
         return self._redo[-1].label if self._redo else None
 
+    # -- save-point tracking (consumed by the UI's modified-state logic) ----
+
+    def mark_save_point(self) -> None:
+        """Record the current history position as the on-disk (saved) state."""
+        self._save_point = len(self._undo)
+
+    def is_modified(self) -> bool:
+        """True iff the document differs from the last marked save point.
+
+        After divergent edits (undo past the save point, then a new push) the
+        saved state is unreachable, so the document stays modified until the
+        next :meth:`mark_save_point`.
+        """
+        return self._save_point != len(self._undo)
+
     # -- operations --------------------------------------------------------
 
     def push(self, command: Command) -> None:
         """Apply *command* to the document and record it for undo.
 
         Clears the redo history (a new action invalidates redone-away future).
+        If ``command.do()`` raises, nothing is recorded — the document was
+        either untouched or (for a :class:`MacroCommand`) already unwound — and
+        the exception propagates.
         """
         command.do(self._schematic)
+        self._record(command)
+
+    def record(self, command: Command) -> None:
+        """Record an **already-applied** command for undo without executing it.
+
+        Used by the scene's ``batch()`` flush, which applies each command
+        immediately at push time (so later commands in the batch capture fresh
+        old values) and records the wrapping macro once at the end. Undo/redo
+        of a recorded command behave exactly as if it had been pushed.
+        """
+        self._record(command)
+
+    def _record(self, command: Command) -> None:
+        # A push below the save point truncates the redo tail that contained
+        # the saved state — it becomes unreachable.
+        if self._save_point is not None and self._save_point > len(self._undo):
+            self._save_point = None
         self._undo.append(command)
         self._redo.clear()
 
@@ -1946,6 +2492,11 @@ class UndoStack:
         return command
 
     def clear(self) -> None:
-        """Drop all undo and redo history (e.g. after New / Open)."""
+        """Drop all undo and redo history (e.g. after New / Open).
+
+        The just-loaded document is the new baseline, so the (empty) history
+        position becomes the save point: ``is_modified()`` is False.
+        """
         self._undo.clear()
         self._redo.clear()
+        self._save_point = 0

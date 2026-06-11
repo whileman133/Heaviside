@@ -22,10 +22,11 @@ from app.canvas.style import SVG_PT_PER_GU
 from app.components import library, render
 from app.resources import resource_path
 
-# Fixed bounding-box half-extent (GU); diode body scale (matches
-# DIODE_SYMBOL_SCALE in app/codegen/circuitikz.py); standalone border.
+# Fixed bounding-box half-extent (GU); diode body scale (single-sourced in
+# app/components/library.py, shared with app/codegen/circuitikz.py); standalone
+# border.
 BBOX = 3.0
-DIODE_SCALE = 0.8
+DIODE_SCALE = library.DIODE_SYMBOL_SCALE
 BORDER_PT = 2
 
 DEFINITIONS_PATH = Path(resource_path("components", "definitions.json"))
@@ -41,8 +42,9 @@ def _tex(off: list[float]) -> str:
     return f"({off[0]:g},{-off[1]:g})"
 
 
-def geometry_key(kind: str) -> str:
-    return kind.replace(" ", "_")
+# Canonical definition lives in the Qt-free component library; re-exported here
+# under the same public name for the generator scripts and the editor.
+geometry_key = library.geometry_key
 
 
 def is_diode(entry: dict) -> bool:
@@ -340,11 +342,11 @@ def data_entry(kind: str, entry: dict) -> dict:
         if entry.get("scale"):
             out["scale"] = [round(float(s), 4) for s in entry["scale"]]
         out["leads"] = entry_leads(entry)
+        if entry.get("ctikzset"):    # static shape settings (e.g. inductor=cute)
+            out["ctikzset"] = list(entry["ctikzset"])
     if entry.get("variants"):
-        out["variants"] = [
-            {"name": v["name"], "token": v["token"], "mode": v["mode"]}
-            for v in entry["variants"]
-        ]
+        keep = ("name", "token", "mode", "label", "offset")
+        out["variants"] = [{k: v[k] for k in keep if k in v} for v in entry["variants"]]
     return out
 
 
@@ -515,5 +517,115 @@ def save_component(kind: str, entry: dict) -> None:
     geometry.update(mes)
     de = data_entry(kind, entry)
     de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
+    components[kind] = de
+    write_store(geometry, components, origin)
+
+
+# ---------------------------------------------------------------------------
+# Multi-parameter mux/demux (CircuiTikZ ``muxdemux`` shape).
+#
+# A mux/demux carries TWO integer parameters — its data-line count and its
+# select-line count — so the geometry is rendered for each value combination and
+# the pins are *measured* (the configurable trapezoid's anchors don't sit on the
+# grid) and baked into ``n_data`` per combo, along with the concrete ``muxdemux
+# def`` option codegen re-emits. The shape is centre-placed (``anchor_pin`` null,
+# like the op amp); a wire snaps onto the off-grid pin via the magnet.
+# ---------------------------------------------------------------------------
+
+def best_alignment_scale(measured: dict[str, tuple]) -> float:
+    """A single uniform scale that lands **as many** of the measured anchor
+    coordinates as possible on the 0.25-GU grid — the best-effort grid alignment
+    for a symbol whose native anchors are off-grid (flip-flops, mux/demux).
+
+    Candidates are each non-trivial coordinate's snap-ratio (the factor that puts
+    that coordinate on the grid); the winner aligns the most coordinates, ties
+    broken toward 1.0 (least distortion). Pins the scale can't bring on-grid (a
+    mux's slanted select pins) just stay off-grid and connect via the magnet."""
+    def _snap(v: float) -> float:
+        return 0.0 if v == 0 else (1.0 if v > 0 else -1.0) * math.floor(abs(v) / 0.25 + 0.5) * 0.25
+
+    cands = {1.0}
+    for (x, y) in measured.values():
+        for v in (x, y):
+            if abs(v) > 0.1:
+                cands.add(round(_snap(v) / v, 6))
+
+    def aligned(s: float) -> int:
+        return sum(1 for (x, y) in measured.values() for v in (x * s, y * s)
+                   if abs(v) > 1e-9 and abs(v - _snap(v)) < 1e-3)
+
+    return max(cands, key=lambda s: (aligned(s), -abs(s - 1.0)))
+
+
+def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tuple[str, str]]]:
+    """The concrete ``muxdemux def`` option, the measured (unscaled) anchors, and
+    the (pin-name, anchor) pairs for one (data, select) combo of a *mux*/*demux*.
+    ``Lh``/``Rh`` track the data count (2× keeps the data-pin pitch constant);
+    ``w`` tracks the select count so the bottom pins don't crowd."""
+    w = sel + 1
+    if role == "mux":      # data inputs on the left, one output right, selects below
+        defstr = (f"muxdemux def={{Lh={2 * data}, Rh=2, NL={data}, "
+                  f"NR=1, NB={sel}, NT=0, w={w}}}")
+        pairs = ([(f"in{i}", f"lpin {i + 1}") for i in range(data)]
+                 + [("out", "rpin 1")])
+    else:                  # demux: one input left, data outputs right, selects below
+        defstr = (f"muxdemux def={{Lh=2, Rh={2 * data}, NL=1, "
+                  f"NR={data}, NB={sel}, NT=0, w={w}}}")
+        pairs = ([("in", "lpin 1")]
+                 + [(f"out{i}", f"rpin {i + 1}") for i in range(data)])
+    pairs += [(f"sel{j}", f"bpin {j + 1}") for j in range(sel)]
+    measured = render.measure_anchors(f"muxdemux, {defstr}", [a for _, a in pairs])
+    return defstr, measured, [p for p in pairs if p[1] in measured]
+
+
+def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
+    """Render every (data, select) combo of a mux/demux. Returns
+    ``(geometry_by_key, data_entry)`` — geometry keyed ``kind:data:select`` (the
+    default aliased under the plain key), and a multi-parameter data entry whose
+    ``n_data[<data>,<select>]`` holds the baked option, alignment scale, measured
+    pins, and bbox. A best-effort uniform scale lands the data pins on the grid;
+    the slanted select pins stay off-grid (magnet)."""
+    rec = entry["muxdemux"]
+    role, dname, sname = rec["role"], rec["data_param"], rec["select_param"]
+    specs = {s["name"]: s for s in entry["params"]}
+    dspec, sspec = specs[dname], specs[sname]
+    base = {k: v for k, v in entry.items() if k not in ("params", "muxdemux")}
+
+    geoms: dict[str, dict] = {}
+    n_data: dict[str, dict] = {}
+    for d in range(int(dspec["min"]), int(dspec["max"]) + 1):
+        for s in range(int(sspec["min"]), int(sspec["max"]) + 1):
+            opt, measured, pairs = _muxdemux_combo(role, d, s)
+            sc = best_alignment_scale(measured)
+            pins = [{"name": nm, "anchor": a,
+                     "offset": [round(measured[a][0] * sc, 4), round(measured[a][1] * sc, 4)]}
+                    for nm, a in pairs]
+            ce = {**base, "tikz": "muxdemux", "emission": "node", "anchor_pin": None,
+                  "pins": pins, "leads": [], "scale": [round(sc, 6), round(sc, 6)]}
+            g = geometry(ce, option=", " + opt)
+            geoms[f"{geometry_key(kind)}:{d}:{s}"] = g
+            n_data[f"{d},{s}"] = {"option": opt, "scale": [round(sc, 6), round(sc, 6)],
+                                  "pins": pins, "bbox": compute_bbox(g, origin, pins)}
+    dd, sd = int(dspec["default"]), int(sspec["default"])
+    geoms[geometry_key(kind)] = geoms[f"{geometry_key(kind)}:{dd}:{sd}"]   # static alias
+    default = n_data[f"{dd},{sd}"]
+    de = {
+        "display_name": entry["display_name"], "category": entry["category"],
+        "emission": "node", "tikz": "muxdemux", "labels": [], "anchor_pin": None,
+        "pins": default["pins"], "bbox": default["bbox"],
+        "params": entry["params"], "n_data": n_data,
+    }
+    return geoms, de
+
+
+def save_muxdemux(kind: str, entry: dict) -> None:
+    """Render and merge a parametric mux/demux into the data files (incremental —
+    does not re-render the rest of the library)."""
+    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
+    components = data["components"]
+    origin = tuple(data["origin_svg"])
+    geometry = json.loads(GEOMETRY_PATH.read_text(encoding="utf-8"))
+    geoms, de = render_muxdemux(kind, entry, origin)
+    geometry.update(geoms)
     components[kind] = de
     write_store(geometry, components, origin)

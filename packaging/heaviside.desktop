@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Heaviside
+GenericName=Schematic Editor
+Comment=Draw circuit schematics and export CircuiTikZ/LaTeX
+Exec=heaviside %f
+Icon=heaviside
+Terminal=false
+Categories=Graphics;Science;Engineering;Education;
+MimeType=application/x-heaviside;
+Keywords=circuit;schematic;circuitikz;latex;tikz;electronics;
+StartupWMClass=Heaviside

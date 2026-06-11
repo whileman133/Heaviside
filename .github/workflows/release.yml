@@ -17,6 +17,16 @@ name: Release
 #   AC_API_ISSUER_ID     App Store Connect API issuer ID
 #   AC_API_KEY           base64 of the App Store Connect API key (.p8)
 #
+# Windows: an Inno Setup installer (HeavisideSetup.exe) is always built. It is
+# Authenticode-signed when these secrets are set; without them the installer and
+# .exe are UNSIGNED (downloaders see a SmartScreen warning), so the pipeline
+# stays testable:
+#   WINDOWS_CERT_PFX       base64 of the code-signing certificate (.pfx)
+#   WINDOWS_CERT_PASSWORD  password for that .pfx
+#
+# Linux: a self-contained AppImage (Heaviside-linux-x86_64.AppImage) is built
+# alongside the portable .tar.gz. No signing.
+#
 on:
   push:
     tags:
@@ -41,7 +51,7 @@ jobs:
           # repos. This produces an Apple-Silicon-native .app.
           - os: macos-15
             label: macOS (Apple Silicon)
-            artifact: Heaviside-macos-arm64.zip
+            artifact: Heaviside-macos-arm64.dmg
           - os: windows-latest
             label: Windows (x64)
             artifact: Heaviside-windows-x64.zip
@@ -50,7 +60,10 @@ jobs:
             artifact: Heaviside-linux-x64.tar.gz
 
     steps:
-      - uses: actions/checkout@v5
+      # Third-party actions are pinned to commit SHAs (not mutable tags) because
+      # this workflow holds contents:write and the signing secrets. To bump one,
+      # resolve the new tag: gh api repos/<owner>/<repo>/git/ref/tags/<tag>
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
       # Linux: PyInstaller bundles the Qt shared libraries, but they must be
       # present on the build host for PyInstaller to find them. (Not needed on
@@ -63,7 +76,7 @@ jobs:
             libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           enable-cache: true
 
@@ -144,62 +157,157 @@ jobs:
             --sign "$MACOS_SIGN_IDENTITY" dist/Heaviside.app
           codesign --verify --deep --strict --verbose=2 dist/Heaviside.app
 
-      # Submit to Apple's notary service and wait for the verdict, then staple
-      # the ticket onto the .app so Gatekeeper passes even offline. Uses an App
-      # Store Connect API key (.p8) rather than an Apple ID + app password.
-      - name: Notarize and staple (macOS)
+      # Wrap the (signed) .app in a drag-to-Applications .dmg. dmgbuild is pulled
+      # in just for this run (it is not a project dependency, so the frozen lock
+      # stays valid); scripts/make_dmg.py regenerates the background art and
+      # builds the image per packaging/dmg_settings.py. Runs whether or not
+      # signing is enabled, so an unsigned test build still produces a .dmg.
+      - name: Build the .dmg (macOS)
+        if: runner.os == 'macOS'
+        run: uv run --with dmgbuild python scripts/make_dmg.py "${{ matrix.artifact }}" dist/Heaviside.app
+
+      # Sign the .dmg, then submit it to Apple's notary service (which registers
+      # the contained app's code-signing hash) and staple the ticket onto the
+      # .dmg so Gatekeeper passes even offline. Uses an App Store Connect API key
+      # (.p8). Only runs when signing secrets are configured.
+      - name: Sign, notarize, and staple the .dmg (macOS)
         if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
         env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
           AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
           AC_API_KEY: ${{ secrets.AC_API_KEY }}
         run: |
+          codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "${{ matrix.artifact }}"
           echo "$AC_API_KEY" | base64 --decode > "$RUNNER_TEMP/api_key.p8"
-          # notarytool uploads an archive, not the .app directory itself.
-          ditto -c -k --keepParent dist/Heaviside.app "$RUNNER_TEMP/notarize.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+          xcrun notarytool submit "${{ matrix.artifact }}" \
             --key "$RUNNER_TEMP/api_key.p8" \
             --key-id "$AC_API_KEY_ID" \
             --issuer "$AC_API_ISSUER_ID" \
             --wait
-          xcrun stapler staple dist/Heaviside.app
-          rm -f "$RUNNER_TEMP/api_key.p8" "$RUNNER_TEMP/notarize.zip"
+          xcrun stapler staple "${{ matrix.artifact }}"
+          rm -f "$RUNNER_TEMP/api_key.p8"
 
-      # macOS: an .app is a directory of many files (including framework symlinks
-      # that a plain zip would mangle), so use ditto, which is the macOS-correct
-      # archiver. Runs after signing/stapling above so the zip carries the
-      # notarization ticket. Then emit a SHA-256 for download verification.
+      # ── Windows installer (Inno Setup) ───────────────────────────────────
+      # Built on every Windows run. Authenticode signing of the .exe and the
+      # installer is conditional on the WINDOWS_CERT_* secrets, mirroring the
+      # macOS signing pattern — an unsigned build still produces a usable
+      # installer so the pipeline stays testable.
+      - name: Install Inno Setup (Windows)
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+
+      - name: Check for signing credentials (Windows)
+        if: runner.os == 'Windows'
+        id: winsign
+        shell: bash
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          if [ -n "$WINDOWS_CERT_PFX" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing secrets are not set — producing an UNSIGNED installer. Downloaders will see a SmartScreen warning."
+          fi
+
+      # Locate signtool (Windows SDK) and sign the app .exe BEFORE it is packed
+      # into the installer, then the installer is signed after it is built.
+      - name: Decode signing certificate (Windows)
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+        run: |
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP\cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+          $st = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" | Sort-Object FullName | Select-Object -Last 1
+          echo "SIGNTOOL=$($st.FullName)" >> $env:GITHUB_ENV
+
+      - name: Sign the app executable (Windows)
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          & "$env:SIGNTOOL" sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_CERT_PASSWORD" `
+            /fd sha256 /tr http://timestamp.digicert.com /td sha256 "dist\Heaviside\Heaviside.exe"
+
+      - name: Build the installer (Windows)
+        if: runner.os == 'Windows'
+        run: uv run python scripts/make_installer.py "Heaviside-windows-x64-setup.exe" "dist/Heaviside"
+
+      - name: Sign the installer (Windows)
+        if: runner.os == 'Windows' && steps.winsign.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          & "$env:SIGNTOOL" sign /f "$env:RUNNER_TEMP\cert.pfx" /p "$env:WINDOWS_CERT_PASSWORD" `
+            /fd sha256 /tr http://timestamp.digicert.com /td sha256 "Heaviside-windows-x64-setup.exe"
+          Remove-Item "$env:RUNNER_TEMP\cert.pfx" -Force
+
+      # ── Linux AppImage ───────────────────────────────────────────────────
+      # Built on every Linux run, alongside the portable .tar.gz. appimagetool is
+      # itself an AppImage; APPIMAGE_EXTRACT_AND_RUN (set by make_appimage.py)
+      # lets it run without FUSE on the runner.
+      # appimagetool ships only via a mutable "continuous" release, so the
+      # download is pinned by SHA-256. When upstream rebuilds, this step fails
+      # closed; refresh the pin by downloading the new file, verifying it, and
+      # updating APPIMAGETOOL_SHA256 below.
+      - name: Install appimagetool (Linux)
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGETOOL_SHA256: a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
+        run: |
+          curl -sSL -o appimagetool-x86_64.AppImage \
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          echo "$APPIMAGETOOL_SHA256  appimagetool-x86_64.AppImage" | sha256sum -c -
+          sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
+          sudo chmod +x /usr/local/bin/appimagetool
+
+      - name: Build the AppImage (Linux)
+        if: runner.os == 'Linux'
+        run: uv run python scripts/make_appimage.py "Heaviside-linux-x86_64.AppImage" "dist/Heaviside"
+
+      # The .dmg is already the single release artifact; just emit its SHA-256
+      # for download verification.
       - name: Package (macOS)
         if: runner.os == 'macOS'
-        run: |
-          cd dist
-          ditto -c -k --keepParent "Heaviside.app" "../${{ matrix.artifact }}"
-          cd ..
-          shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+        run: shasum -a 256 "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
 
-      # Windows: zip the onedir folder; emit a SHA-256 alongside.
+      # Windows: zip the (portable) onedir folder and emit SHA-256s for both the
+      # zip and the installer built above.
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Compress-Archive -Path "dist/Heaviside/*" -DestinationPath "${{ matrix.artifact }}"
           (Get-FileHash "${{ matrix.artifact }}" -Algorithm SHA256).Hash.ToLower() + "  ${{ matrix.artifact }}" | Out-File -Encoding ascii "${{ matrix.artifact }}.sha256"
+          (Get-FileHash "Heaviside-windows-x64-setup.exe" -Algorithm SHA256).Hash.ToLower() + "  Heaviside-windows-x64-setup.exe" | Out-File -Encoding ascii "Heaviside-windows-x64-setup.exe.sha256"
 
       # Linux: tar+gzip the onedir folder (preserves the executable bit); emit a
-      # SHA-256 alongside.
+      # SHA-256 for it and for the AppImage built above.
       - name: Package (Linux)
         if: runner.os == 'Linux'
         run: |
           tar -czf "${{ matrix.artifact }}" -C dist Heaviside
           sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
+          sha256sum "Heaviside-linux-x86_64.AppImage" > "Heaviside-linux-x86_64.AppImage.sha256"
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ matrix.artifact }}
+          # The Windows installer only exists on the Windows runner; the glob is
+          # ignored (not an error) on macOS/Linux.
+          if-no-files-found: ignore
           path: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
+            Heaviside-windows-x64-setup.exe
+            Heaviside-windows-x64-setup.exe.sha256
+            Heaviside-linux-x86_64.AppImage
+            Heaviside-linux-x86_64.AppImage.sha256
 
   release:
     name: Publish Release
@@ -211,13 +319,13 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - name: Download all build artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           path: artifacts
           merge-multiple: true
 
       - name: Create / update the GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           files: artifacts/**
           draft: true            # review the assets, then publish manually

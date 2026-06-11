@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
-from app.components.registry import REGISTRY
+from app.components.registry import REGISTRY, display_rank
 from app.ui import theme
 
 # Preview glyph + tile sizes — enlarged (and 3 columns instead of 4) so the
@@ -61,23 +61,40 @@ _IN_USE_HEADER_H = 26
 # CircuiTikZ bipole/tripole classification. The palette splits the raw "Logic"
 # and "Sources" registry categories into finer groups (see _palette_category).
 _CATEGORY_ORDER = [
-    "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors",
-    "Amplifiers", "Logic (Am)", "Logic (Eu)", "Switches",
+    "Resistors", "Capacitors", "Inductors", "Diodes", "Transistors", "Tubes",
+    "Amplifiers", "Blocks", "Gates (Am)", "Gates (Eu)", "Logic", "Switches",
     "Sources", "Supplies", "Instruments", "Grounds",
-    "Misc", "Annotations", "Drawing",
+    "Transducers", "Antennas", "Misc", "Annotations", "Drawing",
 ]
+
+# Raw-"Logic" kinds that are *blocks* rather than gates (flip-flops, mux/demux,
+# ALU, adder). These split into their own palette "Logic" category; the boolean
+# gates split into the style-grouped "Gates (Am)" / "Gates (Eu)" (see
+# _palette_category). Keyed on the CircuiTikZ shape keyword so it tracks the data.
+_LOGIC_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
 
 # Power-supply kinds (rails + batteries) split out of the raw "Sources" registry
 # category into the palette-only "Supplies" group; the actual sources stay put.
 _SUPPLY_KINDS = frozenset({"vcc", "vdd", "vee", "vss", "battery", "battery1"})
 
 
+def _is_logic_block(kind: str) -> bool:
+    """True for a raw-"Logic" kind that is a *block* (flip-flop, mux/demux, ALU,
+    adder) rather than a boolean gate — so the palette can give the blocks their
+    own "Logic" category and keep the gates in "Gates (Am)" / "Gates (Eu)"."""
+    return REGISTRY[kind].tikz_keyword.startswith(_LOGIC_BLOCK_TIKZ)
+
+
 def _palette_category(kind: str, raw: str) -> str:
-    """Refine a component's registry category into its palette group: split Logic
-    by american/european style and move the supply rails/batteries into Supplies.
-    (Category is a palette-grouping concern, §5.4, so this stays UI-side.)"""
+    """Refine a component's registry category into its palette group: split the raw
+    Logic category into the boolean **Gates** (by american/european style) and the
+    **Logic** blocks (flip-flops, mux/demux, ALU, adder), and move the supply
+    rails/batteries into Supplies. (Category is a palette-grouping concern, §5.4,
+    so this stays UI-side.)"""
     if raw == "Logic":
-        return "Logic (Eu)" if _is_european_style(kind) else "Logic (Am)"
+        if _is_logic_block(kind):
+            return "Logic"
+        return "Gates (Eu)" if _is_european_style(kind) else "Gates (Am)"
     if raw == "Sources" and kind in _SUPPLY_KINDS:
         return "Supplies"
     return raw
@@ -92,14 +109,19 @@ _CATEGORY_REP = {
     "Inductors": "L",
     "Diodes": "D",
     "Transistors": "npn",
+    "Tubes": "triode",
     "Amplifiers": "op amp",
-    "Logic (Am)": "and",
-    "Logic (Eu)": "eand",
+    "Blocks": "amp",
+    "Gates (Am)": "and",
+    "Gates (Eu)": "eand",
+    "Logic": "ALU",
     "Switches": "nos",
     "Sources": "V",
     "Supplies": "battery",
     "Instruments": "voltmeter",
     "Grounds": "ground",
+    "Transducers": "loudspeaker",
+    "Antennas": "antenna",
     "Misc": "lamp",
     "Annotations": "open",
     "Drawing": "rect",
@@ -110,10 +132,11 @@ _CATEGORY_REP = {
 # on each card; pressing 1–9/0 then places the Nth component.
 _CATEGORY_LETTERS = {
     "Resistors": "R", "Capacitors": "C", "Inductors": "L", "Diodes": "D",
-    "Transistors": "T", "Amplifiers": "A",
-    "Logic (Am)": "O", "Logic (Eu)": "E",
+    "Transistors": "T", "Tubes": "J", "Amplifiers": "A", "Blocks": "Y",
+    "Gates (Am)": "O", "Gates (Eu)": "E", "Logic": "K",
     "Switches": "W", "Sources": "V", "Supplies": "U",
-    "Instruments": "M", "Grounds": "G", "Misc": "X",
+    "Instruments": "M", "Grounds": "G",
+    "Transducers": "Z", "Antennas": "F", "Misc": "X",
     "Annotations": "N", "Drawing": "B",
 }
 
@@ -182,6 +205,16 @@ def _is_european_style(kind: str) -> bool:
     symbols together (first) and european ones after. Derived from the CircuiTikZ
     keyword (every european kind uses an ``european …`` shape keyword)."""
     return "european" in REGISTRY[kind].tikz_keyword.lower()
+
+
+def _within_category_key(kind: str):
+    """Sort key for the order of kinds *within* a palette category: kinds in the
+    explicit display order come first, in that order; the rest fall after,
+    american-style before european (then alphabetically)."""
+    rank = display_rank(kind)
+    if rank is not None:
+        return (0, rank, "")
+    return (1, _is_european_style(kind), kind.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -376,10 +409,11 @@ class ComponentPalette(QWidget):
         self._by_cat: dict[str, list[str]] = defaultdict(list)
         for kind, defn in REGISTRY.items():
             self._by_cat[_palette_category(kind, defn.category)].append(kind)
-        # Within each category, keep american-style components together (first),
-        # then european-style ones, instead of jumbling them by registry order.
+        # Within each category, an explicit display order wins (so the Inductors
+        # group reads inductors → transformers → choke); kinds *not* in the order
+        # fall after, american-style first then european, instead of jumbled.
         for kinds in self._by_cat.values():
-            kinds.sort(key=lambda k: (_is_european_style(k),))  # stable: keeps order within each group
+            kinds.sort(key=_within_category_key)
         self._ordered_cats = [c for c in _CATEGORY_ORDER if c in self._by_cat] + [
             c for c in self._by_cat if c not in _CATEGORY_ORDER
         ]

@@ -28,7 +28,8 @@ top-left sits at the local origin, in pt units.  Callers scale by
 fragment lands at the same on-canvas size as a 10 pt text label.
 
 Caching is two-tier:
-  * an in-process ``lru_cache`` of the parsed :class:`QPainterPath`;
+  * an in-process bounded LRU memo of the parsed :class:`QPainterPath`
+    (successes only — failures are retried, never cached);
   * an on-disk cache of the compiled SVG text keyed by a content hash, so a
     fragment seen in a previous session re-parses instantly without invoking
     ``latex``.
@@ -40,16 +41,25 @@ path is the one-time ``latex`` compile).
 
 from __future__ import annotations
 
+import getpass
 import hashlib
 import os
 import re
 import subprocess
 import tempfile
+import threading
 import xml.etree.ElementTree as ET
+from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
+from PySide6.QtCore import (
+    QCoreApplication,
+    QObject,
+    QRunnable,
+    QThreadPool,
+    Signal,
+)
 from PySide6.QtGui import QPainterPath, QTransform
 
 from app.canvas.svgsym import parse_path
@@ -99,10 +109,35 @@ _MATRIX_RE = re.compile(
 # Disk cache
 # ---------------------------------------------------------------------------
 
+def _cache_user() -> str:
+    """A filesystem-safe identifier for the current user (cache-dir suffix)."""
+    try:
+        user = getpass.getuser()
+    except Exception:  # noqa: BLE001 - no login name (daemon/odd env)
+        user = f"uid{os.getuid()}" if hasattr(os, "getuid") else "user"
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", user) or "user"
+
+
 @lru_cache(maxsize=1)
 def _cache_dir() -> Path:
-    d = Path(tempfile.gettempdir()) / "heaviside-mathcache"
-    d.mkdir(parents=True, exist_ok=True)
+    """The on-disk SVG cache directory — **per user**, mode 0700.
+
+    The system temp dir is world-writable, so a fixed shared path
+    (``heaviside-mathcache``) would let another local user pre-create it and
+    plant/replace cache entries that this process then trusts. The directory is
+    therefore suffixed with the user name and created private (0700; mkdir's
+    mode is a no-op on Windows, which is fine — %TEMP% is already per-user
+    there). On POSIX, if the path already exists but is owned by someone else
+    (a squatter), fall back to a fresh private ``mkdtemp`` — a per-session
+    cache is slower but never trusts foreign content.
+    """
+    d = Path(tempfile.gettempdir()) / f"heaviside-mathcache-{_cache_user()}"
+    try:
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if hasattr(os, "getuid") and d.stat().st_uid != os.getuid():
+            return Path(tempfile.mkdtemp(prefix="heaviside-mathcache-"))
+    except OSError:
+        return Path(tempfile.mkdtemp(prefix="heaviside-mathcache-"))
     return d
 
 
@@ -145,11 +180,25 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
     """
     cache_file = _cache_dir() / f"{_cache_key(fragment)}.svg"
     if cache_file.exists():
-        text = cache_file.read_text(encoding="utf-8")
+        try:
+            text = cache_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = ""
         if text:
-            return text
-        # Empty file: a stale failure marker from an older build (or a partial
-        # write). Fall through and retry instead of returning None forever.
+            # Trust the cached SVG only if it actually parses. A corrupted
+            # non-empty entry (torn write, disk error) would otherwise be
+            # returned forever, and the ET.ParseError would escape from
+            # _svg_to_path on every render of that fragment.
+            try:
+                ET.fromstring(text)
+                return text
+            except ET.ParseError:
+                try:
+                    cache_file.unlink()
+                except OSError:
+                    pass
+        # Empty/corrupt file: a stale failure marker from an older build (or a
+        # partial write). Fall through and retry instead of failing forever.
 
     latex_exe = _tools.resolve("latex")
     dvisvgm_exe = _tools.resolve("dvisvgm")
@@ -162,7 +211,14 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
         (tmp_path / "m.tex").write_text(tex, encoding="utf-8")
         try:
             r = subprocess.run(
-                [latex_exe, "-interaction=nonstopmode", "-halt-on-error", "m.tex"],
+                # -no-shell-escape: a label is rendered the instant a .hv file is
+                # opened — no user gesture — and label text flows verbatim into
+                # %FRAGMENT% (it cannot be sanitised; the whole point is to typeset
+                # arbitrary math). This flag guarantees a crafted label can never
+                # invoke \write18 / external commands, regardless of the local TeX
+                # installation's shell_escape default. Mirrors app/preview/latex.py.
+                [latex_exe, "-no-shell-escape", "-interaction=nonstopmode",
+                 "-halt-on-error", "m.tex"],
                 cwd=tmp, capture_output=True, timeout=timeout,
             )
             if r.returncode != 0 or not (tmp_path / "m.dvi").exists():
@@ -312,7 +368,11 @@ def _ziamath_path(fragment: str) -> QPainterPath | None:
     """
     try:
         import ziamath
-    except ImportError:  # pragma: no cover - ziamath is a declared dependency
+    except Exception:  # noqa: BLE001 - missing module OR missing bundled font
+        # ziamath/ziafont load their fonts (STIX Two Math, DejaVu Sans) at import
+        # time. A bundling slip would raise FileNotFoundError here, not
+        # ImportError; treat any import failure as "fallback unavailable" so the
+        # label degrades to raw text instead of crashing the render.
         return None
     try:
         svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()
@@ -361,47 +421,96 @@ def _active_engine() -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
-@lru_cache(maxsize=1)
+# Baseline calibration memo.  Deliberately *not* an ``lru_cache``: a transient
+# calibration failure (a momentary tooling hiccup at startup) must not pin the
+# 0.0 fallback for the whole session — that would vertically shift every label.
+# Only a *successful* calibration is stored; a failure returns the fallback and
+# is retried on the next call.  Guarded by a lock — render_path runs on the
+# QThreadPool workers (render_async, max 2 threads).
+_baseline_lock = threading.Lock()
+_baseline_memo: dict[str, float] = {}
+
+
+def _calibrated_baseline(engine: str) -> float:
+    """Memoised baseline for *engine*; failures are returned but never stored."""
+    with _baseline_lock:
+        if engine in _baseline_memo:
+            return _baseline_memo[engine]
+    if engine == "ziamath":
+        p = _ziamath_path("x")
+    else:
+        svg = _compile_svg("x")
+        p = _svg_to_path(svg) if svg else None
+    if p is None or p.isEmpty():
+        return 0.0                      # fallback — NOT memoised; retried later
+    value = p.boundingRect().bottom()
+    with _baseline_lock:
+        _baseline_memo[engine] = value
+    return value
+
+
 def _baseline_y() -> float:
     """Device-y of the text baseline in raw render coordinates (pt).
 
     Because every fragment is typeset behind a ``\\strut`` (see _TEMPLATE), the
     baseline lands at the same device-y for all fragments.  We recover it from a
     calibration render of ``x`` — a glyph with zero depth, so its ink bottom *is*
-    the baseline.
+    the baseline.  A failed calibration falls back to 0.0 for this call only and
+    is retried on the next call (see :data:`_baseline_memo`).
     """
-    svg = _compile_svg("x")
-    if not svg:
-        return 0.0
-    p = _svg_to_path(svg)
-    return 0.0 if p.isEmpty() else p.boundingRect().bottom()
+    return _calibrated_baseline("latex")
 
 
-@lru_cache(maxsize=1)
 def _ziamath_baseline_y() -> float:
     """Device-y of the text baseline for the ziamath renderer (pt).
 
     ziamath places the baseline at y=0 already; we recover it the same way as the
     LaTeX path — the ink bottom of ``x`` (a zero-depth glyph) — so the two engines
-    normalise identically.
+    normalise identically.  Like :func:`_baseline_y`, failures are not memoised.
     """
-    p = _ziamath_path("x")
-    return 0.0 if (p is None or p.isEmpty()) else p.boundingRect().bottom()
+    return _calibrated_baseline("ziamath")
 
 
-@lru_cache(maxsize=512)
+# In-process render memo.  A bounded LRU that — unlike the previous
+# ``lru_cache(512)`` — **never stores None**, so a transient failure (tool
+# hiccup, race on a cold disk cache) cannot blank a fragment for the whole
+# session; the next request simply retries.  Thread-safe: render_path is called
+# from the render_async QThreadPool workers (up to 2 concurrently) as well as
+# the UI thread.  The slow compile runs *outside* the lock; if two threads race
+# the same fragment, both compute and the last write wins (identical results).
+_render_lock = threading.Lock()
+_render_memo: "OrderedDict[tuple[str, str], QPainterPath]" = OrderedDict()
+_RENDER_MEMO_MAX = 512
+
+
+def _render_memo_clear() -> None:
+    """Drop the in-memory render memo (kept API-compatible with the old
+    ``lru_cache``'s ``render_path.cache_clear()``)."""
+    with _render_lock:
+        _render_memo.clear()
+    with _baseline_lock:
+        _baseline_memo.clear()
+
+
 def render_path(fragment: str, engine: str) -> QPainterPath | None:
     """Render *fragment* with a specific *engine* (``"latex"`` or ``"ziamath"``).
 
     The path is normalised so its **baseline is at y=0** and its **left ink edge
     at x=0**; ascenders have negative y, descenders positive y.  This lets callers
     anchor multiple fragments to a shared baseline.  Returns ``None`` if the
-    fragment is empty or fails to render.  Cached in-process per (fragment,
-    engine); the LaTeX SVG is additionally cached on disk.
+    fragment is empty or fails to render.  Successful renders are cached
+    in-process per (fragment, engine) — failures are never cached, so they are
+    retried — and the LaTeX SVG is additionally cached on disk.
     """
     fragment = fragment.strip()
     if not fragment:
         return None
+    key = (fragment, engine)
+    with _render_lock:
+        cached = _render_memo.get(key)
+        if cached is not None:
+            _render_memo.move_to_end(key)
+            return cached
     if engine == "ziamath":
         path = _ziamath_path(fragment)
         baseline = _ziamath_baseline_y()
@@ -410,10 +519,20 @@ def render_path(fragment: str, engine: str) -> QPainterPath | None:
         path = _svg_to_path(svg) if svg else None
         baseline = _baseline_y()
     if path is None or path.isEmpty():
-        return None
+        return None                     # not memoised: transient failures retry
     norm = QTransform()
     norm.translate(-path.boundingRect().left(), -baseline)
-    return norm.map(path)
+    result = norm.map(path)
+    with _render_lock:
+        _render_memo[key] = result
+        _render_memo.move_to_end(key)
+        while len(_render_memo) > _RENDER_MEMO_MAX:
+            _render_memo.popitem(last=False)
+    return result
+
+
+# Existing call sites (tests) clear the memo via the lru_cache-style attribute.
+render_path.cache_clear = _render_memo_clear  # type: ignore[attr-defined]
 
 
 def render_latex(fragment: str) -> QPainterPath | None:
@@ -457,6 +576,13 @@ class _RenderTask(QRunnable):
 def _pool() -> QThreadPool:
     pool = QThreadPool()
     pool.setMaxThreadCount(2)  # latex is heavy; cap concurrent compiles
+    # On app teardown, drain in-flight label renders so Qt doesn't warn
+    # "QThreadPool destroyed while threads are still running". Bounded wait: at
+    # most 2 threads, each a short subprocess with a 20s timeout. Mirrors the
+    # explicit shutdown PreviewWorker wires for the main compile thread.
+    app = QCoreApplication.instance()
+    if app is not None:
+        app.aboutToQuit.connect(lambda: pool.waitForDone(2000))
     return pool
 
 
@@ -489,13 +615,29 @@ def render_async(fragment: str, on_done) -> None:  # noqa: ANN001
 # Option-string -> displayable LaTeX
 # ---------------------------------------------------------------------------
 
-# CircuiTikZ label/annotation slots whose *values* are what actually render near
-# a component.  Leading "key=" is stripped so the canvas shows "R_1", not "l=R_1".
-_LABEL_KEYS = ("l", "l_", "l^", "v", "v_", "v^", "i", "i_", "i^", "a", "t", "f")
+# CircuiTikZ annotation slots are a **family** letter optionally followed by
+# position/direction modifiers: ``^`` (above) / ``_`` (below) set the side, and
+# ``<`` / ``>`` set the arrow direction (and, for a bipole's current, which lead
+# it rides). Examples: ``i``, ``i^``, ``i<``, ``i_>``, ``v<``. The *value* after
+# ``=`` is what renders near the component (the canvas shows "R_1", not "l=R_1").
+_SLOT_MODS = "^_<>"
+# Families whose value renders near the component.
+_LABEL_FAMILIES = frozenset("lviatf")
+# Families placed on a *side* of the body (as opposed to ``t``, the in-body
+# bipole-box text). Used by slot_fragments() for per-side placement.
+_SIDE_FAMILIES = frozenset("lvia")
 
-# Slots placed on a *side* of the component body (as opposed to ``t``, the
-# in-body bipole-box text).  Used by slot_fragments() for per-side placement.
-_SIDE_KEYS = ("l", "l_", "l^", "v", "v_", "v^", "i", "i_", "i^", "a", "a_", "a^")
+
+def _slot_family(key: str) -> str:
+    """The family letter of a slot key, stripping ``^``/``_``/``<``/``>`` modifiers
+    (e.g. ``i<`` → ``i``, ``v^`` → ``v``)."""
+    return key.rstrip(_SLOT_MODS)[:1]
+
+
+def slot_reversed(key: str) -> bool:
+    """True when the slot's direction modifier is ``<`` (reversed); ``>`` or no
+    modifier is the forward/default direction."""
+    return "<" in key
 
 
 def slot_fragments(options: str) -> list[tuple[str, str]]:
@@ -511,7 +653,7 @@ def slot_fragments(options: str) -> list[tuple[str, str]]:
     for seg in _split_top_level(options):
         key, eq, val = seg.partition("=")
         k = key.strip()
-        if eq and k in _SIDE_KEYS and val.strip():
+        if eq and _slot_family(k) in _SIDE_FAMILIES and val.strip():
             out.append((k, val.strip()))
     return out
 
@@ -519,15 +661,16 @@ def slot_fragments(options: str) -> list[tuple[str, str]]:
 def slot_side(key: str) -> str:
     """Conventional side ('above' / 'below') for a slot key.
 
-    ``^`` forces above, ``_`` forces below; otherwise labels (``l``) and current
-    (``i``) sit above, voltage (``v``) sits below — a readable default, not a
-    pixel-exact reproduction of CircuiTikZ's voltage/current arrow placement.
+    ``^`` forces above, ``_`` forces below (independent of the ``<``/``>``
+    direction modifier); otherwise labels (``l``) and current (``i``) sit above,
+    voltage (``v``) sits below — a readable default, not a pixel-exact
+    reproduction of CircuiTikZ's voltage/current arrow placement.
     """
-    if key.endswith("^"):
+    if "^" in key:
         return "above"
-    if key.endswith("_"):
+    if "_" in key:
         return "below"
-    return "below" if key.startswith("v") else "above"
+    return "below" if _slot_family(key) == "v" else "above"
 
 
 def label_display_latex(options: str) -> str:
@@ -541,7 +684,7 @@ def label_display_latex(options: str) -> str:
     parts: list[str] = []
     for seg in _split_top_level(options):
         key, eq, val = seg.partition("=")
-        if eq and key.strip() in _LABEL_KEYS and val.strip():
+        if eq and _slot_family(key.strip()) in _LABEL_FAMILIES and val.strip():
             parts.append(val.strip())
     return r"\ \ ".join(parts)
 

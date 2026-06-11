@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metainfo for the Heaviside AppImage. Installed to
+     share/metainfo/ so software centres and AppImage integrators can describe
+     the app. The component id matches the macOS bundle identifier. -->
+<component type="desktop-application">
+  <id>com.heaviside.editor</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Heaviside</name>
+  <summary>Draw circuit schematics and export CircuiTikZ/LaTeX</summary>
+  <description>
+    <p>
+      Heaviside is a graphical editor for circuit diagrams. Draw a schematic on
+      a snapping grid, then export it as CircuiTikZ/LaTeX source or render it to
+      a PDF/SVG preview.
+    </p>
+  </description>
+  <launchable type="desktop-id">heaviside.desktop</launchable>
+  <provides>
+    <mediatype>application/x-heaviside</mediatype>
+  </provides>
+  <categories>
+    <category>Graphics</category>
+    <category>Science</category>
+    <category>Engineering</category>
+  </categories>
+  <url type="homepage">https://github.com/whileman133/Heaviside</url>
+  <url type="bugtracker">https://github.com/whileman133/Heaviside/issues</url>
+</component>

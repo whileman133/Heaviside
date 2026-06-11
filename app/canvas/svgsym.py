@@ -65,15 +65,10 @@ def _geometry() -> dict:
         return json.load(fh)
 
 
-# Registry ``kind`` -> geometry key.  Most kinds match the CircuiTikZ keyword
-# verbatim; only "op amp" differs (the export script sanitises the space).
-_KIND_TO_GEOMETRY: dict[str, str] = {
-    "op amp": "op_amp",
-}
-
-
-def geometry_key(kind: str) -> str:
-    return _KIND_TO_GEOMETRY.get(kind, kind)
+# Registry ``kind`` -> geometry key.  Canonical definition lives in the Qt-free
+# component library (``library.geometry_key``); re-exported here under the same
+# public name for the canvas and its tests.
+geometry_key = library.geometry_key
 
 
 # ---------------------------------------------------------------------------
@@ -185,15 +180,25 @@ def parse_path(d: str) -> QPainterPath:
 _PX_PER_PT = GRID_PX / SVG_PT_PER_GU
 
 
-@lru_cache(maxsize=1)
-def _local_transform() -> QTransform:
-    """Affine map from SVG point coordinates to local pixel coordinates."""
+def local_transform() -> QTransform:
+    """Affine map from SVG point coordinates to local pixel coordinates.
+
+    Computed fresh from the library's ``origin_svg`` on every call, so callers
+    that may reload the component store (the component editor) always see the
+    current origin.  The canvas hot path uses the cached :func:`_local_transform`.
+    """
     ox, oy = library.origin_svg()
     t = QTransform()
     # Qt applies right-to-left: scale ∘ translate(-origin).
     t.scale(_PX_PER_PT, _PX_PER_PT)
     t.translate(-ox, -oy)
     return t
+
+
+@lru_cache(maxsize=1)
+def _local_transform() -> QTransform:
+    """Cached :func:`local_transform` (the origin is a bundled constant)."""
+    return local_transform()
 
 
 # ---------------------------------------------------------------------------

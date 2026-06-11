@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- freedesktop shared-MIME-info definition for the Heaviside ".hv" schematic
+     format. Installed to share/mime/packages/ inside the AppImage so file
+     managers recognise *.hv and can offer "Open with Heaviside". -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-heaviside">
+    <comment>Heaviside schematic</comment>
+    <glob pattern="*.hv"/>
+    <icon name="heaviside"/>
+    <generic-icon name="application-x-heaviside"/>
+  </mime-type>
+</mime-info>

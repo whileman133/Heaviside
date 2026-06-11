@@ -140,6 +140,7 @@ class WireGeometry:
         self,
         gu: tuple[float, float],
         exclude_wire_id: str | None = None,
+        raw_gu: tuple[float, float] | None = None,
     ) -> tuple[tuple[float, float], bool]:
         """Resolve a wire endpoint for cursor position *gu* (already snapped).
 
@@ -151,8 +152,14 @@ class WireGeometry:
 
         *exclude_wire_id* omits one wire from the wire-vertex / wire-segment
         snap — used while dragging a vertex so it does not snap to its own wire.
+
+        *raw_gu* is the **unsnapped** cursor position (in GU). When given, the
+        component-pin pass measures distance from it, so a pin that sits *off*
+        the 0.25-GU grid (a scaled logic gate's terminal) is grabbable — its
+        nearest grid node can be more than ``PIN_SNAP_GU`` away. Defaults to
+        *gu* (the grid-snapped cursor) for callers without the raw position.
         """
-        pin = self.nearest_connection_point(gu)
+        pin = self.nearest_connection_point(raw_gu if raw_gu is not None else gu)
         if pin is not None:
             return pin, True
         vtx = self.nearest_wire_vertex(gu, exclude_wire_id)
@@ -217,10 +224,11 @@ class WireGeometry:
         not on a connection point and falls through to selection/drag, while a
         press right on a free pin/lead-end or perimeter dot starts a wire.
         """
-        gu = snap_point_gu(scene_pt)
-        # Use the raw (unsnapped) distance so the grab is tight.
+        # Use the raw (unsnapped) cursor so the grab is tight *and* off-grid pins
+        # (scaled logic gates) are reachable — their nearest grid node can fall
+        # outside PIN_SNAP_GU.
         rx, ry = scene_to_gu(scene_pt)
-        pin = self.nearest_connection_point(gu)
+        pin = self.nearest_connection_point((rx, ry))
         if pin is None:
             return None
         if (pin[0] - rx) ** 2 + (pin[1] - ry) ** 2 > PIN_GRAB_GU * PIN_GRAB_GU:

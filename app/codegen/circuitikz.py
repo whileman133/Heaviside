@@ -77,6 +77,7 @@ from app.components.model import (
 )
 from app.components.registry import REGISTRY
 from app.components.style import (
+    balance_braces,
     compose_style_options,
     protect_label_commas,
     split_top_level,
@@ -175,8 +176,10 @@ _TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
 _DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
-#: Must match DIODE_SCALE in components/generate_components.py.
-DIODE_SYMBOL_SCALE: float = 0.8
+#: Single-sourced in app/components/library.py (re-exported here under the
+#: historical public name); the renderer (app/componenteditor/renderer.py)
+#: reads the same constant, so the two cannot drift.
+DIODE_SYMBOL_SCALE: float = _library.DIODE_SYMBOL_SCALE
 
 # Multi-terminal components use node[] syntax.
 _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["multi_terminal_kinds"])
@@ -247,16 +250,14 @@ def generate(
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
         lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
 
-    # Document voltage/current label conventions (§4 / §7.2), picture-scoped so
-    # the snippet is self-contained.  Emitted only for the non-default (european)
-    # values, so american output (the default) is byte-for-byte unchanged.
-    style_opts = []
-    if getattr(schematic, "voltage_style", "american") == "european":
-        style_opts.append("voltage=european")
-    if getattr(schematic, "current_style", "american") == "european":
-        style_opts.append("current=european")
-    if style_opts:
-        lines.append(rf"  \ctikzset{{{', '.join(style_opts)}}}")
+    # Document voltage/current label conventions (§4 / §7.2). Applied **per
+    # annotated component** as a local `voltage=european` / `current=european`
+    # option (see _annotation_style_opts), NOT as a global `\ctikzset`: the global
+    # form also restyles some component *symbols*, but Heaviside provides separate
+    # american/european symbols as distinct components, so the convention must only
+    # affect the v=/i= annotation arrows.
+    voltage_european = getattr(schematic, "voltage_style", "american") == "european"
+    current_european = getattr(schematic, "current_style", "american") == "european"
 
     # Line-hops (decoration where wires cross without connecting, §6.4), grouped
     # per hopping wire. Default-mode wires hop only when mark_line_hops is on;
@@ -276,6 +277,11 @@ def generate(
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
         anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
+        # A scaled logic gate's pins sit at the true scaled node anchor (no lead
+        # stub), so a connecting wire's endpoint — snapped onto that pin by the
+        # magnet — is exactly the node anchor and maps to `(node.anchor)` like any
+        # other multi-terminal pin.  ``pin_positions`` already carries the scaled
+        # (off-grid) coordinate, so the lookup key matches the wire endpoint.
         for i, pin in enumerate(defn.pins):
             if i >= len(pin_positions):
                 continue
@@ -317,20 +323,24 @@ def generate(
             # Absolute coords: the multi-terminal nodes aren't defined yet.
             lines.append("  " + _wire_layer_line(obj, use_refs=False))
 
-    # Height-setting gates are emitted first, each in its own local group so the
-    # \ctikzset height reverts afterward; their (global) node names then resolve
-    # for wires in the main \draw.
+    # Nodes that need a local \ctikzset (a gate's body height, a cute/european
+    # transformer's inductor shape) are emitted first, each in its own group so the
+    # setting reverts afterward; their (global) node names then resolve for wires in
+    # the main \draw.
     for comp in schematic.components:
-        if _gate_height_setting(comp) is not None:
-            lines.extend(_gate_group_lines(comp, _y, _rot))
+        if _node_group_ctikzset(comp):
+            lines.extend(_node_group_lines(comp, _y, _rot))
 
     lines.append(r"  \draw")
 
     draw_lines: list[str] = []
     for comp in schematic.components:
-        if _gate_height_setting(comp) is not None:
+        if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
-        draw_lines.extend(_component_lines(comp, pin_coord_to_ref, _y, _rot))
+        draw_lines.extend(_component_lines(
+            comp, pin_coord_to_ref, _y, _rot,
+            voltage_european=voltage_european, current_european=current_european,
+        ))
 
     # Wires at the default layer (z_order == 0) share the main \draw path;
     # non-zero-z wires are emitted in the background/foreground layers instead.
@@ -342,7 +352,7 @@ def generate(
             continue
         hops = hops_by_wire.get(wire.id, [])
         style = compose_style_options(
-            line_style=wire.line_style, border_width=wire.line_width
+            line_style=wire.line_style, line_width=wire.line_width
         )
         arrow = _wire_arrow_spec(wire)
         # The arrow spec must lead the option list (``-{Latex}, dashed`` not the
@@ -431,14 +441,18 @@ def _component_lines(
     pin_coord_to_ref: dict[tuple[float, float], str] | None = None,
     y_fn=lambda y: y,
     rot_fn=lambda r: r,
+    *,
+    voltage_european: bool = False,
+    current_european: bool = False,
 ) -> list[str]:
     kind = comp.kind
+    style = _annotation_style_opts(comp, voltage_european, current_european)
     if kind in _TWO_TERMINAL_KINDS:
-        return [_two_terminal_line(comp, pin_coord_to_ref, y_fn)]
+        return [_two_terminal_line(comp, pin_coord_to_ref, y_fn, style)]
     elif kind in _MULTI_TERMINAL_KINDS:
-        return [_multi_terminal_line(comp, y_fn, rot_fn)]
+        return [_multi_terminal_line(comp, y_fn, rot_fn, style)]
     elif kind in _NODE_KINDS:
-        return [_node_line(comp, y_fn)]
+        return [_node_line(comp, y_fn, style)]
     elif isinstance(comp, DrawingComponent):
         # Emitted as standalone commands outside the \draw block; nothing here.
         return []
@@ -450,6 +464,7 @@ def _two_terminal_line(
     comp: Component,
     pin_coord_to_ref: dict[tuple[float, float], str] | None = None,
     y_fn=lambda y: y,
+    style: list[str] = (),
 ) -> str:
     """Render a two-terminal component as: (x0,y0) to[KIND, LABELS] (x1,y1)
 
@@ -492,6 +507,10 @@ def _two_terminal_line(
     # reflection, so off-axis features (an LED's emission arrows, a voltage
     # label's side) land where the canvas Flip-X puts them at every rotation.
     opts = [tikz_kind]
+    lw = _line_width_opt(comp)
+    if lw:
+        opts.append(lw)
+    opts.extend(style)   # local voltage=european / current=european (per annotation)
     if comp.mirror:
         opts.append("mirror")
     if label_str:
@@ -509,24 +528,38 @@ def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
     if spec and spec.get("height_key"):
         nd = _library.param_n_data(comp)
         if nd and "height" in nd:
-            return spec["height_key"], nd["height"]
+            # Scale the body height by the per-instance Component.scale so a scaled
+            # gate's input pitch (and thus its `.in k` anchors) shrink/grow with
+            # it, landing exactly at base_offset*scale (see _multi_terminal_line).
+            s = float(getattr(comp, "scale", 1.0))
+            return spec["height_key"], nd["height"] * s
     return None
 
 
-def _gate_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
-    """A height-setting gate wrapped in a local group so the height reverts after."""
-    key, height = _gate_height_setting(comp)
+def _node_group_ctikzset(comp: Component) -> list[str]:
+    """The ``\\ctikzset`` settings a node must be wrapped in its own group with (so
+    they revert after) — a parametric gate's body height, or a kind's static
+    ``ctikzset`` (a cute/european transformer's ``inductor=…`` shape). Empty when
+    the node needs no group (emitted in the main path)."""
+    height = _gate_height_setting(comp)
+    if height is not None:
+        return [f"{height[0]}={height[1]:g}"]   # full precision (grid alignment)
+    return _library.node_ctikzset(comp.kind)
+
+
+def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
+    """A node needing local ``\\ctikzset`` (gate height / transformer inductor
+    style) wrapped in its own group so the setting reverts after."""
     node = _multi_terminal_line(comp, y_fn, rot_fn)
-    return ["  {",
-            rf"    \ctikzset{{{key}={height:g}}}",   # full precision (grid alignment)
-            rf"    \draw {node};",
-            "  }"]
+    sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
+    return ["  {", *sets, rf"    \draw {node};", "  }"]
 
 
 def _multi_terminal_line(
     comp: Component,
     y_fn=lambda y: y,
     rot_fn=lambda r: r,
+    style: list[str] = (),
 ) -> str:
     """Render a multi-terminal component.
 
@@ -554,8 +587,35 @@ def _multi_terminal_line(
         # A gate's body height (so inputs land on the grid without a node yscale
         # that would oval the bubble) is set in a local group around the node by
         # the caller — see _gate_height_setting / generate.
+    elif _library.is_parametric(comp.kind):
+        # Multi-parameter measured-pins kinds (mux/demux): the concrete shape
+        # option for this value-combo (e.g. "muxdemux def={Lh=8, …, NB=2}") is
+        # baked into the instance's n_data record at generation time, alongside
+        # the baked grid-alignment scale.
+        _nd = _library.param_n_data(comp)
+        if _nd and _nd.get("option"):
+            kind_arg = f"{kind_arg}, {_nd['option']}"
+        extra_opts = _library._scale_opts(_nd["scale"]) if (_nd and _nd.get("scale")) else ""
     else:
         extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
+    # Scalable kinds (logic gates + digital blocks) carry a per-instance size
+    # multiplier (Component.scale, the inspector Size): fold it into the emitted
+    # xscale/yscale on top of the symbol's baked alignment scale so the LaTeX body
+    # matches the canvas.
+    if _library.is_scalable(comp.kind):
+        s_user = float(getattr(comp, "scale", 1.0))
+        if abs(s_user - 1.0) > 1e-9:
+            base = _library.block_scale(comp)   # baked [sx, sy] (gate or block)
+            if defn.tikz_keyword.endswith(" port") and _param is not None:
+                # A multi-input gate sizes its input pitch via the body *height*
+                # (set in the surrounding \ctikzset group — scaled by s_user in
+                # _gate_height_setting), NOT via yscale. So scale only x (width)
+                # here; the height carries the uniform y-scale (xscale would
+                # mis-size the pitch — CircuiTikZ derives it from height).
+                extra_opts = _library._scale_opts([base[0] * s_user, base[1]])
+            else:
+                # Single-input gates and digital blocks scale uniformly.
+                extra_opts = _library._scale_opts([base[0] * s_user, base[1] * s_user])
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)
@@ -571,6 +631,13 @@ def _multi_terminal_line(
             )
         else:
             kind_arg = f"{kind_arg}, xscale=-1"
+    # CircuiTikZ quadpole shapes (transformers) flip their internal coils when the
+    # node is rotated by an odd 90° (crossing the terminal leads) or mirrored (the
+    # coils face outward). Drawing the shape under the node transform (``transform
+    # shape``) reorients it rigidly — matching the canvas — without that distortion,
+    # and leaves the terminal anchors unchanged so connected wires still meet them.
+    if defn.tikz_keyword.startswith("transformer") and (rotation != 0 or comp.mirror):
+        kind_arg = f"{kind_arg}, transform shape"
 
     # Append user options to the node[] argument.  Logic-port shapes (keyword
     # "<gate> port") don't accept the bipole-style ``l=`` quick key, so a label
@@ -583,6 +650,11 @@ def _multi_terminal_line(
         user_opts = _label_args(comp)
     if user_opts:
         kind_arg = f"{kind_arg}, {user_opts}"
+    lw = _line_width_opt(comp)
+    if lw:
+        kind_arg = f"{kind_arg}, {lw}"
+    for s in style:   # local voltage=european / current=european (per annotation)
+        kind_arg = f"{kind_arg}, {s}"
 
     # Determine placement coordinate and anchor option.
     anchor_info = _MULTI_TERMINAL_ANCHOR_PIN.get(comp.kind)
@@ -604,13 +676,9 @@ def _multi_terminal_line(
 
     node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
 
-    # Append lead wires if defined for this kind.
-    leads = _MULTI_TERMINAL_LEADS.get(comp.kind, [])
-    if not leads:
-        return node_line  # gates take this path (no residual leads)
-
     lines = [node_line]
-    for ctikz_anchor, pin_name in leads:
+    # Static residual leads (op-amp/MOSFET) declared in the library.
+    for ctikz_anchor, pin_name in _MULTI_TERMINAL_LEADS.get(comp.kind, []):
         pin_index = next(
             (i for i, p in enumerate(defn.pins) if p.name == pin_name), None
         )
@@ -619,6 +687,15 @@ def _multi_terminal_line(
             lines.append(
                 f"({node_id}.{ctikz_anchor}) -- ({_fmt(px)},{_fmt(y_fn(py))})"
             )
+    # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
+    # checked inner-dot anchor (the dot variants, §5.4).
+    for mark in _library.dot_marks(comp):
+        lines.append(f"({node_id}.{mark['anchor']}) node[circ]{{}}")
+    # A scaled logic gate needs no lead stubs: its pins sit at the true scaled
+    # node anchor, so connecting wires attach directly at `(node.anchor)` (see
+    # pin_coord_to_ref in generate()).
+    if len(lines) == 1:
+        return node_line  # single-point node / no residual leads
     return "\n    ".join(lines)
 
 
@@ -666,7 +743,7 @@ _validate_codegen_tables()
 _POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
 
 
-def _node_line(comp: Component, y_fn=lambda y: y) -> str:
+def _node_line(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
     """Render a single-terminal node as: (x,y) node[kind, options] {}
 
     For power rail kinds, an ``l=`` slot in comp.options is converted to a
@@ -684,8 +761,10 @@ def _node_line(comp: Component, y_fn=lambda y: y) -> str:
         for seg in split_top_level(comp.options):
             key, eq, val = seg.partition("=")
             if eq and key.strip() == "l" and val.strip():
-                args += f", label=right:{{{val.strip()}}}"
+                args += f", label=right:{{{balance_braces(val.strip())}}}"
                 break
+    for s in style:   # local voltage=european / current=european (per annotation)
+        args += f", {s}"
     return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{}}"
 
 
@@ -810,7 +889,7 @@ def _wire_draw_statement(
     y_fn=lambda y: y,
 ) -> str:
     r"""A standalone ``\draw[...] <path>;`` for one wire (used for z-layered wires)."""
-    style = compose_style_options(line_style=wire.line_style, border_width=wire.line_width)
+    style = compose_style_options(line_style=wire.line_style, line_width=wire.line_width)
     arrow = _wire_arrow_spec(wire)
     opts = ", ".join(p for p in (arrow, style) if p)
     path = _wire_path(wire, hops, pin_coord_to_ref, y_fn)
@@ -963,7 +1042,8 @@ def _wire_label_nodes(wire: Wire, y_fn=lambda y: y) -> list[str]:
             px = ex + ox
             py = y_fn(ey) + oy
         lines.append(
-            rf"\node[anchor={anchor}, inner sep=0] at ({_fmt(px)},{_fmt(py)}) {{{text}}};"
+            rf"\node[anchor={anchor}, inner sep=0] at ({_fmt(px)},{_fmt(py)}) "
+            rf"{{{balance_braces(text)}}};"
         )
 
     # Mid-wire label: centred *over* the wire with an opaque (white) backdrop so
@@ -972,7 +1052,7 @@ def _wire_label_nodes(wire: Wire, y_fn=lambda y: y) -> list[str]:
         mx, my = wire_point_at_fraction(pts, wire.mid_label_pos)
         lines.append(
             rf"\node[fill=white, inner sep=1pt] at "
-            rf"({_fmt(mx)},{_fmt(y_fn(my))}) {{{wire.mid_label}}};"
+            rf"({_fmt(mx)},{_fmt(y_fn(my))}) {{{balance_braces(wire.mid_label)}}};"
         )
     return lines
 
@@ -1026,7 +1106,9 @@ def _text_node_line(comp: "TextNodeComponent", y_fn=lambda y: y) -> str:
     when any of them is set.
     """
     x, y = comp.position
-    text = comp.options
+    # Brace-balance: a stray unmatched ``}`` must not escape the node's {…}
+    # argument and inject raw TeX into the document (see balance_braces).
+    text = balance_braces(comp.options)
 
     opts = _font_opts_bracket(comp)
 
@@ -1058,7 +1140,7 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
 
     style = compose_style_options(
         fill_color=comp.fill_color,
-        border_width=comp.border_width,
+        line_width=comp.line_width,
         line_style=comp.line_style,
     )
     style_arg = f"[{style}]" if style else ""
@@ -1080,6 +1162,7 @@ def _centered_text_line(comp: Component, y_fn=lambda y: y) -> str | None:
     text = comp.options
     if not text:
         return None
+    text = balance_braces(text)  # contain a stray ``}`` inside the {…} argument
     defn = REGISTRY[comp.kind]
     x1, y1 = comp.position
     so = comp.span_override if comp.span_override is not None else defn.default_span
@@ -1106,7 +1189,7 @@ def _circle_line(comp: Component, y_fn=lambda y: y) -> str:
 
     style = compose_style_options(
         fill_color=comp.fill_color,
-        border_width=comp.border_width,
+        line_width=comp.line_width,
         line_style=comp.line_style,
     )
     style_arg = f"[{style}]" if style else ""
@@ -1153,7 +1236,7 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
     rotate_opt = f", rotate={tikz_rot}" if tikz_rot else ""
 
     m = re.search(r'\bt\s*=\s*([^,]+)', comp.options)
-    label = m.group(1).strip() if m else ""
+    label = balance_braces(m.group(1).strip()) if m else ""
 
     fs = comp.font_size
     leading = round(fs * 1.2, 1)
@@ -1170,7 +1253,7 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
 
     style = compose_style_options(
         fill_color=comp.fill_color,
-        border_width=comp.border_width,
+        line_width=comp.line_width,
         line_style=comp.line_style,
     )
     extra_opts = f", {style}" if style else ""
@@ -1214,8 +1297,46 @@ def _label_args(comp: Component) -> str:
     """Return comp.options for the ``to[]`` / ``node[]`` argument.
 
     Label values containing commas (e.g. ``v=$\\phi(0,0)$``) are brace-protected
-    so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3)."""
-    return protect_label_commas(comp.options)
+    so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3).
+    The options are brace-balanced first so an unmatched ``}`` cannot escape the
+    ``to[…]``/``node[…]`` bracket group (LaTeX-injection containment)."""
+    return protect_label_commas(balance_braces(comp.options))
+
+
+def _line_width_opt(comp: Component) -> str:
+    """``line width=<w>pt`` for a symbol component whose stroke differs from the
+    CircuiTikZ default (0.4 pt); empty otherwise. Block components (rect/circle/
+    bipole) emit the same unified ``line_width`` through ``compose_style_options``
+    in their own draw/node options, so they are skipped here to avoid emitting it
+    twice."""
+    if isinstance(comp, DrawingComponent) or abs(comp.line_width - 0.4) < 1e-6:
+        return ""
+    return f"line width={comp.line_width:g}pt"
+
+
+def _annotation_style_opts(comp: Component, voltage_european: bool,
+                           current_european: bool) -> list[str]:
+    """Local ``voltage=european`` / ``current=european`` options for a component
+    whose options carry a ``v=`` / ``i=`` annotation, when the document uses the
+    european style. Applied **per component** (not as a global ``\\ctikzset``) so it
+    only restyles the annotation arrow, never the component symbol — Heaviside
+    provides separate american/european *symbols* as distinct components."""
+    if not (voltage_european or current_european):
+        return []
+    has_v = has_i = False
+    for seg in split_top_level(comp.options):
+        key = seg.split("=", 1)[0].strip()
+        fam = key.rstrip("^_<>")[:1] if key else ""
+        if fam == "v":
+            has_v = True
+        elif fam == "i":
+            has_i = True
+    opts: list[str] = []
+    if has_v and voltage_european:
+        opts.append("voltage=european")
+    if has_i and current_european:
+        opts.append("current=european")
+    return opts
 
 
 def _gate_label_args(comp: Component) -> str:
@@ -1224,7 +1345,7 @@ def _gate_label_args(comp: Component) -> str:
     (the option CircuiTikZ accepts on a node), placing the label above the gate
     body to match the canvas.  Remaining slots are passed through unchanged."""
     out: list[str] = []
-    for seg in split_top_level(comp.options):
+    for seg in split_top_level(balance_braces(comp.options)):
         key, eq, val = seg.partition("=")
         if eq and key.strip() == "l" and val.strip():
             out.append(f"label=above:{{{val.strip()}}}")

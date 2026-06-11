@@ -32,6 +32,16 @@ _LIGHT = {
     "TEXT":          "#333333",   # body text
     "ICON":          "#555555",   # icon tint (toolbars, buttons)
     "ICON_MUTED":    "#888888",   # secondary icons
+    # Dialog / reference-table inks (Help & About dialogs, hints).
+    "TEXT_MUTED":    "#666666",   # secondary body text (hints, captions)
+    "HEADING":       "#2c3e57",   # dialog section titles
+    "TABLE_KEY":     "#4a6f9c",   # keycap / shortcut column ink
+    "TABLE_HEADER_BG": "#ebf0f6", # reference-table group-header band
+    # Welcome-screen step diagram (#AARRGGBB — QColor parses the alpha form).
+    "WELCOME_STEP":  "#c85078af",
+    "WELCOME_AXIS":  "#b4a0afbe",
+    "WELCOME_LABEL": "#d26482aa",
+    "WELCOME_HINT":  "#c8788ca5",
 }
 _DARK = {
     "SURFACE":       "#2a2c30",
@@ -48,6 +58,14 @@ _DARK = {
     "TEXT":          "#e6e6e6",
     "ICON":          "#c9ccd1",
     "ICON_MUTED":    "#9aa0a8",
+    "TEXT_MUTED":    "#a8acb3",
+    "HEADING":       "#d6dde8",
+    "TABLE_KEY":     "#9dbbe0",
+    "TABLE_HEADER_BG": "#343840",
+    "WELCOME_STEP":  "#c88fb3e8",
+    "WELCOME_AXIS":  "#b475828f",
+    "WELCOME_LABEL": "#d295b0d8",
+    "WELCOME_HINT":  "#c88a9ab5",
 }
 
 SURFACE = _LIGHT["SURFACE"]
@@ -64,6 +82,14 @@ BUTTON_BORDER = _LIGHT["BUTTON_BORDER"]
 TEXT = _LIGHT["TEXT"]
 ICON = _LIGHT["ICON"]
 ICON_MUTED = _LIGHT["ICON_MUTED"]
+TEXT_MUTED = _LIGHT["TEXT_MUTED"]
+HEADING = _LIGHT["HEADING"]
+TABLE_KEY = _LIGHT["TABLE_KEY"]
+TABLE_HEADER_BG = _LIGHT["TABLE_HEADER_BG"]
+WELCOME_STEP = _LIGHT["WELCOME_STEP"]
+WELCOME_AXIS = _LIGHT["WELCOME_AXIS"]
+WELCOME_LABEL = _LIGHT["WELCOME_LABEL"]
+WELCOME_HINT = _LIGHT["WELCOME_HINT"]
 
 
 def set_dark(on: bool) -> None:
@@ -92,6 +118,16 @@ def top_toolbar_qss() -> str:
         QToolButton:hover {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
         QToolButton:pressed {{ background: {PRESSED}; }}
         QToolButton:checked {{ background: {HOVER}; border-color: {HOVER_BORDER}; }}
+    """
+
+
+def toolbar_dotted_divider_qss() -> str:
+    """A vertical dotted divider for the top toolbar (object name
+    ``toolbarDottedDivider``) — a dotted hairline drawn down the widget's centre to
+    separate the theme group from the buttons on its right."""
+    return f"""
+        QWidget#toolbarDottedDivider {{ border-left: 2px dotted {ICON_MUTED};
+                                        background: transparent; }}
     """
 
 

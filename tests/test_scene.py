@@ -629,6 +629,91 @@ def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     assert pt == (4.0, 0.0) and is_pin is False
 
 
+def test_route_offgrid_pin_extends_along_pin_lead_then_elbows(scene: SchematicScene):
+    """The leg adjacent to an off-grid pin keeps the pin's off-grid coordinate (so
+    the wire extends from the pin along its own lead line) and only then elbows onto
+    the grid — instead of snapping to the grid immediately at the pin."""
+    pin = (81.0, 79.125)                                   # x on-grid, y off-grid
+    # Drawing FROM the pin: first leg keeps the off-grid y, corner carries it.
+    out = scene._route(pin, (78.0, 78.0))
+    assert out[0] == pin and out[1] == (78.0, 79.125)      # horizontal first leg
+    assert out[2] == (78.0, 78.0)
+    # Drawing INTO the pin: last leg keeps the off-grid y (natural approach).
+    inn = scene._route((78.0, 78.0), pin)
+    assert inn[-2] == (78.0, 79.125) and inn[-1] == pin
+    # With neither endpoint off-grid the corner is kept on the grid as before.
+    on = scene._route((0.0, 0.0), (2.0, 1.0))
+    assert scene._on_grid(on[1])
+
+
+def test_route_both_axes_offgrid_pin_honours_orientation(scene: SchematicScene):
+    """A pin off-grid in BOTH axes (the thyristor/triac gate) can be routed either
+    way: horizontal-first OR vertical-first, following the caller's orientation —
+    both keep a valid corner (it inherits one of the pin's own off-grid coords).
+    Regression: the router forced horizontal-first, so vertical routing silently
+    fell back to a horizontal elbow and the user couldn't route up/down."""
+    from app.schematic.model import component_pin_positions
+    from app.schematic.validate import validate
+
+    off = lambda v: abs(v * 4 - round(v * 4)) > 1e-6
+    scene.place_component("thyristor", (40.0, 40.0))
+    gate = component_pin_positions(scene.schematic.components[0])[2]
+    assert off(gate[0]) and off(gate[1])       # the gate is off-grid in both axes
+    target = (round((gate[0] - 1.0) * 4) / 4, round((gate[1] - 2.0) * 4) / 4)
+
+    horiz = scene._route(gate, target, vfirst=False)
+    vert = scene._route(gate, target, vfirst=True)
+    assert horiz[1] == (target[0], gate[1])    # horizontal first leg (carries pin y)
+    assert vert[1] == (gate[0], target[1])     # vertical first leg (carries pin x)
+    assert horiz != vert                       # the two orientations are distinct
+    # Both produce a valid schematic when wired from the gate.
+    for path in (horiz, vert):
+        scene.add_wire(list(path))
+    assert validate(scene.schematic) == []
+
+
+def test_move_wire_vertex_onto_offgrid_pin_keeps_it_offgrid(scene: SchematicScene):
+    """Dropping a wire vertex onto a scaled gate's off-grid pin keeps it exactly on
+    the pin (the magnet resolved it there); dropping elsewhere snaps to the grid.
+    Regression: move_wire_vertex used to snap every target to the grid, knocking a
+    wire off an off-grid pin so it could never stay connected."""
+    from app.schematic.model import component_pin_positions
+    scene.place_component("or", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)                  # 0.5 → off-grid inputs
+    pin = component_pin_positions(g)[1]
+    assert abs(round(pin[1] / 0.25) * 0.25 - pin[1]) > 1e-9   # truly off-grid
+    w = scene.add_wire([(pin[0] - 2.0, 20.0), (pin[0], 20.0)])
+    idx = len(scene._wire_by_id(w.id).points) - 1
+    scene.move_wire_vertex(w.id, idx, pin)               # magnet target = the pin
+    assert scene._wire_by_id(w.id).points[-1] == pin     # kept off-grid, on the pin
+    # A separate vertex dropped on a NON-pin off-grid target still snaps to the grid.
+    w2 = scene.add_wire([(30.0, 30.0), (32.0, 30.0)])
+    scene.move_wire_vertex(w2.id, 1, (34.13, 30.07))
+    assert scene._wire_by_id(w2.id).points[-1] == (34.25, 30.0)
+
+
+def test_drag_does_not_resurrect_suppressed_termination_dot(scene: SchematicScene):
+    """Regression: dragging any component/wire re-ran the open-circle preview, which
+    ignored no_termination_dots (and custom markers) and so added open circles at a
+    suppressed wire end. The preview must mirror open_endpoints exactly."""
+    r = scene.place_component("R", (10.0, 10.0))          # unrelated component to drag
+    w = scene.add_wire([(0.0, 0.0), (0.0, 2.0)])
+    scene.set_wire_no_termination_dots(w.id, True)
+    assert scene._open_circle_items == {}                 # suppressed on both ends
+    # Simulate dragging the unrelated resistor (preview only).
+    scene._drag.drag_start = {r.id: r.position}
+    scene._drag.preview_component_drag()
+    assert scene._open_circle_items == {}                 # still suppressed mid-drag
+    # A custom end marker likewise suppresses the auto open circle during a drag.
+    scene._drag.drag_start = {}
+    w2 = scene.add_wire([(5.0, 0.0), (5.0, 2.0)])
+    scene.set_wire_start_marker(w2.id, "arrow")
+    scene._drag.drag_start = {r.id: r.position}
+    scene._drag.preview_component_drag()
+    assert (5.0, 0.0) not in scene._open_circle_items      # marker end stays bare
+
+
 def test_wire_preview_spawns_and_tracks(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))
     scene.enter_wire_mode()
@@ -656,21 +741,29 @@ def test_wire_preview_pin_marker(scene: SchematicScene):
     assert scene._wire_preview.cursor_is_pin is True
 
 
-def test_wire_preview_dominant_axis_route(scene: SchematicScene):
-    """The ghost corner follows the longer leg (spec §6.4); no key flips it."""
+def test_wire_preview_heading_memory(scene: SchematicScene):
+    """The elbow follows the cursor's locked out-direction (memory, §6.4): the
+    first leg keeps the axis the cursor first went out along, even when the
+    perpendicular leg later grows longer (which the old dominant-axis router would
+    have flipped). The out-direction is set by the first clear departure and held."""
     scene.place_component("R", (0.0, 0.0))
     scene.enter_wire_mode()
+
+    # Out HORIZONTALLY first, then far down → stays horizontal-first (right→down).
     _wire_press(scene, (2.0, 0.0))
-
-    # |dy|=3 > |dx|=2 → vertical-first: corner at (2,3).
-    _wire_move(scene, (4.0, 3.0))
+    _wire_move(scene, (5.0, 0.0))            # out right → locks 'h'
+    _wire_move(scene, (5.0, 6.0))            # then far down (|dy| > |dx|)
     p = scene._wire_preview
-    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (2.0, 3.0), (4.0, 3.0)]
+    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (5.0, 0.0), (5.0, 6.0)]
 
-    # |dx|=3 > |dy|=2 → horizontal-first: corner at (5,0).
-    _wire_move(scene, (5.0, 2.0))
+    # A fresh wire out VERTICALLY first, then far right → stays vertical-first.
+    scene._cancel_wire()
+    scene.enter_wire_mode()
+    _wire_press(scene, (2.0, 0.0))
+    _wire_move(scene, (2.0, 3.0))            # out down → locks 'v'
+    _wire_move(scene, (8.0, 3.0))            # then far right (|dx| > |dy|)
     p = scene._wire_preview
-    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (5.0, 0.0), (5.0, 2.0)]
+    assert list(p.points) + [p.cursor] == [(2.0, 0.0), (2.0, 3.0), (8.0, 3.0)]
 
 
 def test_wire_preview_ignores_shift(scene: SchematicScene):
@@ -796,6 +889,135 @@ def _wire_with_pin_endpoint(scene: SchematicScene):
     return scene.schematic.wires[0]
 
 
+def test_logic_gate_placed_full_size_pins_on_grid(scene: SchematicScene):
+    """A logic gate is placed at the full default scale (1.0), matching the digital
+    blocks; at 1.0 its base pins are on the 0.25-GU grid (no scaled layout). A
+    non-gate also keeps scale 1.0."""
+    from app.schematic.model import component_pin_positions
+    from app.components import library
+    g = scene.place_component("and", (10.0, 10.0))   # 2 inputs by default
+    r = scene.place_component("R", (2.0, 2.0))
+    assert abs(g.scale - 1.0) < 1e-9
+    assert abs(r.scale - 1.0) < 1e-9
+    # At scale 1.0 there is no scaled layout — base pins are used directly.
+    assert library.gate_layout(g) is None
+    on_grid = all(abs(round(y / 0.25) * 0.25 - y) < 1e-9 and abs(round(x / 0.25) * 0.25 - x) < 1e-9
+                  for x, y in component_pin_positions(g))
+    assert on_grid
+
+
+def test_set_component_scale_is_undoable(scene: SchematicScene):
+    g = scene.place_component("and", (10.0, 10.0))   # default 1.0
+    scene.set_component_scale(g.id, 0.5)
+    assert abs(scene.schematic.components[0].scale - 0.5) < 1e-9
+    scene.undo()
+    assert abs(scene.schematic.components[0].scale - 1.0) < 1e-9
+
+
+def test_scaling_a_gate_makes_connected_wires_follow_its_pins(scene: SchematicScene):
+    """Scaling a gate relocates its (off-grid) pins; a wire connected to a pin must
+    follow it so the schematic stays valid. Regression: before this, the wire kept
+    its old endpoint — now off-grid and on no pin — producing an invalid schematic
+    (a CircuiTikZ generation error). Undo restores the original wiring exactly."""
+    from app.schematic.model import component_pin_positions, Wire
+    from app.components.model import Component
+    from app.schematic.validate import validate
+    import uuid
+    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
+                  options="", scale=0.5, params={"inputs": 4})
+    scene._schematic.components.append(g)
+    scene._rebuild_items()
+    in1 = component_pin_positions(g)[1]                   # off-grid input pin
+    w = Wire(id=str(uuid.uuid4()), points=[(16.0, 18.0), (in1[0], 18.0), in1])
+    scene._schematic.wires.append(w)
+    scene._rebuild_items()
+    orig_pts = list(w.points)
+    assert validate(scene.schematic) == []
+
+    scene.set_component_scale(g.id, 0.75)                 # relocates the pins
+    new_in1 = component_pin_positions(scene.schematic.components[0])[1]
+    assert new_in1 != in1                                 # the pin actually moved
+    moved = scene._wire_by_id(w.id)
+    assert moved.points[-1] == new_in1                    # the wire followed it
+    assert validate(scene.schematic) == []                # still valid → compiles
+
+    scene.undo()
+    assert abs(scene.schematic.components[0].scale - 0.5) < 1e-9
+    assert scene._wire_by_id(w.id).points == orig_pts     # wiring restored exactly
+
+
+def test_changing_input_count_makes_connected_wires_follow(scene: SchematicScene):
+    """Changing a gate's input count relocates its pins (and adds/removes some).
+    Connected wires follow the surviving pins to their new positions; a wire on a
+    removed pin is snapped to the grid (valid, disconnected). The schematic stays
+    valid (no CircuiTikZ error) and undo restores the wiring exactly."""
+    from app.schematic.model import component_pin_positions, Wire
+    from app.components.model import Component
+    from app.schematic.validate import validate
+    import uuid
+    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
+                  options="", scale=0.5, params={"inputs": 4})
+    scene._schematic.components.append(g)
+    scene._rebuild_items()
+    pins = component_pin_positions(g)                     # out, in1..in4
+    # one wire on in2 (survives a shrink) and one on in4 (removed by a shrink)
+    w2 = Wire(id=str(uuid.uuid4()), points=[(16.0, 18.0), (pins[2][0], 18.0), pins[2]])
+    w4 = Wire(id=str(uuid.uuid4()), points=[(16.0, 22.0), (pins[4][0], 22.0), pins[4]])
+    scene._schematic.wires += [w2, w4]
+    scene._rebuild_items()
+    w2_orig, w4_orig = list(w2.points), list(w4.points)
+
+    scene.set_component_param(g.id, "inputs", 3)          # in4 removed; in1..3 move
+    new_in2 = component_pin_positions(scene.schematic.components[0])[2]
+    assert scene._wire_by_id(w2.id).points[-1] == new_in2  # survives → follows
+    assert scene._on_grid(scene._wire_by_id(w4.id).points[-1])  # removed → grid-snapped
+    assert validate(scene.schematic) == []                 # valid → compiles
+
+    scene.undo()
+    assert scene.schematic.components[0].params["inputs"] == 4
+    assert scene._wire_by_id(w2.id).points == w2_orig
+    assert scene._wire_by_id(w4.id).points == w4_orig
+
+
+def test_placement_ghost_uses_default_scale(scene: SchematicScene):
+    """The placement ghost previews a logic gate at its full default scale (1.0),
+    so what you see before clicking matches what gets placed."""
+    scene.start_placement("and")
+    assert scene._ghost is not None
+    assert abs(scene._ghost.component.scale - 1.0) < 1e-9
+    scene.start_placement("R")
+    assert abs(scene._ghost.component.scale - 1.0) < 1e-9
+
+
+def test_whole_wire_drag_moves_wire_and_taps_follow(scene: SchematicScene):
+    """Pressing a selected wire's body and dragging translates it; a junction tap
+    follows at the shared vertex while its far end stays. Labels survive and the
+    move is one undoable step (spec §6.3)."""
+    from app.schematic.model import Schematic, Wire
+    sch = Schematic(version="0.1", name="t", wires=[
+        Wire(id="bus", points=[(2.0, 0.0), (2.0, 4.0)], start_label="$a$"),
+        Wire(id="tap", points=[(2.0, 2.0), (5.0, 2.0)]),
+    ])
+    scene.set_schematic(sch)
+    scene._wire_items["bus"].setSelected(True)
+
+    _sel_press(scene, (2.0, 1.0))            # press the bus body (not a vertex/junction)
+    assert scene._drag.wire_drag_ids == {"bus"}
+    _sel_move(scene, (3.0, 1.0))             # live preview
+    _sel_release(scene, (3.0, 1.0))          # commit (delta = +1 GU in x)
+
+    assert scene._drag.wire_drag_ids == set()
+    bus = next(w for w in scene.schematic.wires if w.id == "bus")
+    tap = next(w for w in scene.schematic.wires if w.id == "tap")
+    assert bus.points == [(3.0, 0.0), (3.0, 4.0)]
+    assert tap.points == [(3.0, 2.0), (5.0, 2.0)]   # bus end followed, far end stayed
+    assert bus.start_label == "$a$"
+
+    scene.undo()                              # single undo restores both wires
+    assert next(w for w in scene.schematic.wires if w.id == "bus").points == [(2.0, 0.0), (2.0, 4.0)]
+    assert next(w for w in scene.schematic.wires if w.id == "tap").points == [(2.0, 2.0), (5.0, 2.0)]
+
+
 def test_vertex_hit_test_finds_draggable_corner(scene: SchematicScene):
     w = _wire_with_pin_endpoint(scene)
     hit = scene.wire_vertex_at(scene.gu_to_scene(2.0, 3.0))   # the corner
@@ -856,6 +1078,94 @@ def test_vertex_drag_preview_is_manhattan(scene: SchematicScene):
     for (x0, y0), (x1, y1) in zip(preview, preview[1:]):
         assert x0 == x1 or y0 == y1, f"diagonal segment in preview: ({x0},{y0})→({x1},{y1})"
     _sel_release(scene, (4.0, 1.0))
+
+
+def test_vertex_drag_preview_and_commit_land_on_offgrid_pin(scene: SchematicScene):
+    """Dragging a wire endpoint near a scaled gate's off-grid pin snaps the *live
+    preview* onto the pin (via the magnet), and the commit lands there too — so the
+    wire can actually be connected to (and kept on) an off-grid pin by dragging."""
+    from app.schematic.model import component_pin_positions
+    scene.place_component("or", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)                 # 0.5 → off-grid pin
+    pin = component_pin_positions(g)[1]
+    assert abs(round(pin[1] / 0.25) * 0.25 - pin[1]) > 1e-9   # off-grid pin
+    w = scene.add_wire([(pin[0] - 3.0, 20.0), (pin[0], 20.0)])
+    wid = w.id
+    end = len(scene._wire_by_id(wid).points) - 1
+    _sel_press(scene, scene._wire_by_id(wid).points[end])   # grab the free end
+    assert scene._vertex_drag is not None
+    _sel_move(scene, pin)                                # cursor on the off-grid pin
+    preview = scene._wire_items[wid]._preview_points
+    assert preview is not None and preview[-1] == pin    # preview snapped to the pin
+    _sel_release(scene, pin)
+    assert scene._wire_by_id(wid).points[-1] == pin      # committed onto the pin
+
+
+def test_vertex_drag_slides_along_offgrid_pin_axis(scene: SchematicScene):
+    """A vertex collinear with an off-grid pin can be dragged *along that pin's
+    axis* — its off-grid coordinate is preserved (so the segment into the pin stays
+    straight) while the other coordinate snaps to the grid. Dragging away from the
+    axis snaps both coordinates to the grid as usual."""
+    from app.schematic.model import component_pin_positions, Wire
+    import uuid
+    scene.place_component("or", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    pin = component_pin_positions(g)[1]                  # off-grid in y
+    w = Wire(id=str(uuid.uuid4()),
+             points=[(16.0, 18.0), (18.0, 18.0), (18.0, pin[1]), pin])
+    scene._schematic.wires.append(w)
+    scene._rebuild_items()
+    ids = {w.id}
+    # Near the pin's axis line → y stays on the off-grid pin coordinate.
+    on_axis = scene._vertex_drag_target(ids, (17.3, pin[1] + 0.03), exclude_wire_id=w.id)
+    assert on_axis == (17.25, pin[1])
+    # Far from the axis line → snaps fully to the grid.
+    off_axis = scene._vertex_drag_target(ids, (17.3, 18.4), exclude_wire_id=w.id)
+    assert scene._on_grid(off_axis)
+
+
+def test_vertex_drag_can_land_between_two_offgrid_pins(scene: SchematicScene):
+    """The on-grid line *between* two adjacent off-grid pins (each PIN_SNAP_GU away)
+    must be reachable: the magnet only wins when the cursor is actually closer to a
+    pin than to that grid line. Snapping onto a pin still works when nearer it."""
+    from app.schematic.model import component_pin_positions, Wire
+    from app.components.model import Component
+    import uuid
+    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
+                  options="", scale=0.5, params={"inputs": 4})
+    scene._schematic.components.append(g)
+    scene._rebuild_items()
+    pins = component_pin_positions(g)
+    in2, in3 = pins[2], pins[3]                          # adjacent off-grid inputs
+    mid = (in2[0], (in2[1] + in3[1]) / 2.0)             # on-grid line between them
+    assert scene._on_grid(mid)
+    w = Wire(id=str(uuid.uuid4()), points=[(16.0, 18.0), (in2[0], 18.0), in2])
+    scene._schematic.wires.append(w)
+    scene._rebuild_items()
+    ids = {w.id}
+    # On the mid grid line: not captured by either pin.
+    assert scene._vertex_drag_target(ids, mid, exclude_wire_id=w.id) == mid
+    # Closer to pin 3 than to a grid line: snaps onto pin 3.
+    assert scene._vertex_drag_target(ids, (in3[0], in3[1] + 0.02),
+                                     exclude_wire_id=w.id) == in3
+    # Exactly on the wire's own pin: connects.
+    assert scene._vertex_drag_target(ids, in2, exclude_wire_id=w.id) == in2
+
+
+def test_open_endpoints_overrides_match_committed(scene: SchematicScene):
+    """The shared open_endpoints() drives both the committed canvas decorations and
+    the drag preview: with no overrides it reflects the model; with points_override
+    it reflects the previewed geometry — one rule, no duplicate implementation."""
+    from app.schematic.model import open_endpoints
+    w = scene.add_wire([(0.0, 0.0), (0.0, 2.0)])
+    assert open_endpoints(scene.schematic) == {(0.0, 0.0), (0.0, 2.0)}
+    # Substitute a moved geometry for this wire (as the drag preview does).
+    moved = {w.id: [(1.0, 0.0), (1.0, 2.0)]}
+    assert open_endpoints(scene.schematic, points_override=moved) == {(1.0, 0.0), (1.0, 2.0)}
+    # no_termination_dots is honoured through the same path.
+    scene.set_wire_no_termination_dots(w.id, True)
+    assert open_endpoints(scene.schematic, points_override=moved) == set()
 
 
 def test_vertex_drag_preview_is_simplified(scene: SchematicScene):
@@ -1865,9 +2175,9 @@ def test_label_and_current_on_same_side_offset_along_axis(scene: SchematicScene)
     *exit lead* (offset along the lead axis), matching CircuiTikZ's `i=` placement.
 
     An inductor with `l=$L$, i=$i_L$` puts both above. Rather than stacking the
-    current perpendicularly beyond the label, the current sits at the same body
-    clearance but shifted along the axis toward the second pin, so they clear each
-    other along the wire instead of in height."""
+    current perpendicularly beyond the label, the current hugs the lead (clearing
+    the arrowhead, not the body) but is shifted along the axis toward the second
+    pin, so they clear each other along the wire instead of in height."""
     comp = scene.place_component("L", (0.0, 0.0))   # horizontal lead axis
     scene.edit_component_options(comp.id, r"l=$L$, i=$i_L$")
     item = scene._comp_items[comp.id]
@@ -1951,6 +2261,95 @@ def test_current_slot_draws_arrow(scene: SchematicScene):
     assert decs[0]._mode == "current"
 
 
+def test_current_label_clearance_is_lead_relative(scene: SchematicScene):
+    """An `i=` label clears the arrowhead on the thin lead, not the component
+    body, so its perpendicular clearance is the same regardless of body height.
+    Regression: using the body's perpendicular thickness floated the current
+    label far above the wire on `short`/tall-bodied parts (§5.8)."""
+    from app.canvas.items import _CUR_ARROW_HEAD_W, _LABEL_GAP
+    expected = _CUR_ARROW_HEAD_W / 2.0 + _LABEL_GAP
+
+    def current_base(kind, pos):
+        comp = scene.place_component(kind, pos)
+        scene.edit_component_options(comp.id, r"i=$i$")
+        slot = next(s for s in scene._comp_items[comp.id]._slot_items
+                    if s.isVisible() and s._fragment == "$i$")
+        return slot._base_dist
+
+    assert current_base("L", (0.0, 0.0)) == expected   # tall inductor body
+    assert current_base("R", (0.0, 4.0)) == expected   # flatter resistor body
+
+
+def test_current_reversed_modifier_flips_direction_and_lead(scene: SchematicScene):
+    """`i<=` reverses the current arrow and moves it to the *entry* lead, while
+    `i=` rides the exit lead — matching CircuiTikZ (§5.8)."""
+    fwd = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(fwd.id, r"i=$i$")
+    rev = scene.place_component("R", (0.0, 4.0))
+    scene.edit_component_options(rev.id, r"i<=$i$")
+    fwd_item, rev_item = scene._comp_items[fwd.id], scene._comp_items[rev.id]
+
+    fwd_dec = next(d for d in fwd_item._decoration_items if d.isVisible())
+    rev_dec = next(d for d in rev_item._decoration_items if d.isVisible())
+    assert fwd_dec._mode == "current" and rev_dec._mode == "current"
+    assert fwd_dec._reversed is False
+    assert rev_dec._reversed is True
+
+    # Forward label rides toward the second pin; reversed toward the first.
+    fwd_slot = next(s for s in fwd_item._slot_items if s.isVisible())
+    rev_slot = next(s for s in rev_item._slot_items if s.isVisible())
+    assert fwd_slot._center_rel.x() > rev_slot._center_rel.x()
+
+
+def test_voltage_reversed_modifier_sets_polarity(scene: SchematicScene):
+    """`v<=` marks the voltage decoration reversed (swapped ± / arrow)."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    scene.edit_component_options(comp.id, r"v<=$v$")
+    dec = next(d for d in scene._comp_items[comp.id]._decoration_items if d.isVisible())
+    assert dec._mode == "v_american"
+    assert dec._reversed is True
+
+
+def test_open_current_annotation_arrow_centered_above_line(scene: SchematicScene):
+    """The `open` current annotation draws a *centred* current arrow with its
+    label above it — not the axis-centred label used for an open voltage (§5.8)."""
+    comp = scene.place_component("open", (0.0, 0.0))
+    scene.edit_component_options(comp.id, r"i=$i$")
+    item = scene._comp_items[comp.id]
+    dec = next(d for d in item._decoration_items if d.isVisible())
+    assert dec._mode == "current"
+    assert dec._centered is True
+    slot = next(s for s in item._slot_items if s.isVisible())
+    assert slot._centered is False   # the label sits above the arrow, not on the line
+
+
+def test_current_centered_on_bodyless_short(scene: SchematicScene):
+    """A current on a `short` (no body) is centred on the wire's midpoint like
+    CircuiTikZ — and `i<=` only flips it in place — whereas a bodied component
+    rides the exit lead and shifts when reversed (§5.8)."""
+    sh = scene.place_component("short", (0.0, 0.0))
+    scene.edit_component_options(sh.id, r"i=$i$")
+    sh_item = scene._comp_items[sh.id]
+    assert next(d for d in sh_item._decoration_items if d.isVisible())._centered is True
+    fwd_x = next(s for s in sh_item._slot_items if s.isVisible())._center_rel.x()
+
+    scene.edit_component_options(sh.id, r"i<=$i$")
+    sh_dec = next(d for d in sh_item._decoration_items if d.isVisible())
+    rev_x = next(s for s in sh_item._slot_items if s.isVisible())._center_rel.x()
+    assert sh_dec._centered is True and sh_dec._reversed is True
+    assert abs(rev_x - fwd_x) < 1e-6        # short: midpoint unchanged, arrow only flips
+
+    # A bodied resistor instead rides the lead and shifts when reversed.
+    r = scene.place_component("R", (0.0, 4.0))
+    scene.edit_component_options(r.id, r"i=$i$")
+    r_item = scene._comp_items[r.id]
+    assert next(d for d in r_item._decoration_items if d.isVisible())._centered is False
+    r_fwd = next(s for s in r_item._slot_items if s.isVisible())._center_rel.x()
+    scene.edit_component_options(r.id, r"i<=$i$")
+    r_rev = next(s for s in r_item._slot_items if s.isVisible())._center_rel.x()
+    assert abs(r_rev - r_fwd) > 1.0
+
+
 def test_label_slot_has_no_decoration(scene: SchematicScene):
     """A plain `l=` label draws no voltage/current decoration."""
     comp = scene.place_component("R", (0.0, 0.0))
@@ -1959,13 +2358,23 @@ def test_label_slot_has_no_decoration(scene: SchematicScene):
     assert _visible_decorations(item) == []
 
 
-def test_open_annotation_has_no_decoration(scene: SchematicScene):
-    """The `open` voltage annotation centres its label and draws its own line, so
-    it gets no ± sign / arrow decoration."""
+def test_open_voltage_annotation_draws_signs_and_centers_label(scene: SchematicScene):
+    """The `open` voltage annotation draws ± signs at its terminals (like
+    CircuiTikZ's `to[open, v=…]`) while the value label stays centred on the line;
+    `v<=` swaps the polarity."""
     comp = scene.place_component("open", (0.0, 0.0))
     scene.edit_component_options(comp.id, "v=$V_s$")
     item = scene._comp_items[comp.id]
-    assert _visible_decorations(item) == []
+    decs = _visible_decorations(item)
+    assert len(decs) == 1
+    assert decs[0]._mode == "v_american"
+    assert decs[0]._reversed is False
+    # The value label stays centred on the line (not pushed to a side).
+    label = next(s for s in item._slot_items if s.isVisible())
+    assert label._centered is True
+
+    scene.edit_component_options(comp.id, "v<=$V_s$")
+    assert _visible_decorations(item)[0]._reversed is True
 
 
 def test_voltage_decoration_axis_follows_traversal(scene: SchematicScene):
@@ -2704,8 +3113,8 @@ def test_bipole_line_style_changes_canvas_rendering(scene: SchematicScene):
     """
     comp = scene.place_component("bipole", (1.0, 0.0))
     # Drive edits through the scene (as the inspector does) so the canvas item
-    # is refreshed; thick border makes the dash pattern visible at render scale.
-    scene.set_border_width(comp.id, 3.0)
+    # is refreshed; thick outline makes the dash pattern visible at render scale.
+    scene.set_component_line_width(comp.id, 3.0)
 
     scene.set_line_style(comp.id, "")
     solid = _render_scene(scene)
@@ -3052,3 +3461,269 @@ def test_batch_with_single_edit_is_not_wrapped(scene: SchematicScene):
     assert scene.schematic.components[0].options == "l=$R$"
     scene.undo()
     assert scene.schematic.components[0].options == ""
+
+
+def test_shift_click_adds_to_selection(scene: SchematicScene):
+    """Shift-clicking a second component adds it to the selection (multi-select)
+    rather than replacing the first; clicking it again toggles it off."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    a = scene.place_component("R", (1.0, 0.0))   # body centre ~ (2,0)
+    b = scene.place_component("R", (1.0, 4.0))   # body centre ~ (2,4)
+    scene._comp_items[a.id].setSelected(True)
+
+    def shift_click(gx, gy):
+        ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+        ev.setButton(Qt.LeftButton)
+        ev.setModifiers(Qt.ShiftModifier)
+        ev.setScenePos(scene.gu_to_scene(gx, gy))
+        scene.mousePressEvent(ev)
+
+    shift_click(2.0, 4.0)                          # add the second resistor
+    sel = set(scene.selected_component_ids())
+    assert a.id in sel and b.id in sel
+
+    shift_click(2.0, 4.0)                          # toggle it back off
+    assert b.id not in set(scene.selected_component_ids())
+    assert a.id in set(scene.selected_component_ids())
+
+
+def test_shift_click_over_annotation_decoration_selects_element_beneath():
+    """Regression: an `open`/`short` annotation's label and decoration are
+    non-selectable children that float *over* the elements it measures. A
+    Shift-click on such an element (whose body sits under the annotation's
+    decoration) must add **that element** to the selection — matching a plain
+    click — not the annotation. (Porous-electrode example: the cell-voltage
+    `open` arrow spans across the dependent source and the Zs bipole.)"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    from app.canvas.items import _AnnotationDecoration
+    from app.schematic import io
+
+    sch = io.load("examples/Battery Models/Porous Electrode Interface.hv")
+    sc = SchematicScene(sch)
+
+    cv = next(c for c in sch.components if c.kind == "cV")
+    zs = next(c for c in sch.components if c.kind == "bipole")
+    open_item = sc._comp_items[
+        next(c for c in sch.components if c.kind == "open").id
+    ]
+
+    for comp in (cv, zs):
+        item = sc._comp_items[comp.id]
+        center = item.sceneBoundingRect().center()
+        # Precondition: the annotation's decoration really does cover this point
+        # (otherwise the test wouldn't exercise the climb-to-parent bug).
+        assert any(
+            isinstance(it, _AnnotationDecoration) for it in sc.items(center)
+        ), f"{comp.kind} body is not under the annotation decoration"
+
+        sc.clearSelection()
+        ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+        ev.setButton(Qt.LeftButton)
+        ev.setModifiers(Qt.ShiftModifier)
+        ev.setScenePos(center)
+        sc.mousePressEvent(ev)
+
+        sel = set(sc.selected_component_ids())
+        assert comp.id in sel, f"shift-click did not select the {comp.kind}"
+        assert open_item.component.id not in sel, "selected the annotation instead"
+
+
+def test_set_component_line_width_is_undoable(scene: SchematicScene):
+    """Setting a component's stroke width is an undoable command."""
+    comp = scene.place_component("R", (0.0, 0.0))
+    assert comp.line_width == 0.4
+    scene.set_component_line_width(comp.id, 1.2)
+    assert scene.schematic.components[0].line_width == 1.2
+    scene.undo()
+    assert scene.schematic.components[0].line_width == 0.4
+    scene.redo()
+    assert scene.schematic.components[0].line_width == 1.2
+
+
+def test_stroke_width_section_applies_to_all_but_text():
+    """The unified Stroke section targets every drawable kind — circuit symbols
+    **and** blocks (rect/circle/bipole) — but not pure text (text_node)."""
+    from app.ui.properties import StrokeWidthSection
+    from app.components.model import (
+        Component, RectComponent, CircleComponent, BipoleComponent,
+        TextNodeComponent,
+    )
+    sec = StrokeWidthSection()
+    r = Component(id="x", kind="R", position=(0.0, 0.0), rotation=0, options="")
+    rect = RectComponent(id="y", kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    circle = CircleComponent(id="z", kind="circle", position=(0.0, 0.0), rotation=0, options="")
+    bip = BipoleComponent(id="b", kind="bipole", position=(0.0, 0.0), rotation=0, options="")
+    text = TextNodeComponent(id="t", kind="text_node", position=(0.0, 0.0), rotation=0, options="")
+    assert sec.applies_to(r) is True
+    assert sec.applies_to(rect) is True
+    assert sec.applies_to(circle) is True
+    assert sec.applies_to(bip) is True
+    assert sec.applies_to(text) is False
+
+
+def test_open_european_voltage_label_sits_beside_arrow(scene: SchematicScene):
+    """With european voltage the open annotation's label sits beside its curved
+    arrow (not centred on the line); american keeps it centred (§5.8)."""
+    comp = scene.place_component("open", (0.0, 0.0))
+    scene.schematic.voltage_style = "european"
+    scene.edit_component_options(comp.id, "v=$v$")
+    scene.relayout_annotations()
+    item = scene._comp_items[comp.id]
+    assert next(s for s in item._slot_items if s.isVisible())._centered is False
+
+    scene.schematic.voltage_style = "american"
+    scene.relayout_annotations()
+    assert next(s for s in item._slot_items if s.isVisible())._centered is True
+
+
+# ---------------------------------------------------------------------------
+# Batch — commands inside a batch run immediately (fresh old-value capture)
+# ---------------------------------------------------------------------------
+
+def test_batch_commands_see_fresh_state(scene: SchematicScene):
+    """Regression: batch() used to defer do() to the flush, so a command built
+    inside the batch captured pre-batch state. bring_to_front twice in one
+    batch must stack the second object ABOVE the first, not give both z=1."""
+    a = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    b = scene.add_wire([(0.0, 2.0), (2.0, 2.0)])
+    with scene.batch("Arrange"):
+        scene.bring_to_front(a.id)
+        scene.bring_to_front(b.id)
+    assert scene._wire_by_id(a.id).z_order == 1
+    assert scene._wire_by_id(b.id).z_order == 2          # saw a's fresh z
+    scene.undo()                                          # one step undoes both
+    assert scene._wire_by_id(a.id).z_order == 0
+    assert scene._wire_by_id(b.id).z_order == 0
+
+
+def test_batch_records_without_reexecuting(scene: SchematicScene):
+    """The flush records the already-applied commands; nothing runs twice."""
+    a = scene.place_component("R", (2.0, 0.0))
+    before = scene._stack.undo_count
+    with scene.batch("Edit"):
+        scene.edit_component_options(a.id, "l=$R_1$")
+        scene.edit_component_options(a.id, "l=$R_2$")    # sees the first edit
+    assert scene._component_by_id(a.id).options == "l=$R_2$"
+    assert scene._stack.undo_count == before + 1          # one macro recorded
+    scene.undo()
+    assert scene._component_by_id(a.id).options == ""
+    scene.redo()
+    assert scene._component_by_id(a.id).options == "l=$R_2$"
+
+
+# ---------------------------------------------------------------------------
+# Delete dissolving two junctions that share a wire — merges must compose
+# ---------------------------------------------------------------------------
+
+def test_delete_two_junctions_sharing_wire_merges_chain(scene: SchematicScene):
+    """Deleting both taps of a bus dissolves two T-junctions that share the
+    middle wire. The two merges must compose into ONE through wire (the second
+    merge re-resolves the wire consumed by the first); undo restores all."""
+    mid = scene.add_wire([(2.0, 0.0), (6.0, 0.0)])
+    left = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    right = scene.add_wire([(6.0, 0.0), (8.0, 0.0)])
+    tap1 = scene.add_wire([(2.0, 0.0), (2.0, 3.0)])
+    tap2 = scene.add_wire([(6.0, 0.0), (6.0, 3.0)])
+    assert len(scene.schematic.wires) == 5
+    scene._wire_items[tap1.id].setSelected(True)
+    scene._wire_items[tap2.id].setSelected(True)
+    scene.delete_selected()
+    assert len(scene.schematic.wires) == 1               # fully fused chain
+    merged = scene.schematic.wires[0]
+    assert sorted([merged.points[0], merged.points[-1]]) == [(0.0, 0.0), (8.0, 0.0)]
+    scene.undo()                                          # single undo step
+    ids = {w.id for w in scene.schematic.wires}
+    assert ids == {mid.id, left.id, right.id, tap1.id, tap2.id}
+
+
+# ---------------------------------------------------------------------------
+# Endpoint drag — no-move release restores the model component
+# ---------------------------------------------------------------------------
+
+def test_endpoint_drag_and_return_restores_component(scene: SchematicScene):
+    """Regression: the preview swaps the item's component for a replace() copy;
+    a release without movement cleared wire ghosts but never swapped the model
+    component back, leaving the item desynced (stuck at the preview span)."""
+    from app.components.registry import REGISTRY
+    comp = scene.place_component("open", (0.0, 0.0))
+    old_span = REGISTRY["open"].default_span
+    item = scene._comp_items[comp.id]
+    scene._drag.endpoint_drag = (comp.id, 1, old_span)
+    scene._drag.endpoint_press_gu = (1.0, 0.0)
+    # Preview a stretch: the item now renders a temporary span copy.
+    scene._drag.preview_endpoint_drag((6.0, 0.0))
+    assert item.component.span_override == (6.0, 0.0)
+    assert item.component is not scene._component_by_id(comp.id)
+    # Release back at the press point (no movement).
+    ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseRelease)
+    ev.setButton(Qt.LeftButton)
+    ev.setScenePos(scene.gu_to_scene(1.0, 0.0))
+    scene.mouseReleaseEvent(ev)
+    # The item aliases the live model component again, at the original span.
+    assert item.component is scene._component_by_id(comp.id)
+    assert item._effective_span() == old_span
+    assert scene._stack.undo_count == 1                  # only the placement
+
+
+def test_commit_endpoint_drag_routes_through_push(scene: SchematicScene):
+    """commit_endpoint_drag goes through scene._push (undoable via the scene,
+    schematic_changed emitted) instead of poking the stack directly."""
+    from app.components.registry import REGISTRY
+    comp = scene.place_component("open", (0.0, 0.0))
+    old_span = REGISTRY["open"].default_span
+    fired: list[int] = []
+    scene.schematic_changed.connect(lambda: fired.append(1))
+    scene._drag.commit_endpoint_drag(comp.id, old_span, (5.0, 0.0))
+    assert scene._component_by_id(comp.id).span_override == (5.0, 0.0)
+    assert len(fired) == 1
+    scene.undo()
+    assert scene._component_by_id(comp.id).span_override is None or \
+        scene._component_by_id(comp.id).span_override == old_span
+
+
+# ---------------------------------------------------------------------------
+# Drag previews — junction dots must honour no_junction_dots mid-drag
+# ---------------------------------------------------------------------------
+
+def test_junction_preview_respects_no_junction_dots(scene: SchematicScene):
+    """Regression: the drag preview recomputed junction degree by hand and
+    ignored the per-wire no_junction_dots opt-out, so a suppressed dot
+    flickered into existence during any drag."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    tap = scene.add_wire([(2.0, 0.0), (2.0, 3.0)])       # T-junction (bus splits)
+    assert scene._junction_items != {}                    # dot while enabled
+    scene.set_wire_no_junction_dots(tap.id, True)
+    assert scene._junction_items == {}                    # committed: no dot
+    scene._drag.update_junction_preview({})               # any drag repaint
+    assert scene._junction_items == {}                    # preview: still none
+
+
+# ---------------------------------------------------------------------------
+# Component-drag commit — selected wires translate exactly once
+# ---------------------------------------------------------------------------
+
+def test_commit_component_drag_multiple_deltas_moves_wires_once(scene: SchematicScene):
+    """Latent bug: with several per-delta groups, attaching the same selected
+    wire set to each group's MoveCommand translated the wires once per group
+    (by different deltas). The wires must move exactly once."""
+    a = scene.place_component("R", (0.0, 0.0))
+    b = scene.place_component("R", (0.0, 4.0))
+    w = scene.add_wire([(10.0, 10.0), (12.0, 10.0)])
+    # Simulate a finished drag whose two items snapped to DIFFERENT deltas.
+    scene._drag.drag_start = {a.id: a.position, b.id: b.position}
+    scene._drag.drag_wire_ids = {w.id}
+    scene._comp_items[a.id].setPos(scene.gu_to_scene(1.0, 0.0))   # delta (1,0)
+    scene._comp_items[b.id].setPos(scene.gu_to_scene(2.0, 4.0))   # delta (2,0)
+    scene._drag.commit_component_drag()
+    moved = scene._wire_by_id(w.id)
+    assert moved.points == [(11.0, 10.0), (13.0, 10.0)]   # one delta, not the sum
+    assert scene._component_by_id(a.id).position == (1.0, 0.0)
+    assert scene._component_by_id(b.id).position == (2.0, 4.0)
+    scene.undo()                                          # one undoable action
+    assert scene._wire_by_id(w.id).points == [(10.0, 10.0), (12.0, 10.0)]
+    assert scene._component_by_id(a.id).position == (0.0, 0.0)
+    assert scene._component_by_id(b.id).position == (0.0, 4.0)

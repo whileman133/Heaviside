@@ -92,11 +92,59 @@ def build() -> None:
     )
 
 
+def build_dmg_if_macos() -> None:
+    """On macOS, wrap the built .app in a drag-to-Applications .dmg.
+
+    Best-effort for local builds: a missing ``dmgbuild`` (it is not a project
+    dependency — the release workflow installs it ad-hoc) just prints a hint and
+    leaves ``dist/Heaviside.app``. The release pipeline signs the app *before*
+    this so the image is notarizable as a unit; a local build is unsigned.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import dmgbuild  # noqa: F401
+    except ImportError:
+        print("\nSkipping .dmg (dmgbuild not installed). To build one:\n"
+              "  uv pip install dmgbuild && uv run python scripts/make_dmg.py")
+        return
+    print("Building .dmg…")
+    subprocess.run(
+        [sys.executable, str(_ROOT / "scripts" / "make_dmg.py")],
+        cwd=_ROOT, check=True,
+    )
+
+
+def build_appimage_if_linux() -> None:
+    """On Linux, wrap the built onedir folder in a self-contained AppImage.
+
+    Best-effort for local builds: a missing ``appimagetool`` (not a project
+    dependency — the release workflow fetches it ad-hoc) just prints a hint and
+    leaves ``dist/Heaviside/``.
+    """
+    if sys.platform != "linux":
+        return
+    sys.path.insert(0, str(_ROOT / "scripts"))
+    from make_appimage import _find_appimagetool
+    if _find_appimagetool() is None:
+        print("\nSkipping AppImage (appimagetool not found). To build one:\n"
+              "  install appimagetool (https://github.com/AppImage/appimagetool/"
+              "releases) on PATH, then: uv run python scripts/make_appimage.py")
+        return
+    print("Building AppImage…")
+    subprocess.run(
+        [sys.executable, str(_ROOT / "scripts" / "make_appimage.py")],
+        cwd=_ROOT, check=True,
+    )
+
+
 def main() -> int:
     regenerate_icons()
     ensure_license_texts()
     clean()
     build()
+    build_dmg_if_macos()
+    build_appimage_if_linux()
 
     dist = _ROOT / "dist"
     print("\nDone. Output in: dist/")

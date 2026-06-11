@@ -240,6 +240,57 @@ LABEL_STYLES: tuple[str, ...] = ("american", "european")
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
+def point_key(pt: tuple[float, float]) -> tuple[float, float]:
+    """Canonical coordinate key (6-dp rounding) for coincidence comparisons.
+
+    The **single** connectivity convention: every wire↔pin and wire↔wire
+    coincidence test (junctions, open endpoints, wire-following on move/resize,
+    splits, merges, dict/set keys for canvas decorations) compares coordinates
+    through this helper, so float noise from off-grid pins (scaled gates) can
+    never silently detach a wire. Stored geometry stays **unrounded** — only
+    comparisons go through the key.
+    """
+    return (round(pt[0], 6), round(pt[1], 6))
+
+
+#: Grid snap granularity in GU — the minor grid (spec §3.1). The canvas-side
+#: constant ``app.canvas.geometry.SNAP_GU`` aliases this value, so the grid
+#: pitch has a single Qt-free source of truth.
+GRID_GU: float = 0.25
+
+
+def snap_coord(v: float) -> float:
+    """Round a single GU coordinate to the nearest grid node (GRID_GU)."""
+    return round(v / GRID_GU) * GRID_GU
+
+
+def snap_point(pt: tuple[float, float]) -> tuple[float, float]:
+    """Round a GU point to the nearest grid node on both axes."""
+    return (snap_coord(pt[0]), snap_coord(pt[1]))
+
+
+def coord_on_grid(v: float) -> bool:
+    """True when a single coordinate lies on the 0.25-GU grid."""
+    return abs(v * 4 - round(v * 4)) < 1e-6
+
+
+def point_on_grid(pt: tuple[float, float]) -> bool:
+    """True when both coordinates lie on the 0.25-GU grid."""
+    return coord_on_grid(pt[0]) and coord_on_grid(pt[1])
+
+
+#: Kinds drawn as resizable block-diagram boxes (anchored-corner resize,
+#: perimeter/cardinal connection points, behind-circuit default z-order).
+BOX_KINDS: frozenset[str] = frozenset({"rect", "circle"})
+
+
+def is_box_kind(obj: "Component | str") -> bool:
+    """True when *obj* (a Component or a kind string) is a box annotation
+    (``rect``/``circle``) — the single predicate for box-kind dispatch."""
+    kind = obj if isinstance(obj, str) else obj.kind
+    return kind in BOX_KINDS
+
+
 def _segment_lengths(points: list[tuple[float, float]]) -> list[float]:
     return [
         math.hypot(points[i + 1][0] - points[i][0], points[i + 1][1] - points[i][1])
@@ -462,6 +513,56 @@ def route(
     return [a, corner, b]
 
 
+# Backwards-compatible alias for the shared grid predicate (see coord_on_grid).
+_on_quarter_grid = coord_on_grid
+
+
+def route_pin_aware(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    vfirst: bool | None = None,
+) -> list[tuple[float, float]]:
+    """Manhattan route a→b that respects **off-grid component pins** (a scaled
+    logic gate's terminal). The leg adjacent to an off-grid endpoint is oriented
+    to keep that endpoint's off-grid coordinate, so the wire extends from the pin
+    along its own lead line and only then elbows onto the grid (the corner
+    inherits the pin's off-grid coordinate, which validation permits, §3.1).
+
+    With **neither** endpoint off-grid, the corner follows *vfirst* (the caller's
+    orientation preference — e.g. the cursor's heading while drawing, so the elbow
+    traces the path the cursor took; ``None`` = dominant-axis default).
+
+    When an off-grid endpoint is off-grid in **one axis only** (a scaled gate's
+    terminal, sitting at the end of an axis-aligned lead), the lead direction wins
+    over *vfirst*: the adjacent leg keeps the pin's off-grid coordinate so the wire
+    extends along the lead before elbowing onto the grid. But when the endpoint is
+    off-grid in **both** axes (e.g. the thyristor/triac gate, which has no single
+    lead axis), *either* orientation produces a valid corner — the corner inherits
+    one of the pin's own off-grid coordinates, which validation permits — so
+    *vfirst* is honoured, making vertical routing work just like horizontal. Shared
+    by the canvas drawing/vertex-drag router (`SchematicScene._route`) and
+    component-follow re-routing (`SetComponentScaleCommand`). Pure function."""
+    a_off = not (_on_quarter_grid(a[0]) and _on_quarter_grid(a[1]))
+    b_off = not (_on_quarter_grid(b[0]) and _on_quarter_grid(b[1]))
+    if not a_off and not b_off:
+        return route(a, b, vfirst)
+    if len(route(a, b)) != 3:
+        return [a, b]
+    # A single-axis off-grid endpoint forces the orientation that keeps its
+    # off-grid coordinate in the adjacent leg (continue along the lead); a
+    # both-axes off-grid endpoint imposes no constraint, so honour *vfirst*.
+    forced: bool | None = None
+    if a_off:
+        ax_off, ay_off = not _on_quarter_grid(a[0]), not _on_quarter_grid(a[1])
+        if not (ax_off and ay_off):
+            forced = True if ax_off else False   # keep off-grid x → vfirst; else hfirst
+    else:  # b_off
+        bx_off, by_off = not _on_quarter_grid(b[0]), not _on_quarter_grid(b[1])
+        if not (bx_off and by_off):
+            forced = True if by_off else False   # keep off-grid y → vfirst; else hfirst
+    return route(a, b, forced if forced is not None else vfirst)
+
+
 def component_pin_positions(component: "Component") -> list[tuple[float, float]]:
     """Absolute (rotate-then-mirror) pin coordinates of *component*, in GU.
 
@@ -485,6 +586,10 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     # Parametric kinds (logic gates) resolve their pins from the instance's
     # parameter value; fixed kinds use the static registry pins.
     pins = library.resolved_pins(component)
+    # A scaled logic gate snaps each pin onto the 0.25-GU grid (the lead stubs
+    # bridge the off-grid scaled body anchor to it); None for unscaled gates and
+    # all other kinds, which use their base offsets unchanged.
+    gate = library.gate_layout(component)
 
     ox, oy = component.position
     out: list[tuple[float, float]] = []
@@ -498,6 +603,8 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             and component.span_override is not None
         ):
             dx, dy = component.span_override
+        elif gate is not None:
+            dx, dy = gate[i]["pin_offset"]
         r = component.rotation % 360
         if r == 90:
             rx, ry = (-dy, dx)
@@ -513,10 +620,9 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     return out
 
 
-# Spacing of connection points along a rectangle's edges, in GU.  Matches the
-# minor grid (SNAP_GU = 0.25 in app/canvas/geometry.py); duplicated here to keep
-# the schematic layer free of a dependency on the canvas layer.
-_RECT_EDGE_SPACING: float = 0.25
+# Spacing of connection points along a rectangle's edges, in GU — the minor
+# grid (GRID_GU, the single Qt-free source of the grid pitch).
+_RECT_EDGE_SPACING: float = GRID_GU
 
 
 def rect_perimeter_points(component: "Component") -> set[tuple[float, float]]:
@@ -607,7 +713,12 @@ def component_connection_points(component: "Component") -> set[tuple[float, floa
     return set(component_pin_positions(component))
 
 
-def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
+def junction_points(
+    schematic: "Schematic",
+    *,
+    points_override: dict[str, list[tuple[float, float]]] | None = None,
+    pin_positions: "list[tuple[float, float]] | None" = None,
+) -> set[tuple[float, float]]:
     """Coordinates that need a solid connection dot.
 
     Uses the *degree* of each coordinate — the number of wire segment-ends that
@@ -626,8 +737,22 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
     get no dot. (In this model coincident wires are electrically joined; there
     is no non-connecting "hop" crossing.)
 
-    Pure function; returns a set of (x, y) tuples in grid units.
+    This is the **single** source of the junction-dot rule. The live canvas
+    decorations call it directly; the drag preview calls it with overrides so
+    it can never drift from the committed result (incl. the per-wire
+    ``no_junction_dots`` opt-out):
+
+    * *points_override* maps ``wire_id → preview points`` to substitute a
+      wire's geometry mid-drag (only moving wires need an entry).
+    * *pin_positions* supplies the component pin coordinates to count
+      (with multiplicity) instead of deriving them from the components — used
+      during a component drag, where the dragged pins are at live positions,
+      not their model ones.
+
+    Pure function; returns a set of (x, y) tuples in grid units (each rounded
+    through :func:`point_key`).
     """
+    override = points_override or {}
     degree: dict[tuple[float, float], int] = {}
 
     def add(pt: tuple[float, float], d: int) -> None:
@@ -637,7 +762,7 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
         # Annotation wires opt out of junction-dot placement entirely.
         if wire.no_junction_dots:
             continue
-        pts = wire.points
+        pts = override.get(wire.id, wire.points)
         if len(pts) < 2:
             continue
         # Count how many segment-ends of THIS wire touch each coordinate:
@@ -646,14 +771,19 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
         own: dict[tuple[float, float], int] = {}
         n = len(pts)
         for i, pt in enumerate(pts):
-            pt = tuple(pt)
+            pt = point_key(pt)
             own[pt] = own.get(pt, 0) + (1 if (i == 0 or i == n - 1) else 2)
         for pt, d in own.items():
             add(pt, d)
 
-    for comp in schematic.components:
-        for p in component_pin_positions(comp):
-            add(p, 1)
+    if pin_positions is None:
+        pin_positions = [
+            p
+            for comp in schematic.components
+            for p in component_pin_positions(comp)
+        ]
+    for p in pin_positions:
+        add(point_key(p), 1)
 
     return {pt for pt, d in degree.items() if d >= 3}
 
@@ -668,7 +798,12 @@ def junction_points(schematic: "Schematic") -> set[tuple[float, float]]:
 NON_CONNECTING_KINDS: frozenset[str] = frozenset({"open"})
 
 
-def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
+def open_endpoints(
+    schematic: "Schematic",
+    *,
+    points_override: dict[str, list[tuple[float, float]]] | None = None,
+    pin_positions: set[tuple[float, float]] | None = None,
+) -> set[tuple[float, float]]:
     """Wire endpoints that do not connect to any component pin.
 
     An open endpoint is a wire's first or last point that lies at a position
@@ -678,40 +813,56 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
     Interior wire vertices are never open endpoints — only the first and last
     point of each wire are candidates.  Pins of :data:`NON_CONNECTING_KINDS`
     (the ``open`` voltage annotation) do not count as a connection, so a wire
-    end that only touches one stays open.
+    end that only touches one stays open. A wire flagged ``no_termination_dots``
+    contributes no open ends (but still counts for *other* wires' connection
+    detection), and an end carrying a custom marker has its automatic terminal
+    replaced by that marker.
+
+    This is the **single** source of the open-terminal rule. The live canvas
+    decorations call it directly; the drag preview calls it with overrides so it
+    can never drift from the committed result:
+
+    * *points_override* maps ``wire_id → preview points`` to substitute a wire's
+      geometry mid-drag (only moving wires need an entry).
+    * *pin_positions* supplies the connecting-pin coordinate set (already rounded)
+      to use instead of deriving it from the components — used during a component
+      drag, where the dragged pins are at live positions, not their model ones.
 
     Pure function; returns a set of (x, y) tuples in grid units.
     """
-    # Collect connecting component pin positions (voltage annotations excluded).
-    pin_positions: set[tuple[float, float]] = set()
-    for comp in schematic.components:
-        if comp.kind in NON_CONNECTING_KINDS:
-            continue
-        for p in component_connection_points(comp):
-            pin_positions.add((round(p[0], 6), round(p[1], 6)))
+    override = points_override or {}
 
-    # Collect all wire vertex positions (every point on every wire).
-    # A wire endpoint that coincides with ANY vertex of ANY other wire is
-    # connected — it should not be shown as an open endpoint.  Degenerate wires
-    # (fewer than two points) have no segments and connect nothing, so they are
-    # skipped — otherwise a stray single-point wire would make a real endpoint
-    # at the same coordinate look connected.
+    def pts_of(wire: "Wire") -> list[tuple[float, float]]:
+        return override.get(wire.id, wire.points)
+
+    # Connecting component pin positions (voltage annotations excluded), unless
+    # the caller supplied an explicit set (live drag positions).
+    if pin_positions is None:
+        pin_positions = set()
+        for comp in schematic.components:
+            if comp.kind in NON_CONNECTING_KINDS:
+                continue
+            for p in component_connection_points(comp):
+                pin_positions.add(point_key(p))
+
+    # Count every wire vertex coordinate. A wire endpoint that coincides with ANY
+    # vertex of ANY other wire is connected, so it is not an open endpoint.
+    # Degenerate wires (fewer than two points) connect nothing and are skipped.
     all_wire_points: dict[tuple[float, float], int] = {}
     for wire in schematic.wires:
-        if len(wire.points) < 2:
+        pts = pts_of(wire)
+        if len(pts) < 2:
             continue
-        for pt in wire.points:
-            pt_r = (round(pt[0], 6), round(pt[1], 6))
+        for pt in pts:
+            pt_r = point_key(pt)
             all_wire_points[pt_r] = all_wire_points.get(pt_r, 0) + 1
 
     candidates: set[tuple[float, float]] = set()
     for wire in schematic.wires:
         # Annotation wires opt out of terminal (ocirc) markers on their own ends.
-        # They still count toward all_wire_points above, so other wires ending
-        # on this wire remain connected.
         if wire.no_termination_dots:
             continue
-        pts = wire.points
+        pts = pts_of(wire)
         if len(pts) < 2:
             continue
         # A custom endpoint marker (e.g. an arrow) replaces the automatic
@@ -719,11 +870,9 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
         for pt, marker in ((pts[0], wire.start_marker), (pts[-1], wire.end_marker)):
             if marker:
                 continue
-            pt_r = (round(pt[0], 6), round(pt[1], 6))
+            pt_r = point_key(pt)
             if pt_r in pin_positions:
                 continue
-            # Connected to another wire if this point appears in more than one
-            # wire's point list, or appears as an interior vertex of any wire.
             if all_wire_points.get(pt_r, 0) > 1:
                 continue
             candidates.add(pt_r)
@@ -731,7 +880,12 @@ def open_endpoints(schematic: "Schematic") -> set[tuple[float, float]]:
     return candidates
 
 
-def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
+def unconnected_pins(
+    schematic: "Schematic",
+    *,
+    points_override: dict[str, list[tuple[float, float]]] | None = None,
+    pin_positions: "list[tuple[float, float]] | None" = None,
+) -> set[tuple[float, float]]:
     """Component pin positions that nothing connects to.
 
     A pin is *unconnected* when no wire vertex (endpoint or interior) lies at
@@ -745,27 +899,41 @@ def unconnected_pins(schematic: "Schematic") -> set[tuple[float, float]]:
     are ignored entirely: they form no connection, so they neither count as a
     connection for a real pin nor are flagged themselves.
 
+    Like :func:`open_endpoints` this is the single source of its rule; the drag
+    preview substitutes live geometry via the override hooks:
+
+    * *points_override* maps ``wire_id → preview points`` for wires mid-drag.
+    * *pin_positions* supplies the connecting-pin coordinates (counted with
+      multiplicity) to use instead of deriving them from the components — the
+      caller is then responsible for excluding :data:`NON_CONNECTING_KINDS`.
+
     Pure function; returns a set of (x, y) tuples in grid units.
     """
+    override = points_override or {}
     # Every wire vertex coordinate (endpoints and interior points alike).
     # Degenerate wires (fewer than two points) connect nothing and are skipped,
     # so a stray single-point wire on a pin does not mark it as connected.
     wire_points: set[tuple[float, float]] = set()
     for wire in schematic.wires:
-        if len(wire.points) < 2:
+        pts = override.get(wire.id, wire.points)
+        if len(pts) < 2:
             continue
-        for pt in wire.points:
-            wire_points.add((round(pt[0], 6), round(pt[1], 6)))
+        for pt in pts:
+            wire_points.add(point_key(pt))
 
     # Count component pins per coordinate so two abutting pins are not flagged.
     # Non-connecting kinds (voltage annotation) are skipped entirely.
+    if pin_positions is None:
+        pin_positions = [
+            p
+            for comp in schematic.components
+            if comp.kind not in NON_CONNECTING_KINDS
+            for p in component_pin_positions(comp)
+        ]
     pin_count: dict[tuple[float, float], int] = {}
-    for comp in schematic.components:
-        if comp.kind in NON_CONNECTING_KINDS:
-            continue
-        for p in component_pin_positions(comp):
-            key = (round(p[0], 6), round(p[1], 6))
-            pin_count[key] = pin_count.get(key, 0) + 1
+    for p in pin_positions:
+        key = point_key(p)
+        pin_count[key] = pin_count.get(key, 0) + 1
 
     return {
         coord
@@ -783,7 +951,9 @@ def _point_strictly_on_segment(
 
     Segments are axis-aligned (Manhattan). Endpoints are excluded so a point
     that already coincides with a vertex is never treated as a split site.
+    Coordinates are compared through :func:`point_key` (float-noise guard).
     """
+    pt, a, b = point_key(pt), point_key(a), point_key(b)
     if pt == a or pt == b:
         return False
     px, py = pt
@@ -807,10 +977,11 @@ def wire_splits_at(
     that already has a vertex exactly at *point* is **not** returned — there is
     nothing to split there.
     """
+    key = point_key(point)
     out: list[tuple[str, int]] = []
     for wire in schematic.wires:
         pts = wire.points
-        if point in pts:
+        if any(point_key(p) == key for p in pts):
             continue
         for i in range(len(pts) - 1):
             if _point_strictly_on_segment(point, pts[i], pts[i + 1]):
@@ -829,11 +1000,12 @@ def wire_corner_splits_at(
     Used to split L-shaped wires at their elbow when a new wire connects to
     that corner.
     """
+    key = point_key(point)
     out: list[tuple[str, int]] = []
     for wire in schematic.wires:
         pts = wire.points
         for i in range(1, len(pts) - 1):   # skip endpoints
-            if pts[i] == point:
+            if point_key(pts[i]) == key:
                 out.append((wire.id, i))
                 break   # at most one interior match per wire
     return out
@@ -897,7 +1069,7 @@ def wire_crossings(
     pins: set[tuple[float, float]] = set()
     for comp in schematic.components:
         for p in component_connection_points(comp):
-            pins.add((round(p[0], 6), round(p[1], 6)))
+            pins.add(point_key(p))
 
     def _can_hop(w: "Wire") -> bool:
         if w.hop_mode == "never":
@@ -916,14 +1088,14 @@ def wire_crossings(
 
     for ai in range(len(eligible)):
         idx_a, wa = eligible[ai]
-        va = {tuple(p) for p in wa.points}
+        va = {point_key(p) for p in wa.points}
         segs_a = _axis_segments(wa)
         for bi in range(ai + 1, len(eligible)):
             idx_b, wb = eligible[bi]
             a_ok, b_ok = _can_hop(wa), _can_hop(wb)
             if not a_ok and not b_ok:                  # neither wire may hop here
                 continue
-            vb = {tuple(p) for p in wb.points}
+            vb = {point_key(p) for p in wb.points}
             segs_b = _axis_segments(wb)
             for ia, oa, a0, a1 in segs_a:
                 for ib, ob, b0, b1 in segs_b:
@@ -935,9 +1107,9 @@ def wire_crossings(
                         continue
                     if not _point_strictly_on_segment(p, b0, b1):
                         continue
-                    if p in va or p in vb:             # a vertex here = a connection
-                        continue
-                    pr = (round(p[0], 6), round(p[1], 6))
+                    if point_key(p) in va or point_key(p) in vb:
+                        continue                       # a vertex here = a connection
+                    pr = point_key(p)
                     if pr in junctions or pr in pins:  # defensive: real connection
                         continue
                     # Pick the hopper among the wires allowed to hop here.

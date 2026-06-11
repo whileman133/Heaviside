@@ -63,3 +63,33 @@ def test_chrome_qss_reflects_active_palette() -> None:
     qss_light = theme.top_toolbar_qss()
     assert theme._LIGHT["SURFACE"] in qss_light
     assert qss_dark != qss_light
+
+
+def test_line_width_matches_circuitikz_thin_stroke() -> None:
+    """The canvas stroke width is the CircuiTikZ thin stroke (~0.3985 pt) mapped to
+    the grid scale, so on-canvas line weight matches the compiled figure rather
+    than the earlier (~2.4x) bolder strokes. Guards against reverting to 2.0 px."""
+    expected = style.GRID_PX * (0.3985 / style.SVG_PT_PER_GU)
+    assert style.LINE_W == pytest.approx(expected, abs=1e-6)
+    assert style.LINE_W == pytest.approx(0.84, abs=0.02)
+    assert style.LINE_W_THICK == pytest.approx(2.0 * style.LINE_W, abs=1e-6)
+
+
+def test_palettes_define_matching_token_sets() -> None:
+    """Every token exists in both palettes (set_dark swaps them wholesale), and
+    the dialog/welcome tokens added for dark-mode readability are present."""
+    assert set(theme._LIGHT) == set(theme._DARK)
+    for token in ("TEXT_MUTED", "HEADING", "TABLE_KEY", "TABLE_HEADER_BG",
+                  "WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL", "WELCOME_HINT"):
+        assert token in theme._LIGHT
+        assert getattr(theme, token) == theme._LIGHT[token]
+
+
+def test_welcome_tokens_carry_alpha() -> None:
+    """The welcome diagram tokens are #AARRGGBB strings (QColor's alpha form),
+    and they differ between light and dark so the diagram stays readable."""
+    for token in ("WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL", "WELCOME_HINT"):
+        for palette in (theme._LIGHT, theme._DARK):
+            value = palette[token]
+            assert value.startswith("#") and len(value) == 9
+        assert theme._LIGHT[token] != theme._DARK[token]

@@ -97,15 +97,16 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
         work = Path(tmp)
         (work / "sym.tex").write_text(doc, encoding="utf-8")
         r = subprocess.run(
-            ["latex", "-interaction=nonstopmode", "-output-directory", str(work), "sym.tex"],
-            capture_output=True, text=True, cwd=work,
+            ["latex", "-no-shell-escape", "-interaction=nonstopmode",
+             "-output-directory", str(work), "sym.tex"],
+            capture_output=True, text=True, cwd=work, timeout=60,
         )
         if not (work / "sym.dvi").exists():
             raise RenderError("latex failed to produce a DVI", r.stdout)
         svg = work / "sym.svg"
         rs = subprocess.run(
             ["dvisvgm", "--no-fonts", str(work / "sym.dvi"), "-o", str(svg)],
-            capture_output=True, text=True, cwd=work, env=_render_env(),
+            capture_output=True, text=True, cwd=work, env=_render_env(), timeout=60,
         )
         if not svg.exists() or "0pt x 0pt" in rs.stderr:
             raise RenderError("dvisvgm failed (Ghostscript/LIBGS?)", r.stdout + rs.stderr)
@@ -221,6 +222,17 @@ def parse_geometry(svg_text: str) -> dict:
                 ux, uy = float(child.get("x", "0")), float(child.get("y", "0"))
                 a, b, c, dd, e, f = _parse_matrix(child.get("transform", inherited))
                 glyphs.append({"d": d, "matrix": [a, b, c, dd, a * ux + c * uy + e, b * ux + dd * uy + f],
+                               "stroke_width": 0.3985})
+            elif tag == "rect":
+                # dvisvgm emits a TeX rule (e.g. the overline of \ctikztextnot{Q} —
+                # the flip-flop's Q̄) as a <rect> with its own transform. Capture it
+                # as a filled glyph (a closed rectangle path + that matrix) so the
+                # canvas paints it; otherwise the bar is silently dropped.
+                x, y = float(child.get("x", "0")), float(child.get("y", "0"))
+                w, h = float(child.get("width", "0")), float(child.get("height", "0"))
+                a, b, c, dd, e, f = _parse_matrix(child.get("transform", inherited))
+                rect_d = f"M{x} {y}L{x + w} {y}L{x + w} {y + h}L{x} {y + h}Z"
+                glyphs.append({"d": rect_d, "matrix": [a, b, c, dd, e, f],
                                "stroke_width": 0.3985})
 
     walk(root, None)

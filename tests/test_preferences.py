@@ -31,20 +31,22 @@ def prefs(tmp_path) -> Preferences:
     return Preferences(QSettings(str(ini), QSettings.IniFormat))
 
 
-def test_defaults_are_false(prefs: Preferences) -> None:
-    """A fresh settings store reports auto-export disabled."""
-    assert prefs.auto_export_tex is False
+def test_export_defaults(prefs: Preferences) -> None:
+    """A fresh store reports TeX/SVG/PNG auto-export on, PDF/EPS off."""
+    assert prefs.auto_export_tex is True
+    assert prefs.auto_export_svg is True
+    assert prefs.auto_export_png is True
     assert prefs.auto_export_pdf is False
     assert prefs.auto_export_eps is False
     assert prefs.force_ziamath is False  # auto engine selection by default
 
 
 def test_roundtrip_tex(prefs: Preferences) -> None:
-    assert prefs.auto_export_tex is False  # defaults off
-    prefs.auto_export_tex = True
-    assert prefs.auto_export_tex is True
+    assert prefs.auto_export_tex is True  # defaults on
     prefs.auto_export_tex = False
     assert prefs.auto_export_tex is False
+    prefs.auto_export_tex = True
+    assert prefs.auto_export_tex is True
 
 
 def test_tool_paths_default_empty(prefs: Preferences) -> None:
@@ -86,11 +88,11 @@ def test_roundtrip_eps(prefs: Preferences) -> None:
 
 
 def test_roundtrip_svg(prefs: Preferences) -> None:
-    assert prefs.auto_export_svg is False  # defaults off
-    prefs.auto_export_svg = True
-    assert prefs.auto_export_svg is True
+    assert prefs.auto_export_svg is True  # defaults on
     prefs.auto_export_svg = False
     assert prefs.auto_export_svg is False
+    prefs.auto_export_svg = True
+    assert prefs.auto_export_svg is True
 
 
 def test_persists_across_instances(tmp_path) -> None:
@@ -115,6 +117,25 @@ def test_line_hops_default_on_and_roundtrip(prefs: Preferences) -> None:
     assert prefs.line_hops is False
     prefs.line_hops = True
     assert prefs.line_hops is True
+
+
+def test_check_updates_default_on_and_roundtrip(prefs: Preferences) -> None:
+    """The update check defaults ON and round-trips."""
+    assert prefs.check_updates_on_startup is True
+    prefs.check_updates_on_startup = False
+    assert prefs.check_updates_on_startup is False
+
+
+def test_skipped_update_version_roundtrip(prefs: Preferences) -> None:
+    assert prefs.skipped_update_version == ""
+    prefs.skipped_update_version = "0.9.0"
+    assert prefs.skipped_update_version == "0.9.0"
+
+
+def test_update_check_disclosed_default_and_roundtrip(prefs: Preferences) -> None:
+    assert prefs.update_check_disclosed is False
+    prefs.update_check_disclosed = True
+    assert prefs.update_check_disclosed is True
 
 
 def test_to_bool_coerces_strings() -> None:
@@ -158,7 +179,9 @@ def test_dialog_cancel_discards(prefs: Preferences) -> None:
 
 
 def test_roundtrip_png(prefs: Preferences) -> None:
-    assert prefs.auto_export_png is False  # default off
+    assert prefs.auto_export_png is True  # defaults on
+    prefs.auto_export_png = False
+    assert prefs.auto_export_png is False
     prefs.auto_export_png = True
     assert prefs.auto_export_png is True
 
@@ -167,3 +190,52 @@ def test_png_dpi_default_and_roundtrip(prefs: Preferences) -> None:
     assert prefs.png_dpi == 300            # publication default
     prefs.png_dpi = 600
     assert prefs.png_dpi == 600
+
+
+def test_dark_override_roundtrip(prefs: Preferences) -> None:
+    """Unset → follow the OS (None); a pinned dark/light choice round-trips and is
+    cleared back to None. This is what persists the dark-mode toggle (the value is
+    re-read at the next launch)."""
+    assert prefs.dark_override is None            # default: follow the OS
+    prefs.set_dark_override(True)
+    assert prefs.dark_override is True            # pinned dark
+    prefs.set_dark_override(False)
+    assert prefs.dark_override is False           # pinned light
+    prefs.set_dark_override(None)
+    assert prefs.dark_override is None            # cleared → follow the OS again
+
+
+def test_dark_override_persists_across_instances(tmp_path) -> None:
+    """A pinned choice survives a new Preferences over the same store (a relaunch)."""
+    ini = tmp_path / "settings.ini"
+    Preferences(QSettings(str(ini), QSettings.IniFormat)).set_dark_override(True)
+    assert Preferences(QSettings(str(ini), QSettings.IniFormat)).dark_override is True
+
+
+def test_png_dpi_clamped_to_dialog_range(prefs: Preferences) -> None:
+    """A corrupt/hand-edited stored DPI is clamped to 72–1200 so a save can't
+    trigger an absurd render; garbage falls back to the default."""
+    prefs._settings.setValue("export/png_dpi", 999_999)
+    assert prefs.png_dpi == 1200
+    prefs._settings.setValue("export/png_dpi", 5)
+    assert prefs.png_dpi == 72
+    prefs._settings.setValue("export/png_dpi", "garbage")
+    assert prefs.png_dpi == 300
+
+
+def test_dialog_hint_labels_use_theme_token(prefs: Preferences) -> None:
+    """The dialog's hint labels take their ink from the theme palette (readable
+    in dark mode), not a hardcoded light-mode grey."""
+    from app.ui import theme
+
+    try:
+        theme.set_dark(True)
+        dlg = PreferencesDialog(prefs)
+        from PySide6.QtWidgets import QLabel
+        hints = [l for l in dlg.findChildren(QLabel)
+                 if "font-size: 11px" in l.styleSheet()]
+        assert hints
+        assert all(theme._DARK["ICON_MUTED"] in l.styleSheet() for l in hints)
+        assert all("#666" not in l.styleSheet() for l in hints)
+    finally:
+        theme.set_dark(False)
