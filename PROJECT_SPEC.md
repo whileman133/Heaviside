@@ -2666,6 +2666,7 @@ heaviside/
     ├── test_latex_security.py     # LaTeX-pipeline security: -no-shell-escape + no shell=True (mathrender, preview, component render)
     ├── test_componenteditor.py    # editor renderer/draft core + offscreen window smoke
     ├── test_screenshots.py        # README example-gallery renderer: manifest/README sync + framed render (offscreen Qt)
+    ├── test_packaging.py          # Linux AppImage assets + AppDir assembly + host-arch ARCH selection (pure)
     └── test_version.py            # runtime version resolution (source + frozen fallback + spec bundling tripwire)
 ```
 
@@ -2716,10 +2717,16 @@ the `.dmg`, then signs/notarizes/staples the **`.dmg`** as one unit (`dmgbuild`
 is installed ad-hoc there, so it is not a project dependency and the locked
 environment stays frozen).
 
-**Linux AppImage (`Heaviside-linux-x86_64.AppImage`).** The Linux release artifact
-is a self-contained **AppImage** — a single no-root, run-anywhere file, the Linux
+**Linux AppImage (`Heaviside-linux-x86_64.AppImage` /
+`Heaviside-linux-aarch64.AppImage`).** The Linux release artifact is a
+self-contained **AppImage** — a single no-root, run-anywhere file, the Linux
 analogue of the `.dmg`/installer — built by `scripts/make_appimage.py` from the
-`dist/Heaviside/` onedir build. AppImage (unlike Flatpak/Snap) is **not**
+`dist/Heaviside/` onedir build, on **both x64 and arm64** (the release matrix
+runs `ubuntu-latest` and `ubuntu-24.04-arm`; the arm64 build serves Raspberry
+Pi OS 64-bit and other aarch64 Linux). The `ARCH` appimagetool embeds follows
+the build host (`platform.machine()`); the AppImage filename carries the same
+`uname -m` suffix, the portable tarball the matching `linux-x64`/`linux-arm64`
+name. AppImage (unlike Flatpak/Snap) is **not**
 sandboxed, so the app keeps direct access to the user's system `pdflatex`. The
 script assembles an **AppDir** — the onedir under `usr/bin/Heaviside/`; an `AppRun`
 that execs the bundled binary forwarding `argv`; a 256×256 icon rendered from
@@ -3204,6 +3211,19 @@ globally, which must not leak into the test process; importing the module is
 asserted side-effect-free by the same arrangement) captures the full dark-mode
 editor window: the PNG is exactly `WINDOW_SIZE`, predominantly dark, and shows
 real UI structure rather than a blank fill or a canvas-only crop.
+
+#### Linux AppImage packaging (`test_packaging.py`)
+
+The AppImage packaging assets and assembly logic (§11.1 "Linux AppImage"),
+pure (no Qt, no appimagetool): the `.desktop` entry is well-formed (Exec takes
+`%f`, advertises the `application/x-heaviside` MIME type matching the MIME XML
+glob `*.hv` and the AppStream metainfo); `_render_icon` produces a square RGBA
+PNG; `_build_appdir` assembles the AppDir tree (onedir under
+`usr/bin/Heaviside/`, executable `AppRun`, root `.desktop`+icon, `usr/share`
+integration files); `make_appimage` is a no-op off Linux; and the **ARCH
+appimagetool embeds follows the build host** (`platform.machine()`, explicit
+`ARCH` env still wins) — regression for the x64/arm64 release matrix, where a
+hardcoded arch would mislabel the other runner's image.
 
 #### Component palette (`test_palette.py`)
 

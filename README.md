@@ -48,6 +48,9 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 - **Linux (x64)**  
     AppImage: [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage)  
     Portable: [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz)
+- **Linux (arm64 — Raspberry Pi OS 64-bit, etc.)**  
+    AppImage: [Heaviside-linux-aarch64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-aarch64.AppImage)  
+    Portable: [Heaviside-linux-arm64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-arm64.tar.gz)
 
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 

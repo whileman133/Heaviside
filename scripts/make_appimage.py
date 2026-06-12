@@ -4,7 +4,8 @@ Build the Heaviside Linux AppImage from the PyInstaller onedir build.
 
     python scripts/make_appimage.py [OUTPUT.AppImage] [SOURCE_DIR]
 
-Defaults: ``dist/Heaviside-linux-x86_64.AppImage`` from ``dist/Heaviside``.
+Defaults: ``dist/Heaviside-linux-<arch>.AppImage`` (``<arch>`` is the build
+host's ``uname -m``: x86_64, aarch64, …) from ``dist/Heaviside``.
 
 An AppImage is a single self-contained, no-root, "download-and-run" file — the
 Linux analogue of the macOS ``.dmg`` and the Windows installer. It bundles the
@@ -36,6 +37,7 @@ hint rather than failing.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import stat
 import subprocess
@@ -72,7 +74,8 @@ def _find_appimagetool() -> str | None:
     env = os.environ.get("APPIMAGETOOL")
     if env and Path(env).exists():
         return env
-    return shutil.which("appimagetool") or shutil.which("appimagetool-x86_64.AppImage")
+    return (shutil.which("appimagetool")
+            or shutil.which(f"appimagetool-{platform.machine()}.AppImage"))
 
 
 def _render_icon(dest: Path, size: int = _ICON_SIZE) -> None:
@@ -143,7 +146,10 @@ def make_appimage(output: Path, source_dir: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     env = dict(os.environ)
-    env.setdefault("ARCH", "x86_64")           # the runtime appimagetool embeds
+    # The runtime architecture appimagetool embeds. Must follow the build host
+    # (x86_64 on the x64 runner, aarch64 on the ARM runner) — a hardcoded value
+    # would mislabel the other arch's build. An explicit ARCH env still wins.
+    env.setdefault("ARCH", platform.machine())
     env["VERSION"] = _app_version()            # recorded in the AppImage metadata
     # CI runners frequently lack FUSE; let appimagetool (itself an AppImage) and
     # the produced image run by self-extracting instead of mounting.
@@ -162,7 +168,8 @@ def make_appimage(output: Path, source_dir: Path) -> Path:
 
 def main() -> None:
     argv = sys.argv[1:]
-    output = Path(argv[0]) if len(argv) >= 1 else _ROOT / "dist" / "Heaviside-linux-x86_64.AppImage"
+    output = (Path(argv[0]) if len(argv) >= 1
+              else _ROOT / "dist" / f"Heaviside-linux-{platform.machine()}.AppImage")
     source = Path(argv[1]) if len(argv) >= 2 else _ROOT / "dist" / "Heaviside"
     make_appimage(output, source)
 

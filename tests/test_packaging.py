@@ -108,3 +108,34 @@ def test_make_appimage_is_noop_off_linux(tmp_path):
     # Returns the output path unchanged and does not raise or build anything.
     assert make_appimage.make_appimage(out, tmp_path / "Heaviside") == out
     assert not out.exists()
+
+
+def test_make_appimage_arch_follows_build_host(tmp_path, monkeypatch):
+    """The ARCH appimagetool embeds must follow the build host — the release
+    matrix builds on x64 *and* arm64 runners, and a hardcoded value would
+    mislabel the other arch's image. An explicit ARCH env still wins."""
+    source = tmp_path / "Heaviside"
+    source.mkdir()
+    (source / "Heaviside").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    captured = {}
+
+    def _fake_run(cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        Path(cmd[-1]).write_bytes(b"AI")  # the "built" image
+
+    monkeypatch.setattr(make_appimage.sys, "platform", "linux")
+    monkeypatch.setattr(make_appimage, "_find_appimagetool",
+                        lambda: "/usr/bin/appimagetool")
+    monkeypatch.setattr(make_appimage, "_build_appdir",
+                        lambda s: tmp_path / "Heaviside.AppDir")
+    monkeypatch.setattr(make_appimage.subprocess, "run", _fake_run)
+    monkeypatch.setattr(make_appimage.platform, "machine", lambda: "aarch64")
+    monkeypatch.delenv("ARCH", raising=False)
+
+    make_appimage.make_appimage(tmp_path / "Heaviside-linux-aarch64.AppImage", source)
+    assert captured["env"]["ARCH"] == "aarch64"
+
+    monkeypatch.setenv("ARCH", "x86_64")  # an explicit override is respected
+    make_appimage.make_appimage(tmp_path / "Heaviside-linux-x86_64.AppImage", source)
+    assert captured["env"]["ARCH"] == "x86_64"

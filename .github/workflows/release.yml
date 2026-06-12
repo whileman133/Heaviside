@@ -24,8 +24,10 @@ name: Release
 #   WINDOWS_CERT_PFX       base64 of the code-signing certificate (.pfx)
 #   WINDOWS_CERT_PASSWORD  password for that .pfx
 #
-# Linux: a self-contained AppImage (Heaviside-linux-x86_64.AppImage) is built
-# alongside the portable .tar.gz. No signing.
+# Linux: a self-contained AppImage is built alongside the portable .tar.gz, on
+# both x64 (Heaviside-linux-x86_64.AppImage) and arm64
+# (Heaviside-linux-aarch64.AppImage — Raspberry Pi OS 64-bit and other ARM
+# Linux). No signing.
 #
 on:
   push:
@@ -55,9 +57,21 @@ jobs:
           - os: windows-latest
             label: Windows (x64)
             artifact: Heaviside-windows-x64.zip
+          # The two Linux entries carry the AppImage name (suffixed with the
+          # host's uname -m, per AppImage convention) and the SHA-256 pin of
+          # that arch's appimagetool (see "Install appimagetool" below).
           - os: ubuntu-latest
             label: Linux (x64)
             artifact: Heaviside-linux-x64.tar.gz
+            appimage: Heaviside-linux-x86_64.AppImage
+            appimagetool_sha256: a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
+          # ubuntu-24.04-arm runners are native arm64, free for public repos.
+          # This build runs on Raspberry Pi OS (64-bit) and other aarch64 Linux.
+          - os: ubuntu-24.04-arm
+            label: Linux (arm64)
+            artifact: Heaviside-linux-arm64.tar.gz
+            appimage: Heaviside-linux-aarch64.AppImage
+            appimagetool_sha256: 1b00524ba8c6b678dc15ef88a5c25ec24def36cdfc7e3abb32ddcd068e8007fe
 
     steps:
       # Third-party actions are pinned to commit SHAs (not mutable tags) because
@@ -247,27 +261,27 @@ jobs:
           Remove-Item "$env:RUNNER_TEMP\cert.pfx" -Force
 
       # ── Linux AppImage ───────────────────────────────────────────────────
-      # Built on every Linux run, alongside the portable .tar.gz. appimagetool is
-      # itself an AppImage; APPIMAGE_EXTRACT_AND_RUN (set by make_appimage.py)
-      # lets it run without FUSE on the runner.
+      # Built on every Linux run (x64 and arm64), alongside the portable
+      # .tar.gz. appimagetool is itself an AppImage; APPIMAGE_EXTRACT_AND_RUN
+      # (set by make_appimage.py) lets it run without FUSE on the runner.
       # appimagetool ships only via a mutable "continuous" release, so the
-      # download is pinned by SHA-256. When upstream rebuilds, this step fails
-      # closed; refresh the pin by downloading the new file, verifying it, and
-      # updating APPIMAGETOOL_SHA256 below.
+      # download is pinned by SHA-256 (per arch, in the matrix). When upstream
+      # rebuilds, this step fails closed; refresh the pins by downloading the
+      # new files, verifying them, and updating appimagetool_sha256 above.
       - name: Install appimagetool (Linux)
         if: runner.os == 'Linux'
         env:
-          APPIMAGETOOL_SHA256: a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
+          APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
         run: |
-          curl -sSL -o appimagetool-x86_64.AppImage \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
-          echo "$APPIMAGETOOL_SHA256  appimagetool-x86_64.AppImage" | sha256sum -c -
-          sudo mv appimagetool-x86_64.AppImage /usr/local/bin/appimagetool
+          curl -sSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage"
+          echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
+          sudo mv appimagetool /usr/local/bin/appimagetool
           sudo chmod +x /usr/local/bin/appimagetool
 
       - name: Build the AppImage (Linux)
         if: runner.os == 'Linux'
-        run: uv run python scripts/make_appimage.py "Heaviside-linux-x86_64.AppImage" "dist/Heaviside"
+        run: uv run python scripts/make_appimage.py "${{ matrix.appimage }}" "dist/Heaviside"
 
       # The .dmg is already the single release artifact; just emit its SHA-256
       # for download verification.
@@ -292,22 +306,23 @@ jobs:
         run: |
           tar -czf "${{ matrix.artifact }}" -C dist Heaviside
           sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
-          sha256sum "Heaviside-linux-x86_64.AppImage" > "Heaviside-linux-x86_64.AppImage.sha256"
+          sha256sum "${{ matrix.appimage }}" > "${{ matrix.appimage }}.sha256"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.artifact }}
-          # The Windows installer only exists on the Windows runner; the glob is
-          # ignored (not an error) on macOS/Linux.
+          # The Windows installer only exists on the Windows runner, and
+          # matrix.appimage is set only on the Linux entries; missing/empty
+          # lines are ignored (not an error) elsewhere.
           if-no-files-found: ignore
           path: |
             ${{ matrix.artifact }}
             ${{ matrix.artifact }}.sha256
             Heaviside-windows-x64-setup.exe
             Heaviside-windows-x64-setup.exe.sha256
-            Heaviside-linux-x86_64.AppImage
-            Heaviside-linux-x86_64.AppImage.sha256
+            ${{ matrix.appimage }}
+            ${{ matrix.appimage }}.sha256
 
   # Re-render the README example-gallery screenshots from this release's code
   # and examples (scripts/render_screenshots.py — the full editor GUI grabbed
