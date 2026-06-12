@@ -2726,7 +2726,9 @@ runs `ubuntu-latest` and `ubuntu-24.04-arm`; the arm64 build serves Raspberry
 Pi OS 64-bit and other aarch64 Linux). The `ARCH` appimagetool embeds follows
 the build host (`platform.machine()`); the AppImage filename carries the same
 `uname -m` suffix, the portable tarball the matching `linux-x64`/`linux-arm64`
-name. AppImage (unlike Flatpak/Snap) is **not**
+name. PyInstaller does not bundle glibc, so both Linux binaries inherit the
+24.04 runners' floor: **glibc ≥ 2.38** (Debian 13 "Trixie" / Ubuntu 24.04+,
+documented in the README) — older distros run from source instead. AppImage (unlike Flatpak/Snap) is **not**
 sandboxed, so the app keeps direct access to the user's system `pdflatex`. The
 script assembles an **AppDir** — the onedir under `usr/bin/Heaviside/`; an `AppRun`
 that execs the bundled binary forwarding `argv`; a 256×256 icon rendered from

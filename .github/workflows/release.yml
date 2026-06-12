@@ -308,10 +308,14 @@ jobs:
           sha256sum "${{ matrix.artifact }}" > "${{ matrix.artifact }}.sha256"
           sha256sum "${{ matrix.appimage }}" > "${{ matrix.appimage }}.sha256"
 
+      # The artifact bundle is named after the platform label, not one file —
+      # each Linux bundle holds the .tar.gz AND the AppImage (plus .sha256s),
+      # which a name like "….tar.gz" obscured in the run's artifact list. The
+      # release job downloads by glob, so bundle names are free to be readable.
       - name: Upload build artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ matrix.artifact }}
+          name: ${{ matrix.label }}
           # The Windows installer only exists on the Windows runner, and
           # matrix.appimage is set only on the Linux entries; missing/empty
           # lines are ignored (not an error) elsewhere.

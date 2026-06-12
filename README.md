@@ -52,6 +52,10 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
     AppImage: [Heaviside-linux-aarch64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-aarch64.AppImage)  
     Portable: [Heaviside-linux-arm64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-arm64.tar.gz)
 
+  The Linux binaries need glibc ≥ 2.38 (Ubuntu 24.04+, Debian 13 "Trixie" —
+  including Raspberry Pi OS Trixie). On older distros (e.g. Debian 12
+  "Bookworm"), [build from source](#building-from-source) instead.
+
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 
 > **LaTeX is required for PDF preview and PDF/PNG exports.** These features need `pdflatex` with the `circuitikz`

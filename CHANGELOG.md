@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Linux ARM (arm64/aarch64) release builds.** Releases now include
   `Heaviside-linux-aarch64.AppImage` and `Heaviside-linux-arm64.tar.gz` built
   on native ARM runners, so Raspberry Pi OS (64-bit) and other aarch64 Linux
-  systems get a download-and-run binary instead of an x86_64-only one.
+  systems get a download-and-run binary instead of an x86_64-only one. Like
+  the x64 binaries, they need glibc ≥ 2.38 (Debian 13 "Trixie" /
+  Ubuntu 24.04 or newer); older distros build from source.
 - **Inkscape works as the EPS/SVG export converter.** When Poppler's
   `pdftocairo` isn't installed, EPS and SVG export now fall back automatically
   to Inkscape (1.0+) — including Inkscape installs that aren't on `PATH` (the
