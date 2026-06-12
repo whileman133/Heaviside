@@ -240,17 +240,30 @@ LABEL_STYLES: tuple[str, ...] = ("american", "european")
 # Geometry helpers
 # ---------------------------------------------------------------------------
 
+#: Decimal places of the canonical coordinate key. The single constant from
+#: which both :func:`point_key` (point identity) and :data:`KEY_EPS` (interval
+#: coverage tolerance) derive, so the two conventions cannot diverge.
+_KEY_DECIMALS: int = 6
+
+#: Coordinate tolerance consistent with :func:`point_key`: two coordinates
+#: whose keys agree differ by at most one unit in the last rounded decimal.
+#: Used wherever a comparison needs an epsilon rather than exact key equality
+#: (interval coverage in the contained-wire test).
+KEY_EPS: float = 10.0 ** -_KEY_DECIMALS
+
+
 def point_key(pt: tuple[float, float]) -> tuple[float, float]:
     """Canonical coordinate key (6-dp rounding) for coincidence comparisons.
 
     The **single** connectivity convention: every wire↔pin and wire↔wire
     coincidence test (junctions, open endpoints, wire-following on move/resize,
-    splits, merges, dict/set keys for canvas decorations) compares coordinates
-    through this helper, so float noise from off-grid pins (scaled gates) can
-    never silently detach a wire. Stored geometry stays **unrounded** — only
-    comparisons go through the key.
+    splits, merges, collinearity/coverage in the contained-wire test, dict/set
+    keys for canvas decorations) compares coordinates through this helper, so
+    float noise from off-grid pins (scaled gates) can never silently detach a
+    wire. Stored geometry stays **unrounded** — only comparisons go through
+    the key.
     """
-    return (round(pt[0], 6), round(pt[1], 6))
+    return (round(pt[0], _KEY_DECIMALS), round(pt[1], _KEY_DECIMALS))
 
 
 #: Grid snap granularity in GU — the minor grid (spec §3.1). The canvas-side
@@ -419,11 +432,12 @@ def simplify_points(
 
 
 def _interval_covered(
-    lo: float, hi: float, intervals: list[tuple[float, float]], eps: float = 1e-6
+    lo: float, hi: float, intervals: list[tuple[float, float]], eps: float = KEY_EPS
 ) -> bool:
     """True if [lo, hi] is fully covered by the union of *intervals* (each a
     (start, end) pair on the same axis). A zero-length target is trivially
-    covered."""
+    covered. The tolerance defaults to :data:`KEY_EPS` — the same 6-dp
+    convention as :func:`point_key` — so coverage and point identity agree."""
     if hi - lo <= eps:
         return True
     relevant = sorted(iv for iv in intervals if iv[1] > lo - eps and iv[0] < hi + eps)
@@ -441,16 +455,25 @@ def _segment_covered(
     seg: tuple[tuple[float, float], tuple[float, float]],
     other_segs: list[tuple[tuple[float, float], tuple[float, float]]],
 ) -> bool:
-    """True if axis-aligned *seg* lies entirely on collinear *other_segs*."""
-    (x0, y0), (x1, y1) = seg
+    """True if axis-aligned *seg* lies entirely on collinear *other_segs*.
+
+    Collinearity is decided through :func:`point_key` (the 6-dp connectivity
+    convention) rather than exact float equality, so float noise from off-grid
+    pins (scaled gates) — e.g. ``0.30000000000000004`` vs ``0.3`` — cannot make
+    a genuinely contained wire go undetected (or vice versa). Interval coverage
+    uses the matching :data:`KEY_EPS` tolerance; on-grid geometry behaves
+    exactly as before.
+    """
+    (x0, y0), (x1, y1) = point_key(seg[0]), point_key(seg[1])
+    keyed = [(point_key(a), point_key(b)) for a, b in other_segs]
     if x0 == x1:        # vertical at x = x0
         lo, hi = sorted((y0, y1))
         ivals = [tuple(sorted((b, d)))
-                 for (a, b), (c, d) in other_segs if a == x0 and c == x0]
+                 for (a, b), (c, d) in keyed if a == x0 and c == x0]
     elif y0 == y1:      # horizontal at y = y0
         lo, hi = sorted((x0, x1))
         ivals = [tuple(sorted((a, c)))
-                 for (a, b), (c, d) in other_segs if b == y0 and d == y0]
+                 for (a, b), (c, d) in keyed if b == y0 and d == y0]
     else:               # diagonal (should not occur on a Manhattan wire)
         return False
     return _interval_covered(lo, hi, ivals)

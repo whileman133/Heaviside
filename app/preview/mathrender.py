@@ -356,6 +356,12 @@ def _ziamath_svg_to_path(svg_text: str) -> QPainterPath:
     return out
 
 
+# ziamath/ziafont lay out glyphs through shared module-level font objects and
+# caches; the render pool runs two workers, so typesetting must be serialised —
+# concurrent layout corrupts the shared state.
+_ziamath_lock = threading.Lock()
+
+
 def _ziamath_path(fragment: str) -> QPainterPath | None:
     """Render *fragment* to a QPainterPath via ziamath, or ``None`` if ziamath is
     missing or the fragment fails to typeset.
@@ -366,18 +372,19 @@ def _ziamath_path(fragment: str) -> QPainterPath | None:
     math.  (``ziamath.Latex`` is math-only — it would render the ``$`` delimiters
     as literal dollar glyphs.)
     """
-    try:
-        import ziamath
-    except Exception:  # noqa: BLE001 - missing module OR missing bundled font
-        # ziamath/ziafont load their fonts (STIX Two Math, DejaVu Sans) at import
-        # time. A bundling slip would raise FileNotFoundError here, not
-        # ImportError; treat any import failure as "fallback unavailable" so the
-        # label degrades to raw text instead of crashing the render.
-        return None
-    try:
-        svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()
-    except Exception:  # noqa: BLE001 - any parse/layout failure -> raw-text fallback
-        return None
+    with _ziamath_lock:
+        try:
+            import ziamath
+        except Exception:  # noqa: BLE001 - missing module OR missing bundled font
+            # ziamath/ziafont load their fonts (STIX Two Math, DejaVu Sans) at import
+            # time. A bundling slip would raise FileNotFoundError here, not
+            # ImportError; treat any import failure as "fallback unavailable" so the
+            # label degrades to raw text instead of crashing the render.
+            return None
+        try:
+            svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()
+        except Exception:  # noqa: BLE001 - any parse/layout failure -> raw-text fallback
+            return None
     return _ziamath_svg_to_path(svg)
 
 
@@ -554,22 +561,65 @@ def render_latex(fragment: str) -> QPainterPath | None:
 # the vector path arrives.  A bounded QThreadPool runs the compiles; results are
 # delivered back on the caller's (UI) thread via a queued signal.
 
-class _RenderSignals(QObject):
-    done = Signal(str, object)  # fragment, QPainterPath | None
+class _RenderDispatcher(QObject):
+    """The single, process-lifetime bridge from the render pool to the UI thread.
+
+    Exactly **one** QObject, created lazily on the UI thread and never
+    destroyed: worker threads only ever *emit* on it. (An earlier design
+    created a signals QObject per request, kept alive by a module-level set
+    that the relay discarded on delivery — which left the QRunnable holding
+    the *last* Python reference, dropped on the **worker** thread by the
+    pool's auto-delete after ``run()``. Destroying a UI-thread-affine QObject
+    from a worker thread is undefined behaviour in Qt and surfaced as a
+    nondeterministic segfault in the main thread's event dispatch under load.
+    A permanent dispatcher removes per-request QObject lifetime entirely.)
+
+    The token→callback map is touched only on the UI thread — ``register()``
+    runs in ``render_async``'s caller and ``_dispatch`` is delivered queued —
+    so it needs no lock.
+    """
+
+    done = Signal(int, object)  # token, QPainterPath | None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._callbacks: dict[int, object] = {}
+        self._next_token = 0
+        # AutoConnection: emitted from a pool thread, the receiver (this
+        # object) lives on the UI thread, so delivery is queued.
+        self.done.connect(self._dispatch)
+
+    def register(self, on_done) -> int:  # noqa: ANN001
+        self._next_token += 1
+        self._callbacks[self._next_token] = on_done
+        return self._next_token
+
+    def _dispatch(self, token: int, path) -> None:  # noqa: ANN001
+        cb = self._callbacks.pop(token, None)
+        if cb is not None:
+            cb(path)
+
+
+@lru_cache(maxsize=1)
+def _dispatcher() -> _RenderDispatcher:
+    return _RenderDispatcher()
 
 
 class _RenderTask(QRunnable):
-    def __init__(self, fragment: str, signals: "_RenderSignals") -> None:
+    def __init__(self, fragment: str, token: int) -> None:
         super().__init__()
         self._fragment = fragment
-        self._signals = signals
+        self._token = token
 
     def run(self) -> None:  # noqa: D401 - QRunnable hook
         try:
             path = render_latex(self._fragment)
         except Exception:  # pragma: no cover - defensive; never kill the pool
             path = None
-        self._signals.done.emit(self._fragment, path)
+        # The dispatcher is module-permanent (the lru_cache holds it), so this
+        # emit — and the runnable's destruction right after run() returns —
+        # never lets a worker thread drop a QObject's last reference.
+        _dispatcher().done.emit(self._token, path)
 
 
 @lru_cache(maxsize=1)
@@ -586,29 +636,20 @@ def _pool() -> QThreadPool:
     return pool
 
 
-# Keep signal objects alive until their task fires (else they're GC'd mid-flight).
-_live_signals: set[_RenderSignals] = set()
-
-
 def render_async(fragment: str, on_done) -> None:  # noqa: ANN001
     """Render *fragment* on a worker thread; call ``on_done(QPainterPath|None)``
-    on the calling thread when ready.
+    on the calling (UI) thread when ready.
 
-    Cache hits still hop through the pool but return almost immediately.
+    Must be called on the UI thread — the dispatcher that delivers results is
+    created with that thread's affinity. Cache hits still hop through the pool
+    but return almost immediately.
     """
     fragment = (fragment or "").strip()
     if not fragment:
         on_done(None)
         return
-    signals = _RenderSignals()
-
-    def _relay(_frag: str, path) -> None:  # noqa: ANN001
-        _live_signals.discard(signals)
-        on_done(path)
-
-    signals.done.connect(_relay)
-    _live_signals.add(signals)
-    _pool().start(_RenderTask(fragment, signals))
+    token = _dispatcher().register(on_done)
+    _pool().start(_RenderTask(fragment, token))
 
 
 # ---------------------------------------------------------------------------

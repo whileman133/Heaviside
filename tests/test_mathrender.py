@@ -238,6 +238,79 @@ def test_render_async_delivers_on_event_loop() -> None:
     assert box["path"].elementCount() > 0
 
 
+def test_render_async_single_dispatcher_no_per_request_qobject() -> None:
+    """One process-lifetime dispatcher delivers every async result.
+
+    Regression for a CI segfault: the old design created a signals QObject per
+    request whose last Python reference was often dropped by the QRunnable's
+    auto-delete on the *worker* thread — destroying a UI-thread-affine QObject
+    from a worker thread (Qt UB, nondeterministic crash in the main thread's
+    event dispatch). The dispatcher must be a singleton and its callback map
+    must drain after delivery.
+    """
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from app.preview.mathrender import _dispatcher, render_async
+
+    set_force_ziamath(True)
+    assert _dispatcher() is _dispatcher()
+    assert not hasattr(_mr, "_live_signals"), "per-request signal set is gone"
+
+    # Earlier test modules share the process-lifetime dispatcher and may have
+    # tokens still in flight; only the tokens registered *here* must drain.
+    tokens_before = set(_dispatcher()._callbacks)
+
+    n = 12
+    results: list[object] = []
+    loop = QEventLoop()
+
+    def make_done():  # noqa: ANN202
+        def done(path) -> None:  # noqa: ANN001
+            results.append(path)
+            if len(results) == n:
+                loop.quit()
+        return done
+
+    for i in range(n):
+        render_async(rf"$x_{{{i % 3}}}$", make_done())
+    QTimer.singleShot(20000, loop.quit)
+    loop.exec()
+
+    assert len(results) == n, "every async render must deliver exactly once"
+    assert all(p is not None for p in results)
+    leftover = set(_dispatcher()._callbacks) - tokens_before
+    assert leftover == set(), "this test's callback tokens must drain"
+
+
+def test_render_async_callbacks_run_on_ui_thread() -> None:
+    """Results are delivered on the UI thread even under concurrent churn."""
+    import threading
+
+    from PySide6.QtCore import QEventLoop, QTimer
+
+    from app.preview.mathrender import render_async
+
+    set_force_ziamath(True)
+    main_ident = threading.get_ident()
+    idents: list[int] = []
+    n = 8
+    loop = QEventLoop()
+
+    def done(path) -> None:  # noqa: ANN001
+        idents.append(threading.get_ident())
+        if len(idents) == n:
+            loop.quit()
+
+    render_path.cache_clear()  # force real worker-side renders, not memo hits
+    for i in range(n):
+        render_async(rf"$y_{{{i}}}$", done)
+    QTimer.singleShot(20000, loop.quit)
+    loop.exec()
+
+    assert len(idents) == n
+    assert set(idents) == {main_ident}
+
+
 # ---------------------------------------------------------------------------
 # ziamath engine + selection (no LaTeX install required)
 # ---------------------------------------------------------------------------

@@ -3727,3 +3727,120 @@ def test_commit_component_drag_multiple_deltas_moves_wires_once(scene: Schematic
     assert scene._wire_by_id(w.id).points == [(10.0, 10.0), (12.0, 10.0)]
     assert scene._component_by_id(a.id).position == (0.0, 0.0)
     assert scene._component_by_id(b.id).position == (0.0, 4.0)
+
+
+# ---------------------------------------------------------------------------
+# Structural re-entrancy safety (grab release on removal; coalesced rebuilds)
+# ---------------------------------------------------------------------------
+
+def test_push_during_grab_ungrabs_before_removal(scene: SchematicScene):
+    """Pushing a command that removes the mouse-grabbing item mid-gesture must
+    release the grab before the item is freed (the dangerous sequence that
+    previously relied on handler ordering alone)."""
+    from app.canvas.commands import DeleteCommand
+
+    a = scene.place_component("R", (0.0, 0.0))
+    item = scene._comp_items[a.id]
+    item.setSelected(True)
+    press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    press.setButton(Qt.LeftButton)
+    press.setScenePos(scene.gu_to_scene(1.0, 0.0))       # body centre
+    scene.mousePressEvent(press)
+    assert scene.mouseGrabberItem() is item              # Qt grabbed the item
+
+    # The dangerous moment: a command removes the grabbing item while the
+    # press is still in flight. _remove_item must ungrab first.
+    scene._push(DeleteCommand([a.id]))
+    assert scene.mouseGrabberItem() is None
+    assert a.id not in scene._comp_items
+
+    # The release is then delivered safely (no grabber, no crash).
+    rel = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseRelease)
+    rel.setButton(Qt.LeftButton)
+    rel.setScenePos(scene.gu_to_scene(1.0, 0.0))
+    scene.mouseReleaseEvent(rel)
+
+
+def test_remove_item_ungrabs_grabbing_child(scene: SchematicScene):
+    """Removing an item whose CHILD holds the mouse grab releases the grab too
+    (the replace/teardown path: destroying an ancestor destroys the grabbing
+    child with it)."""
+    a = scene.place_component("R", (0.0, 0.0))
+    item = scene._comp_items[a.id]
+    child = next(iter(item.childItems()), None)
+    assert child is not None
+    child.setVisible(True)                   # an invisible item cannot grab
+    child.grabMouse()
+    assert scene.mouseGrabberItem() is child
+
+    scene._remove_item(scene._comp_items.pop(a.id))
+    assert scene.mouseGrabberItem() is None
+
+
+def test_remove_item_keeps_unrelated_grab(scene: SchematicScene):
+    """Removing an item must not disturb a grab held by an unrelated item."""
+    a = scene.place_component("R", (0.0, 0.0))
+    b = scene.place_component("R", (6.0, 0.0))
+    grab_item = scene._comp_items[b.id]
+    grab_item.grabMouse()
+    assert scene.mouseGrabberItem() is grab_item
+
+    scene._remove_item(scene._comp_items.pop(a.id))
+    assert scene.mouseGrabberItem() is grab_item
+    grab_item.ungrabMouse()
+
+
+def test_reentrant_rebuild_coalesces(scene: SchematicScene, monkeypatch):
+    """A _rebuild_items call arriving while a rebuild is already running must
+    not recurse into a half-reconciled item map: it is deferred and the outer
+    invocation loops once more until clean."""
+    scene.place_component("R", (0.0, 0.0))
+
+    calls = {"n": 0, "reentered": False}
+    orig_body = scene._rebuild_items_now
+
+    def body():
+        calls["n"] += 1
+        if not calls["reentered"]:
+            calls["reentered"] = True
+            depth_before = calls["n"]
+            scene._rebuild_items()           # re-entrant request mid-rebuild
+            # The nested call must NOT have run the body inline.
+            assert calls["n"] == depth_before
+        orig_body()
+
+    monkeypatch.setattr(scene, "_rebuild_items_now", body)
+    scene._rebuild_items()
+    # Outer pass + exactly one coalesced re-run; no unbounded recursion.
+    assert calls["n"] == 2
+    assert scene._rebuilding is False
+    assert scene._rebuild_pending is False
+
+
+def test_push_during_rebuild_signal_is_safe(scene: SchematicScene):
+    """A handler reacting to selectionChanged (fired synchronously from inside
+    a rebuild, e.g. when a selected item is removed) may push another command;
+    the nested rebuild request coalesces and both commands land in the model."""
+    from app.canvas.commands import DeleteCommand
+
+    a = scene.place_component("R", (0.0, 0.0))
+    b = scene.place_component("R", (6.0, 0.0))
+    scene._comp_items[a.id].setSelected(True)
+
+    fired = {"done": False}
+
+    def on_selection_changed():
+        # Triggered when the selected item is removed mid-rebuild.
+        if not fired["done"] and a.id not in {c.id for c in scene.schematic.components}:
+            fired["done"] = True
+            scene._push(DeleteCommand([b.id]))           # push during rebuild
+
+    scene.selectionChanged.connect(on_selection_changed)
+    try:
+        scene._push(DeleteCommand([a.id]))
+    finally:
+        scene.selectionChanged.disconnect(on_selection_changed)
+
+    assert fired["done"], "the re-entrant push path was not exercised"
+    assert scene.schematic.components == []
+    assert scene._comp_items == {}

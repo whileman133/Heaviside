@@ -36,9 +36,13 @@ from app.canvas.commands import (
     MacroCommand,
     MoveCommand,
     ResizeCommand,
-    _point_on_polyline,
+)
+from app.schematic.reshape import (
+    compute_box_resize_reshape,
+    compute_move_reshape,
+    compute_pin_drag_reshape,
+    move_vertex_points,
     reshape_junction_wire,
-    reshape_wire_points,
 )
 from app.canvas.geometry import (
     gu_to_scene,
@@ -63,9 +67,6 @@ from app.schematic.model import (
     junction_points,
     open_endpoints,
     point_key,
-    route,
-    simplify_points,
-    snap_point,
     unconnected_pins,
 )
 
@@ -239,20 +240,13 @@ class DragPreviewController:
         pin_dy = new_pin[1] - old_pin[1]
         if pin_dx == 0.0 and pin_dy == 0.0:
             return
-        pin_key = point_key(old_pin)
-        for wire in self._scene._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            start_hit = point_key(pts[0]) == pin_key
-            end_hit = point_key(pts[-1]) == pin_key
-            if not start_hit and not end_hit:
-                continue
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit,
-                dx=pin_dx, dy=pin_dy,
-            )
-            wire_item = self._scene._wire_items.get(wire.id)
+        # The single source of the pin-follow rule (also applied by
+        # ResizeCommand); render its result as ghosts, applying nothing.
+        result = compute_pin_drag_reshape(
+            self._scene._schematic.wires, old_pin=old_pin, dx=pin_dx, dy=pin_dy
+        )
+        for wid, new_pts in result.new_points.items():
+            wire_item = self._scene._wire_items.get(wid)
             if wire_item is not None and len(new_pts) >= 2:
                 wire_item.set_preview_points(new_pts)
 
@@ -264,46 +258,17 @@ class DragPreviewController:
     ) -> None:
         """Live preview of connected wires while a rect/circle is resized.
 
-        Mirrors ``ResizeCommand._reshape_wires_scaled`` but only sets preview
-        points on the wire items; the model is untouched until commit.  Uses the
-        kind's own connection points (rect perimeter / circle cardinal points).
+        Renders the result of the shared ``compute_box_resize_reshape`` (the
+        same function ``ResizeCommand._reshape_wires_scaled`` applies at
+        commit) as preview points on the wire items; the model is untouched
+        until commit.
         """
-        x0, y0 = comp.position
-        odx, ody = old_span
-        ndx, ndy = new_span
-        old_perim = {
-            point_key(p)
-            for p in component_connection_points(replace(comp, span_override=old_span))
-        }
-
-        def _map(p: tuple[float, float]) -> tuple[float, float]:
-            px, py = p
-            fx = (px - x0) / odx if odx else 0.0
-            fy = (py - y0) / ody if ody else 0.0
-            return snap_point((x0 + fx * ndx, y0 + fy * ndy))
-
-        for wire in self._scene._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            start_hit = point_key(pts[0]) in old_perim
-            end_hit = point_key(pts[-1]) in old_perim
-            if not start_hit and not end_hit:
-                continue
-            new_pts = list(pts)
-            if start_hit:
-                t = _map(new_pts[0])
-                new_pts = reshape_wire_points(
-                    new_pts, start_hit=True, end_hit=False,
-                    dx=t[0] - new_pts[0][0], dy=t[1] - new_pts[0][1],
-                )
-            if end_hit:
-                t = _map(new_pts[-1])
-                new_pts = reshape_wire_points(
-                    new_pts, start_hit=False, end_hit=True,
-                    dx=t[0] - new_pts[-1][0], dy=t[1] - new_pts[-1][1],
-                )
-            wire_item = self._scene._wire_items.get(wire.id)
+        result = compute_box_resize_reshape(
+            comp, old_span=old_span, new_span=new_span,
+            wires=self._scene._schematic.wires,
+        )
+        for wid, new_pts in result.new_points.items():
+            wire_item = self._scene._wire_items.get(wid)
             if wire_item is not None and len(new_pts) >= 2:
                 wire_item.set_preview_points(new_pts)
 
@@ -392,20 +357,9 @@ class DragPreviewController:
                     if point_key(gu) == old_key:
                         break       # zero-distance move; avoid re-finding forever
             else:
-                # Single vertex: plain horizontal-first elbow (mirrors
-                # MoveWireVertexCommand.do).
-                idx = idxs[0]
-                pts[idx] = gu
-                rebuilt: list[tuple[float, float]] = []
-                for j, p in enumerate(pts):
-                    if j == 0:
-                        rebuilt.append(p)
-                        continue
-                    prev = pts[j - 1]
-                    if j == idx or j - 1 == idx:
-                        rebuilt.extend(route(prev, p, vfirst=False)[1:-1])
-                    rebuilt.append(p)
-                simplified = simplify_points(rebuilt)
+                # Single vertex: the shared move_vertex_points (the same
+                # function MoveWireVertexCommand applies at commit).
+                simplified = move_vertex_points(pts, idxs[0], gu)
             item.set_preview_points(simplified)
             previews[wire_id] = simplified
         self.update_ocirc_preview(previews)
@@ -436,7 +390,7 @@ class DragPreviewController:
 
     def clear_junction_preview(self) -> None:
         if self.junction_preview is not None:
-            self._scene.removeItem(self.junction_preview)
+            self._scene._remove_item(self.junction_preview)
             self.junction_preview = None
         if self._hidden_junction is not None:
             self._hidden_junction.setVisible(True)
@@ -488,41 +442,24 @@ class DragPreviewController:
             set(self.drag_start.keys()) >= {c.id for c in scene._schematic.components}
         )
 
-        # Endpoint multiplicity per coordinate — mirrors MoveCommand so a pin on a
-        # multi-wire junction disconnects (rather than dragging the whole net) in
-        # the live preview too, keeping it consistent with the committed move.
-        endpoint_count: dict[tuple[float, float], int] = {}
-        for w in scene._schematic.wires:
-            if len(w.points) < 2:
-                continue
-            endpoint_count[point_key(w.points[0])] = endpoint_count.get(point_key(w.points[0]), 0) + 1
-            endpoint_count[point_key(w.points[-1])] = endpoint_count.get(point_key(w.points[-1]), 0) + 1
+        # The single source of the move rule set (sole-lead endpoint test,
+        # junction-tap follow, re-stretch leads, contained-wire removal) — the
+        # same function MoveCommand applies at commit. Render its result as
+        # ghosts; the model is untouched until release.
+        result = compute_move_reshape(
+            scene._schematic.wires,
+            moving_pins=start_pins,
+            delta=(dx, dy),
+            explicit_wire_ids=self.drag_wire_ids,
+            all_dragged=all_dragged,
+        )
 
         previewed: set[str] = set()
-        for wire in scene._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            # Mirror MoveCommand._reshape_wires exactly: selected wires and
-            # all_dragged both force a rigid translate so free endpoints follow;
-            # otherwise an endpoint follows only when it is its pin's sole lead.
-            if all_dragged or wire.id in self.drag_wire_ids:
-                start_hit = end_hit = True
-            else:
-                start_hit = (point_key(pts[0]) in start_pins
-                             and endpoint_count.get(point_key(pts[0]), 0) == 1)
-                end_hit = (point_key(pts[-1]) in start_pins
-                           and endpoint_count.get(point_key(pts[-1]), 0) == 1)
-                if not (start_hit or end_hit):
-                    continue
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy,
-                simplify=True,
-            )
-            item = scene._wire_items.get(wire.id)
+        for wid, new_pts in result.new_points.items():
+            item = scene._wire_items.get(wid)
             if item is not None:
                 item.set_preview_points(new_pts)
-                previewed.add(wire.id)
+                previewed.add(wid)
 
         # Clear any wire that was previewed last frame but no longer is.
         for wid in self.previewed_wire_ids - previewed:
@@ -560,25 +497,21 @@ class DragPreviewController:
 
         # Ghost the re-stretch leads (pins dragged off a multi-wire junction), so
         # the preview shows the connection growing — matching what MoveCommand
-        # will commit, not a momentarily-disconnected component.
-        restretch_pins = set() if all_dragged else {
-            p for p in start_pins if endpoint_count.get(p, 0) >= 2
-        }
-        self._update_restretch_preview(restretch_pins, dx, dy)
+        # will commit, not a momentarily-disconnected component. The paths come
+        # from the same shared compute as the committed leads.
+        self._update_restretch_preview(
+            [list(path) for path in result.lead_paths]
+        )
 
     def _update_restretch_preview(
-        self, pins: set[tuple[float, float]], dx: float, dy: float
+        self, paths: list[list[tuple[float, float]]]
     ) -> None:
-        """Reconcile the ghost lead items to one per re-stretch pin (node → live
-        dragged position), creating/removing throwaway non-interactive WireItems."""
+        """Reconcile the ghost lead items to the computed re-stretch lead paths
+        (node → live dragged position), creating/removing throwaway
+        non-interactive WireItems."""
         scene = self._scene
-        paths: list[list[tuple[float, float]]] = []
-        for p in sorted(pins):
-            path = route(p, (p[0] + dx, p[1] + dy))
-            if len(path) >= 2 and len(set(path)) >= 2:
-                paths.append(path)
         while len(self._restretch_ghosts) > len(paths):
-            scene.removeItem(self._restretch_ghosts.pop())
+            scene._remove_item(self._restretch_ghosts.pop())
         while len(self._restretch_ghosts) < len(paths):
             ghost = WireItem(Wire(id="__restretch_ghost__", points=[(0.0, 0.0), (0.0, 0.0)]))
             ghost.setFlag(ghost.GraphicsItemFlag.ItemIsSelectable, False)
@@ -590,7 +523,7 @@ class DragPreviewController:
 
     def _clear_restretch_preview(self) -> None:
         for ghost in self._restretch_ghosts:
-            self._scene.removeItem(ghost)
+            self._scene._remove_item(ghost)
         self._restretch_ghosts = []
 
     def commit_component_drag(self) -> None:
@@ -657,40 +590,27 @@ class DragPreviewController:
 
     def preview_wire_drag(self, dx: float, dy: float) -> None:
         """Ghost the dragged wires (rigid translate by the live delta) and any
-        junction tap that follows, without touching the model. Mirrors
-        :meth:`MoveCommand._reshape_wires` for the wire-only case so the preview
-        matches the committed move."""
+        junction tap that follows, without touching the model. Renders the
+        result of the shared ``compute_move_reshape`` (the same function the
+        committed wire-only MoveCommand applies) so the preview matches the
+        committed move."""
         scene = self._scene
         if not self.wire_drag_ids:
             return
-        explicit_orig = [
-            list(w.points) for w in scene._schematic.wires
-            if w.id in self.wire_drag_ids and len(w.points) >= 2
-        ]
-
-        def on_explicit(p: tuple[float, float]) -> bool:
-            return any(_point_on_polyline(p, poly) for poly in explicit_orig)
+        result = compute_move_reshape(
+            scene._schematic.wires,
+            moving_pins=set(),
+            delta=(dx, dy),
+            explicit_wire_ids=self.wire_drag_ids,
+            all_dragged=False,
+        )
 
         previewed: set[str] = set()
-        for wire in scene._schematic.wires:
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            if wire.id in self.wire_drag_ids:
-                start_hit = end_hit = True
-            else:
-                start_hit = on_explicit(pts[0])
-                end_hit = on_explicit(pts[-1])
-                if not (start_hit or end_hit):
-                    continue
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy,
-                simplify=True,
-            )
-            item = scene._wire_items.get(wire.id)
+        for wid, new_pts in result.new_points.items():
+            item = scene._wire_items.get(wid)
             if item is not None:
                 item.set_preview_points(new_pts)
-                previewed.add(wire.id)
+                previewed.add(wid)
 
         for wid in self.previewed_wire_ids - previewed:
             it = scene._wire_items.get(wid)

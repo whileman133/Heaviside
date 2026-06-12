@@ -57,8 +57,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing to undo/redo), and the window's dirty marker clears when you undo
   back to the last-saved state.
 - **Document-tab voltage/current style edits are undoable.**
+- **Canvas item removal is grab-safe and rebuilds coalesce.** Removing a
+  canvas item now always releases an in-flight mouse grab first, and a scene
+  rebuild requested while one is already running is coalesced instead of
+  recursing — hardening against use-after-free crashes when a command runs
+  mid-gesture.
 
 ### Fixed
+- **Nondeterministic crash (segfault) while math labels rendered in the
+  background.** Each async label render created a short-lived Qt signals
+  object whose final reference could be dropped on a worker thread —
+  destroying a UI-thread object off-thread, which could crash the app (seen
+  as a CI segfault under load). All results now flow through one permanent
+  UI-thread dispatcher, and the ziamath fallback engine is serialised (its
+  shared font state is not thread-safe).
+- **Drag previews can no longer differ from the committed result.** The ghost
+  geometry shown while dragging components, whole wires, box resizes, and
+  vertices is now computed by the same shared functions
+  (`app/schematic/reshape.py`) that the committed commands apply — previously
+  the previews hand-mirrored the commit rules and had drifted (a junction tap
+  on a co-dragged wire followed on commit but not in the preview).
+- **Redundant fully-covered wires are detected despite float noise.** The
+  contained-wire test now uses the same 6-decimal tolerance as all other
+  connectivity comparisons, so off-grid pin coordinates can't hide a wire that
+  lies entirely on top of others.
 - **Wires connected to off-grid pins could silently detach.** Connectivity
   comparisons against a scaled gate's off-grid pins used exact float equality,
   so float noise during moves/rotations could quietly disconnect a wire; every

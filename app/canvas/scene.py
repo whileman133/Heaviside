@@ -28,6 +28,7 @@ from __future__ import annotations
 import contextlib
 import copy
 import dataclasses
+import logging
 import uuid
 from enum import Enum, auto
 
@@ -117,6 +118,8 @@ from app.schematic.model import (
 
 _LABEL_CLEARANCE = 6  # px gap used by auto-placement candidates (§8.3)
 
+_log = logging.getLogger(__name__)
+
 
 class Mode(Enum):
     """Canvas interaction mode (spec §6.1)."""
@@ -157,6 +160,13 @@ class SchematicScene(QGraphicsScene):
         # When non-None, _push() accumulates commands here for one MacroCommand
         # (see batch()); used for multi-component inspector edits.
         self._batch: list | None = None
+
+        # Re-entrancy guard for _rebuild_items: True while a reconcile pass is
+        # running; a re-entrant request (e.g. a selectionChanged handler pushing
+        # a command mid-rebuild) sets _rebuild_pending instead of recursing, and
+        # the outer pass loops until clean (see _rebuild_items).
+        self._rebuilding = False
+        self._rebuild_pending = False
 
         # Stateless query helper for wire snapping / hit-testing. Reads the live
         # schematic through a getter so it stays valid across set_schematic().
@@ -221,6 +231,9 @@ class SchematicScene(QGraphicsScene):
         # flush the index). NoIndex updates the item list synchronously on
         # removeItem, eliminating the dangling pointer; linear hit-testing is a
         # non-issue for schematic-sized scenes that mutate this frequently.
+        # Together with _remove_item (which releases the mouse grab before any
+        # removal) and the _rebuild_items re-entrancy guard, this makes item
+        # teardown structurally safe rather than ordering-dependent.
         self.setItemIndexMethod(QGraphicsScene.ItemIndexMethod.NoIndex)
 
         self.setSceneRect(-20 * GRID_PX, -20 * GRID_PX, 200 * GRID_PX, 200 * GRID_PX)
@@ -1271,9 +1284,28 @@ class SchematicScene(QGraphicsScene):
         grabber, hover, and — under NoIndex — the item list), so the subsequent
         free can never dangle. Callers pass ``dict.pop(key)`` directly so the
         tracking entry and the scene item are dropped together.
+
+        **Grab safety (structural):** if the item being removed — or any of its
+        child items — currently holds the scene's mouse grab (a command was
+        pushed mid-gesture, e.g. from inside a mouse handler), the grab is
+        explicitly released *before* removal. Qt therefore never finalises a
+        drag against a freed item, regardless of where in an event handler the
+        removal happens; callers no longer need to sequence their pushes after
+        ``super().mouseReleaseEvent()`` for memory safety.
         """
-        if item is not None:
-            self.removeItem(item)
+        if item is None:
+            return
+        grabber = self.mouseGrabberItem()
+        if grabber is not None:
+            # Walk up from the grabber: removing an ancestor destroys the
+            # grabbing child with it, so the grab must be released first.
+            node = grabber
+            while node is not None:
+                if node is item:
+                    grabber.ungrabMouse()
+                    break
+                node = node.parentItem()
+        self.removeItem(item)
 
     def _rebuild_items(self) -> None:
         """Reconcile the scene's graphics items with the current model.
@@ -1288,8 +1320,42 @@ class SchematicScene(QGraphicsScene):
         item Qt is still finalizing its grab on, corrupting the scene's
         interaction state and leaving the next rebuilt item un-painted — the
         "component disappears on the second move" bug. Reusing live items keeps
-        Qt's grab valid across the command.
+        Qt's grab valid across the command. (Items that genuinely must go are
+        removed through ``_remove_item``, which releases the mouse grab first,
+        so even a removal mid-gesture cannot dangle.)
+
+        **Re-entrancy (structural):** the reconcile pass can re-enter itself —
+        ``removeItem``/``setSelected`` fire ``selectionChanged``, and a handler
+        on it (or on a signal it cascades to) may push a command, which calls
+        back into ``_rebuild_items`` synchronously. Recursing would reconcile
+        against a half-updated item map. Instead, a re-entrant call only flags
+        ``_rebuild_pending`` and returns; the outermost call loops until no new
+        request arrived, so the final pass always reflects the latest model
+        state and the synchronous model→items contract is preserved.
         """
+        if self._rebuilding:
+            # Re-entered from inside a reconcile pass (signal handler pushed a
+            # command). Defer: the outer pass reruns until clean.
+            _log.warning(
+                "re-entrant _rebuild_items call deferred (triggered from "
+                "within a rebuild — likely a selectionChanged/schematic_changed "
+                "handler mutating the model)"
+            )
+            self._rebuild_pending = True
+            return
+        self._rebuilding = True
+        try:
+            while True:
+                self._rebuild_pending = False
+                self._rebuild_items_now()
+                if not self._rebuild_pending:
+                    break
+        finally:
+            self._rebuilding = False
+
+    def _rebuild_items_now(self) -> None:
+        """One reconcile pass (the body of :meth:`_rebuild_items`); never call
+        directly — the wrapper provides the re-entrancy guard."""
         model_comp_ids = {c.id for c in self._schematic.components}
         model_wire_ids = {w.id for w in self._schematic.wires}
 
@@ -2222,9 +2288,15 @@ class SchematicScene(QGraphicsScene):
         # rebuilds the wire items with their real (snapped) geometry.
         self._drag.clear_component_drag_preview()
 
-        # Let Qt finish its own mouse-grab / drag bookkeeping FIRST. Pushing a
-        # command (which reconciles items) before this returns can run while Qt
-        # still treats the drag as in-progress, corrupting interaction state.
+        # Let Qt finish its own mouse-grab / drag bookkeeping before the commit
+        # below. This ordering is the natural flow but is NO LONGER load-bearing
+        # for memory safety: pushing a command mid-grab is structurally safe
+        # because (a) _remove_item releases the mouse grab before removing the
+        # grabbing item (or any ancestor of it), so Qt never finalises a drag
+        # against a freed item, and (b) _rebuild_items coalesces re-entrant
+        # reconcile requests instead of recursing. The commit itself reads the
+        # items' final snapped positions, which the release delivery does not
+        # change, so it does not depend on super() having run first.
         super().mouseReleaseEvent(event)
 
         if pending:

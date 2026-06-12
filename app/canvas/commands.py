@@ -48,11 +48,23 @@ from app.schematic.model import (
     coord_on_grid,
     is_box_kind,
     point_key,
-    route,
     route_pin_aware,
     simplify_points,
     snap_point,
-    wire_contained_by_others,
+)
+
+# The wire-reshape rules shared with the drag previews live in the Qt-free
+# app.schematic.reshape module; commands apply the computed results with their
+# undo bookkeeping. Re-exported here for backwards-compatible imports.
+from app.schematic.reshape import (  # noqa: F401  (re-exports)
+    WireReshapeResult,
+    _point_on_polyline,
+    compute_box_resize_reshape,
+    compute_move_reshape,
+    compute_pin_drag_reshape,
+    move_vertex_points as _move_vertex_points,
+    reshape_junction_wire,
+    reshape_wire_points,
 )
 
 __all__ = [
@@ -143,23 +155,6 @@ def _polyline_length(points: list[tuple[float, float]]) -> float:
     for (x0, y0), (x1, y1) in zip(points, points[1:]):
         total += abs(x1 - x0) + abs(y1 - y0)
     return total
-
-
-def _point_on_polyline(pt: tuple[float, float], points: list[tuple[float, float]]) -> bool:
-    """True if *pt* is a vertex of, or lies on any (axis-aligned) segment of, the
-    polyline *points* (inclusive of vertices). Used to detect a wire endpoint that
-    sits on another wire — a junction that must follow when that wire is moved.
-    All coordinate comparisons go through :func:`point_key` (float-noise guard)."""
-    px, py = point_key(pt)
-    if any(point_key(p) == (px, py) for p in points):
-        return True
-    for a, b in zip(points, points[1:]):
-        (ax, ay), (bx, by) = point_key(a), point_key(b)
-        if ax == bx and px == ax and min(ay, by) <= py <= max(ay, by):
-            return True
-        if ay == by and py == ay and min(ax, bx) <= px <= max(ax, bx):
-            return True
-    return False
 
 
 def _split_wire_into_halves(orig: Wire, half1_pts, half2_pts, id1, id2):
@@ -265,69 +260,6 @@ def _wire_touches_position(wire: Wire, pos: tuple[float, float]) -> bool:
     key = point_key(pos)
     return point_key(wire.points[0]) == key or point_key(wire.points[-1]) == key
 
-
-
-def _seg_elbow(
-    moved: tuple[float, float], neighbour: tuple[float, float]
-) -> tuple[float, float] | None:
-    """Elbow vertex between *moved* and *neighbour*, or None if already
-    axis-aligned. Keeps the path Manhattan after an endpoint shift.
-
-    Thin wrapper over the shared :func:`route` primitive (spec §6.4): the elbow
-    is the vertical-first corner ``(moved.x, neighbour.y)`` — i.e. vertical from
-    the moved endpoint, then horizontal into the neighbour. ``route`` returns
-    ``[moved, neighbour]`` (no corner) when the two are already axis-aligned, so
-    slicing the middle yields ``None`` here.
-    """
-    mid = route(moved, neighbour, vfirst=True)[1:-1]
-    return mid[0] if mid else None
-
-
-def reshape_wire_points(
-    points: list[tuple[float, float]],
-    *,
-    start_hit: bool,
-    end_hit: bool,
-    dx: float,
-    dy: float,
-    simplify: bool = True,
-) -> list[tuple[float, float]]:
-    """Return the points of a wire after a connected component moves by (dx,dy).
-
-    *start_hit* / *end_hit* say whether the wire's first / last vertex is
-    attached to a moving component's pin. Behaviour mirrors :class:`MoveCommand`
-    exactly (it is the shared implementation):
-
-    * both ends attached → rigid translation of the whole polyline;
-    * one end attached   → that endpoint shifts, with an auto-elbow inserted on
-      the adjacent segment if it would otherwise go diagonal.
-
-    When *simplify* is True the result is run through :func:`simplify_points` to
-    drop redundant collinear vertices. The live drag preview passes
-    ``simplify=False`` for smoother intermediate frames; the committed command
-    simplifies.
-    """
-    pts = list(points)
-    if len(pts) < 2 or not (start_hit or end_hit):
-        return pts
-
-    if start_hit and end_hit:
-        pts = [(x + dx, y + dy) for (x, y) in pts]
-    else:
-        if start_hit:
-            p, nb = pts[0], pts[1]
-            new_p = (p[0] + dx, p[1] + dy)
-            elbow = _seg_elbow(new_p, nb)
-            head = [new_p] + ([elbow] if elbow is not None else [])
-            pts = head + pts[1:]
-        else:  # end_hit
-            p, nb = pts[-1], pts[-2]
-            new_p = (p[0] + dx, p[1] + dy)
-            elbow = _seg_elbow(new_p, nb)
-            tail = ([elbow] if elbow is not None else []) + [new_p]
-            pts = pts[:-1] + tail
-
-    return simplify_points(pts) if simplify else pts
 
 
 # ---------------------------------------------------------------------------
@@ -551,14 +483,12 @@ class MoveCommand(Command):
     def _reshape_wires(self, schematic: Schematic) -> None:
         """Drag connected endpoints by the delta, inserting elbows as needed.
 
-        When every component in the schematic is being moved (select-all drag)
-        every wire translates rigidly so free endpoints (open-circle nodes)
-        move with the rest of the circuit.  Otherwise only endpoints that sit on
-        a moving pin are shifted; free endpoints stay anchored.
-
-        Wires that collapse to a single point (both endpoints moved to the same
-        coordinate) are removed from the schematic. Their original points are
-        still captured so undo can restore them.
+        The complete rule set (rigid translate / sole-lead endpoint test /
+        junction-tap follow / re-stretch leads / contained-wire removal) lives
+        in :func:`app.schematic.reshape.compute_move_reshape`, shared with the
+        drag previews so the ghost always matches this committed result. This
+        method applies the computed result and keeps the undo bookkeeping:
+        pristine originals, index-preserving restore, stable lead ids.
         """
         # "Move the whole circuit" only when components are actually being moved
         # and they are *all* of them. Guard against the empty-set case: a wire-only
@@ -568,147 +498,41 @@ class MoveCommand(Command):
         all_dragged = bool(self._component_ids) and (
             set(self._component_ids) >= {c.id for c in schematic.components}
         )
-        pins = self._connected_pin_set(schematic)
-        if not pins and not all_dragged and not self._explicit_wire_ids:
-            return
-        # How many wire endpoints coincide at each coordinate. A moving pin that
-        # sits on a *junction* (≥2 wire endpoints there) must NOT drag those wires:
-        # doing so tears the net apart when the component is dragged off the node
-        # (e.g. moving a capacitor back down off the rail junction it had been
-        # dragged onto would carry both rail stubs with it, leaving overlapping
-        # segments and a phantom dot). Only a pin that is the *sole* wire endpoint
-        # at its coordinate — a genuine lead — follows; on a shared junction the
-        # pin stays connected by a fresh **re-stretch lead** from the node to its
-        # new position (created below), leaving the existing net intact.
-        endpoint_count: dict[tuple[float, float], int] = {}
-        for w in schematic.wires:
-            if len(w.points) < 2:
-                continue
-            for end in (point_key(w.points[0]), point_key(w.points[-1])):
-                endpoint_count[end] = endpoint_count.get(end, 0) + 1
-        # Snapshot the pre-move geometry of explicitly-translated wires (whole-wire
-        # drag). Any OTHER wire joined at one of their vertices/segments — a
-        # junction tap — must follow at that shared point when the explicit wire
-        # moves rigidly, so the connection is preserved (spec §6.3 "keep connected").
-        explicit_orig = [
-            list(w.points) for w in schematic.wires
-            if w.id in self._explicit_wire_ids and len(w.points) >= 2
-        ]
+        result = compute_move_reshape(
+            schematic.wires,
+            moving_pins=self._connected_pin_set(schematic),
+            delta=(self._dx, self._dy),
+            explicit_wire_ids=self._explicit_wire_ids,
+            all_dragged=all_dragged,
+        )
 
-        def _on_explicit(p: tuple[float, float]) -> bool:
-            return any(_point_on_polyline(p, poly) for poly in explicit_orig)
-
-        to_remove: list[str] = []
+        # Capture the pristine path (and full wire + list position, for verbatim
+        # restore of a wire this move removes) once, for undo.
         for w_idx, wire in enumerate(schematic.wires):
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-
-            if all_dragged or wire.id in self._explicit_wire_ids:
-                start_hit = end_hit = True
-            else:
-                s_key, e_key = point_key(pts[0]), point_key(pts[-1])
-                start_hit = (
-                    (s_key in pins and endpoint_count.get(s_key, 0) == 1)
-                    or _on_explicit(pts[0])
-                )
-                end_hit = (
-                    (e_key in pins and endpoint_count.get(e_key, 0) == 1)
-                    or _on_explicit(pts[-1])
-                )
-                if not start_hit and not end_hit:
-                    continue
-
-            # Capture the pristine path (and full wire + list position, for
-            # verbatim restore of a wire this move removes) once, for undo.
-            if wire.id not in self._orig_wire_points:
+            if wire.id in result.new_points and wire.id not in self._orig_wire_points:
                 self._orig_wire_points[wire.id] = list(wire.points)
                 self._orig_wires[wire.id] = copy.deepcopy(wire)
                 self._orig_wire_index[wire.id] = w_idx
 
-            new_pts = reshape_wire_points(
-                pts,
-                start_hit=start_hit,
-                end_hit=end_hit,
-                dx=self._dx,
-                dy=self._dy,
-            )
-            if len(new_pts) < 2:
-                # Wire collapsed to a point — remove it.
-                to_remove.append(wire.id)
-            else:
-                wire.points = new_pts
-
-        if to_remove:
-            self._removed_wire_ids.update(to_remove)
+        # Apply the new geometry to survivors; drop collapsed/contained wires.
+        removed = set(result.removed_ids)
+        for wire in schematic.wires:
+            pts = result.new_points.get(wire.id)
+            if pts is not None and wire.id not in removed:
+                wire.points = list(pts)
+        if removed:
+            self._removed_wire_ids.update(removed)
             schematic.wires[:] = [
-                w for w in schematic.wires if w.id not in to_remove
+                w for w in schematic.wires if w.id not in removed
             ]
 
-        self._add_restretch_leads(schematic, pins, endpoint_count, all_dragged)
-        self._remove_contained_wires(schematic)
-
-    def _remove_contained_wires(self, schematic: Schematic) -> None:
-        """Drop any wire *this move touched* whose polyline now lies entirely on
-        top of other wires (a redundant, fully-contained wire — e.g. a lead
-        dragged collinearly onto the rail it connects to). Only wires reshaped or
-        created by this move are candidates, so an unrelated redundant wire
-        elsewhere is left alone. Removals are captured for exact undo."""
-        created_ids = {lead.id for lead in (self._created_leads or [])}
-        # Candidates: wires this move reshaped or created.
-        candidates = set(self._orig_wire_points) | created_ids
-        removed: list[str] = []
-        for wire in schematic.wires:
-            if wire.id not in candidates or len(wire.points) < 2:
-                continue  # untouched, or single-point (handled elsewhere)
-            others = [w for w in schematic.wires
-                      if w.id != wire.id and w.id not in removed]
-            if wire_contained_by_others(wire.points, others):
-                removed.append(wire.id)
-        if not removed:
-            return
-        for wid in removed:
-            if wid in created_ids:
-                # A re-stretch lead that turned out redundant — just don't keep it.
-                self._created_leads = [
-                    lead for lead in self._created_leads if lead.id != wid
-                ]
-            else:
-                if wid not in self._orig_wire_points:
-                    idx, w = next(
-                        (i, w) for i, w in enumerate(schematic.wires) if w.id == wid
-                    )
-                    self._orig_wire_points[wid] = list(w.points)
-                    self._orig_wires[wid] = copy.deepcopy(w)
-                    self._orig_wire_index[wid] = idx
-                self._removed_wire_ids.add(wid)
-        schematic.wires[:] = [w for w in schematic.wires if w.id not in removed]
-
-    def _add_restretch_leads(
-        self,
-        schematic: Schematic,
-        pins: set[tuple[float, float]],
-        endpoint_count: dict[tuple[float, float], int],
-        all_dragged: bool,
-    ) -> None:
-        """Keep a component connected when it is dragged off a multi-wire junction:
-        add a fresh lead from each such pin's node (its pre-move coordinate) to its
-        new position, so the net stays whole and the connection rubber-bands along
-        instead of snapping. No leads when the whole circuit translates rigidly
-        (everything moves together, nothing is left behind to reconnect to)."""
-        if all_dragged or (self._dx == 0.0 and self._dy == 0.0):
-            self._created_leads = self._created_leads or []
-            return
+        # Re-stretch leads: materialised once at the first do() so their ids are
+        # stable across undo/redo; re-added on redo, removed on undo.
         if self._created_leads is None:
-            leads: list[Wire] = []
-            for p in sorted(pins):
-                if endpoint_count.get(p, 0) < 2:
-                    continue  # free pin or a single lead that already followed
-                new_p = (p[0] + self._dx, p[1] + self._dy)
-                path = route(p, new_p)
-                if len(path) >= 2 and len(set(path)) >= 2:
-                    leads.append(Wire(id=str(uuid.uuid4()), points=path))
-            self._created_leads = leads
+            self._created_leads = [
+                Wire(id=str(uuid.uuid4()), points=[tuple(p) for p in path])
+                for path in result.lead_paths
+            ]
         existing = {w.id for w in schematic.wires}
         for lead in self._created_leads:
             if lead.id not in existing:
@@ -800,6 +624,27 @@ class ResizeCommand(Command):
         comp.span_override = orig
         return pins[1] if len(pins) > 1 else comp.position
 
+    def _apply_reshape_result(
+        self, schematic: Schematic, result: WireReshapeResult
+    ) -> None:
+        """Apply a pure reshape result with this command's undo bookkeeping:
+        capture pristine originals (first time only, with list positions for
+        index-preserving restore), set the new geometry on survivors, and
+        remove collapsed wires."""
+        for w_idx, wire in enumerate(schematic.wires):
+            if wire.id in result.new_points and wire.id not in self._orig_wire_points:
+                self._orig_wire_points[wire.id] = list(wire.points)
+                self._orig_wires[wire.id] = copy.deepcopy(wire)
+                self._orig_wire_index[wire.id] = w_idx
+        removed = set(result.removed_ids)
+        for wire in schematic.wires:
+            pts = result.new_points.get(wire.id)
+            if pts is not None and wire.id not in removed:
+                wire.points = list(pts)
+        if removed:
+            self._removed_wire_ids.update(removed)
+            schematic.wires[:] = [w for w in schematic.wires if w.id not in removed]
+
     def _reshape_wires(
         self,
         schematic: Schematic,
@@ -807,30 +652,13 @@ class ResizeCommand(Command):
         dx: float,
         dy: float,
     ) -> None:
-        pin_key = point_key(old_pin)
-        to_remove: list[str] = []
-        for w_idx, wire in enumerate(schematic.wires):
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            start_hit = point_key(pts[0]) == pin_key
-            end_hit = point_key(pts[-1]) == pin_key
-            if not start_hit and not end_hit:
-                continue
-            if wire.id not in self._orig_wire_points:
-                self._orig_wire_points[wire.id] = list(pts)
-                self._orig_wires[wire.id] = copy.deepcopy(wire)
-                self._orig_wire_index[wire.id] = w_idx
-            new_pts = reshape_wire_points(
-                pts, start_hit=start_hit, end_hit=end_hit, dx=dx, dy=dy
-            )
-            if len(new_pts) < 2:
-                to_remove.append(wire.id)
-            else:
-                wire.points = new_pts
-        if to_remove:
-            self._removed_wire_ids.update(to_remove)
-            schematic.wires[:] = [w for w in schematic.wires if w.id not in to_remove]
+        """Reshape wires connected to the relocated terminal pin. The rule is
+        the shared :func:`compute_pin_drag_reshape` (also used by the endpoint
+        drag preview); this applies it with undo bookkeeping."""
+        self._apply_reshape_result(
+            schematic,
+            compute_pin_drag_reshape(schematic.wires, old_pin=old_pin, dx=dx, dy=dy),
+        )
 
     def _reshape_wires_scaled(
         self,
@@ -840,70 +668,17 @@ class ResizeCommand(Command):
     ) -> None:
         """Reshape edge-connected wires as a box annotation (rect/circle) resizes.
 
-        The resize is an anchored scale about the box's fixed corner
-        (``position``): a connection point P maps to
-        ``position + (P - position) * (new_span / old_span)``, snapped to the
-        0.25 GU grid, so each connection point stays on its corresponding new
-        edge.  Points on the two edges through the anchored corner map to
-        themselves; the opposite edges translate; mid-edge points scale
-        proportionally.  The connection-point set is the kind's own
-        (`component_connection_points`): a rect's full perimeter, a circle's
-        four cardinal points.
+        The anchored-scale mapping of connection points lives in the shared
+        :func:`compute_box_resize_reshape` (also used by the box-resize drag
+        preview); this applies its result with undo bookkeeping.
         """
         comp = _find_component(schematic, self._component_id)
-        x0, y0 = comp.position
-        odx, ody = old_span
-        ndx, ndy = new_span
-
-        # Connection points under the OLD span (comp.span_override is already new).
-        orig_so = comp.span_override
-        comp.span_override = old_span
-        old_perim = {point_key(p) for p in _component_connection_points(comp)}
-        comp.span_override = orig_so
-
-        def _map(p: tuple[float, float]) -> tuple[float, float]:
-            px, py = p
-            fx = (px - x0) / odx if odx else 0.0
-            fy = (py - y0) / ody if ody else 0.0
-            return snap_point((x0 + fx * ndx, y0 + fy * ndy))
-
-        to_remove: list[str] = []
-        for w_idx, wire in enumerate(schematic.wires):
-            pts = wire.points
-            if len(pts) < 2:
-                continue
-            start_hit = point_key(pts[0]) in old_perim
-            end_hit = point_key(pts[-1]) in old_perim
-            start_tgt = _map(pts[0]) if start_hit else None
-            end_tgt = _map(pts[-1]) if end_hit else None
-            start_moves = start_tgt is not None and point_key(start_tgt) != point_key(pts[0])
-            end_moves = end_tgt is not None and point_key(end_tgt) != point_key(pts[-1])
-            if not start_moves and not end_moves:
-                continue
-            if wire.id not in self._orig_wire_points:
-                self._orig_wire_points[wire.id] = list(pts)
-                self._orig_wires[wire.id] = copy.deepcopy(wire)
-                self._orig_wire_index[wire.id] = w_idx
-            new_pts = list(pts)
-            if start_moves:
-                new_pts = reshape_wire_points(
-                    new_pts, start_hit=True, end_hit=False,
-                    dx=start_tgt[0] - new_pts[0][0],
-                    dy=start_tgt[1] - new_pts[0][1],
-                )
-            if end_moves:
-                new_pts = reshape_wire_points(
-                    new_pts, start_hit=False, end_hit=True,
-                    dx=end_tgt[0] - new_pts[-1][0],
-                    dy=end_tgt[1] - new_pts[-1][1],
-                )
-            if len(new_pts) < 2:
-                to_remove.append(wire.id)
-            else:
-                wire.points = new_pts
-        if to_remove:
-            self._removed_wire_ids.update(to_remove)
-            schematic.wires[:] = [w for w in schematic.wires if w.id not in to_remove]
+        self._apply_reshape_result(
+            schematic,
+            compute_box_resize_reshape(
+                comp, old_span=old_span, new_span=new_span, wires=schematic.wires
+            ),
+        )
 
     def do(self, schematic: Schematic) -> None:
         comp = _find_component(schematic, self._component_id)
@@ -1268,80 +1043,8 @@ class MergeWireCommand(Command):
         self.do(schematic)
 
 
-def _move_vertex_points(
-    points: list[tuple[float, float]],
-    idx: int,
-    new_point: tuple[float, float],
-) -> list[tuple[float, float]]:
-    """Move vertex *idx* to *new_point*, inserting horizontal-first elbows on any
-    adjacent segment that turned diagonal; returns the simplified point list
-    (may be < 2 points if the wire collapsed)."""
-    pts = list(points)
-    if not (0 <= idx < len(pts)):
-        return pts
-    pts[idx] = new_point
-    rebuilt: list[tuple[float, float]] = []
-    for j, p in enumerate(pts):
-        if j == 0:
-            rebuilt.append(p)
-            continue
-        prev = pts[j - 1]
-        if j == idx or j - 1 == idx:
-            mid = route(prev, p, vfirst=False)[1:-1]
-            if mid:
-                rebuilt.append(mid[0])
-        rebuilt.append(p)
-    return simplify_points(rebuilt)
-
-
-def reshape_junction_wire(
-    points: list[tuple[float, float]],
-    idx: int,
-    new_point: tuple[float, float],
-) -> list[tuple[float, float]]:
-    """Move a junction vertex (*idx*) to *new_point*, **preserving the orientation
-    of the segment that enters the junction** so a wire arriving vertically keeps
-    arriving vertically (and horizontally likewise).
-
-    Only endpoint junctions (``idx`` is 0 or the last index) are orientation-
-    preserved; an interior junction vertex falls back to a plain vertex move. The
-    terminal segment runs from the junction vertex to its neighbour:
-
-    * neighbour is an **interior corner** → relocate it along the terminal axis
-      (move its parallel coordinate to the new junction position), which keeps
-      both the terminal segment and the corner's other (perpendicular) segment
-      valid without inserting anything;
-    * neighbour is the **far endpoint** (2-point wire, can't be moved) → insert
-      an elbow whose first leg out of the junction keeps the original orientation.
-    """
-    pts = list(points)
-    n = len(pts)
-    if n < 2 or not (0 <= idx < n):
-        return pts
-    if idx not in (0, n - 1):
-        return _move_vertex_points(pts, idx, new_point)
-
-    nb = 1 if idx == 0 else n - 2
-    old = pts[idx]
-    nbp = pts[nb]
-    vertical = abs(nbp[0] - old[0]) < 1e-9    # terminal segment is vertical
-    pts[idx] = new_point
-
-    if 1 <= nb <= n - 2:
-        # Interior corner: slide it along the terminal axis to follow the move.
-        if vertical:
-            pts[nb] = (new_point[0], nbp[1])
-        else:
-            pts[nb] = (nbp[0], new_point[1])
-    else:
-        # Far endpoint: insert an orientation-preserving elbow.
-        if vertical:
-            corner = (new_point[0], nbp[1])
-        else:
-            corner = (nbp[0], new_point[1])
-        if corner != new_point and corner != nbp:
-            pts.insert(1 if idx == 0 else n - 1, corner)
-    return simplify_points(pts)
+# _move_vertex_points / reshape_junction_wire live in app.schematic.reshape
+# (shared with the vertex-drag preview); imported at the top of this module.
 
 
 class MoveWireVertexCommand(Command):

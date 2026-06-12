@@ -1074,6 +1074,44 @@ def test_wire_contained_by_others() -> None:
     assert wire_contained_by_others([(0.0, 0.0)], [long_h]) is False
 
 
+def test_wire_contained_tolerates_float_noise() -> None:
+    """Containment uses the point_key (6-dp) convention, not exact float
+    equality — float noise from off-grid pins (e.g. 0.1+0.2 vs 0.3) must not
+    hide a genuinely contained wire (regression)."""
+    noisy = 0.1 + 0.2                            # 0.30000000000000004 != 0.3
+    assert noisy != 0.3
+    # Noisy collinear row: a clean wire on y=0.3 covered by a noisy-y rail.
+    rail = _wire([(0.0, noisy), (4.0, noisy)], id="rail")
+    assert wire_contained_by_others([(1.0, 0.3), (3.0, 0.3)], [rail]) is True
+    # And the symmetric case: noisy candidate over a clean rail.
+    clean = _wire([(0.0, 0.3), (4.0, 0.3)], id="clean")
+    assert wire_contained_by_others([(1.0, noisy), (3.0, noisy)], [clean]) is True
+    # Noise in the covering interval's endpoints joins seamlessly too.
+    halves = [
+        _wire([(0.0, 0.3), (noisy + 1.7, 0.3)]),     # ends at ~2.0 (noisy)
+        _wire([(2.0, 0.3), (4.0, 0.3)]),
+    ]
+    assert wire_contained_by_others([(0.0, 0.3), (4.0, 0.3)], halves) is True
+    # A genuinely different row (beyond the 6-dp tolerance) is NOT collinear.
+    off_row = _wire([(0.0, 0.31), (4.0, 0.31)], id="off")
+    assert wire_contained_by_others([(1.0, 0.3), (3.0, 0.3)], [off_row]) is False
+
+
+def test_key_eps_derived_from_point_key_decimals() -> None:
+    """The coverage tolerance and the point key derive from one constant so the
+    two conventions cannot diverge."""
+    from app.schematic.model import KEY_EPS, _KEY_DECIMALS, point_key
+
+    assert KEY_EPS == 10.0 ** -_KEY_DECIMALS
+    # A coordinate pair point_key calls identical is within KEY_EPS…
+    a, b = 0.1 + 0.2, 0.3
+    assert point_key((a, 0.0)) == point_key((b, 0.0))
+    assert abs(a - b) < KEY_EPS
+    # …and one it distinguishes is well beyond it.
+    assert point_key((0.3, 0.0)) != point_key((0.31, 0.0))
+    assert abs(0.31 - 0.3) > KEY_EPS
+
+
 # ---------------------------------------------------------------------------
 # point_key / grid helpers / is_box_kind — the single connectivity convention
 # ---------------------------------------------------------------------------
