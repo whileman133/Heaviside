@@ -1688,13 +1688,16 @@ def test_build_snippet_has_no_document_wrapper() -> None:
 # ---------------------------------------------------------------------------
 
 def test_pdf_to_eps_missing_tool(monkeypatch) -> None:
-    """pdf_to_eps raises CompileError when pdftocairo is absent."""
+    """pdf_to_eps raises CompileError when BOTH converters are absent, and the
+    message names both install options."""
     from app.preview import latex, tools
 
     monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {})  # no local Inkscape
     tools.set_tool_paths({})  # no explicit override -> falls through to (patched) PATH
-    with pytest.raises(latex.CompileError, match="pdftocairo"):
+    with pytest.raises(latex.CompileError, match="pdftocairo") as exc:
         latex.pdf_to_eps(b"%PDF-1.4")
+    assert "Inkscape" in str(exc.value)
 
 
 @pytest.mark.skipif(
@@ -1719,13 +1722,95 @@ def test_pdf_to_eps_roundtrip() -> None:
 # ---------------------------------------------------------------------------
 
 def test_pdf_to_svg_missing_tool(monkeypatch) -> None:
-    """pdf_to_svg raises CompileError when pdftocairo is absent."""
+    """pdf_to_svg raises CompileError when BOTH converters are absent."""
     from app.preview import latex, tools
 
     monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {})  # no local Inkscape
     tools.set_tool_paths({})
     with pytest.raises(latex.CompileError, match="pdftocairo"):
         latex.pdf_to_svg(b"%PDF-1.4")
+
+
+# ---------------------------------------------------------------------------
+# Inkscape fallback for EPS/SVG export (§8.6) — used when Poppler is absent
+# ---------------------------------------------------------------------------
+
+def _runnable_stub(tmp_path, name: str) -> str:
+    exe = tmp_path / name
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    return str(exe)
+
+
+def test_vector_converter_prefers_pdftocairo(monkeypatch, tmp_path) -> None:
+    """With both converters available, Poppler wins (lighter, instant start)."""
+    from app.preview import latex, tools
+
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    tools.set_tool_paths({
+        "pdftocairo": _runnable_stub(tmp_path, "pdftocairo"),
+        "inkscape": _runnable_stub(tmp_path, "inkscape"),
+    })
+    try:
+        name, exe = latex.vector_converter()
+        assert name == "pdftocairo" and exe.endswith("pdftocairo")
+    finally:
+        tools.set_tool_paths({})
+
+
+def test_pdf_to_svg_falls_back_to_inkscape(monkeypatch, tmp_path) -> None:
+    """Without Poppler, the conversion runs Inkscape with the 1.x CLI args."""
+    import subprocess
+    from pathlib import Path
+
+    from app.preview import latex, tools
+
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {})
+    inkscape = _runnable_stub(tmp_path, "inkscape")
+    tools.set_tool_paths({"inkscape": inkscape})
+
+    seen: dict = {}
+
+    def fake_run(argv, *, cwd, capture_output, timeout):  # noqa: ANN001
+        seen["argv"] = argv
+        out = next(a for a in argv if a.startswith("--export-filename="))
+        Path(out.split("=", 1)[1]).write_bytes(b"<svg>fake</svg>")
+        return subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(latex.subprocess, "run", fake_run)
+    try:
+        out = latex.pdf_to_svg(b"%PDF-1.4")
+    finally:
+        tools.set_tool_paths({})
+
+    assert out == b"<svg>fake</svg>"
+    assert seen["argv"][0] == inkscape
+    assert seen["argv"][1].endswith("schematic.pdf")
+    assert "--export-type=svg" in seen["argv"]
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("pdflatex") is None
+    or __import__("app.preview.tools", fromlist=["resolve"]).resolve("inkscape") is None,
+    reason="requires pdflatex and Inkscape",
+)
+def test_pdf_to_svg_roundtrip_inkscape(monkeypatch) -> None:
+    """End-to-end: with Poppler masked out, a real Inkscape converts a compiled
+    schematic PDF to a valid SVG (exercises the actual 1.x CLI arguments)."""
+    from app.preview import latex, tools
+    from app.preview.latex import build_tex, compile_tex, pdf_to_svg
+
+    real_resolve = tools.resolve
+    monkeypatch.setattr(
+        latex._tools, "resolve",
+        lambda name: None if name == "pdftocairo" else real_resolve(name),
+    )
+    src = generate(_schematic(_comp("R")), y_flip=True)
+    pdf_bytes = compile_tex(build_tex(src))
+    svg_bytes = pdf_to_svg(pdf_bytes, timeout=120)
+    assert b"<svg" in svg_bytes[:1024]
 
 
 @pytest.mark.skipif(

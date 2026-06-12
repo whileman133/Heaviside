@@ -5,6 +5,39 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Auto-export defaults are now PDF + PNG.** Saving a schematic writes
+  `<name>.pdf` and `<name>.png` siblings by default — the two formats that
+  need only `pdflatex` (PDF is included natively by LyX/Overleaf; PNG is
+  rendered by the app's own PDF engine). The TeX snippet, EPS, and SVG
+  siblings are now opt-in (Preferences → Export); SVG/EPS are the only
+  formats needing a PDF→vector converter (Poppler or Inkscape), so a
+  converter-less system no longer fails an export on every save. Installs
+  that saved an explicit choice keep it; otherwise the sibling set changes
+  from `.tex`/`.svg`/`.png` to `.pdf`/`.png` until re-configured.
+
+### Added
+- **Inkscape works as the EPS/SVG export converter.** When Poppler's
+  `pdftocairo` isn't installed, EPS and SVG export now fall back automatically
+  to Inkscape (1.0+) — including Inkscape installs that aren't on `PATH` (the
+  macOS app bundle, Windows Program Files). Poppler remains preferred when
+  both are present; an explicit Inkscape path can be set in
+  Preferences → Tools.
+
+### Fixed
+- **Windows: no more console window flashing over the app on every render.**
+  Each `pdflatex`/`latex`/`dvisvgm`/converter run briefly opened a console
+  window on Windows; all tool subprocesses are now launched with
+  `CREATE_NO_WINDOW`.
+
+### Removed
+- **The welcome screen no longer shows the *Help ▸ Keyboard Shortcuts &
+  Gestures (F1)* hint line.** The screen now displays only the H(t) step
+  diagram; the full reference is still available from the Help menu, the
+  toolbar `?` button, and `F1`.
+
 ## [0.3.1] - 2026-06-12
 
 ### Fixed

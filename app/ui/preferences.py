@@ -90,9 +90,10 @@ class Preferences:
 
     @property
     def auto_export_tex(self) -> bool:
-        # On by default: the .tex snippet needs no LaTeX install, so keeping the
-        # paper's \input figure current on every save is free. See also SVG/PNG.
-        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=True)
+        # Off by default (though it needs no LaTeX install): the default
+        # sibling set is just PDF + PNG — the formats every consumer can use
+        # directly. Users embedding the CircuiTikZ source via \input opt in.
+        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=False)
 
     @auto_export_tex.setter
     def auto_export_tex(self, value: bool) -> None:
@@ -100,7 +101,11 @@ class Preferences:
 
     @property
     def auto_export_pdf(self) -> bool:
-        return _to_bool(self._settings.value(_KEY_AUTO_PDF), default=False)
+        # On by default: PDF is the figure format LyX/Overleaf/pdflatex include
+        # natively and it needs nothing beyond the pdflatex compile the preview
+        # already requires. A missing pdflatex fails the export non-fatally
+        # (status-bar notice), never the save itself.
+        return _to_bool(self._settings.value(_KEY_AUTO_PDF), default=True)
 
     @auto_export_pdf.setter
     def auto_export_pdf(self, value: bool) -> None:
@@ -116,10 +121,13 @@ class Preferences:
 
     @property
     def auto_export_svg(self) -> bool:
-        # On by default: SVG is the most broadly embeddable vector format. Needs
-        # pdflatex + pdftocairo (Poppler); a missing tool fails the save's export
-        # non-fatally (status-bar notice), never blocking the save itself.
-        return _to_bool(self._settings.value(_KEY_AUTO_SVG), default=True)
+        # Off by default: SVG is for destinations *outside* LaTeX (Office, web,
+        # vector editors) and is the only format needing a PDF→vector converter
+        # (pdftocairo, or Inkscape as the automatic fallback) — defaulting it on
+        # made every save by a converter-less user fail the export with a
+        # status-bar notice. The core LaTeX workflow (.tex + PDF/PNG) needs no
+        # converter; users who want .svg siblings opt in here.
+        return _to_bool(self._settings.value(_KEY_AUTO_SVG), default=False)
 
     @auto_export_svg.setter
     def auto_export_svg(self, value: bool) -> None:
@@ -239,8 +247,9 @@ class Preferences:
 
     # -- External tool paths -------------------------------------------------
     #
-    # Explicit paths to pdflatex/latex/dvisvgm/pdftocairo. Empty means "discover
-    # on PATH" (the default). Consumed by app.preview.tools via set_tool_paths.
+    # Explicit paths to pdflatex/latex/dvisvgm/pdftocairo/inkscape. Empty means
+    # "discover on PATH" (the default). Consumed by app.preview.tools via
+    # set_tool_paths.
 
     def tool_path(self, name: str) -> str:
         return str(self._settings.value(f"tools/{name}", "") or "")
@@ -326,9 +335,9 @@ class PreferencesDialog(QDialog):
             "When saving <name>.hv, also write <name>.tex / <name>.pdf / <name>.eps "
             "/ <name>.svg / <name>.png to the same folder so an \\input or "
             "\\includegraphics in your LaTeX document stays up to date.  The TeX "
-            "snippet needs nothing; PDF/EPS/SVG/PNG require pdflatex (and pdftocairo "
-            "for EPS/SVG). PNG resolution applies to both Copy PNG and PNG export "
-            "(300 dpi is publication grade)."
+            "snippet needs nothing; PDF/EPS/SVG/PNG require pdflatex (EPS/SVG also "
+            "need pdftocairo or Inkscape). PNG resolution applies to both Copy PNG "
+            "and PNG export (300 dpi is publication grade)."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(_hint_qss())

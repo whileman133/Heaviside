@@ -1922,9 +1922,8 @@ class _WelcomeScreen(QWidget):
     """
     Solid welcome screen shown in the canvas slot before any document is
     active.  Draws only the Heaviside unit step function H(t) as a centred
-    diagram, with a faint hint pointing to the Help dialog (the full keyboard-
-    shortcut and gesture reference lives in **Help ▸ Keyboard Shortcuts &
-    Gestures**, see :class:`_HelpDialog`).
+    diagram. (The full keyboard-shortcut and gesture reference lives in
+    **Help ▸ Keyboard Shortcuts & Gestures**, see :class:`_HelpDialog`.)
 
     Replaced by the live SchematicView (via QStackedWidget) as soon as the
     user creates/opens a document or begins component placement.
@@ -1941,7 +1940,6 @@ class _WelcomeScreen(QWidget):
         c_step = QColor(theme.WELCOME_STEP)
         c_axis = QColor(theme.WELCOME_AXIS)
         c_label = QColor(theme.WELCOME_LABEL)
-        c_hint = QColor(theme.WELCOME_HINT)
 
         # ---- step function (centred) -----------------------------------
         step_w  = min(w * 0.40, 260.0)
@@ -1981,17 +1979,6 @@ class _WelcomeScreen(QWidget):
         painter.setFont(ann_font)
         painter.drawText(QPointF(origin_x - 16, one_y + 5),  "1")
         painter.drawText(QPointF(right_x + 22,  zero_y + 5), "t")
-
-        # ---- hint pointing to the Help dialog --------------------------
-        hint_font = QFont()
-        hint_font.setPointSizeF(10.0)
-        painter.setFont(hint_font)
-        painter.setPen(QPen(c_hint))
-        painter.drawText(
-            QRectF(0, zero_y + 40, w, 20),
-            Qt.AlignHCenter | Qt.AlignTop,
-            "Help ▸ Keyboard Shortcuts & Gestures  (F1)",
-        )
 
 
 # ---------------------------------------------------------------------------

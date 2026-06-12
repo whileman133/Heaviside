@@ -8,52 +8,53 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. A desktop tool designed for researchers, educators, and engineers, integrating into LyX, Overleaf, and LaTeX workflows with minimum effort.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. Heaviside is a desktop tool for researchers, educators, and engineers that integrates into LaTeX, Overleaf, and LyX workflows with minimum effort.
 
 <table>
   <tr>
     <td align="center" colspan="2">
     <img src="docs/images/examples/boost-converter-light.png" alt="Boost converter example open in the Heaviside editor, light mode"><br>
-      <sub><b>Boost Converter</b> · Power Electronics · light mode</sub>
+      <sub><b>Boost Converter</b> · light mode</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
       <img src="docs/images/examples/porous-electrode-dark.png" alt="Porous electrode interface model open in the Heaviside editor, dark mode"><br>
-      <sub><b>Porous Electrode Interface</b> · Battery Models · dark mode</sub>
+      <sub><b>Porous Electrode Interface</b> · dark mode</sub>
     </td>
     <td align="center" width="50%">
       <img src="docs/images/examples/mux-4-1-dark.png" alt="4:1 multiplexer logic example open in the Heaviside editor, dark mode"><br>
-      <sub><b>4:1 MUX</b> · Logic Circuits · dark mode</sub>
+      <sub><b>4:1 MUX</b> · dark mode</sub>
     </td>
   </tr>
 </table>
 
-<p align="center"><sub>Bundled examples (<code>examples/</code>) open in the editor. The release pipeline re-captures these screenshots automatically, so they always match the latest release.</sub></p>
-
 ## Features
 
-* **CircuiTikZ, visually.** Draw on a grid-snapped canvas and get clean, publication-ready CircuiTikZ source — with a live compiled PDF preview as you work.
-* **Typeset math everywhere.** Component and wire labels are LaTeX (`$R_1$`, `$v(t)$`), rendered on the canvas as they'll appear in print.
+* **Grid-aligned CircuiTikZ.** Draw on a grid-snapped canvas and get clean, publication-ready CircuiTikZ source with a compiled PDF preview as you work.
+* **Typeset math.** Component and wire labels are LaTeX (`$R_1$`, `$v(t)$`), rendered on the canvas as they'll appear in print.
 * **Smart wiring.** Right-angle routing with automatic junction dots, open-terminal markers, and line hops at crossings.
-* **Symbols and blocks.** Passives, sources, semiconductors, op-amps, and configurable logic gates — plus boxes, circles, and free text for block diagrams.
-* **Exports that stay current.** Every save refreshes the `.tex` and compiled `.pdf`/`.svg`/`.eps` alongside your schematic, so your paper's figures never go stale.
-
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (1000+ tests) and spec are kept in sync.
+* **Symbols and blocks.** Passives, sources, semiconductors, op-amps, and configurable logic gates, plus boxes, circles, and free text for block diagrams.
+* **Exports that stay current.** Every save refreshes `.pdf` and `.png` siblings alongside your schematic — add `.tex`/`.svg`/`.eps` in Preferences — so your paper's figures never go stale.
 
 ## Download
 
-- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg) — drag to Applications. *(Intel Macs: [build from source](#building-from-source).)*
-- **Windows (x64)** → [Heaviside-windows-x64-setup.exe](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64-setup.exe) (installer) · [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip) (portable)
-- **Linux (x64)** → [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage) — `chmod +x`, then run · [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz) (portable)
+- **macOS**  
+    Apple Silicon: [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg)  
+    Intel: [build from source](#building-from-source)
+- **Windows (x64)**  
+    Installer: [Heaviside-windows-x64-setup.exe](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64-setup.exe)   
+    Portable: [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
+- **Linux (x64)**  
+    AppImage: [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage)  
+    Portable: [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz)
 
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 
-> **LaTeX is optional.** Everything works without it except the live PDF preview
-> and the PDF/EPS/SVG exports, which need `pdflatex` with the `circuitikz`
-> package on your `PATH` (EPS/SVG also need
-> [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo`). Custom tool paths:
-> **Preferences → Tools**.
+> **LaTeX is required for PDF preview and PDF/PNG exports.** These features need `pdflatex` with the `circuitikz`
+> package on your `PATH`. EPS/SVG also need
+> [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo` or
+> [Inkscape](https://inkscape.org/), used automatically when Poppler isn't installed.
 
 ## Getting started
 
@@ -68,12 +69,15 @@ All releases, with checksums and notes, on the [Releases page](https://github.co
    math, e.g. `$R_1$`), value, orientation, and style in the properties panel.
 5. **Watch the source and preview.** The CircuiTikZ source and a live compiled
    PDF preview update as you work. Press **Ctrl/Cmd+Return** to force a recompile.
-6. **Save once, export forever.** **File → Save** writes the `.hv` source and, on
-   every save, automatically refreshes the co-located `.tex` and image exports so
-   your paper's figures stay current. You can also export on demand from the
+6. **File → Save** writes the `.hv` source and, on
+   every save, automatically refreshes the co-located `.pdf` and `.png` exports so
+   your paper's figures stay current (add `.tex`/`.svg`/`.eps` siblings in
+   **Preferences → Export**). You can also export on demand from the
    **File → Export** menu (`.tex`, `.pdf`, `.svg`, `.eps`, `.png`).
 
 ## Architecture
+
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (1000+ tests) and spec are kept in sync.
 
 Heaviside is split into a **View** layer built on Qt and a
 **Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.

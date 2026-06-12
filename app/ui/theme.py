@@ -41,7 +41,6 @@ _LIGHT = {
     "WELCOME_STEP":  "#c85078af",
     "WELCOME_AXIS":  "#b4a0afbe",
     "WELCOME_LABEL": "#d26482aa",
-    "WELCOME_HINT":  "#c8788ca5",
 }
 _DARK = {
     "SURFACE":       "#2a2c30",
@@ -65,7 +64,6 @@ _DARK = {
     "WELCOME_STEP":  "#c88fb3e8",
     "WELCOME_AXIS":  "#b475828f",
     "WELCOME_LABEL": "#d295b0d8",
-    "WELCOME_HINT":  "#c88a9ab5",
 }
 
 SURFACE = _LIGHT["SURFACE"]
@@ -89,7 +87,6 @@ TABLE_HEADER_BG = _LIGHT["TABLE_HEADER_BG"]
 WELCOME_STEP = _LIGHT["WELCOME_STEP"]
 WELCOME_AXIS = _LIGHT["WELCOME_AXIS"]
 WELCOME_LABEL = _LIGHT["WELCOME_LABEL"]
-WELCOME_HINT = _LIGHT["WELCOME_HINT"]
 
 
 def set_dark(on: bool) -> None:

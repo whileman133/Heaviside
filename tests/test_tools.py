@@ -74,3 +74,83 @@ def test_is_runnable(tmp_path):
     assert tools.is_runnable(str(tmp_path / "missing")) is False
     assert tools.is_runnable(str(tmp_path)) is False  # a directory is not runnable
     assert tools.is_runnable("") is False
+
+
+def test_inkscape_is_a_known_tool():
+    """"inkscape" is a first-class tool: overridable in Preferences → Tools and
+    persisted like the others (the dialog builds its rows from TOOLS)."""
+    assert "inkscape" in tools.TOOLS
+
+
+def test_extra_candidates_resolve_when_path_misses(tmp_path, monkeypatch):
+    """A tool absent from PATH resolves through its well-known install
+    locations (Inkscape's installers don't put the CLI binary on PATH)."""
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    exe = _make_exe(tmp_path / "inkscape")
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {"inkscape": (exe,)})
+    assert tools.resolve("inkscape") == exe
+
+
+def test_extra_candidates_skip_nonrunnable(tmp_path, monkeypatch):
+    """A candidate that doesn't exist (or isn't executable) is ignored."""
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    missing = str(tmp_path / "nope" / "inkscape")
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {"inkscape": (missing,)})
+    assert tools.resolve("inkscape") is None
+
+
+def test_override_beats_extra_candidates(tmp_path, monkeypatch):
+    """An explicit configured path wins over the well-known locations."""
+    monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    candidate = _make_exe(tmp_path / "candidate-inkscape")
+    override = _make_exe(tmp_path / "my-inkscape")
+    monkeypatch.setattr(tools, "_EXTRA_TOOL_CANDIDATES", {"inkscape": (candidate,)})
+    tools.set_tool_paths({"inkscape": override})
+    assert tools.resolve("inkscape") == override
+
+
+def test_run_kwargs_hides_console_window_on_windows(monkeypatch):
+    """On Windows the tool subprocesses must be launched with CREATE_NO_WINDOW —
+    without it, every pdflatex/dvisvgm run flashes a console window over the
+    (windowed, no-console) app."""
+    monkeypatch.setattr(tools.platform, "system", lambda: "Windows")
+    kwargs = tools.run_kwargs()
+    assert kwargs.get("creationflags") == getattr(
+        tools.subprocess, "CREATE_NO_WINDOW", 0x08000000
+    )
+
+
+def test_run_kwargs_empty_off_windows(monkeypatch):
+    """creationflags is Windows-only; other platforms must add nothing."""
+    monkeypatch.setattr(tools.platform, "system", lambda: "Linux")
+    assert tools.run_kwargs() == {}
+
+
+def test_compile_tex_forwards_run_kwargs(monkeypatch, tmp_path):
+    """The pdflatex invocation actually passes the platform kwargs through
+    (regression: the console-window flash on Windows)."""
+    from pathlib import Path
+
+    from app.preview import latex
+
+    captured: dict = {}
+
+    class _Done:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def _fake_run(cmd, *args, **kwargs):
+        captured.update(kwargs)
+        (Path(kwargs["cwd"]) / "schematic.pdf").write_bytes(b"%PDF-1.4\n%%EOF\n")
+        return _Done()
+
+    monkeypatch.setattr(tools.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(tools.shutil, "which", lambda _name: "/usr/bin/pdflatex")
+    monkeypatch.setattr(latex.subprocess, "run", _fake_run)
+
+    latex.compile_tex(r"\documentclass{standalone}\begin{document}x\end{document}")
+
+    assert captured["creationflags"] == getattr(
+        tools.subprocess, "CREATE_NO_WINDOW", 0x08000000
+    )

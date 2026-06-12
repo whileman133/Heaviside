@@ -27,6 +27,8 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from app.preview import tools as _tools
+
 # 1 GU == 1 cm in CircuiTikZ; \the\pgf@x reports a TeX-point dimension (1 cm =
 # 72.27/2.54 pt).  Anchor dumps are divided by this to get GU.
 TEXPT_PER_GU: float = 72.27 / 2.54  # = 28.452756
@@ -100,6 +102,7 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
             ["latex", "-no-shell-escape", "-interaction=nonstopmode",
              "-output-directory", str(work), "sym.tex"],
             capture_output=True, text=True, cwd=work, timeout=60,
+            **_tools.run_kwargs(),
         )
         if not (work / "sym.dvi").exists():
             raise RenderError("latex failed to produce a DVI", r.stdout)
@@ -107,6 +110,7 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
         rs = subprocess.run(
             ["dvisvgm", "--no-fonts", str(work / "sym.dvi"), "-o", str(svg)],
             capture_output=True, text=True, cwd=work, env=_render_env(), timeout=60,
+            **_tools.run_kwargs(),
         )
         if not svg.exists() or "0pt x 0pt" in rs.stderr:
             raise RenderError("dvisvgm failed (Ghostscript/LIBGS?)", r.stdout + rs.stderr)

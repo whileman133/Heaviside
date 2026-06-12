@@ -1798,7 +1798,11 @@ A rendered PDF preview of the complete schematic is produced by:
    party and label/text fields are emitted verbatim into the generated LaTeX,
    disabling shell-escape explicitly guarantees a crafted label can never invoke
    `\write18` / external commands, independent of the local TeX installation's
-   default. Covered by `tests/test_latex_security.py`.
+   default. Covered by `tests/test_latex_security.py`. On Windows every tool
+   subprocess (pdflatex, latex, dvisvgm, pdftocairo/inkscape) is additionally
+   launched with `CREATE_NO_WINDOW` (`tools.run_kwargs()`): the app ships as a
+   windowed (no-console) executable, so a console child would otherwise flash
+   its own console window over the app on every render.
 3. Rendering the output PDF page to a `QImage` with Qt's own PDF engine
    (`PySide6.QtPdf.QPdfDocument`) — `pdf_to_qimage()` loads the PDF bytes from an
    in-memory `QBuffer` and renders page 0 at the worker's DPI. No external
@@ -1933,6 +1937,18 @@ in a LaTeX document (or any other consumer). All reuse the §8.1 compile pipelin
    beyond the one EPS already requires. The standalone PDF is already cropped
    tight, so the SVG inherits that extent. Both share the `_pdf_to_vector` helper.
 
+   **Converter selection (`vector_converter()`).** Both EPS and SVG pick their
+   converter the same way: `pdftocairo` when it resolves (preferred — Poppler
+   is lightweight and starts instantly), otherwise **Inkscape** (1.x CLI:
+   `inkscape <pdf> --export-type=<eps|svg> --export-filename=<out>`), so users
+   who already have Inkscape installed need no Poppler at all. Inkscape is a
+   first-class tool in `tools.TOOLS` (Preferences → Tools override, §10.8) and
+   resolution additionally checks its well-known install locations
+   (`_EXTRA_TOOL_CANDIDATES`: the macOS `.app` binary and Windows
+   `Program Files\Inkscape\bin`), because Inkscape's installers do not put the
+   CLI on `PATH`. With neither converter available, `_pdf_to_vector` raises a
+   `CompileError` naming both install options.
+
 5. **PNG export** renders the compiled PDF to a `QImage` via `pdf_to_qimage`
    (QtPdf — no extra dependency) at the **PNG resolution** preference (default 300
    dpi, §10.8) and saves it with `QImage.save`.
@@ -1960,10 +1976,10 @@ pasted. Needs `pdflatex`; failures report as for export.
 ### 8.7 Dependencies
 
 - `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Checked at startup (`check_dependencies`); a warning dialog is shown if not found.
-- **Tool discovery.** Which binary runs for each external tool (`pdflatex`, `latex`, `dvisvgm`, `pdftocairo`) is resolved by `app/preview/tools.py`: an explicit **user-configured path** (Preferences → Tools, §10.8) wins when it points at a runnable file, otherwise the tool is looked up on the `PATH` (augmented on macOS with common install dirs a Finder/Dock launch would not inherit). The UI pushes the configured paths into `tools.set_tool_paths()` at startup and when preferences change; `tools` has no Qt dependency, so the codegen/preview modules never touch `QSettings`.
+- **Tool discovery.** Which binary runs for each external tool (`pdflatex`, `latex`, `dvisvgm`, `pdftocairo`, `inkscape`) is resolved by `app/preview/tools.py`: an explicit **user-configured path** (Preferences → Tools, §10.8) wins when it points at a runnable file, otherwise the tool is looked up on the `PATH` (augmented on macOS with common install dirs a Finder/Dock launch would not inherit), and finally any well-known install locations for that tool (`_EXTRA_TOOL_CANDIDATES` — Inkscape's macOS `.app` and Windows `Program Files` binaries). The UI pushes the configured paths into `tools.set_tool_paths()` at startup and when preferences change; `tools` has no Qt dependency, so the codegen/preview modules never touch `QSettings`.
 - **On-canvas equation labels need no LaTeX.** They render via the bundled, pure-Python **ziamath** engine when `latex`/`dvisvgm` are absent (§8.4); when those are present the higher-fidelity LaTeX engine is used instead. So drawing, typeset canvas labels, CircuiTikZ source generation, and the `.tex` export all work with no LaTeX install — only the PDF preview and image exports require it.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
-- `pdftocairo` (Poppler) is required **only** for EPS and SVG export (§8.6). It is checked on demand in `pdf_to_eps`/`pdf_to_svg` (not at startup), so users who never export EPS or SVG are not warned about a missing Poppler.
+- A PDF→vector converter — `pdftocairo` (Poppler, preferred) **or** `inkscape` (automatic fallback) — is required **only** for EPS and SVG export (§8.6). It is checked on demand in `pdf_to_eps`/`pdf_to_svg` (not at startup), so users who never export EPS or SVG are not warned about a missing converter.
 - The `circuitikz` LaTeX package must be installed in the TeX distribution (for the preview and image exports).
 
 ---
@@ -2233,10 +2249,8 @@ packaged end-user build, which ships no toolchain, hides it.
 **Welcome screen.** The canvas slot is a `QStackedWidget`: page 0 is a painted
 `_WelcomeScreen`, page 1 is the live `SchematicView`. Before any document is
 active the welcome screen shows **only** the Heaviside unit step function H(t)
-as a centred diagram, with one faint hint line pointing to the Help dialog
-(*Help ▸ Keyboard Shortcuts & Gestures (F1)*). The screen is replaced (one-way)
-by the live view as soon as a document is created/opened or component placement
-begins.
+as a centred diagram. The screen is replaced (one-way) by the live view as soon
+as a document is created/opened or component placement begins.
 
 **Help dialog.** The full shortcut and gesture reference lives in
 `_HelpDialog`, opened from **Help ▸ Keyboard Shortcuts & Gestures** (shortcut
@@ -2503,16 +2517,16 @@ Current settings:
 
 | Setting | Key | Default | Effect |
 |---------|-----|---------|--------|
-| Auto-export TeX on save | `export/auto_tex_on_save` | **on** | After a successful save of `<name>.hv`, also write the includable `<name>.tex` snippet (§8.5) to the same directory. Pure Python — needs no LaTeX install. |
-| Auto-export PDF on save | `export/auto_pdf_on_save` | off | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. |
+| Auto-export TeX on save | `export/auto_tex_on_save` | off | After a successful save of `<name>.hv`, also write the includable `<name>.tex` snippet (§8.5) to the same directory. Pure Python — needs no LaTeX install — but off by default: the default sibling set is just PDF + PNG; users embedding the source via `\input` opt in. |
+| Auto-export PDF on save | `export/auto_pdf_on_save` | **on** | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. On by default: PDF is the figure format LyX/Overleaf/pdflatex include natively, and it needs nothing beyond the pdflatex compile the preview already requires. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
-| Auto-export SVG on save | `export/auto_svg_on_save` | **on** | After a successful save, also write `<name>.svg` to the same directory. Needs pdflatex + pdftocairo; a missing tool fails this export non-fatally (status bar), never the save. |
+| Auto-export SVG on save | `export/auto_svg_on_save` | **off** | After a successful save, also write `<name>.svg` to the same directory. Off by default: SVG serves non-LaTeX destinations and is the only format needing a PDF→vector converter (pdftocairo or Inkscape, §8.6) — defaulting it on made converter-less saves fail the export with a status-bar notice on every save. A missing tool still fails this export non-fatally (status bar), never the save. |
 | Auto-export PNG on save | `export/auto_png_on_save` | **on** | After a successful save, also write `<name>.png` (rendered at the PNG-resolution preference) to the same directory. Needs pdflatex. |
 | PNG resolution | `export/png_dpi` | **300** | Dots-per-inch for **Copy PNG** and **PNG export / auto-export** (300 dpi is publication grade). A spin box (72–1200) in the Auto-export group. The accessor **clamps the stored value to 72–1200 on read**, so a corrupt or hand-edited settings file cannot drive a pathological render size. |
 | Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
 | Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
-| Tool paths | `tools/pdflatex`, `tools/latex`, `tools/dvisvgm`, `tools/pdftocairo` | empty (auto-detect) | Explicit path to each external tool (§8.7). Blank = discover on `PATH`. A **Tools** group in the dialog provides a field + **Browse…** per tool with live status (found-on-PATH / will-use-this-path / not-found). Applied via `tools.set_tool_paths()` on accept, then the dependency check, label re-typeset, and recompile re-run. |
+| Tool paths | `tools/pdflatex`, `tools/latex`, `tools/dvisvgm`, `tools/pdftocairo`, `tools/inkscape` | empty (auto-detect) | Explicit path to each external tool (§8.7). Blank = discover on `PATH`. A **Tools** group in the dialog provides a field + **Browse…** per tool with live status (found-on-PATH / will-use-this-path / not-found). Applied via `tools.set_tool_paths()` on accept, then the dependency check, label re-typeset, and recompile re-run. |
 
 When any is enabled, `_do_save()` calls `_auto_export()`. The `.tex` snippet is
 generated directly (`generate()` → `build_snippet()`, pure Python — **no LaTeX
@@ -2614,7 +2628,7 @@ heaviside/
 │   │   └── circuitikz.py          # generate(schematic) → str
 │   ├── preview/
 │   │   ├── worker.py              # PreviewWorker(QThread)
-│   │   ├── tools.py               # external-tool path resolution (pdflatex/latex/dvisvgm/pdftocairo)
+│   │   ├── tools.py               # external-tool path resolution (pdflatex/latex/dvisvgm/pdftocairo/inkscape)
 │   │   ├── mathrender.py          # on-canvas math labels → QPainterPath (latex or ziamath engine)
 │   │   └── latex.py               # build_tex / build_snippet / pdf_to_eps / pdf_to_svg, helpers
 │   └── ui/
@@ -2941,7 +2955,8 @@ The following must be installed separately from uv — they are not Python packa
 |------------|---------|---------|
 | `pdflatex` | Compiling LaTeX previews | TeX Live (`texlive-full`) or MiKTeX |
 | `circuitikz` | LaTeX package for circuit diagrams | Included in `texlive-science` or MiKTeX package manager |
-| `pdftocairo` *(optional)* | PDF→EPS/SVG conversion for **EPS and SVG export only** | Poppler (`poppler-utils` on Debian/Ubuntu) |
+| `pdftocairo` *(optional)* | PDF→EPS/SVG conversion for **EPS and SVG export only** (preferred converter) | Poppler (`poppler-utils` on Debian/Ubuntu) |
+| `inkscape` *(optional)* | PDF→EPS/SVG conversion fallback when Poppler is absent (Inkscape ≥ 1.0) | [inkscape.org](https://inkscape.org/) |
 
 The PDF preview is rendered by the `QtPdf` module bundled with PySide6, so no Poppler is needed for normal use. The application checks for `pdflatex` on the system `PATH` at startup and shows a warning dialog if it is missing; `pdftocairo` is checked only when EPS or SVG export is invoked.
 
@@ -3127,8 +3142,9 @@ SECURITY header comment in their output.
 
 The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
 isolated `QSettings` backed by a temp INI file (never touching the real user
-store): **TeX/SVG/PNG auto-export default on and PDF/EPS off**
-(`test_export_defaults`), mark-unconnected-pins defaults off, **line-hops
+store): **PDF/PNG auto-export default on and TeX/EPS/SVG off**
+(`test_export_defaults` — the two defaults need only pdflatex),
+mark-unconnected-pins defaults off, **line-hops
 defaults on** (`test_line_hops_default_on_and_roundtrip`); TeX/PDF/EPS/SVG/PNG, the
 `force_ziamath` render flag, and the display flags round-trip and persist across
 new `Preferences` instances over the
@@ -3162,6 +3178,20 @@ when it points at a runnable file; a non-runnable override is ignored and
 resolution falls back to `PATH`; `resolve` is `None` when neither yields a tool;
 a blank value clears an override; `set_tool_paths` ignores unknown keys; and
 `is_runnable` accepts only existing executable files (not directories or blanks).
+The **well-known-location tier** is covered too: `inkscape` is a first-class
+tool in `TOOLS`; a tool absent from `PATH` resolves through
+`_EXTRA_TOOL_CANDIDATES`; a non-runnable candidate is skipped; and an explicit
+override beats the candidates. The **EPS/SVG converter selection** (§8.6) is
+pinned in `test_codegen.py`: with both converters available `vector_converter`
+prefers `pdftocairo`; without Poppler the conversion runs Inkscape with the
+1.x CLI arguments (`--export-type`/`--export-filename`); with neither, the
+`CompileError` names both install options; and a **gated end-to-end** test
+(`test_pdf_to_svg_roundtrip_inkscape`, requires pdflatex + a real Inkscape)
+masks Poppler out and converts a compiled schematic PDF through Inkscape.
+The **Windows console suppression** (§8.1) is pinned too: `run_kwargs()`
+returns `creationflags=CREATE_NO_WINDOW` on Windows and `{}` elsewhere, and
+`compile_tex` forwards it to `subprocess.run` (regression for the console
+window that flashed over the app on every render).
 
 #### README gallery screenshots (`test_screenshots.py`)
 

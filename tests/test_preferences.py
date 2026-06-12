@@ -32,21 +32,22 @@ def prefs(tmp_path) -> Preferences:
 
 
 def test_export_defaults(prefs: Preferences) -> None:
-    """A fresh store reports TeX/SVG/PNG auto-export on, PDF/EPS off."""
-    assert prefs.auto_export_tex is True
-    assert prefs.auto_export_svg is True
+    """A fresh store reports PDF/PNG auto-export on — the two formats needing
+    only pdflatex — and TeX/EPS/SVG off (opt-in)."""
+    assert prefs.auto_export_pdf is True
     assert prefs.auto_export_png is True
-    assert prefs.auto_export_pdf is False
+    assert prefs.auto_export_tex is False
     assert prefs.auto_export_eps is False
+    assert prefs.auto_export_svg is False
     assert prefs.force_ziamath is False  # auto engine selection by default
 
 
 def test_roundtrip_tex(prefs: Preferences) -> None:
-    assert prefs.auto_export_tex is True  # defaults on
-    prefs.auto_export_tex = False
-    assert prefs.auto_export_tex is False
+    assert prefs.auto_export_tex is False  # defaults off (PDF/PNG are the defaults)
     prefs.auto_export_tex = True
     assert prefs.auto_export_tex is True
+    prefs.auto_export_tex = False
+    assert prefs.auto_export_tex is False
 
 
 def test_tool_paths_default_empty(prefs: Preferences) -> None:
@@ -88,11 +89,11 @@ def test_roundtrip_eps(prefs: Preferences) -> None:
 
 
 def test_roundtrip_svg(prefs: Preferences) -> None:
-    assert prefs.auto_export_svg is True  # defaults on
-    prefs.auto_export_svg = False
-    assert prefs.auto_export_svg is False
+    assert prefs.auto_export_svg is False  # defaults off (converter-dependent)
     prefs.auto_export_svg = True
     assert prefs.auto_export_svg is True
+    prefs.auto_export_svg = False
+    assert prefs.auto_export_svg is False
 
 
 def test_persists_across_instances(tmp_path) -> None:

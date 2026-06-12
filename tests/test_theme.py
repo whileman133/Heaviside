@@ -80,7 +80,7 @@ def test_palettes_define_matching_token_sets() -> None:
     the dialog/welcome tokens added for dark-mode readability are present."""
     assert set(theme._LIGHT) == set(theme._DARK)
     for token in ("TEXT_MUTED", "HEADING", "TABLE_KEY", "TABLE_HEADER_BG",
-                  "WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL", "WELCOME_HINT"):
+                  "WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL"):
         assert token in theme._LIGHT
         assert getattr(theme, token) == theme._LIGHT[token]
 
@@ -88,7 +88,7 @@ def test_palettes_define_matching_token_sets() -> None:
 def test_welcome_tokens_carry_alpha() -> None:
     """The welcome diagram tokens are #AARRGGBB strings (QColor's alpha form),
     and they differ between light and dark so the diagram stays readable."""
-    for token in ("WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL", "WELCOME_HINT"):
+    for token in ("WELCOME_STEP", "WELCOME_AXIS", "WELCOME_LABEL"):
         for palette in (theme._LIGHT, theme._DARK):
             value = palette[token]
             assert value.startswith("#") and len(value) == 9

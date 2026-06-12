@@ -220,12 +220,14 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
                 [latex_exe, "-no-shell-escape", "-interaction=nonstopmode",
                  "-halt-on-error", "m.tex"],
                 cwd=tmp, capture_output=True, timeout=timeout,
+                **_tools.run_kwargs(),
             )
             if r.returncode != 0 or not (tmp_path / "m.dvi").exists():
                 return None
             r = subprocess.run(
                 [dvisvgm_exe, "--no-fonts", "m.dvi", "-o", "m.svg"],
                 cwd=tmp, capture_output=True, timeout=timeout,
+                **_tools.run_kwargs(),
             )
             svg_file = tmp_path / "m.svg"
             if r.returncode != 0 or not svg_file.exists():

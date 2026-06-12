@@ -220,6 +220,7 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
                 cwd=tmp,
                 capture_output=True,
                 timeout=timeout,
+                **_tools.run_kwargs(),
             )
         except subprocess.TimeoutExpired as exc:
             raise CompileError(
@@ -245,15 +246,31 @@ def compile_tex(tex_source: str, *, timeout: int = 30) -> bytes:
 # PDF → EPS
 # ---------------------------------------------------------------------------
 
-def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout: int) -> bytes:
-    """Convert *pdf_bytes* to a vector format with ``pdftocairo`` (Poppler).
+def vector_converter() -> tuple[str, str] | None:
+    """The PDF→EPS/SVG converter to use: ``(tool_name, executable)`` or ``None``.
 
-    *flag* is the pdftocairo output flag (``-eps`` / ``-svg``), *ext* the output
-    file extension, and *label* the human-readable format name used in error
-    messages.  Both EPS and SVG export use the same Poppler tool — SVG adds no
-    dependency beyond what EPS already requires.  The preview itself is rendered
-    by Qt (see :func:`pdf_to_qimage`), so a missing Poppler only affects these
-    on-demand exports and is reported clearly here.
+    ``pdftocairo`` (Poppler) is preferred — it is lightweight and starts
+    instantly. ``inkscape`` (1.x) is the automatic fallback, so users who
+    already have Inkscape installed need no Poppler at all. A configured path
+    in Preferences → Tools wins for either tool (per :func:`tools.resolve`).
+    """
+    for name in ("pdftocairo", "inkscape"):
+        exe = _tools.resolve(name)
+        if exe is not None:
+            return name, exe
+    return None
+
+
+def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout: int) -> bytes:
+    """Convert *pdf_bytes* to a vector format (EPS/SVG).
+
+    Runs the converter chosen by :func:`vector_converter`: ``pdftocairo``
+    (*flag* is its output flag, ``-eps``/``-svg``) or, when Poppler is absent,
+    ``inkscape`` (1.x CLI: ``--export-type=<ext>``). *ext* is the output file
+    extension and *label* the human-readable format name used in error
+    messages. The preview itself is rendered by Qt (see :func:`pdf_to_qimage`),
+    so having neither converter only affects these on-demand exports and is
+    reported clearly here.
 
     The conversion happens in a fresh temporary directory that is removed
     afterward regardless of outcome.
@@ -261,15 +278,18 @@ def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout
     Raises
     ------
     CompileError
-        If ``pdftocairo`` is not found (PATH or a configured path), exits
-        non-zero, times out, or produces no output.
+        If no converter is found (PATH, well-known locations, or a configured
+        path), or the chosen one exits non-zero, times out, or produces no
+        output.
     """
-    pdftocairo = _tools.resolve("pdftocairo")
-    if pdftocairo is None:
+    converter = vector_converter()
+    if converter is None:
         raise CompileError(
-            "pdftocairo not found. Install Poppler (poppler-utils) to enable "
-            f"{label} export, or set its path in Preferences → Tools."
+            f"No PDF→{label} converter found. Install Poppler (pdftocairo) or "
+            f"Inkscape to enable {label} export, or set a path in "
+            "Preferences → Tools."
         )
+    tool, exe = converter
 
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
@@ -277,24 +297,35 @@ def _pdf_to_vector(pdf_bytes: bytes, *, flag: str, ext: str, label: str, timeout
         out_file = tmp_path / f"schematic.{ext}"
         pdf_file.write_bytes(pdf_bytes)
 
+        if tool == "pdftocairo":
+            argv = [exe, flag, str(pdf_file), str(out_file)]
+        else:  # inkscape ≥ 1.0
+            argv = [
+                exe,
+                str(pdf_file),
+                f"--export-type={ext}",
+                f"--export-filename={out_file}",
+            ]
+
         try:
             result = subprocess.run(
-                [pdftocairo, flag, str(pdf_file), str(out_file)],
+                argv,
                 cwd=tmp,
                 capture_output=True,
                 timeout=timeout,
+                **_tools.run_kwargs(),
             )
         except subprocess.TimeoutExpired as exc:
-            raise CompileError(f"pdftocairo timed out after {timeout}s.") from exc
+            raise CompileError(f"{tool} timed out after {timeout}s.") from exc
 
         if result.returncode != 0:
             log = result.stderr.decode("utf-8", errors="replace")
             raise CompileError(
-                f"pdftocairo exited with code {result.returncode}.", log=log
+                f"{tool} exited with code {result.returncode}.", log=log
             )
 
         if not out_file.exists():
-            raise CompileError(f"pdftocairo produced no {label} output.")
+            raise CompileError(f"{tool} produced no {label} output.")
 
         return out_file.read_bytes()
 

@@ -1,16 +1,20 @@
 """
 Resolution of the external command-line tools the app shells out to.
 
-The app needs up to four executables: ``pdflatex`` (preview + PDF/EPS/SVG export),
+The app needs up to five executables: ``pdflatex`` (preview + PDF/EPS/SVG export),
 ``latex`` + ``dvisvgm`` (on-canvas math labels, when not using the ziamath
-fallback), and ``pdftocairo`` (EPS/SVG export).  This module is the single place
-that decides *which* binary to run for a given tool name.
+fallback), and ``pdftocairo`` or ``inkscape`` (EPS/SVG export — Poppler is
+preferred, Inkscape is the automatic fallback).  This module is the single
+place that decides *which* binary to run for a given tool name.
 
 Resolution order, per tool:
   1. an explicit **user-configured path** (set in Preferences → Tools), when it is
      set and points at a runnable file;
   2. otherwise a lookup on ``PATH`` (after augmenting it with common install
-     directories a Finder/Dock-launched GUI would not inherit).
+     directories a Finder/Dock-launched GUI would not inherit);
+  3. otherwise any well-known install locations for that tool
+     (:data:`_EXTRA_TOOL_CANDIDATES` — e.g. Inkscape's .app/Program Files
+     binaries, which its installers do not put on PATH).
 
 This module has **no Qt dependency** so it stays usable headlessly (tests, the
 codegen pipeline).  The UI layer reads the persisted paths from ``Preferences``
@@ -23,9 +27,24 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 
 #: Tools the app may invoke. The configured-path keys mirror these names.
-TOOLS: tuple[str, ...] = ("pdflatex", "latex", "dvisvgm", "pdftocairo")
+TOOLS: tuple[str, ...] = ("pdflatex", "latex", "dvisvgm", "pdftocairo", "inkscape")
+
+#: Well-known install locations checked when a tool is neither overridden nor
+#: on PATH. Inkscape's installers do not put the CLI binary on PATH on macOS
+#: (it lives inside the .app bundle) or Windows (Program Files); without these
+#: candidates "install Inkscape" would not be enough for most users. On
+#: Windows ``inkscape.com`` is the console binary (proper stdio/exit codes);
+#: ``inkscape.exe`` is the GUI one, kept as a fallback.
+_EXTRA_TOOL_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "inkscape": (
+        "/Applications/Inkscape.app/Contents/MacOS/inkscape",
+        r"C:\Program Files\Inkscape\bin\inkscape.com",
+        r"C:\Program Files\Inkscape\bin\inkscape.exe",
+    ),
+}
 
 # Directories where TeX and Poppler binaries commonly live on macOS but which a
 # GUI app launched from Finder/Dock does NOT inherit: such an app gets only a
@@ -99,14 +118,36 @@ def resolve(name: str) -> str | None:
     """Return the executable to run for tool *name*, or ``None`` if not found.
 
     A configured override wins when it points at a runnable file; otherwise the
-    tool is looked up on the (augmented) ``PATH``.
+    tool is looked up on the (augmented) ``PATH``; finally any well-known
+    install locations (:data:`_EXTRA_TOOL_CANDIDATES`) are checked.
     """
     override = _overrides.get(name)
     if override and is_runnable(override):
         return override
-    return path_on_path(name)
+    found = path_on_path(name)
+    if found is not None:
+        return found
+    for candidate in _EXTRA_TOOL_CANDIDATES.get(name, ()):
+        if is_runnable(candidate):
+            return candidate
+    return None
 
 
 def available(name: str) -> bool:
     """True when tool *name* resolves to a runnable executable."""
     return resolve(name) is not None
+
+
+def run_kwargs() -> dict[str, int]:
+    """Extra ``subprocess.run`` keyword arguments for launching a tool.
+
+    On Windows, a windowed (no-console) app that spawns a console child lets
+    the child allocate its own console — a console window flashes over the app
+    on every pdflatex/latex/dvisvgm/converter run. ``CREATE_NO_WINDOW``
+    suppresses that. Empty on other platforms. (The numeric fallback keeps the
+    Windows branch exercisable in tests on POSIX, where ``subprocess`` does not
+    define the constant.)
+    """
+    if platform.system() != "Windows":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
