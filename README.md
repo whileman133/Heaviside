@@ -13,14 +13,14 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 <table>
   <tr>
     <td align="center" colspan="2">
-      <img src="docs/images/examples/porous-electrode-dark.png" alt="Porous electrode interface model open in the Heaviside editor, dark mode"><br>
-      <sub><b>Porous Electrode Interface</b> · Battery Models · dark mode</sub>
+    <img src="docs/images/examples/boost-converter-light.png" alt="Boost converter example open in the Heaviside editor, light mode"><br>
+      <sub><b>Boost Converter</b> · Power Electronics · light mode</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/examples/boost-converter-light.png" alt="Boost converter example open in the Heaviside editor, light mode"><br>
-      <sub><b>Boost Converter</b> · Power Electronics · light mode</sub>
+      <img src="docs/images/examples/porous-electrode-dark.png" alt="Porous electrode interface model open in the Heaviside editor, dark mode"><br>
+      <sub><b>Porous Electrode Interface</b> · Battery Models · dark mode</sub>
     </td>
     <td align="center" width="50%">
       <img src="docs/images/examples/mux-4-1-dark.png" alt="4:1 multiplexer logic example open in the Heaviside editor, dark mode"><br>
