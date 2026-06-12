@@ -2731,13 +2731,13 @@ is padded onto a transparent square canvas first, so the icon is never distorted
 Dock on macOS, or note Windows caches `.exe` icons — to see the change on an
 already-seen bundle.)
 
-**README gallery screenshots.** The README's 2×2 example gallery
-(`docs/images/examples/*.png`) is generated, not hand-captured.
-`scripts/render_screenshots.py` opens four bundled examples (Boost Converter,
-4:1 MUX, ESC Cell Model, Porous Electrode Interface) in the real `MainWindow`
-under Qt's offscreen platform — palette, canvas, inspector, and the live
-CircuiTikZ source/PDF preview — two on the light theme and two on the dark
-one, then grabs the whole 1600×1000 window. Before each grab it waits for the
+**README gallery screenshots.** The README's example-screenshot table at the
+top of the page (`docs/images/examples/*.png`) is generated, not
+hand-captured. `scripts/render_screenshots.py` opens three bundled examples
+(Boost Converter on the light theme; 4:1 MUX and Porous Electrode Interface on
+the dark one) in the real `MainWindow` under Qt's offscreen platform —
+palette, canvas, inspector, and the live CircuiTikZ source/PDF preview — then
+grabs the whole 1600×1000 window. Before each grab it waits for the
 async work to settle: the math-label pipeline drains (the dispatcher's
 callback map empties and the pool idles) and, when a `pdflatex` is available,
 the preview worker reports ready/error; then the view is fit to the
@@ -3158,7 +3158,7 @@ a blank value clears an override; `set_tool_paths` ignores unknown keys; and
 #### README gallery screenshots (`test_screenshots.py`)
 
 The release-time README gallery renderer (§11.1 "README gallery screenshots"),
-offscreen Qt: the `SHOTS` manifest names exactly four bundled examples that all
+offscreen Qt: the `SHOTS` manifest names exactly three bundled examples that all
 exist on disk, with unique output names and at least one light **and** one dark
 entry; the README references every output file (manifest↔README drift guard);
 and an actual script run (in a **subprocess** — the script redirects QSettings

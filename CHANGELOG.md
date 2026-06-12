@@ -30,13 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a descriptive load error instead of crashing the app.
 
 ### Added
-- **Auto-generated README example gallery.** The README now shows four bundled
-  examples (Boost Converter, 4:1 MUX, ESC Cell Model, Porous Electrode
-  Interface) open in the full editor — palette, canvas, inspector, and live
-  source/PDF preview — in a 2×2 grid, mixing light and dark mode. The release
-  pipeline re-captures them (`scripts/render_screenshots.py`) on every version
-  tag and commits changes back to `main`, so the gallery always matches the
-  latest release.
+- **Auto-generated README example screenshots.** The README now opens with
+  bundled examples (Boost Converter, 4:1 MUX, Porous Electrode Interface)
+  shown in the full editor — palette, canvas, inspector, and live source/PDF
+  preview — mixing light and dark mode. The release pipeline re-captures them
+  (`scripts/render_screenshots.py`) on every version tag and commits changes
+  back to `main`, so the screenshots always match the latest release.
 - **The unsaved-changes prompt now offers Save.** Closing or replacing a
   modified document asks **Save / Don't Save / Cancel** (Save is the default)
   instead of only offering to discard.

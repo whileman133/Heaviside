@@ -8,7 +8,7 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. It's a streamlined desktop tool designed for researchers, educators, and engineers, integrating into LyX, Overleaf, and LaTeX workflows with minimum effort.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. A desktop tool designed for researchers, educators, and engineers, integrating into LyX, Overleaf, and LaTeX workflows with minimum effort.
 
 <table>
   <tr>
@@ -29,6 +29,8 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
   </tr>
 </table>
 
+<p align="center"><sub>Bundled examples (<code>examples/</code>) open in the editor. The release pipeline re-captures these screenshots automatically, so they always match the latest release.</sub></p>
+
 ## Features
 
 ### Intelligent Canvas
@@ -46,10 +48,6 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 * **Automatic Export:** Every save updates the Heaviside schematic (`.hv`), CircuiTikZ code (`.tex`), and compiled vector graphics (`.pdf`, `.svg`, or `.eps`) on the filesystem. Your paper's figures stay up to date without manual exports.
 
 > **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
-
-## Gallery
-
-Four of the bundled examples (`examples/`) open in the full editor — palette, canvas, inspector, and live CircuiTikZ source/PDF preview — in light and dark mode. The release pipeline re-captures these automatically, so they always match the latest release.
 
 ## Download
 

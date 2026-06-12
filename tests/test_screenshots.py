@@ -35,7 +35,7 @@ _spec.loader.exec_module(_mod)
 
 def test_manifest_examples_exist_and_cover_both_themes() -> None:
     """Every manifest entry points at a bundled example; both palettes appear."""
-    assert len(_mod.SHOTS) == 4
+    assert len(_mod.SHOTS) == 3
     names = [name for _, _, name in _mod.SHOTS]
     assert len(set(names)) == len(names), "output names must be unique"
     for rel, _dark, _name in _mod.SHOTS:
@@ -45,7 +45,7 @@ def test_manifest_examples_exist_and_cover_both_themes() -> None:
 
 
 def test_readme_gallery_references_every_screenshot() -> None:
-    """The README 2x2 gallery and the manifest cannot drift apart."""
+    """The README screenshot table and the manifest cannot drift apart."""
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
     for _rel, _dark, name in _mod.SHOTS:
         assert f"docs/images/examples/{name}" in readme, f"README missing {name}"
