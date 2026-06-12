@@ -9,7 +9,7 @@ change.
 from __future__ import annotations
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -62,8 +62,11 @@ class SourcePanel(QWidget):
         self._text.setReadOnly(True)
         self._text.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._text.setFrameShape(QPlainTextEdit.NoFrame)
-        mono = QFont("Monospace")
-        mono.setStyleHint(QFont.TypeWriter)
+        # The platform's real fixed-width font. Asking for a literal
+        # "Monospace" family forces Qt to scan every installed font to build
+        # its alias table on platforms where no such family exists (macOS:
+        # "qt.qpa.fonts: Populating font family aliases took NNN ms").
+        mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         mono.setPointSize(10)
         self._text.setFont(mono)
         layout.addWidget(self._text, 1)

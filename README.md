@@ -10,30 +10,6 @@
 
 An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. It's a streamlined desktop tool designed for researchers, educators, and engineers, integrating into LyX, Overleaf, and LaTeX workflows with minimum effort.
 
-![The Heaviside editor: component palette, schematic canvas, and live CircuiTikZ source and PDF preview](docs/images/screenshot-overview.png)
-
-## Features
-
-### Intelligent Canvas
-* **Grid-Disciplined Editing:** Quarter-grid CircuiTikZ snapping guarantees your components and wires line up.
-* **Smart Wiring:** Automatic junction dots at connections, optional open-terminal dots at loose ends, and optional line hops at wire crossings.
-* **Smart Routing:** Wires route at right angles, with customizable line style, weight, endpoint arrowheads, and typeset endpoint and mid-point labels.
-* **Transformations:** 90° rotation, horizontal mirroring, shape resizing, copy/paste, and undo/redo.
-* **Live PDF Preview:** Displays a real-time, compiled PDF rendering of your schematic directly inside the editor as you work.
-
-### Component & Block Libraries
-* **Schematic Symbols:** Built-in library with standard two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal semiconductors (op-amps, MOSFETs, BJTs), logic gates with a configurable number of inputs, grounds, and power supply rails.
-* **Block-Diagram Primitives:** Build system diagrams using boxes, circles, and free text, with wires that snap dynamically to any point on a shape's perimeter.
-
-### Export Pipeline
-* **Automatic Export:** Every save updates the Heaviside schematic (`.hv`), CircuiTikZ code (`.tex`), and compiled vector graphics (`.pdf`, `.svg`, or `.eps`) on the filesystem. Your paper's figures stay up to date without manual exports.
-
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
-
-## Gallery
-
-Four of the bundled examples (`examples/`) open in the full editor — palette, canvas, inspector, and live CircuiTikZ source/PDF preview — in light and dark mode. The release pipeline re-captures these automatically, so they always match the latest release.
-
 <table>
   <tr>
     <td align="center" width="50%">
@@ -56,6 +32,28 @@ Four of the bundled examples (`examples/`) open in the full editor — palette, 
     </td>
   </tr>
 </table>
+
+## Features
+
+### Intelligent Canvas
+* **Grid-Disciplined Editing:** Quarter-grid CircuiTikZ snapping guarantees your components and wires line up.
+* **Smart Wiring:** Automatic junction dots at connections, optional open-terminal dots at loose ends, and optional line hops at wire crossings.
+* **Smart Routing:** Wires route at right angles, with customizable line style, weight, endpoint arrowheads, and typeset endpoint and mid-point labels.
+* **Transformations:** 90° rotation, horizontal mirroring, shape resizing, copy/paste, and undo/redo.
+* **Live PDF Preview:** Displays a real-time, compiled PDF rendering of your schematic directly inside the editor as you work.
+
+### Component & Block Libraries
+* **Schematic Symbols:** Built-in library with standard two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal semiconductors (op-amps, MOSFETs, BJTs), logic gates with a configurable number of inputs, grounds, and power supply rails.
+* **Block-Diagram Primitives:** Build system diagrams using boxes, circles, and free text, with wires that snap dynamically to any point on a shape's perimeter.
+
+### Export Pipeline
+* **Automatic Export:** Every save updates the Heaviside schematic (`.hv`), CircuiTikZ code (`.tex`), and compiled vector graphics (`.pdf`, `.svg`, or `.eps`) on the filesystem. Your paper's figures stay up to date without manual exports.
+
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
+
+## Gallery
+
+Four of the bundled examples (`examples/`) open in the full editor — palette, canvas, inspector, and live CircuiTikZ source/PDF preview — in light and dark mode. The release pipeline re-captures these automatically, so they always match the latest release.
 
 ## Download
 

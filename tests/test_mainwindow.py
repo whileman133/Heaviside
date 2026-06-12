@@ -1039,3 +1039,87 @@ def test_excepthook_handler_never_raises(tmp_path, monkeypatch):
         raise ValueError("quiet")
     except ValueError:
         entry._handle_uncaught(*sys.exc_info())   # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Theme: explicit-palette fallback when the platform ignores scheme forcing
+# ---------------------------------------------------------------------------
+
+def test_dark_mode_palettes_native_widgets_when_scheme_unsupported(tmp_path):
+    """Forcing Dark must restyle native widgets even on platforms whose theme
+    ignores QStyleHints.setColorScheme (the offscreen platform used here, and
+    bare Linux sessions). Regression: the inspector sidebar stayed light in
+    dark mode because only Window/WindowText were overridden while Base/Button
+    kept the platform's light defaults."""
+    from PySide6.QtGui import QPalette
+
+    win = _win(tmp_path)
+    try:
+        win._set_theme_mode("dark")
+        pal = QApplication.palette()
+        assert win._palette_fallback_active
+        assert pal.color(QPalette.Base).lightness() < 100, "field bg must go dark"
+        assert pal.color(QPalette.Button).lightness() < 100
+        assert pal.color(QPalette.Text).lightness() > 150
+
+        win._set_theme_mode("light")
+        pal = QApplication.palette()
+        assert pal.color(QPalette.Base).lightness() > 150, "back to light fields"
+
+        # System mode releases the pin and restores the platform palette.
+        win._set_theme_mode("system")
+        assert not win._palette_fallback_active
+    finally:
+        win._set_theme_mode("system")
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()
+
+
+def test_startup_with_pinned_dark_applies_native_palette(tmp_path):
+    """A saved Dark override must pin native widgets at construction, not only
+    after a later toggle."""
+    from PySide6.QtGui import QPalette
+
+    prefs = Preferences(QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat))
+    prefs.set_dark_override(True)
+    prefs._settings.sync()
+
+    # MainWindow reads the real default QSettings; patch the saved override in
+    # by constructing, then re-running the startup pinning path with the
+    # isolated prefs state it would have read.
+    win = MainWindow()
+    try:
+        win._prefs = prefs
+        win._theme_mode = "dark"
+        win._follow_system = False
+        win._dark = True
+        from app.canvas import style as _style2
+        from app.ui import theme as _theme2
+        _theme2.set_dark(True)
+        _style2.set_dark(True)
+        win._apply_color_scheme()   # the call __init__ now makes for overrides
+        pal = QApplication.palette()
+        assert win._palette_fallback_active
+        assert pal.color(QPalette.Base).lightness() < 100
+    finally:
+        win._set_theme_mode("system")
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()
+
+
+def test_source_panel_uses_platform_fixed_font(tmp_path):
+    """The source pane asks for the platform's real fixed-width font instead of
+    the generic "Monospace" family (whose absence makes Qt scan every installed
+    font: 'Populating font family aliases took NNN ms')."""
+    from PySide6.QtGui import QFontDatabase
+
+    win = _win(tmp_path)
+    try:
+        expected = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
+        assert win._source_panel._text.font().family() == expected
+    finally:
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()

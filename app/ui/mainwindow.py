@@ -126,6 +126,47 @@ def _component_editor_available() -> bool:
     return bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
 
+# The application palette as the platform provided it, captured before the
+# first explicit-palette fallback so System/honoured modes can restore it.
+_native_palette: QPalette | None = None
+
+
+def _token_palette() -> QPalette:
+    """An explicit application palette built from the current theme tokens.
+
+    Used only when the platform theme ignores ``QStyleHints.setColorScheme``
+    (Qt's offscreen platform; bare Linux sessions) — native widgets then take
+    their Window/Base/Button/Text/Highlight roles from this instead of being
+    stuck on the platform's light defaults. ``theme.set_dark`` must already
+    reflect the target mode (it runs first in ``_apply_theme``)."""
+    pal = QPalette()
+    groups = (QPalette.Active, QPalette.Inactive, QPalette.Disabled)
+    roles = {
+        QPalette.Window: theme.SURFACE,
+        QPalette.WindowText: theme.TEXT,
+        QPalette.Base: theme.SURFACE_ALT,
+        QPalette.AlternateBase: theme.SURFACE,
+        QPalette.Text: theme.TEXT,
+        QPalette.PlaceholderText: theme.ICON_MUTED,
+        QPalette.Button: theme.BUTTON_BG,
+        QPalette.ButtonText: theme.TEXT,
+        QPalette.Highlight: theme.ACCENT,
+        QPalette.HighlightedText: "#ffffff",
+        QPalette.ToolTipBase: theme.SURFACE_ALT,
+        QPalette.ToolTipText: theme.TEXT,
+        QPalette.Link: theme.ACCENT,
+        QPalette.Mid: theme.BORDER,
+        QPalette.Dark: theme.DIVIDER,
+        QPalette.Light: theme.SURFACE_ALT,
+    }
+    for group in groups:
+        for role, color in roles.items():
+            pal.setColor(group, role, QColor(color))
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        pal.setColor(QPalette.Disabled, role, QColor(theme.ICON_MUTED))
+    return pal
+
+
 # ---------------------------------------------------------------------------
 # Background auto-export (runs the post-save sibling-file exports off the UI
 # thread; see MainWindow._auto_export)
@@ -253,6 +294,9 @@ class MainWindow(QMainWindow):
         self._dark = (
             _system_is_dark() if self._follow_system else self._theme_mode == "dark"
         )
+        # True while the explicit token palette substitutes for an ignored
+        # QStyleHints.setColorScheme (see _apply_color_scheme).
+        self._palette_fallback_active = False
         theme.set_dark(self._dark)
         style.set_dark(self._dark)
         # Records (QAction, qtawesome-name) so toolbar/ribbon icons can be
@@ -292,9 +336,14 @@ class MainWindow(QMainWindow):
         self._build_tool_ribbon()
         self._build_central()
         self._build_statusbar()
-        # If the app launched with the manual override already off (it does not at
-        # startup), the OS appearance drives native widgets directly; a later toggle
-        # pins the colour scheme via _apply_color_scheme.
+        # Pin a saved Light/Dark override for native widgets at startup —
+        # previously this happened only on a later toggle, so launching with a
+        # pinned theme that disagreed with the OS left native widgets on the
+        # OS appearance. System mode leaves the scheme Unknown so the OS
+        # drives native widgets directly. The explicit-palette fallback inside
+        # _apply_color_scheme covers platforms that ignore scheme forcing.
+        if not self._follow_system:
+            self._apply_color_scheme()
 
         # -- Window-level Escape: cancel placement/wire regardless of focus ----
         # The view's keyPressEvent also handles Escape when the view has focus,
@@ -422,7 +471,17 @@ class MainWindow(QMainWindow):
         being restyled (which looked non-native). In **System** mode we set it back
         to ``Unknown`` so the OS drives native widgets directly (and a previously
         pinned scheme is released); **Light**/**Dark** pin it. Requires Qt 6.8+
-        (``QStyleHints.setColorScheme``)."""
+        (``QStyleHints.setColorScheme``).
+
+        Not every platform theme supports scheme forcing — Qt's ``offscreen``
+        platform (headless screenshots/tests) and bare Linux sessions without a
+        desktop theme silently ignore ``setColorScheme``, leaving native
+        widgets (inspector fields, combos, tab pages) on the light palette
+        while everything custom-painted goes dark. When the request is not
+        honoured, fall back to an explicit application palette built from the
+        theme tokens; when the platform takes over again (or System mode is
+        chosen), restore the pristine native palette."""
+        global _native_palette
         sh = QGuiApplication.styleHints()
         target = (
             Qt.ColorScheme.Unknown if self._follow_system
@@ -430,6 +489,16 @@ class MainWindow(QMainWindow):
         )
         if sh.colorScheme() != target:
             sh.setColorScheme(target)
+        if _native_palette is None:
+            _native_palette = QPalette(QApplication.palette())
+        honoured = target == Qt.ColorScheme.Unknown or sh.colorScheme() == target
+        if honoured:
+            if self._palette_fallback_active:
+                QApplication.setPalette(_native_palette)
+                self._palette_fallback_active = False
+        else:
+            QApplication.setPalette(_token_palette())
+            self._palette_fallback_active = True
 
     def _apply_theme(self) -> None:
         """Re-theme every surface for the current ``self._dark`` state: drive the

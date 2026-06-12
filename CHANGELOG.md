@@ -125,6 +125,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edits** instead of being snapped to the nearest preset.
 - **Dark-mode readability** of the Help/About dialogs, the Preferences hint
   text, the welcome screen, and the status bar.
+- **Dark mode now reaches native widgets everywhere.** On platforms whose
+  theme ignores Qt's colour-scheme request (headless/offscreen sessions, bare
+  Linux desktops), the inspector sidebar and other native controls stayed
+  light in dark mode; an explicit theme-token palette now substitutes when
+  the request is not honoured. A saved Light/Dark preference is also pinned
+  at startup instead of only after the next toolbar toggle.
+- **Faster startup: no more "Populating font family aliases" pause.** The
+  CircuiTikZ source pane now asks for the platform's real fixed-width font
+  instead of the generic "Monospace" family, which forced Qt to scan every
+  installed font on systems without one (macOS).
 - **Preview update failures now show in the status bar** instead of failing
   silently.
 - **A corrupt PNG-resolution setting is clamped** to the dialog's 72–1200 dpi

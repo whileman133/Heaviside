@@ -2147,7 +2147,7 @@ inherited by the central area, panels, splitter gaps, status bar). Both
 **toolbars** carry a hairline divider (`theme.top_toolbar_qss` / `ribbon_qss`),
 icons tinted `theme.ICON`, rounded soft-blue hovers (`theme.HOVER`), and the
 active tool shown as a soft-blue fill (the one accent `theme.ACCENT`) rather than
-the native highlight. **Form controls stay native and follow the colour scheme.** Form controls (line edits, spin boxes, combo boxes, checkboxes), dialogs, message boxes, tooltips, tab bars, native scrollbars, and the window background keep the platform-native look — restyling them via a stylesheet looked non-native (and a window-level stylesheet broke the palette-based window background). They follow light/dark **natively**: while the app tracks the OS appearance the OS drives them directly, and when the user **forces a mode** with the toolbar toggle, `MainWindow._apply_color_scheme` drives the application colour scheme via `QGuiApplication.styleHints().setColorScheme(Dark/Light)` (Qt 6.8+), so the native widgets re-render dark/light themselves. `_apply_window_palette` then re-snapshots the live `QApplication.palette()` (so native children inherit the right Base/Text/Button roles) and overrides only Window/WindowText with the chrome surface colour. Only the deliberately-flat chrome — toolbars, palette tiles, palette **search box**, side panels, and their scrollbars — is themed by scoped stylesheet/tokens, and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor). The inspector's header/section/hint labels carry a pinned colour and are re-inked on a swap (§10.3); plain field-row labels follow the palette.
+the native highlight. **Form controls stay native and follow the colour scheme.** Form controls (line edits, spin boxes, combo boxes, checkboxes), dialogs, message boxes, tooltips, tab bars, native scrollbars, and the window background keep the platform-native look — restyling them via a stylesheet looked non-native (and a window-level stylesheet broke the palette-based window background). They follow light/dark **natively**: while the app tracks the OS appearance the OS drives them directly, and when the user **forces a mode** with the toolbar toggle — or launches with a saved Light/Dark override, which `__init__` now pins the same way — `MainWindow._apply_color_scheme` drives the application colour scheme via `QGuiApplication.styleHints().setColorScheme(Dark/Light)` (Qt 6.8+), so the native widgets re-render dark/light themselves. **Fallback when the platform ignores the request:** not every platform theme supports scheme forcing (Qt's `offscreen` platform — headless tests and the README screenshot job — and bare Linux sessions without a desktop theme); when `styleHints().colorScheme()` still disagrees after the set, `_apply_color_scheme` installs an explicit application palette built from the theme tokens (`_token_palette`: Window/Base/Button/Text/Highlight/Disabled roles from `SURFACE`/`SURFACE_ALT`/`BUTTON_BG`/`TEXT`/`ACCENT`/`ICON_MUTED`), and restores the captured pristine platform palette when the pin is released (System mode) or honoured again — previously the inspector sidebar stayed light in dark mode on such platforms. `_apply_window_palette` then re-snapshots the live `QApplication.palette()` (so native children inherit the right Base/Text/Button roles) and overrides only Window/WindowText with the chrome surface colour. Only the deliberately-flat chrome — toolbars, palette tiles, palette **search box**, side panels, and their scrollbars — is themed by scoped stylesheet/tokens, and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor). The inspector's header/section/hint labels carry a pinned colour and are re-inked on a swap (§10.3); plain field-row labels follow the palette.
 
 **Theme — light / dark (follows the OS appearance, with a manual toggle).** The
 chrome and the canvas each carry a **switchable two-palette** design:
@@ -2422,7 +2422,9 @@ light/dark theme via `apply_theme`.
 
 - Left pane of the bottom strip; card frame with a "CircuiTikZ Source" header.
 - Read-only, frameless `QPlainTextEdit` showing the current generated CircuiTikZ
-  source (the card supplies the border).
+  source (the card supplies the border), in the platform's fixed-width font
+  (`QFontDatabase.systemFont(FixedFont)` — requesting a literal "Monospace"
+  family made Qt scan every installed font on platforms without one).
 - Updates live (debounced 300ms) as the schematic changes.
 - Syntax is not highlighted in v1.
 
@@ -3178,7 +3180,11 @@ flat results grid (restored on clear); and clicking a tile calls
 #### Main window (`test_mainwindow.py`)
 
 `MainWindow` auto-export and label re-typeset, against an isolated `QSettings`
-and offscreen Qt. The TeX-snippet auto-export writes `<name>.tex` **without**
+and offscreen Qt. The **explicit-palette fallback** (§10.1) is pinned here:
+forcing Dark on a platform that ignores `setColorScheme` (offscreen) flips the
+application palette's Base/Button/Text roles dark, Light flips them back, and
+System mode restores the pristine platform palette; the source pane's font is
+asserted to be the platform fixed-width font (no "Monospace" alias scan). The TeX-snippet auto-export writes `<name>.tex` **without**
 invoking the compiler (asserted by failing the test if `_compile_to_pdf` is
 called) — confirming it needs no `pdflatex`; with every auto-export preference
 off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
