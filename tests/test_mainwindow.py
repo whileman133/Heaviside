@@ -1123,3 +1123,34 @@ def test_source_panel_uses_platform_fixed_font(tmp_path):
         win.close()
         win.deleteLater()
         QApplication.processEvents()
+
+
+# Captured at import time, before the autouse _no_dependency_modal fixture
+# replaces the class attribute with a no-op for each test.
+_REAL_STARTUP_UPDATE_CHECK = mw.MainWindow._maybe_check_for_updates_on_startup
+
+
+def test_startup_update_check_skipped_when_version_unresolved(tmp_path, monkeypatch):
+    """A 0.0.0 runtime version (resolution failure in a mis-packaged bundle)
+    must not trigger the startup update prompt — every release looks "newer"
+    than 0.0.0, which nagged users of the broken 0.3.0 Windows build on every
+    launch. The manual Help menu check stays available."""
+    calls = []
+    monkeypatch.setattr(mw._update, "check_async", lambda *a, **k: calls.append(a))
+
+    win = _win(tmp_path)
+    try:
+        win._prefs.check_updates_on_startup = True
+        win._prefs.update_check_disclosed = True
+
+        monkeypatch.setattr(mw, "__version__", "0.0.0")
+        _REAL_STARTUP_UPDATE_CHECK(win)
+        assert calls == [], "0.0.0 must suppress the automatic probe"
+
+        monkeypatch.setattr(mw, "__version__", "1.0.0")
+        _REAL_STARTUP_UPDATE_CHECK(win)
+        assert len(calls) == 1, "a real version still probes"
+    finally:
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()

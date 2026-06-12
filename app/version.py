@@ -15,7 +15,6 @@ Exposed as ``__version__``.
 from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
-from pathlib import Path
 
 
 def _read_version() -> str:
@@ -24,8 +23,14 @@ def _read_version() -> str:
     except PackageNotFoundError:
         pass
 
-    # Source-checkout fallback: read pyproject.toml from the repo root.
-    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    # Fallback: read pyproject.toml from the resource root. resource_path()
+    # resolves to the repo root from a source checkout and to sys._MEIPASS in
+    # a frozen build (heaviside.spec bundles pyproject.toml for exactly this) —
+    # a plain __file__-relative path finds nothing inside a PyInstaller bundle,
+    # which is how frozen builds shipped reporting version 0.0.0.
+    from app.resources import resource_path
+
+    pyproject = resource_path("pyproject.toml")
     try:
         text = pyproject.read_text(encoding="utf-8")
     except OSError:

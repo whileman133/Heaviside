@@ -68,6 +68,12 @@ datas = [
     # every CircuiTikZ symbol — read at runtime by app/components/library.py to
     # build REGISTRY and the codegen tables (see spec/component-editor.md).
     ("components/definitions.json", "components"),
+    # The runtime version source: app/version.py reads this via resource_path.
+    # The project declares no [build-system], so it is never installed as a
+    # package and importlib.metadata can never resolve it — this bundled file
+    # is the ONLY way a frozen build knows its version. Without it the app
+    # reports 0.0.0 and the update notifier nags on every launch.
+    ("pyproject.toml", "."),
 ]
 # Example schematics for the File → Open Example menu. Only the .hv sources are
 # bundled — the co-located .pdf/.eps are regenerable and intentionally skipped.

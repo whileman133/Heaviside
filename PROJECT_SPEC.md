@@ -2651,7 +2651,8 @@ heaviside/
     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
     ├── test_latex_security.py     # LaTeX-pipeline security: -no-shell-escape + no shell=True (mathrender, preview, component render)
     ├── test_componenteditor.py    # editor renderer/draft core + offscreen window smoke
-    └── test_screenshots.py        # README example-gallery renderer: manifest/README sync + framed render (offscreen Qt)
+    ├── test_screenshots.py        # README example-gallery renderer: manifest/README sync + framed render (offscreen Qt)
+    └── test_version.py            # runtime version resolution (source + frozen fallback + spec bundling tripwire)
 ```
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
@@ -2755,10 +2756,17 @@ release. The manifest (`SHOTS`) is the single source: tests assert each entry
 exists under `examples/`, both themes are represented, and the README
 references every output file (§13, `tests/test_screenshots.py`).
 
-**Runtime resources.** Three resources are read at runtime and must be bundled:
-`assets/icon.png`, `components/geometry.json` (symbol geometry), and
+**Runtime resources.** Four resources are read at runtime and must be bundled:
+`assets/icon.png`, `components/geometry.json` (symbol geometry),
 `components/definitions.json` (per-component registry/codegen data + the
-`origin_svg` placement constant — read by `app/components/library.py`). The
+`origin_svg` placement constant — read by `app/components/library.py`), and
+`pyproject.toml` (the runtime version source — `app/version.py` reads it via
+`resource_path`; the project declares no `[build-system]`, so it is never
+installed as a package and `importlib.metadata` can never resolve the version.
+A frozen build without this file reports **0.0.0** and the update notifier
+nags on every launch — the v0.3.0 Windows-release bug. As defence in depth,
+`MainWindow._maybe_check_for_updates_on_startup` skips the automatic probe
+when the version resolves to the `0.0.0` sentinel). The
 geometry is **self-contained** — it bakes in every symbol's geometry, including
 the resolved `+`/`−` glyph marks (as `glyphs` entries with a baked affine matrix;
 see §5.3), so `svgsym.py` reads only the geometry plus the single
@@ -3180,7 +3188,14 @@ flat results grid (restored on clear); and clicking a tile calls
 #### Main window (`test_mainwindow.py`)
 
 `MainWindow` auto-export and label re-typeset, against an isolated `QSettings`
-and offscreen Qt. The **explicit-palette fallback** (§10.1) is pinned here:
+and offscreen Qt. The **0.0.0 update-nag guard** is pinned here
+(`test_startup_update_check_skipped_when_version_unresolved`): an unresolved
+runtime version suppresses the automatic startup probe while a real version
+still probes. Version resolution itself lives in **`test_version.py`**: the
+source checkout resolves to the pyproject version; a simulated frozen layout
+(`sys._MEIPASS`) reads the bundled `pyproject.toml`; total failure yields the
+`0.0.0` sentinel; and `heaviside.spec` must keep bundling `pyproject.toml`
+(tripwire). The **explicit-palette fallback** (§10.1) is pinned here:
 forcing Dark on a platform that ignores `setColorScheme` (offscreen) flips the
 application palette's Base/Button/Text roles dark, Light flips them back, and
 System mode restores the pristine platform palette; the source pane's font is

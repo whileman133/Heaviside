@@ -1717,6 +1717,11 @@ class MainWindow(QMainWindow):
         """Run the startup update probe when the preference is on (default)."""
         if not self._prefs.check_updates_on_startup:
             return
+        # 0.0.0 means version resolution failed (e.g. a mis-packaged bundle) —
+        # every release then looks "newer" and the prompt nags on each launch.
+        # Skip the automatic probe; Help ▸ Check for Updates still works.
+        if __version__ == "0.0.0":
+            return
         # One-time, plain-language disclosure that we contact GitHub on launch.
         if not self._prefs.update_check_disclosed:
             self._prefs.update_check_disclosed = True
