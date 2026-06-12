@@ -619,7 +619,12 @@ class _RenderTask(QRunnable):
         # The dispatcher is module-permanent (the lru_cache holds it), so this
         # emit — and the runnable's destruction right after run() returns —
         # never lets a worker thread drop a QObject's last reference.
-        _dispatcher().done.emit(self._token, path)
+        try:
+            _dispatcher().done.emit(self._token, path)
+        except RuntimeError:  # pragma: no cover - interpreter/app shutdown
+            # Qt is tearing down (the dispatcher's C++ object is gone); the
+            # result has no recipient anymore — drop it quietly.
+            pass
 
 
 @lru_cache(maxsize=1)

@@ -30,6 +30,33 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 
 > **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
 
+## Gallery
+
+Four of the bundled examples (`examples/`) open in the full editor — palette, canvas, inspector, and live CircuiTikZ source/PDF preview — in light and dark mode. The release pipeline re-captures these automatically, so they always match the latest release.
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/examples/boost-converter-light.png" alt="Boost converter example open in the Heaviside editor, light mode"><br>
+      <sub><b>Boost Converter</b> · Power Electronics · light mode</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/examples/mux-4-1-dark.png" alt="4:1 multiplexer logic example open in the Heaviside editor, dark mode"><br>
+      <sub><b>4:1 MUX</b> · Logic Circuits · dark mode</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/examples/esc-cell-model-light.png" alt="Equivalent series circuit battery cell model open in the Heaviside editor, light mode"><br>
+      <sub><b>ESC Cell Model</b> · Battery Models · light mode</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/examples/porous-electrode-dark.png" alt="Porous electrode interface model open in the Heaviside editor, dark mode"><br>
+      <sub><b>Porous Electrode Interface</b> · Battery Models · dark mode</sub>
+    </td>
+  </tr>
+</table>
+
 ## Download
 
 Pre-built apps (always the latest release):

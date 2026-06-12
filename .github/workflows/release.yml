@@ -309,6 +309,62 @@ jobs:
             Heaviside-linux-x86_64.AppImage
             Heaviside-linux-x86_64.AppImage.sha256
 
+  # Re-render the README example-gallery screenshots from this release's code
+  # and examples (scripts/render_screenshots.py — the full editor GUI grabbed
+  # under offscreen Qt, no display) and commit them to main when the pixels
+  # changed, so the README gallery always matches the latest release. Skipped
+  # on workflow_dispatch test runs.
+  screenshots:
+    name: Refresh README screenshots
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # texlive: pdflatex + standalone + circuitikz so the editor's live PDF
+      # preview pane compiles for the screenshots. (No dvisvgm — canvas math
+      # labels render through the bundled ziamath fallback, deterministic
+      # across runners.)
+      - name: Install Qt system libraries and LaTeX
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+            texlive-latex-base texlive-pictures texlive-latex-extra
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Render example screenshots
+        run: QT_QPA_PLATFORM=offscreen uv run python scripts/render_screenshots.py
+
+      # The job checked out the tag; the screenshots are committed onto main.
+      # [skip ci] keeps the docs-only commit from burning a CI run. If main
+      # advances between fetch and push the push fails loudly — re-run the job.
+      - name: Commit refreshed screenshots to main
+        run: |
+          cp -r docs/images/examples "$RUNNER_TEMP/example-shots"
+          git fetch origin main
+          git checkout -B main origin/main
+          rm -rf docs/images/examples
+          mkdir -p docs/images
+          cp -r "$RUNNER_TEMP/example-shots" docs/images/examples
+          git add docs/images/examples
+          if git diff --cached --quiet; then
+            echo "Screenshots unchanged - nothing to commit."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "docs: refresh README example screenshots for ${GITHUB_REF_NAME} [skip ci]"
+            git push origin main
+          fi
+
   release:
     name: Publish Release
     needs: build

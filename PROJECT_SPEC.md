@@ -2563,7 +2563,8 @@ heaviside/
 │   ├── make_icons.py              # Regenerate assets/icon.ico + icon.icns from icon.png
 │   ├── make_dmg_background.py     # Generate the macOS .dmg "drag to Applications" art
 │   ├── make_dmg.py                # Build the macOS .dmg (dmgbuild + packaging/dmg_settings.py)
-│   └── make_installer.py          # Build the Windows installer (iscc + packaging/heaviside.iss)
+│   ├── make_installer.py          # Build the Windows installer (iscc + packaging/heaviside.iss)
+│   └── render_screenshots.py      # Render the README example gallery (offscreen Qt → docs/images/examples/)
 ├── packaging/
 │   ├── entitlements.plist         # macOS hardened-runtime entitlements (signing)
 │   ├── dmg_settings.py            # dmgbuild layout for the drag-to-Applications image
@@ -2647,7 +2648,8 @@ heaviside/
     ├── test_components_library.py # definitions.json → registry/codegen reconstruction
     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
     ├── test_latex_security.py     # LaTeX-pipeline security: -no-shell-escape + no shell=True (mathrender, preview, component render)
-    └── test_componenteditor.py    # editor renderer/draft core + offscreen window smoke
+    ├── test_componenteditor.py    # editor renderer/draft core + offscreen window smoke
+    └── test_screenshots.py        # README example-gallery renderer: manifest/README sync + framed render (offscreen Qt)
 ```
 
 Note: the `assets/components/` directory has been removed. All component rendering is handled programmatically via `ComponentItem.paint()`.
@@ -2726,6 +2728,30 @@ is padded onto a transparent square canvas first, so the icon is never distorted
 (After replacing the icon you may need to clear the OS icon cache — relaunch the
 Dock on macOS, or note Windows caches `.exe` icons — to see the change on an
 already-seen bundle.)
+
+**README gallery screenshots.** The README's 2×2 example gallery
+(`docs/images/examples/*.png`) is generated, not hand-captured.
+`scripts/render_screenshots.py` opens four bundled examples (Boost Converter,
+4:1 MUX, ESC Cell Model, Porous Electrode Interface) in the real `MainWindow`
+under Qt's offscreen platform — palette, canvas, inspector, and the live
+CircuiTikZ source/PDF preview — two on the light theme and two on the dark
+one, then grabs the whole 1600×1000 window. Before each grab it waits for the
+async work to settle: the math-label pipeline drains (the dispatcher's
+callback map empties and the pool idles) and, when a `pdflatex` is available,
+the preview worker reports ready/error; then the view is fit to the
+schematic. Importing the script is side-effect-free (tests read the `SHOTS`
+manifest); `main()`'s bootstrap redirects QSettings to a throwaway directory
+(the developer's real preferences are neither read nor written), disables the
+startup update check, and stubs `check_dependencies` — both produce modal
+dialogs that would block an offscreen run. The release workflow's
+`screenshots` job installs a minimal texlive (pdflatex + standalone +
+circuitikz, no dvisvgm — math labels go through the deterministic bundled
+ziamath fallback) so the preview pane compiles, re-runs the script on every
+version tag, and commits the images to `main` only when the pixels changed
+(`[skip ci]` docs-only commit), so the gallery always matches the latest
+release. The manifest (`SHOTS`) is the single source: tests assert each entry
+exists under `examples/`, both themes are represented, and the README
+references every output file (§13, `tests/test_screenshots.py`).
 
 **Runtime resources.** Three resources are read at runtime and must be bundled:
 `assets/icon.png`, `components/geometry.json` (symbol geometry), and
@@ -3126,6 +3152,18 @@ when it points at a runnable file; a non-runnable override is ignored and
 resolution falls back to `PATH`; `resolve` is `None` when neither yields a tool;
 a blank value clears an override; `set_tool_paths` ignores unknown keys; and
 `is_runnable` accepts only existing executable files (not directories or blanks).
+
+#### README gallery screenshots (`test_screenshots.py`)
+
+The release-time README gallery renderer (§11.1 "README gallery screenshots"),
+offscreen Qt: the `SHOTS` manifest names exactly four bundled examples that all
+exist on disk, with unique output names and at least one light **and** one dark
+entry; the README references every output file (manifest↔README drift guard);
+and an actual script run (in a **subprocess** — the script redirects QSettings
+globally, which must not leak into the test process; importing the module is
+asserted side-effect-free by the same arrangement) captures the full dark-mode
+editor window: the PNG is exactly `WINDOW_SIZE`, predominantly dark, and shows
+real UI structure rather than a blank fill or a canvas-only crop.
 
 #### Component palette (`test_palette.py`)
 
