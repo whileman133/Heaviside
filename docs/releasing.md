@@ -20,7 +20,7 @@ Then record the release in `CHANGELOG.md` (move `[Unreleased]` into a new
 Two other "versions" are intentionally **separate** and not bumped with the app
 version: the spec document's own `**Version:**` header in `PROJECT_SPEC.md`
 (tracks the specification, not the app), and the `.hv` **file-format** version
-(`_FORMAT_VERSION` in `app/schematic/io.py`, currently `0.1`).
+(`_FORMAT_VERSION` in `app/schematic/io.py`, currently `0.3`).
 
 ## Release steps
 

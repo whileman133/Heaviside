@@ -33,73 +33,27 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 
 ## Features
 
-### Intelligent Canvas
-* **Grid-Disciplined Editing:** Quarter-grid CircuiTikZ snapping guarantees your components and wires line up.
-* **Smart Wiring:** Automatic junction dots at connections, optional open-terminal dots at loose ends, and optional line hops at wire crossings.
-* **Smart Routing:** Wires route at right angles, with customizable line style, weight, endpoint arrowheads, and typeset endpoint and mid-point labels.
-* **Transformations:** 90° rotation, horizontal mirroring, shape resizing, copy/paste, and undo/redo.
-* **Live PDF Preview:** Displays a real-time, compiled PDF rendering of your schematic directly inside the editor as you work.
+* **CircuiTikZ, visually.** Draw on a grid-snapped canvas and get clean, publication-ready CircuiTikZ source — with a live compiled PDF preview as you work.
+* **Typeset math everywhere.** Component and wire labels are LaTeX (`$R_1$`, `$v(t)$`), rendered on the canvas as they'll appear in print.
+* **Smart wiring.** Right-angle routing with automatic junction dots, open-terminal markers, and line hops at crossings.
+* **Symbols and blocks.** Passives, sources, semiconductors, op-amps, and configurable logic gates — plus boxes, circles, and free text for block diagrams.
+* **Exports that stay current.** Every save refreshes the `.tex` and compiled `.pdf`/`.svg`/`.eps` alongside your schematic, so your paper's figures never go stale.
 
-### Component & Block Libraries
-* **Schematic Symbols:** Built-in library with standard two-terminal parts (resistors, capacitors, inductors, diodes, sources), multi-terminal semiconductors (op-amps, MOSFETs, BJTs), logic gates with a configurable number of inputs, grounds, and power supply rails.
-* **Block-Diagram Primitives:** Build system diagrams using boxes, circles, and free text, with wires that snap dynamically to any point on a shape's perimeter.
-
-### Export Pipeline
-* **Automatic Export:** Every save updates the Heaviside schematic (`.hv`), CircuiTikZ code (`.tex`), and compiled vector graphics (`.pdf`, `.svg`, or `.eps`) on the filesystem. Your paper's figures stay up to date without manual exports.
-
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (700+ tests) and spec are kept in sync.
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (1000+ tests) and spec are kept in sync.
 
 ## Download
 
-Pre-built apps (always the latest release):
-
-- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg)
+- **macOS (Apple Silicon)** → [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg) — drag to Applications. *(Intel Macs: [build from source](#building-from-source).)*
 - **Windows (x64)** → [Heaviside-windows-x64-setup.exe](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64-setup.exe) (installer) · [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip) (portable)
-- **Linux (x64)** → [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage) (run anywhere) · [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz) (portable)
+- **Linux (x64)** → [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage) — `chmod +x`, then run · [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz) (portable)
 
-Or browse all releases (with checksums and release notes) on the
-[Releases page](https://github.com/whileman133/Heaviside/releases).
+All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 
-> **The macOS build is Apple Silicon (arm64) only.** It will not run on an
-> Intel Mac. Intel users can run Heaviside by [building from source](#packaging-a-standalone-app)
-> (`scripts/build.py` produces a native Intel `.app` on an Intel Mac).
-
-> **Works without LaTeX — for the most part.** Drawing, on-canvas typeset
-> equation labels (rendered by a bundled, pure-Python engine), CircuiTikZ source
-> generation, and `.tex` export all work with **no LaTeX installation**.
->
-> **Needs `pdflatex` (with the `circuitikz` package) on your `PATH`:** the live
-> **PDF preview pane** and the **PDF / EPS / SVG image exports** — these compile
-> the schematic with LaTeX. The app warns at startup if it can't find `pdflatex`.
-> When LaTeX *is* installed, the canvas labels use it for the highest fidelity.
-> If a tool isn't on your `PATH` (or you want a specific install), set its path
-> in **Preferences → Tools**.
->
-> **Optional: Poppler (for EPS and SVG export).** Exporting to **EPS** or **SVG**
-> additionally needs `pdftocairo` from [Poppler](https://poppler.freedesktop.org/).
-> PDF export needs only `pdflatex`, so you can skip Poppler unless you export EPS
-> or SVG.
-
-> **Installing:** On **macOS**, open the `.dmg` and drag **Heaviside** onto the
-> **Applications** folder. On **Windows**, run **`Heaviside-windows-x64-setup.exe`**
-> — it installs Heaviside (no admin needed), adds a Start Menu shortcut, and
-> associates `.hv` files so you can double-click a schematic to open it; an
-> uninstaller is added to *Add or remove programs*. (Prefer no install? The
-> `.zip` is portable — unzip and run `Heaviside.exe`.) On **Linux**, download the
-> **`.AppImage`**, make it executable (`chmod +x Heaviside-linux-x86_64.AppImage`)
-> and run it — no install, no root. (Prefer the folder form? The `.tar.gz` is
-> portable — `tar -xzf Heaviside-linux-x64.tar.gz` and run the `Heaviside`
-> executable inside.) The AppImage needs FUSE; on systems without it, run it with
-> `./Heaviside-linux-x86_64.AppImage --appimage-extract-and-run`.
->
-> **First launch:** if these builds are not code-signed/notarized, macOS and
-> Windows will warn on first open — see
-> [Opening the app with macOS](#opening-the-app-with-macos) for how to proceed.
-
-> **Stay up to date.** Heaviside checks GitHub for a newer release on startup and
-> tells you if one is available (it never downloads or installs anything by
-> itself, and sends no information about you). Turn it off in
-> **Preferences → Updates**, or check on demand from **Help → Check for Updates**.
+> **LaTeX is optional.** Everything works without it except the live PDF preview
+> and the PDF/EPS/SVG exports, which need `pdflatex` with the `circuitikz`
+> package on your `PATH` (EPS/SVG also need
+> [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo`). Custom tool paths:
+> **Preferences → Tools**.
 
 ## Getting started
 
@@ -118,38 +72,6 @@ Or browse all releases (with checksums and release notes) on the
    every save, automatically refreshes the co-located `.tex` and image exports so
    your paper's figures stay current. You can also export on demand from the
    **File → Export** menu (`.tex`, `.pdf`, `.svg`, `.eps`, `.png`).
-
-> **No LaTeX? Most of this still works.** Drawing, typeset on-canvas labels,
-> CircuiTikZ source, and `.tex` export need no LaTeX install. The live **PDF
-> preview** and **PDF/EPS/SVG** image exports need `pdflatex` (and Poppler for
-> EPS/SVG) — see the [Download](#download) notes above. Point Heaviside at a
-> specific install under **Preferences → Tools** if a tool isn't on your `PATH`.
-
-## Opening the app with macOS
-
-Open the downloaded `.dmg` and drag **Heaviside** onto the **Applications**
-folder, then launch it from Applications.
-
-When the release is **signed and notarized** with an Apple Developer ID, it
-opens normally — you can skip the rest of this section.
-
-If a build is **not** notarized (e.g. a fork, or before signing is configured),
-macOS Gatekeeper blocks it on first launch with a message like *“Apple could not
-verify ‘Heaviside.app’ is free of malware…”*. This does **not** indicate a
-problem with the app — it is how macOS treats software that hasn’t been notarized
-through a paid Developer ID. To open it the first time, do **one** of the
-following:
-
-- **System Settings → Privacy & Security:** try to open the app once (and dismiss
-  the warning), then open **System Settings → Privacy & Security**, scroll to the
-  **Security** section near the bottom, and click **“Open Anyway”** next to the
-  note about Heaviside. Confirm in the dialog. After this, it opens normally.
-- **Or** clear the download quarantine from Terminal, then open it:
-
-  ```sh
-  xattr -dr com.apple.quarantine /Applications/Heaviside.app
-  open /Applications/Heaviside.app
-  ```
 
 ## Architecture
 
@@ -214,7 +136,7 @@ Heaviside is released under the [MIT License](LICENSE).
 Its GUI toolkit, **PySide6 (Qt for Python), is licensed under the LGPL v3**.
 Using PySide6 as an ordinary dependency (the `uv run` workflow above) imposes no
 extra obligations on you. The other Python dependencies (`pydantic`, `qtawesome`)
-are MIT-licensed and impose no such requirement.
+are MIT-licensed and impose no requirements.
 
 ### Redistributing the standalone app (LGPL compliance)
 
