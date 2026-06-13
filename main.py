@@ -130,6 +130,14 @@ def main() -> None:
     from app.ui.controlstyle import install as install_control_style
     install_control_style(app)
 
+    # ``--no-latex``: pretend the TeX toolchain is absent, even on a machine that
+    # has it, so the no-LaTeX experience (preview "LaTeX not found" notice +
+    # ziamath label fallback) can be exercised. Must run before MainWindow, whose
+    # startup checks tool availability.
+    if "--no-latex" in sys.argv[1:]:
+        from app.preview import tools
+        tools.set_forced_missing({"pdflatex", "latex", "dvisvgm"})
+
     # Crash guard: installed after the app name is set so the log lands in the
     # right app-data folder. An uncaught exception logs + informs, never exits.
     _install_excepthooks()

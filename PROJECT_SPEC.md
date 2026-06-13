@@ -965,13 +965,20 @@ they place identically (`render_path(fragment, engine)`):
   `tests/test_latex_security.py`.
 - **`ziamath`** is a pure-Python, **no-install** fallback (a declared dependency
   that bundles the STIX Two Math OpenType-MATH font, with DejaVu Sans via
-  `ziafont` for plain text). Both packages load their fonts at import time, so the
-  PyInstaller bundle must ship their package data (`collect_data_files` for
-  `ziamath` and `ziafont` in `heaviside.spec`; guarded by
-  `test_pyinstaller_spec_bundles_ziamath_fonts`) — otherwise this fallback is dead
-  in the frozen app even though it works from source. The import guard treats a
-  missing module *or* a missing bundled font as "fallback unavailable" and degrades
-  to raw text rather than crashing. It uses `ziamath.Text`,
+  `ziafont` for plain text). Both packages load their fonts **at import time**, and
+  `ziamath` pulls in `latex2mathml`, which reads its `unimathsymbols.txt` symbol
+  table **at import time** too — so the PyInstaller bundle must ship all three
+  packages' data (`collect_data_files` for `ziamath`, `ziafont`, **and
+  `latex2mathml`** in `heaviside.spec`; guarded by
+  `test_pyinstaller_spec_bundles_ziamath_fonts`). Omitting any of them makes
+  `import ziamath` raise `FileNotFoundError` in the frozen app, which the guard
+  swallows — leaving canvas labels that rely on the vector path **blank** even
+  though it all works from source. (This was the cause of "no labels render when no
+  LaTeX is installed" on the packaged Linux/Windows builds.) The import guard
+  treats a missing module *or* missing bundled data as "fallback unavailable" and
+  returns no path rather than crashing; it also writes a one-time stderr warning
+  (`_warn_ziamath_unavailable_once`) so the otherwise-invisible failure is
+  diagnosable. It uses `ziamath.Text`,
   which renders mixed text with inline math **delimited by `$…$`** — matching the
   fragment convention the LaTeX engine consumes (`\strut %FRAGMENT%`), so plain
   text renders verbatim and `$…$` spans typeset as math. (`ziamath.Latex` is
@@ -1975,7 +1982,7 @@ pasted. Needs `pdflatex`; failures report as for export.
 
 ### 8.7 Dependencies
 
-- `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Checked at startup (`check_dependencies`); a warning dialog is shown if not found.
+- `pdflatex` is needed for the **PDF preview pane** (§8.1) and the **PDF/EPS/SVG image exports** (§8.6). Its presence is checked by `check_dependencies`. When it is missing, **no dialog is shown** — instead the preview pane itself displays a light, centred "LaTeX not found" notice (an info icon, an explanation that `pdflatex` is not on the `PATH`, and an OS-specific install recommendation linking MacTeX / MiKTeX / TeX Live, plus a pointer to Preferences ▸ Tools). The notice is set at startup when the tool is absent and refreshed on every compile attempt (`_PreviewPanel.show_no_latex()`), so configuring a path or installing LaTeX clears it on the next compile. Genuine compile *errors* (LaTeX present, document fails) still use the red error strip.
 - **Tool discovery.** Which binary runs for each external tool (`pdflatex`, `latex`, `dvisvgm`, `pdftocairo`, `inkscape`) is resolved by `app/preview/tools.py`: an explicit **user-configured path** (Preferences → Tools, §10.8) wins when it points at a runnable file, otherwise the tool is looked up on the `PATH` (augmented on macOS with common install dirs a Finder/Dock launch would not inherit), and finally any well-known install locations for that tool (`_EXTRA_TOOL_CANDIDATES` — Inkscape's macOS `.app` and Windows `Program Files` binaries). The UI pushes the configured paths into `tools.set_tool_paths()` at startup and when preferences change; `tools` has no Qt dependency, so the codegen/preview modules never touch `QSettings`.
 - **On-canvas equation labels need no LaTeX.** They render via the bundled, pure-Python **ziamath** engine when `latex`/`dvisvgm` are absent (§8.4); when those are present the higher-fidelity LaTeX engine is used instead. So drawing, typeset canvas labels, CircuiTikZ source generation, and the `.tex` export all work with no LaTeX install — only the PDF preview and image exports require it.
 - The PDF preview is rendered by the `QtPdf` module that ships with PySide6 — no external process and no Poppler. There is no `pdf2image`/Poppler dependency for the preview.
@@ -2206,6 +2213,14 @@ stores `None` (System) / `"light"` / `"dark"`, re-read at the **next launch**
 including System — survives a relaunch. `_sync_theme_action` checks the button
 matching the active mode (leaving the other two unchecked) so a programmatic mode
 change keeps the group in sync.
+Toolbar/ribbon icons are built by `_themed_qicon`, which tints qtawesome icons
+with `theme.ICON` and — crucially — pins the **disabled** state to
+`theme.ICON_MUTED` explicitly. Without that, qtawesome defaults `color_disabled`
+to `palette(Disabled, Text)` *resolved when the icon is created*; the toolbar is
+built before `_apply_color_scheme` installs the dark palette at a dark-persisted
+launch, so disabled buttons (undo/redo) captured the light palette's dark ink and
+rendered near-black on the dark toolbar
+(`test_disabled_toolbar_icon_uses_muted_ink_not_palette`).
 `MainWindow._apply_theme` swaps both palettes,
 re-applies the toolbar/ribbon stylesheets, re-tints the registered toolbar icons,
 asks each side panel to `apply_theme()` (the palette also invalidates its
@@ -2492,8 +2507,14 @@ A narrow vertical ribbon toolbar is docked on the **left edge** of the window (Q
 ### 10.8 Preferences
 
 **Edit → Preferences…** (`Ctrl+,`) opens a modal `PreferencesDialog`
-(`app/ui/preferences.py`). On macOS the action carries `QAction.PreferencesRole`
-so Qt relocates it to the standard application menu. Settings are persisted via
+(`app/ui/preferences.py`). **On macOS** the action carries
+`QAction.PreferencesRole` so Qt relocates it to the standard application menu
+(Heaviside ▸ Preferences). **Off macOS** the action carries `QAction.NoRole`
+(so a desktop with a global/unified menu bar that honours menu roles cannot pull
+it out of the in-window menu into a non-existent application menu, leaving it
+unreachable) and is added to **both the Edit and File menus** — the File
+duplicate matching where Windows/Linux users commonly look. Both branches are
+guarded by tests in `tests/test_mainwindow.py`. Settings are persisted via
 `QSettings` (keyed by the organization/application names set in `main.py`) and
 accessed through the typed `Preferences` wrapper rather than raw string keys.
 The dialog reads current values on open and writes them back only on **OK**;
@@ -2681,6 +2702,15 @@ path as `argv`, also handled by `_schematic_arg`. All call the shared
 `MainWindow.load_path`. At launch there is nothing to discard; a runtime macOS
 "open with" first guards unsaved work (`_confirm_discard`).
 
+**`--no-latex` launch flag (testing/debug).** Passing `--no-latex` makes
+`main.py` call `tools.set_forced_missing({"pdflatex", "latex", "dvisvgm"})`, which
+short-circuits `tools.resolve` to return `None` for those tools ahead of any
+override or PATH hit. This simulates a machine with no TeX install on one that
+has it, so the no-LaTeX experience — the preview's "LaTeX not found" notice
+(§8.7) and the ziamath canvas-label fallback (§8.4) — can be exercised. It is a
+developer aid, not part of the file-association path; `_schematic_arg` ignores it
+(it is not a `.hv` path).
+
 **Windows installer (`HeavisideSetup.exe`).** The Windows release artifact is an
 **Inno Setup** installer ([`packaging/heaviside.iss`](packaging/heaviside.iss),
 built by `scripts/make_installer.py`, which runs `iscc` with the version/paths
@@ -2756,8 +2786,9 @@ the preview worker reports ready/error; then the view is fit to the
 schematic. Importing the script is side-effect-free (tests read the `SHOTS`
 manifest); `main()`'s bootstrap redirects QSettings to a throwaway directory
 (the developer's real preferences are neither read nor written), disables the
-startup update check, and stubs `check_dependencies` — both produce modal
-dialogs that would block an offscreen run. The release workflow's
+startup update check (no network), and stubs `check_dependencies` to report the
+toolchain present (so the preview compiles rather than showing the no-LaTeX
+notice). The release workflow's
 `screenshots` job installs a minimal texlive (pdflatex + standalone +
 circuitikz, no dvisvgm — math labels go through the deterministic bundled
 ziamath fallback) so the preview pane compiles, re-runs the script on every
@@ -2772,10 +2803,11 @@ references every output file (§13, `tests/test_screenshots.py`).
 `components/definitions.json` (per-component registry/codegen data + the
 `origin_svg` placement constant — read by `app/components/library.py`), and
 `pyproject.toml` (the runtime version source — `app/version.py` reads it via
-`resource_path`; the project declares no `[build-system]`, so it is never
-installed as a package and `importlib.metadata` can never resolve the version.
-A frozen build without this file reports **0.0.0** and the update notifier
-nags on every launch — the v0.3.0 Windows-release bug. As defence in depth,
+`resource_path`. PyInstaller does not bundle the package's dist-info metadata, so
+`importlib.metadata` cannot resolve the version inside the frozen app and this
+bundled file is its only version source. A frozen build without this file reports
+**0.0.0** and the update notifier nags on every launch — the v0.3.0
+Windows-release bug. As defence in depth,
 `MainWindow._maybe_check_for_updates_on_startup` skips the automatic probe
 when the version resolves to the `0.0.0` sentinel). The
 geometry is **self-contained** — it bakes in every symbol's geometry, including
@@ -2827,11 +2859,10 @@ about the user is sent.
 
 Behaviour and invariants:
 
-- **Default on, with a one-time disclosure.** The first time the startup check
-  would run, a plain-language dialog explains that the app contacts GitHub on
-  launch and how to turn it off (`Preferences.update_check_disclosed` records
-  that it has been shown). Help ▸ **Check for Updates** runs the same check on
-  demand and always reports a result (including "you're up to date").
+- **Default on, opt-out in Preferences ▸ Updates.** The startup check runs
+  silently unless it finds a newer release (no dialog announces that the check is
+  happening). Help ▸ **Check for Updates** runs the same check on demand and
+  always reports a result (including "you're up to date").
 - **Pre-releases are considered.** The probe queries the releases *list*
   (`/releases?per_page=…`), not `/releases/latest` — the latter silently omits
   pre-releases, which alpha builds are tagged as (§docs/releasing.md). Drafts are
@@ -2895,6 +2926,15 @@ dependencies = [
 [project.scripts]
 heaviside = "main:main"
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]          # the package, plus the top-level entry module below
+include = ["main.py"]
+dev-mode-dirs = ["."]       # editable install exposes `main` + keeps resource_path valid
+
 [dependency-groups]
 dev = [
     "pytest>=7.0",
@@ -2916,6 +2956,14 @@ omit = [
     "app/canvas/items.py",
 ]
 ```
+
+The `[build-system]` makes the project an installable (Hatchling) package, so uv
+installs it **editable** into `.venv` and the `heaviside` console script works
+(`uv run heaviside`). The wheel ships only the `app` package and the top-level
+`main` entry module; `dev-mode-dirs = ["."]` points the editable install at the
+repo root so both import and `resource_path` keeps resolving bundled data from the
+checkout. The frozen build is unaffected — PyInstaller drives `main.py` directly
+and reads the version from the bundled `pyproject.toml` (§11.1).
 
 ### 12.4 Common Commands
 
@@ -3118,7 +3166,7 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 
 #### Math Render (`test_mathrender.py`)
 
-On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. LaTeX render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop. The **ziamath** engine tests need no LaTeX (it is a bundled dependency): it renders text, mixed text+math, fractions and Greek to a non-empty baseline-normalised path; `$…$` delimiters typeset as math rather than literal dollar glyphs (`test_ziamath_strips_math_delimiters` — guards the `ziamath.Text` vs math-only `ziamath.Latex` choice); `_active_engine` selects `latex` when present else `ziamath`; `set_force_ziamath` forces ziamath; and auto-selection falls back to ziamath when `latex`/`dvisvgm` are absent. A packaging guard (`test_pyinstaller_spec_bundles_ziamath_fonts`) asserts `heaviside.spec` keeps the `collect_data_files` lines for `ziamath` and `ziafont`, so their import-time fonts (STIX Two Math, DejaVu Sans) cannot silently drop out of the frozen bundle. The **cache hardening** is pinned here too: a transient render or baseline failure is **not memoised** (it is retried and self-heals; successes are memoised in a bounded memo), a **corrupt on-disk cache entry is discarded and recompiled** rather than trusted, and the disk cache directory is **per-user and private (0700)**, falling back to a fresh `mkdtemp` when the expected path has been squatted by another user. The **async delivery invariant** (§5.8) is pinned ungated: `test_render_async_single_dispatcher_no_per_request_qobject` — one process-lifetime dispatcher, no per-request signals QObject (the off-thread QObject-destruction segfault class), and this test's callback tokens drain after delivery; `test_render_async_callbacks_run_on_ui_thread` — results land on the UI thread even with the memo cleared and the pool churning.
+On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. LaTeX render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop. The **ziamath** engine tests need no LaTeX (it is a bundled dependency): it renders text, mixed text+math, fractions and Greek to a non-empty baseline-normalised path; `$…$` delimiters typeset as math rather than literal dollar glyphs (`test_ziamath_strips_math_delimiters` — guards the `ziamath.Text` vs math-only `ziamath.Latex` choice); `_active_engine` selects `latex` when present else `ziamath`; `set_force_ziamath` forces ziamath; and auto-selection falls back to ziamath when `latex`/`dvisvgm` are absent. Packaging guards assert `heaviside.spec` keeps the `collect_data_files` lines for `ziamath`, `ziafont`, **and `latex2mathml`** (`test_pyinstaller_spec_bundles_ziamath_fonts`), and that `latex2mathml`'s `unimathsymbols.txt` table is actually collectable (`test_latex2mathml_data_file_is_collectable`) — so the import-time data (STIX Two Math / DejaVu Sans fonts and the symbol table) cannot silently drop out of the frozen bundle and leave canvas labels blank when no LaTeX is installed. The **cache hardening** is pinned here too: a transient render or baseline failure is **not memoised** (it is retried and self-heals; successes are memoised in a bounded memo), a **corrupt on-disk cache entry is discarded and recompiled** rather than trusted, and the disk cache directory is **per-user and private (0700)**, falling back to a fresh `mkdtemp` when the expected path has been squatted by another user. The **async delivery invariant** (§5.8) is pinned ungated: `test_render_async_single_dispatcher_no_per_request_qobject` — one process-lifetime dispatcher, no per-request signals QObject (the off-thread QObject-destruction segfault class), and this test's callback tokens drain after delivery; `test_render_async_callbacks_run_on_ui_thread` — results land on the UI thread even with the memo cleared and the pool churning.
 
 #### Symbol Geometry (`test_svgsym.py`)
 
@@ -3149,8 +3197,7 @@ same backing file; `_to_bool` normalizes the string booleans `QSettings` may
 return; the **per-tool path** accessors default to empty and round-trip (trimmed);
 and the dialog persists all checkbox state **and the tool-path fields** on accept
 and discards them on cancel. The **update preferences** default correctly
-(`check_updates_on_startup` **on**, `skipped_update_version` empty,
-`update_check_disclosed` off) and round-trip.
+(`check_updates_on_startup` **on**, `skipped_update_version` empty) and round-trip.
 
 #### Update Notifier (`test_update.py`)
 
@@ -3265,9 +3312,19 @@ follows the undo-stack save point**; a new document declares the current
 format version; `load_path` opens a schematic, reports a bad file, and
 **warns about dangerous LaTeX** in labels; and **auto-export runs off the UI
 thread, is single-flight, and a failure in one format does not block the
-others**. MainWindow tests neutralise the startup
-dependency check (an autouse fixture) so a missing tool never pops a modal that
-would hang a headless run.
+others**. The **Preferences menu placement** (§10.8) is pinned across platforms:
+off macOS the action carries `NoRole` and appears in **both** the Edit and File
+menus (`test_preferences_reachable_in_menus_off_macos`), while on macOS it keeps
+`PreferencesRole` and is **not** duplicated into File
+(`test_preferences_uses_app_menu_role_on_macos`) — both branches driven by
+monkeypatching `sys.platform`. The **no-LaTeX preview notice** (§8.7) is pinned:
+`_PreviewPanel.show_no_latex()` makes the centred notice the exclusive state
+(image and error hidden) and names the missing `pdflatex`
+(`test_preview_panel_no_latex_notice_is_exclusive_state`), and an auto-compile
+with `pdflatex` absent shows the notice and **does not** spawn the compile worker
+(`test_auto_compile_shows_no_latex_notice_and_skips_worker`). MainWindow tests
+stub the dependency check to "present" (an autouse fixture) so the notice and a
+doomed compile never fire in unrelated tests.
 
 #### Welcome screen & Help dialog (`test_welcome.py`)
 

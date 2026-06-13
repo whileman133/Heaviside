@@ -372,11 +372,13 @@ def test_render_latex_uses_ziamath_when_forced() -> None:
 
 
 def test_pyinstaller_spec_bundles_ziamath_fonts() -> None:
-    """The frozen app must bundle ziamath/ziafont package data (their fonts).
+    """The frozen app must bundle ziamath/ziafont/latex2mathml package data.
 
-    ziamath/ziafont load STIX Two Math / DejaVu Sans at import time, so without
-    these collect_data_files() lines the no-LaTeX math fallback is dead in the
-    PyInstaller bundle even though it works in the dev venv. This guards the
+    ziamath/ziafont load STIX Two Math / DejaVu Sans, and the latex2mathml they
+    pull in reads ``unimathsymbols.txt``, all at import time — so without these
+    collect_data_files() lines `import ziamath` raises in the PyInstaller bundle
+    (FileNotFoundError), the no-LaTeX math fallback is dead, and every canvas
+    label renders blank even though it all works in the dev venv. This guards the
     heaviside.spec lines from silently regressing.
     """
     from pathlib import Path
@@ -386,6 +388,17 @@ def test_pyinstaller_spec_bundles_ziamath_fonts() -> None:
     )
     assert 'collect_data_files("ziamath")' in spec
     assert 'collect_data_files("ziafont")' in spec
+    assert 'collect_data_files("latex2mathml")' in spec
+
+
+def test_latex2mathml_data_file_is_collectable() -> None:
+    """latex2mathml's ``unimathsymbols.txt`` (loaded at import) must be something
+    PyInstaller's collect_data_files() actually finds — guards against the table
+    moving or the dependency changing shape under us."""
+    from PyInstaller.utils.hooks import collect_data_files
+
+    files = collect_data_files("latex2mathml")
+    assert any(src.endswith("unimathsymbols.txt") for src, _dest in files), files
 
 
 def test_slot_reversed_detects_direction_modifier() -> None:

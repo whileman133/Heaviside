@@ -32,11 +32,10 @@ from app.ui.preferences import Preferences  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _no_dependency_modal(monkeypatch):
-    """Stop MainWindow's startup checks from popping a *modal* QMessageBox that
-    blocks a headless run: the dependency warning (when a tool like pdflatex is
-    absent) and the first-run update-check disclosure. Also keeps the live update
-    probe off the network. Tests don't assert on either, so neutralise both for
-    every MainWindow built here.
+    """Pretend the LaTeX toolchain is present so MainWindow's startup compile and
+    the no-LaTeX preview notice don't kick in, and stub the startup update probe
+    so it never hits the network. Tests that care about either drive them
+    explicitly; the rest get a clean, side-effect-free MainWindow.
     """
     monkeypatch.setattr(mw, "check_dependencies", lambda: [])
     monkeypatch.setattr(
@@ -615,6 +614,129 @@ def test_examples_menu_groups_by_category(tmp_path):
     assert sorted(leaves) == expected
 
 
+def _menus_containing(win, action) -> set[str]:
+    """The set of top-level menu names (mnemonics stripped) that hold *action*.
+
+    Done in a single inline pass: holding a QMenu wrapper across a helper boundary
+    trips a PySide object-lifetime quirk, so each menu is inspected while live.
+    """
+    names: set[str] = set()
+    for top in win.menuBar().actions():
+        menu = top.menu()
+        if menu is None:
+            continue
+        if action in menu.actions():
+            names.add(menu.title().replace("&", ""))
+    return names
+
+
+def test_preferences_reachable_in_menus_off_macos(tmp_path, monkeypatch):
+    """On Linux/Windows the Preferences action must carry NoRole (so a global menu
+    bar can't relocate it out of view) and appear in BOTH the Edit and File menus.
+
+    Regression: with PreferencesRole on a Linux desktop that honours menu roles,
+    Preferences was pulled into a non-existent application menu and unreachable.
+    """
+    from PySide6.QtGui import QAction
+
+    monkeypatch.setattr(mw.sys, "platform", "linux")
+    win = _win(tmp_path)
+
+    act = win._act_preferences
+    assert act.menuRole() == QAction.NoRole
+    assert {"Edit", "File"} <= _menus_containing(win, act), "Preferences must be in Edit and File"
+
+
+def test_preferences_uses_app_menu_role_on_macos(tmp_path, monkeypatch):
+    """On macOS the action keeps PreferencesRole (Qt relocates it to the
+    application menu) and is NOT duplicated into the File menu."""
+    from PySide6.QtGui import QAction
+
+    monkeypatch.setattr(mw.sys, "platform", "darwin")
+    win = _win(tmp_path)
+
+    act = win._act_preferences
+    assert act.menuRole() == QAction.PreferencesRole
+    assert "File" not in _menus_containing(win, act), "should not duplicate in File on macOS"
+
+
+def test_preview_panel_no_latex_notice_is_exclusive_state(tmp_path):
+    """`show_no_latex()` hands the whole preview area to a centred notice (image
+    and error hidden) and names the missing tool; a rendered image takes it back.
+    The three states (image / notice / error) are mutually exclusive."""
+    from PySide6.QtGui import QImage
+
+    panel = mw._PreviewPanel()
+
+    panel.show_no_latex()
+    assert panel._notice.isHidden() is False
+    assert panel._img_label.isHidden() is True
+    assert panel._error_label.isHidden() is True
+    assert "pdflatex" in panel._notice_text.text()
+
+    img = QImage(4, 4, QImage.Format_ARGB32)
+    img.fill(0)
+    panel.set_image(img)
+    assert panel._img_label.isHidden() is False
+    assert panel._notice.isHidden() is True
+
+    panel.set_error("boom")
+    assert panel._error_label.isHidden() is False
+    assert panel._notice.isHidden() is True
+
+
+def test_auto_compile_shows_no_latex_notice_and_skips_worker(tmp_path, monkeypatch):
+    """When pdflatex is missing, an auto-compile shows the no-LaTeX notice and
+    does NOT spawn the compile worker (which would only fail), replacing the old
+    modal dependency warning."""
+    monkeypatch.setattr(mw, "check_dependencies", lambda: ["pdflatex not found."])
+    win = _win(tmp_path)
+
+    compiled: list[str] = []
+    monkeypatch.setattr(win._preview_worker, "request_compile", compiled.append)
+    win._on_auto_compile()
+
+    assert compiled == [], "compile worker must not run when pdflatex is missing"
+    assert win._preview_panel._notice.isHidden() is False
+
+
+def test_disabled_toolbar_icon_uses_muted_ink_not_palette():
+    """A disabled toolbar icon must render in the theme's muted ink, independent of
+    the application palette. Regression: qtawesome defaults `color_disabled` to
+    `palette(Disabled, Text)` resolved at icon-creation time; toolbar icons are
+    built before the dark palette is applied at a dark-persisted launch, so the
+    disabled undo/redo captured the light palette's dark ink and rendered
+    near-black on the dark toolbar."""
+    from PySide6.QtGui import QIcon, QPalette, QColor
+    from PySide6.QtCore import QSize
+    from app.ui import theme
+
+    qapp = QApplication.instance()
+    saved = qapp.palette()
+    try:
+        # The adverse condition: dark theme tokens, but an app palette whose
+        # Disabled/Text is near-black (as it is before _apply_color_scheme runs).
+        theme.set_dark(True)
+        pal = QPalette(saved)
+        pal.setColor(QPalette.Disabled, QPalette.Text, QColor("#101010"))
+        qapp.setPalette(pal)
+
+        icon = mw.MainWindow._themed_qicon("fa5s.undo")
+        img = icon.pixmap(QSize(24, 24), QIcon.Mode.Disabled).toImage()
+        reds = [
+            img.pixelColor(x, y).red()
+            for y in range(0, 24, 2)
+            for x in range(0, 24, 2)
+            if img.pixelColor(x, y).alpha() > 100
+        ]
+        # Muted ink (ICON_MUTED ≈ #9aa0a8, red≈154), not the palette's near-black.
+        assert reds, "icon rendered no opaque ink"
+        assert max(reds) > 120, f"disabled ink too dark ({max(reds)}); palette leaked in"
+    finally:
+        qapp.setPalette(saved)
+        theme.set_dark(False)
+
+
 def test_load_path_opens_a_schematic(tmp_path):
     """load_path() loads a saved .hv into the editor (the shared loader behind
     File ▸ Open and the command-line / file-association launch)."""
@@ -1141,7 +1263,6 @@ def test_startup_update_check_skipped_when_version_unresolved(tmp_path, monkeypa
     win = _win(tmp_path)
     try:
         win._prefs.check_updates_on_startup = True
-        win._prefs.update_check_disclosed = True
 
         monkeypatch.setattr(mw, "__version__", "0.0.0")
         _REAL_STARTUP_UPDATE_CHECK(win)

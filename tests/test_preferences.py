@@ -133,12 +133,6 @@ def test_skipped_update_version_roundtrip(prefs: Preferences) -> None:
     assert prefs.skipped_update_version == "0.9.0"
 
 
-def test_update_check_disclosed_default_and_roundtrip(prefs: Preferences) -> None:
-    assert prefs.update_check_disclosed is False
-    prefs.update_check_disclosed = True
-    assert prefs.update_check_disclosed is True
-
-
 def test_to_bool_coerces_strings() -> None:
     """QSettings may return booleans as strings; _to_bool normalizes them."""
     assert _to_bool("true") is True

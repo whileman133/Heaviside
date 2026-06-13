@@ -135,8 +135,8 @@ toml = [
 
 [[package]]
 name = "heaviside"
-version = "0.3.1"
-source = { virtual = "." }
+version = "0.1.0"
+source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
     { name = "pyside6" },

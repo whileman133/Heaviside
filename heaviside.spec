@@ -69,10 +69,12 @@ datas = [
     # build REGISTRY and the codegen tables (see spec/component-editor.md).
     ("components/definitions.json", "components"),
     # The runtime version source: app/version.py reads this via resource_path.
-    # The project declares no [build-system], so it is never installed as a
-    # package and importlib.metadata can never resolve it — this bundled file
-    # is the ONLY way a frozen build knows its version. Without it the app
-    # reports 0.0.0 and the update notifier nags on every launch.
+    # PyInstaller does not bundle the package's dist-info metadata, so inside the
+    # frozen app importlib.metadata.version("heaviside") raises PackageNotFoundError
+    # and this bundled file is the ONLY way the build knows its version. Without it
+    # the app reports 0.0.0 and the update notifier nags on every launch. (From an
+    # installed/editable source checkout the metadata resolves directly; this is
+    # purely the frozen-build fallback.)
     ("pyproject.toml", "."),
 ]
 # Example schematics for the File → Open Example menu. Only the .hv sources are
@@ -89,6 +91,12 @@ datas += collect_data_files("qtawesome")
 # PyInstaller does not collect them automatically (neither package ships a hook).
 datas += collect_data_files("ziamath")
 datas += collect_data_files("ziafont")
+# ziamath imports latex2mathml, which reads its bundled `unimathsymbols.txt`
+# table AT IMPORT TIME (latex2mathml/symbols_parser.py). PyInstaller bundles the
+# .py modules but not that data file, so in a frozen build `import ziamath`
+# raises FileNotFoundError — silently caught in mathrender, leaving every canvas
+# label blank when no LaTeX is installed. Collect the table so the fallback works.
+datas += collect_data_files("latex2mathml")
 # Third-party license notices. The bundled Qt/PySide6 is LGPLv3, which requires
 # the attribution notice and license text to travel *inside* the distributed
 # application (.app / Heaviside/ folder). Ship the whole licenses/ folder.

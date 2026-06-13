@@ -55,8 +55,8 @@ def test_frozen_without_any_source_falls_back_to_zero(tmp_path, monkeypatch) -> 
 
 
 def test_spec_bundles_version_source() -> None:
-    """heaviside.spec must bundle pyproject.toml — the project declares no
-    [build-system], so it is never installed as a package and the bundled
-    file is the only version source a frozen build has."""
+    """heaviside.spec must bundle pyproject.toml — PyInstaller does not bundle the
+    package's dist-info metadata, so importlib.metadata can't resolve the version
+    inside the frozen app and the bundled file is the only version source it has."""
     spec = (_ROOT / "heaviside.spec").read_text(encoding="utf-8")
     assert '("pyproject.toml", ".")' in spec

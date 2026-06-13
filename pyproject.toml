@@ -1,6 +1,6 @@
 [project]
 name = "heaviside"
-version = "0.3.1"
+version = "0.1.0"
 description = "Graphical editor for CircuiTikZ circuit diagrams"
 requires-python = ">=3.11"
 dependencies = [
@@ -12,6 +12,23 @@ dependencies = [
 
 [project.scripts]
 heaviside = "main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# The importable code is the `app` package plus the top-level `main` module that
+# the console script (`heaviside = main:main`) targets. Everything else at the
+# repo root (tests, examples, docs, the PyInstaller spec) is not part of the
+# package and is deliberately excluded.
+packages = ["app"]
+include = ["main.py"]
+# uv installs the project itself in editable mode. Point the editable install at
+# the repo ROOT so BOTH `app` and the top-level `main` module import, and
+# app/resources.py keeps resolving bundled data relative to the checkout
+# (resource_path walks app/ -> parents[1] == repo root).
+dev-mode-dirs = ["."]
 
 [dependency-groups]
 dev = [

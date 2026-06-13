@@ -63,6 +63,22 @@ _MAC_TOOL_DIRS = (
 #: "fall back to PATH". Only paths that point at a runnable file are honoured.
 _overrides: dict[str, str] = {}
 
+#: Tools to pretend are *not installed*, regardless of overrides or PATH. Set by
+#: the ``--no-latex`` launch flag (main.py) so the no-LaTeX experience — the
+#: preview's "LaTeX not found" notice and the ziamath label fallback — can be
+#: exercised on a machine that actually has a TeX install. Empty in normal use.
+_forced_missing: set[str] = set()
+
+
+def set_forced_missing(names) -> None:  # noqa: ANN001
+    """Force the given tool *names* to resolve as missing (testing/debug aid).
+
+    Replaces the current forced-missing set. Pass an empty iterable to clear it.
+    Faithful across every consumer because it short-circuits :func:`resolve`.
+    """
+    global _forced_missing
+    _forced_missing = {n for n in names if n in TOOLS}
+
 
 def ensure_tool_dirs_on_path() -> None:
     """Append common macOS TeX/Poppler bin dirs to PATH if absent.
@@ -120,7 +136,12 @@ def resolve(name: str) -> str | None:
     A configured override wins when it points at a runnable file; otherwise the
     tool is looked up on the (augmented) ``PATH``; finally any well-known
     install locations (:data:`_EXTRA_TOOL_CANDIDATES`) are checked.
+
+    Tools in :data:`_forced_missing` (the ``--no-latex`` flag) always return
+    ``None``, ahead of every other source, to simulate an absent install.
     """
+    if name in _forced_missing:
+        return None
     override = _overrides.get(name)
     if override and is_runnable(override):
         return override

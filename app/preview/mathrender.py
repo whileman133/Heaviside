@@ -363,6 +363,30 @@ def _ziamath_svg_to_path(svg_text: str) -> QPainterPath:
 # concurrent layout corrupts the shared state.
 _ziamath_lock = threading.Lock()
 
+#: Guards the import-failure warning so a broken bundle logs once, not per label.
+_ziamath_warned = False
+
+
+def _warn_ziamath_unavailable_once(exc: BaseException) -> None:
+    """Emit a single stderr warning the first time ziamath fails to import.
+
+    In a correctly built app this never fires. It only triggers when the
+    no-LaTeX math fallback is broken — typically a packaging regression where
+    ziamath/ziafont fonts or latex2mathml's ``unimathsymbols.txt`` weren't
+    bundled — turning an otherwise invisible "labels just don't appear" symptom
+    into something diagnosable.
+    """
+    global _ziamath_warned
+    if _ziamath_warned:
+        return
+    _ziamath_warned = True
+    import sys
+    sys.stderr.write(
+        "Heaviside: ziamath math fallback unavailable "
+        f"({type(exc).__name__}: {exc}); canvas labels will not render without a "
+        "LaTeX install. This usually means a packaging problem.\n"
+    )
+
 
 def _ziamath_path(fragment: str) -> QPainterPath | None:
     """Render *fragment* to a QPainterPath via ziamath, or ``None`` if ziamath is
@@ -377,11 +401,14 @@ def _ziamath_path(fragment: str) -> QPainterPath | None:
     with _ziamath_lock:
         try:
             import ziamath
-        except Exception:  # noqa: BLE001 - missing module OR missing bundled font
-            # ziamath/ziafont load their fonts (STIX Two Math, DejaVu Sans) at import
-            # time. A bundling slip would raise FileNotFoundError here, not
-            # ImportError; treat any import failure as "fallback unavailable" so the
-            # label degrades to raw text instead of crashing the render.
+        except Exception as exc:  # noqa: BLE001 - missing module OR missing bundled data
+            # ziamath/ziafont load their fonts (STIX Two Math, DejaVu Sans), and the
+            # latex2mathml it pulls in reads `unimathsymbols.txt`, all AT IMPORT TIME.
+            # A bundling slip raises FileNotFoundError here, not ImportError — which is
+            # why a frozen build with the data files missing renders every label blank.
+            # Returning None means "no math path"; the caller paints nothing. Warn once
+            # so that silent, undiagnosable failure leaves a trail in the logs.
+            _warn_ziamath_unavailable_once(exc)
             return None
         try:
             svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()

@@ -18,10 +18,12 @@ from app.preview import tools
 
 @pytest.fixture(autouse=True)
 def _clear_overrides():
-    """Keep the module-level overrides from leaking between tests."""
+    """Keep the module-level overrides / forced-missing from leaking between tests."""
     tools.set_tool_paths({})
+    tools.set_forced_missing(set())
     yield
     tools.set_tool_paths({})
+    tools.set_forced_missing(set())
 
 
 def _make_exe(path) -> str:
@@ -50,6 +52,31 @@ def test_resolve_none_when_absent(monkeypatch):
     monkeypatch.setattr(tools.shutil, "which", lambda name: None)
     assert tools.resolve("pdftocairo") is None
     assert tools.available("pdftocairo") is False
+
+
+def test_forced_missing_overrides_path_and_override(tmp_path, monkeypatch):
+    """``--no-latex`` (set_forced_missing) makes a tool resolve as absent ahead of
+    every other source — even a runnable override or a PATH hit — and clears back."""
+    exe = _make_exe(tmp_path / "pdflatex")
+    monkeypatch.setattr(tools.shutil, "which", lambda name: exe)
+    tools.set_tool_path("pdflatex", exe)            # would normally win
+    assert tools.available("pdflatex") is True
+
+    tools.set_forced_missing({"pdflatex"})
+    assert tools.resolve("pdflatex") is None
+    assert tools.available("pdflatex") is False
+    # Other tools are unaffected.
+    assert tools.resolve("dvisvgm") == exe
+
+    tools.set_forced_missing(set())
+    assert tools.available("pdflatex") is True
+
+
+def test_forced_missing_ignores_unknown_names():
+    """Only real TOOLS names are honoured (a typo can't silently disable nothing
+    or everything)."""
+    tools.set_forced_missing({"bogus"})
+    assert tools._forced_missing == set()
 
 
 def test_blank_clears_override(tmp_path, monkeypatch):

@@ -22,6 +22,7 @@ The preview occupies the lower-right of the bottom strip, beside the source.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -354,8 +355,13 @@ class MainWindow(QMainWindow):
             self._on_color_scheme_changed
         )
 
-        # -- Dependency warnings (non-blocking) ----------------------------
-        self._check_and_warn_dependencies()
+        # -- LaTeX toolchain notice ----------------------------------------
+        # No startup dialog: if pdflatex is absent, the preview pane itself shows
+        # a light, centred "LaTeX not found" notice with install guidance (set
+        # here so it is visible the moment the editor is shown, and refreshed on
+        # every compile attempt).
+        if check_dependencies():
+            self._preview_panel.show_no_latex()
 
         # -- Update check (non-blocking, opt-out) --------------------------
         # Deferred so it never delays first paint; the network probe itself runs
@@ -405,10 +411,23 @@ class MainWindow(QMainWindow):
         pal.setColor(QPalette.WindowText, QColor(theme.TEXT))
         self.setPalette(pal)
 
+    @staticmethod
+    def _themed_qicon(name: str):
+        """A qtawesome icon tinted for the current theme.
+
+        The **disabled** state is pinned to ``theme.ICON_MUTED`` explicitly.
+        Without it, qtawesome defaults ``color_disabled`` to
+        ``palette(Disabled, Text)`` resolved *at icon-creation time* — and toolbar
+        icons are built before the dark palette is applied at a dark-persisted
+        launch, so disabled buttons (undo/redo) captured the light palette's dark
+        ink and rendered near-black on the dark toolbar.
+        """
+        return qta.icon(name, color=theme.ICON, color_disabled=theme.ICON_MUTED)
+
     def _themed_icon(self, action: QAction, name: str) -> None:
-        """Tint *action*'s icon with the current ``theme.ICON`` and remember the
+        """Tint *action*'s icon for the current theme and remember the
         (action, name) pair so it can be re-tinted on a theme change."""
-        action.setIcon(qta.icon(name, color=theme.ICON))
+        action.setIcon(self._themed_qicon(name))
         self._themed_icons.append((action, name))
 
     def _on_color_scheme_changed(self, _scheme=None) -> None:
@@ -508,7 +527,7 @@ class MainWindow(QMainWindow):
         if divider is not None:
             divider.setStyleSheet(theme.toolbar_dotted_divider_qss())
         for action, name in self._themed_icons:
-            action.setIcon(qta.icon(name, color=theme.ICON))
+            action.setIcon(self._themed_qicon(name))
         self._sync_theme_action()  # state-dependent icon (monitor/sun/moon), re-tinted
         self._view.setStyleSheet(theme.scrollbar_qss())  # canvas scrollbars
         # Side panels rebuild their own theme-token stylesheets.
@@ -691,10 +710,24 @@ class MainWindow(QMainWindow):
 
         self._act_preferences = QAction("&Preferences…", self)
         self._act_preferences.setShortcut(QKeySequence("Ctrl+,"))
-        # On macOS this role relocates the item to the application menu.
-        self._act_preferences.setMenuRole(QAction.PreferencesRole)
+        # macOS: PreferencesRole relocates this to the application menu (Heaviside ▸
+        # Preferences), the native convention. Off macOS we force NoRole: some Linux
+        # desktops with a global/unified menu bar honour the role and pull the item
+        # out of the in-window Edit menu into an app menu that isn't shown, making
+        # Preferences unreachable. NoRole keeps it put in Edit on every platform.
+        self._act_preferences.setMenuRole(
+            QAction.PreferencesRole if sys.platform == "darwin" else QAction.NoRole
+        )
         self._act_preferences.triggered.connect(self._on_preferences)
         edit_menu.addAction(self._act_preferences)
+
+        # Off macOS, also surface Preferences in the File menu (above Quit) — a
+        # second home for the same action, since users coming from Windows/Linux
+        # apps often look in File first. On macOS it lives in the application menu
+        # (PreferencesRole above), so the File duplicate is skipped there.
+        if sys.platform != "darwin":
+            file_menu.insertAction(act_quit, self._act_preferences)
+            file_menu.insertSeparator(act_quit)
 
         # View menu.
         view_menu = mb.addMenu("&View")
@@ -1118,6 +1151,10 @@ class MainWindow(QMainWindow):
     def _on_auto_compile(self) -> None:
         if self._scene.is_gesture_in_progress:
             return
+        if check_dependencies():   # pdflatex missing → show the notice, skip compile
+            self._preview_panel.show_no_latex()
+            self._status_compile.setText("LaTeX not found")
+            return
         try:
             source = generate(self._scene.schematic, y_flip=True,
                             mark_unconnected_pins=self._prefs.mark_unconnected_pins,
@@ -1128,6 +1165,10 @@ class MainWindow(QMainWindow):
         self._preview_worker.request_compile(source)
 
     def _on_compile_now(self) -> None:
+        if check_dependencies():   # pdflatex missing → show the notice, skip compile
+            self._preview_panel.show_no_latex()
+            self._status_compile.setText("LaTeX not found")
+            return
         try:
             source = generate(self._scene.schematic, y_flip=True,
                             mark_unconnected_pins=self._prefs.mark_unconnected_pins,
@@ -1442,9 +1483,9 @@ class MainWindow(QMainWindow):
             mathrender.set_force_ziamath(self._prefs.force_ziamath)
             self._scene.retypeset_labels()
             self._source_panel.refresh()
+            # Recompiles, or refreshes the no-LaTeX notice if a tool is still
+            # missing (or clears it once a newly-configured path resolves).
             self._on_auto_compile()
-            # Surface any still-missing required tool (silent when now resolved).
-            self._check_and_warn_dependencies()
 
     def _on_export_tex(self) -> None:
         """Export the schematic as an includable CircuiTikZ ``.tex`` snippet.
@@ -1694,17 +1735,6 @@ class MainWindow(QMainWindow):
         # Skip the automatic probe; Help ▸ Check for Updates still works.
         if __version__ == "0.0.0":
             return
-        # One-time, plain-language disclosure that we contact GitHub on launch.
-        if not self._prefs.update_check_disclosed:
-            self._prefs.update_check_disclosed = True
-            QMessageBox.information(
-                self,
-                "Checking for Updates",
-                "Heaviside checks GitHub for a newer version when it starts, and "
-                "tells you if one is available. It never downloads or installs "
-                "anything automatically, and sends no information about you.\n\n"
-                "You can turn this off in Preferences ▸ Updates.",
-            )
         _update.check_async(__version__, self._on_startup_update_result)
 
     def _on_startup_update_result(self, info) -> None:  # noqa: ANN001
@@ -1767,20 +1797,6 @@ class MainWindow(QMainWindow):
             QDesktopServices.openUrl(QUrl(info.url or _update.RELEASES_PAGE_URL))
         elif skip_btn is not None and clicked is skip_btn:
             self._prefs.skipped_update_version = info.version
-
-    # ------------------------------------------------------------------
-    # Dependency check
-    # ------------------------------------------------------------------
-
-    def _check_and_warn_dependencies(self) -> None:
-        warnings = check_dependencies()
-        if warnings:
-            msg = "\n".join(f"• {w}" for w in warnings)
-            QMessageBox.warning(
-                self,
-                "Missing Dependencies",
-                f"Some preview features may be unavailable:\n\n{msg}",
-            )
 
     # ------------------------------------------------------------------
     # Window close
@@ -2254,6 +2270,25 @@ def _separator() -> QWidget:
     return sep
 
 
+def _latex_install_hint() -> str:
+    """A one-line, OS-appropriate LaTeX-distribution recommendation (rich text
+    with links) for the no-LaTeX preview notice. Distributions are chosen to
+    include — or make installable — the ``circuitikz`` package the preview needs."""
+    if sys.platform == "darwin":
+        return ('Install <a href="https://www.tug.org/mactex/">MacTeX</a> (or the '
+                'smaller BasicTeX), then restart Heaviside.')
+    if sys.platform.startswith("win"):
+        return ('Install <a href="https://miktex.org/">MiKTeX</a> or '
+                '<a href="https://tug.org/texlive/">TeX&nbsp;Live</a>, then restart '
+                'Heaviside.')
+    # Linux / other Unix — apt covers Debian/Ubuntu/Raspberry Pi OS, where
+    # circuitikz lives in the texlive-pictures package.
+    return ('Install <a href="https://tug.org/texlive/">TeX&nbsp;Live</a> — on '
+            'Debian/Ubuntu/Raspberry&nbsp;Pi&nbsp;OS: '
+            '<code>sudo apt install texlive texlive-pictures</code> — then restart '
+            'Heaviside.')
+
+
 class _PreviewPanel(QWidget):
     """
     Preview image panel in the lower-right of the bottom strip.
@@ -2311,6 +2346,32 @@ class _PreviewPanel(QWidget):
         self._img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(self._img_label, 1)
 
+        # Centered, *light* notice shown when the LaTeX toolchain is absent — an
+        # icon above a rich-text message with OS-specific install guidance. This
+        # is the "pdflatex not found" state (a missing install, distinct from a
+        # document compile error), so it deliberately avoids the alarming red of
+        # `_error_label` below. Given the whole preview area (image hidden) so it
+        # sits centred in the middle.
+        self._notice = QWidget()
+        self._notice.setObjectName("prevNotice")
+        notice_col = QVBoxLayout(self._notice)
+        notice_col.setContentsMargins(24, 24, 24, 24)
+        notice_col.setSpacing(12)
+        notice_col.setAlignment(Qt.AlignCenter)
+        self._notice_icon = QLabel()
+        self._notice_icon.setAlignment(Qt.AlignCenter)
+        self._notice_text = QLabel()
+        self._notice_text.setAlignment(Qt.AlignCenter)
+        self._notice_text.setWordWrap(True)
+        self._notice_text.setTextFormat(Qt.RichText)
+        self._notice_text.setOpenExternalLinks(True)
+        self._notice_text.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        self._notice_text.setMaximumWidth(380)
+        notice_col.addWidget(self._notice_icon, 0, Qt.AlignHCenter)
+        notice_col.addWidget(self._notice_text, 0, Qt.AlignHCenter)
+        self._notice.hide()
+        layout.addWidget(self._notice, 1)
+
         self._error_label = QLabel()
         self._error_label.setWordWrap(True)
         self._error_label.setStyleSheet("color: red; font-size: 10px; border: none; padding: 4px 8px;")
@@ -2330,6 +2391,22 @@ class _PreviewPanel(QWidget):
         self._img_label.setStyleSheet(
             "border: none; background: %s;" % style.COLOR_BACKGROUND
         )
+        # The no-LaTeX notice sits on the figure's page colour like the image; its
+        # icon and text follow the theme's muted tokens. Re-render the rich text
+        # while visible so its embedded colours track a light/dark switch.
+        self._notice.setStyleSheet(
+            "QWidget#prevNotice { border: none; background: %s; }" % style.COLOR_BACKGROUND
+        )
+        self._notice_icon.setPixmap(
+            qta.icon("fa5s.info-circle", color=theme.ICON_MUTED).pixmap(40, 40)
+        )
+        # Keep the install links legible in both themes (the default link blue is
+        # too dark on the dark page colour).
+        npal = self._notice_text.palette()
+        npal.setColor(QPalette.Link, QColor(theme.ACCENT))
+        self._notice_text.setPalette(npal)
+        if self._notice.isVisible():
+            self._notice_text.setText(self._no_latex_html())
         for btn, icon_name in zip(self._copy_buttons, self._copy_icons):
             btn.setIcon(qta.icon(icon_name, color=theme.ICON))
             btn.setStyleSheet(theme.icon_button_qss())
@@ -2345,6 +2422,8 @@ class _PreviewPanel(QWidget):
     def set_image(self, image: QImage) -> None:
         self._raw_image = image
         self._error_label.hide()
+        self._notice.hide()
+        self._img_label.show()
         self._render(image)
 
     def _render(self, image: QImage) -> None:
@@ -2375,10 +2454,41 @@ class _PreviewPanel(QWidget):
     def set_error(self, error: str) -> None:
         self._raw_image = None
         self._img_label.clear()
+        self._img_label.show()
+        self._notice.hide()
         self._error_label.setText(error[:400])
         self._error_label.show()
+
+    def show_no_latex(self) -> None:
+        """Show the centered, light "LaTeX not found" notice in place of the
+        preview — the missing-`pdflatex` state, with OS-specific install guidance.
+        Replaces both the red error label and the old startup warning dialog."""
+        self._raw_image = None
+        self._img_label.clear()
+        self._img_label.hide()        # hand the whole area to the centred notice
+        self._error_label.hide()
+        self._notice_text.setText(self._no_latex_html())
+        self._notice.show()
+
+    def _no_latex_html(self) -> str:
+        """Rich-text body for the no-LaTeX notice, themed and OS-aware."""
+        return (
+            f'<div style="color:{theme.HEADING}; font-size:14px; '
+            'font-weight:600;">LaTeX not found</div>'
+            f'<div style="color:{theme.TEXT_MUTED}; font-size:11px; '
+            'margin-top:8px;">Heaviside could not find <b>pdflatex</b> on your '
+            'PATH. The live preview and PDF/PNG export need a LaTeX distribution '
+            'with the <b>circuitikz</b> package.</div>'
+            f'<div style="color:{theme.TEXT_MUTED}; font-size:11px; '
+            f'margin-top:8px;">{_latex_install_hint()}</div>'
+            f'<div style="color:{theme.TEXT_MUTED}; font-size:11px; '
+            'margin-top:8px;">Already installed? Set its path in '
+            '<b>Preferences ▸ Tools</b>.</div>'
+        )
 
     def clear(self) -> None:
         self._raw_image = None
         self._img_label.clear()
+        self._img_label.show()
         self._error_label.hide()
+        self._notice.hide()

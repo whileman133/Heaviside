@@ -53,7 +53,6 @@ _KEY_DARK_OVERRIDE = "display/dark_override"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
 _KEY_CHECK_UPDATES = "updates/check_on_startup"
 _KEY_SKIPPED_VERSION = "updates/skipped_version"
-_KEY_UPDATE_DISCLOSED = "updates/disclosed"
 
 
 def _hint_qss() -> str:
@@ -234,16 +233,6 @@ class Preferences:
     @skipped_update_version.setter
     def skipped_update_version(self, value: str) -> None:
         self._settings.setValue(_KEY_SKIPPED_VERSION, str(value or ""))
-
-    @property
-    def update_check_disclosed(self) -> bool:
-        """Whether the one-time "this app checks GitHub on startup" notice has
-        been shown."""
-        return _to_bool(self._settings.value(_KEY_UPDATE_DISCLOSED), default=False)
-
-    @update_check_disclosed.setter
-    def update_check_disclosed(self, value: bool) -> None:
-        self._settings.setValue(_KEY_UPDATE_DISCLOSED, bool(value))
 
     # -- External tool paths -------------------------------------------------
     #
