@@ -4,34 +4,33 @@
 %   \usepackage[american]{circuitikz}
 %   \usetikzlibrary{arrows.meta}
 %   \ctikzset{voltage=american, current=american, resistor=american}
+% SECURITY: label and text fields below are raw LaTeX taken verbatim from the
+% schematic (.hv) file. If that file came from an untrusted source, compile
+% WITHOUT shell-escape (the default; e.g. `pdflatex -no-shell-escape`).
 \begin{circuitikz}
   \draw (0,-1.25) -- (2.5,-1.25);
   \draw (0,-2.25) -- (2.5,-2.25);
   \draw (0,-4.25) -- (2.5,-4.25);
   \draw (0,-3.25) -- (2.5,-3.25);
   {
-    \ctikzset{tripoles/american and port/height=1.0714}
-    \draw (3.25,-1) node[and port, number inputs=3, xscale=0.487, yscale=0.5, anchor=out] (node_143cd38a) {};
+    \ctikzset{tripoles/american and port/height=0.5357}
+    \draw (3.25,-1) node[and port, number inputs=3, xscale=0.54115] (node_143cd38a) {};
   }
   {
-    \ctikzset{tripoles/american and port/height=1.0714}
-    \draw (3.25,-2) node[and port, number inputs=3, xscale=0.487, yscale=0.5, anchor=out] (node_d67f7acd) {};
+    \ctikzset{tripoles/american and port/height=0.5357}
+    \draw (3.25,-2) node[and port, number inputs=3, xscale=0.54115] (node_d67f7acd) {};
   }
   {
-    \ctikzset{tripoles/american and port/height=1.0714}
-    \draw (3.25,-3) node[and port, number inputs=3, xscale=0.487, yscale=0.5, anchor=out] (node_f15b69c8) {};
+    \ctikzset{tripoles/american and port/height=0.5357}
+    \draw (3.25,-3) node[and port, number inputs=3, xscale=0.54115] (node_f15b69c8) {};
   }
   {
-    \ctikzset{tripoles/american and port/height=1.0714}
-    \draw (3.25,-4) node[and port, number inputs=3, xscale=0.487, yscale=0.5, anchor=out] (node_01b8c559) {};
+    \ctikzset{tripoles/american and port/height=0.5357}
+    \draw (3.25,-4) node[and port, number inputs=3, xscale=0.54115] (node_01b8c559) {};
   }
   {
-    \ctikzset{tripoles/american or port/height=1.4286}
-    \draw (4.75,-2.5) node[or port, number inputs=4, xscale=0.487, yscale=0.5, anchor=out] (node_c98b5e4f) {}
-    (node_c98b5e4f.in 1) -- (4,-2)
-    (node_c98b5e4f.in 2) -- (4,-2.25)
-    (node_c98b5e4f.in 3) -- (4,-2.75)
-    (node_c98b5e4f.in 4) -- (4,-3);
+    \ctikzset{tripoles/american or port/height=0.7143}
+    \draw (4.75,-2.5) node[or port, number inputs=4, xscale=0.54115] (node_c98b5e4f) {};
   }
   \draw
     (1,-0.5) -- (1,-0.75)
@@ -47,18 +46,18 @@
     (1.75,-2) -- (1.75,-2.17) .. controls (1.86,-2.17) and (1.86,-2.33) .. (1.75,-2.33) -- (1.75,-3.17) .. controls (1.86,-3.17) and (1.86,-3.33) .. (1.75,-3.33) -- (1.75,-4)
     (1.75,-4) -- (1.75,-4.17) .. controls (1.86,-4.17) and (1.86,-4.33) .. (1.75,-4.33) -- (1.75,-4.5)
     (node_143cd38a.out) -- (4,-1) -- (node_c98b5e4f.in 1)
-    (node_d67f7acd.out) -- (3.5,-2) -- (3.5,-2.25) -- (node_c98b5e4f.in 2)
-    (node_f15b69c8.out) -- (3.5,-3) -- (3.5,-2.75) -- (4,-2.75)
-    (4,-3) -- (4,-4) -- (node_01b8c559.out)
-    (node_143cd38a.in 1) -- (1.83,-0.75) .. controls (1.83,-0.64) and (1.67,-0.64) .. (1.67,-0.75) -- (1.58,-0.75) .. controls (1.58,-0.64) and (1.42,-0.64) .. (1.42,-0.75) -- (1.33,-0.75) .. controls (1.33,-0.64) and (1.17,-0.64) .. (1.17,-0.75) -- (1,-0.75)
+    (node_d67f7acd.out) -- (3.5,-2) -- (3.5,-2.38) -- (node_c98b5e4f.in 2)
+    (node_f15b69c8.out) -- (3.5,-3) -- (3.5,-2.62) -- (4,-2.62)
+    (4,-2.88) -- (4,-4) -- (node_01b8c559.out)
     (node_143cd38a.in 2) -- (1.83,-1) .. controls (1.83,-0.89) and (1.67,-0.89) .. (1.67,-1) -- (1.5,-1)
     (node_d67f7acd.in 1) -- (1.83,-1.75) .. controls (1.83,-1.64) and (1.67,-1.64) .. (1.67,-1.75) -- (1.58,-1.75) .. controls (1.58,-1.64) and (1.42,-1.64) .. (1.42,-1.75) -- (1.33,-1.75) .. controls (1.33,-1.64) and (1.17,-1.64) .. (1.17,-1.75) -- (1,-1.75)
-    (node_d67f7acd.in 2) -- (1.75,-2)
     (node_f15b69c8.in 1) -- (1.83,-2.75) .. controls (1.83,-2.64) and (1.67,-2.64) .. (1.67,-2.75) -- (1.58,-2.75) .. controls (1.58,-2.64) and (1.42,-2.64) .. (1.42,-2.75) -- (1.25,-2.75)
     (node_f15b69c8.in 2) -- (1.83,-3) .. controls (1.83,-2.89) and (1.67,-2.89) .. (1.67,-3) -- (1.5,-3)
     (node_01b8c559.in 1) -- (1.83,-3.75) .. controls (1.83,-3.64) and (1.67,-3.64) .. (1.67,-3.75) -- (1.58,-3.75) .. controls (1.58,-3.64) and (1.42,-3.64) .. (1.42,-3.75) -- (1.25,-3.75)
-    (node_01b8c559.in 2) -- (1.75,-4)
     (node_c98b5e4f.out) -- (5,-2.5)
+    (node_d67f7acd.in 2) -- (1.75,-2)
+    (node_143cd38a.in 1) -- (1.83,-0.75) .. controls (1.83,-0.64) and (1.67,-0.64) .. (1.67,-0.75) -- (1.58,-0.75) .. controls (1.58,-0.64) and (1.42,-0.64) .. (1.42,-0.75) -- (1.33,-0.75) .. controls (1.33,-0.64) and (1.17,-0.64) .. (1.17,-0.75) -- (1,-0.75)
+    (node_01b8c559.in 2) -- (1.75,-4)
   ;
   \node[circ] at (1,-0.75) {};
   \node[circ] at (1,-1.75) {};

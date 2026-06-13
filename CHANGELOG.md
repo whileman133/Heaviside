@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Component alignment is now a single uniform algorithm.** Every multi-terminal
+  symbol (transistors, op amps, switches, logic gates, …) is centre-placed and
+  aligned to the grid by one per-axis `scale`, derived by measuring its CircuiTikZ
+  anchors — replacing the former mix of anchor-pinned placement, per-component
+  scales, and bridge "leads". Consequences in generated figures: op amps render
+  compact (no extended input/output stubs); transistor footprints shift (and
+  their symbols re-centre); switches/logic-gate bodies are no longer sheared (a
+  per-axis distortion is capped, falling back to a uniform scale). Alignment
+  constants (grid, scale bounds, anisotropy cap, gate/mux body sizing) live in the
+  new `components/generation.toml`. Internal pipeline change; no `.hv` format
+  change, but saved figures re-export with the new symbol geometry.
+
 - **Auto-export defaults are now PDF + PNG.** Saving a schematic writes
   `<name>.pdf` and `<name>.png` siblings by default — the two formats that
   need only `pdflatex` (PDF is included natively by LyX/Overleaf; PNG is
@@ -33,12 +45,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Preferences → Tools.
 
 ### Fixed
+- **Batch component regeneration is faithful again (developer tooling).**
+  `components/generate_components.py` silently degraded 26 library entries: the
+  parametric mux/demux lost their `params`/`n_data` and all 120 size-combo
+  geometries, and centre-placed kinds with a uniform grid-alignment scale
+  (flip-flops, transformers, ALU/adder, cute switches) had that scale stripped.
+  The generator now routes mux/demux through their combo renderer (the
+  authoring rec is persisted in `definitions.json`) and re-derives — rather
+  than discards — uniform scales and pin offsets. `definitions.json` also now
+  records the CircuiTikZ version it was generated against
+  (`circuitikz_version`).
 - **Windows: no more console window flashing over the app on every render.**
   Each `pdflatex`/`latex`/`dvisvgm`/converter run briefly opened a console
   window on Windows; all tool subprocesses are now launched with
   `CREATE_NO_WINDOW`.
 
 ### Removed
+- **The Component Editor (Tools menu) is gone.** The GUI existed for manual
+  scale/offset fix-ups when a symbol's pins couldn't be grid-aligned
+  automatically; the pipeline now measures anchors (`\pgfpointanchor`),
+  re-derives every alignment on regeneration, and tolerates off-grid pins by
+  design, so the editor had no remaining job. Its Qt-free engine lives on as
+  `app/components/generate.py`; authoring is editing
+  `components/definitions.json` and re-running
+  `components/generate_components.py` (which now also validates every entry
+  before rendering).
 - **The welcome screen no longer shows the *Help ▸ Keyboard Shortcuts &
   Gestures (F1)* hint line.** The screen now displays only the H(t) step
   diagram; the full reference is still available from the Help menu, the

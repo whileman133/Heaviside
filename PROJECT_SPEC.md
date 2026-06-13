@@ -7,7 +7,7 @@
 **Related specifications:** focused per-feature specs live in [`spec/`](spec/)
 and are indexed in [`spec/README.md`](spec/README.md). This document remains the
 master; the feature specs expand on sections referenced inline (e.g. §5.5 →
-[`spec/component-editor.md`](spec/component-editor.md)).
+[`spec/component-pipeline.md`](spec/component-pipeline.md)).
 
 ---
 
@@ -367,7 +367,7 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 **All component symbols must be derived from CircuiTikZ SVG exports.** Hand-drawn symbols are prohibited — they will inevitably diverge from what CircuiTikZ actually renders and produce previews that don't match the canvas.
 
-Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `components/geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/definitions.json` (registry/codegen data + the single `origin_svg` placement constant; see [`spec/component-editor.md`](spec/component-editor.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
+Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `components/geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/definitions.json` (registry/codegen data + the single `origin_svg` placement constant + a `circuitikz_version` stamp recording the CircuiTikZ release the library was generated against, measured via the package's own `\pgfcircversion` macro; see [`spec/component-pipeline.md`](spec/component-pipeline.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
 Each component declares an **`emission`** type in `definitions.json` that selects which CircuiTikZ syntax renders it (and later generates — §5.6); this is independent of its palette `category`. There are exactly two emission types, named for the syntax they produce:
 
@@ -376,7 +376,7 @@ Each component declares an **`emission`** type in `definitions.json` that select
 | `path` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
 | `node` | `\draw (0,0) node[kind] {};` (single point), or `\node[kind, anchor=…] (X) at (0,0) {}; <leads>` (multi-terminal) | ground, vcc, … (single point); op amp, nigfete, npn (multi-terminal) |
 
-A **`node`** element comes in two flavours, distinguished by the *data* rather than a third emission type: a **single-point** node (grounds, power rails — pins carry no CircuiTikZ anchor) placed at one coordinate, and a **multi-terminal** node (op amps, transistors, logic gates — at least one pin maps to a CircuiTikZ anchor, or an `anchor_pin` is set) placed by one anchor with computed lead routing extending each other terminal to a grid-aligned coordinate (`library.is_multi_terminal_entry`; §4 of [`spec/component-editor.md`](spec/component-editor.md)). The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds).
+A **`node`** element comes in two flavours, distinguished by the *data* rather than a third emission type: a **single-point** node (grounds, power rails — pins carry no CircuiTikZ anchor) placed at one coordinate, and a **multi-terminal** node (op amps, transistors, logic gates — at least one pin maps to a CircuiTikZ anchor, or an `anchor_pin` is set) placed by one anchor with computed lead routing extending each other terminal to a grid-aligned coordinate (`library.is_multi_terminal_entry`; §4 of [`spec/component-pipeline.md`](spec/component-pipeline.md)). The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds).
 
 **Geometry schema.** Each entry is keyed by component name and holds `kind`, `name`, `viewBox`, `width_pt`/`height_pt`, and two geometry lists (both in SVG point coordinates):
 
@@ -385,7 +385,7 @@ A **`node`** element comes in two flavours, distinguished by the *data* rather t
 
 **Diode body scale.** CircuiTikZ's default diode body is visually large next to the other bipoles, so every diode-family symbol (`D`/`zD`/`sD`/`tD`/`zzD`/`leD` and their filled `*` variants) is rendered with `\ctikzset{diodes/scale=0.8}` and the code generator emits the **same** picture-scoped `\ctikzset{diodes/scale=0.8}` for any schematic containing a diode (see §7.2). `DIODE_SYMBOL_SCALE` in `app/codegen/circuitikz.py` and `DIODE_SCALE` in the export script are the two sources of truth and **must match**. The scale shrinks only the body (the 2-GU span and pin positions are unchanged — leads auto-extend), and it does not affect the MOSFET body-diode (a tripole shape), so the canvas and the rendered output stay in sync.
 
-To add a new component: add an entry to `components/definitions.json` (measure its pins with `app/components/render.py`) and re-run `components/generate_components.py` (see [`spec/component-editor.md`](spec/component-editor.md)). That is the whole procedure for a plain symbol — the registry, codegen tables, and canvas all derive from the data; the canvas item falls back to the generic `ComponentItem`, and `_DISPLAY_ORDER` is only a preference so the palette shows it automatically. No `ITEM_CLASSES` entry, `_DISPLAY_ORDER` edit, or `svgsym.py` anchor is required (placement is the single `origin_svg` constant). Only a component needing special item behaviour (custom `boundingRect`/hit-testing/resize) also needs a `ComponentItem` subclass + `ITEM_CLASSES` row.
+To add a new component: add an entry to `components/definitions.json` (measure its pins with `app/components/render.py`) and re-run `components/generate_components.py` (see [`spec/component-pipeline.md`](spec/component-pipeline.md)). That is the whole procedure for a plain symbol — the registry, codegen tables, and canvas all derive from the data; the canvas item falls back to the generic `ComponentItem`, and `_DISPLAY_ORDER` is only a preference so the palette shows it automatically. No `ITEM_CLASSES` entry, `_DISPLAY_ORDER` edit, or `svgsym.py` anchor is required (placement is the single `origin_svg` constant). Only a component needing special item behaviour (custom `boundingRect`/hit-testing/resize) also needs a `ComponentItem` subclass + `ITEM_CLASSES` row.
 
 To implement a new `ComponentItem`, look up the component in `geometry.json`, read the `paths` (and `glyphs`) arrays, and translate each path `d` string into `QPainterPath` calls:
 
@@ -481,7 +481,7 @@ The component palette renders each component's thumbnail by instantiating its `C
 
 The **Generic Bipole** (`bipole`) component appears in the **Misc** group — see §7.7.
 
-Each component's `bbox` is **computed**, not hand-chosen: `components/generate_components.py` takes the extent of the rendered ink (paths + glyphs) unioned with the pin positions and rounds it outward to 0.05 GU (`renderer.compute_bbox`; see [`spec/component-editor.md`](spec/component-editor.md) §3). So every box is snug to the actual symbol — the resistor/inductor stay tight perpendicular to the leads (≈±0.25 around the zigzag/humps), the capacitor reaches its plates (±0.45), and the LED's box follows its emission arrows (asymmetric, y0=−0.6, y1=0.3). This drives label clearance (§5.8) and the hit/selection region (§5.4), so the box tracks the drawn symbol rather than a typed constant.
+Each component's `bbox` is **computed**, not hand-chosen: `components/generate_components.py` takes the extent of the rendered ink (paths + glyphs) unioned with the pin positions and rounds it outward to 0.05 GU (`renderer.compute_bbox`; see [`spec/component-pipeline.md`](spec/component-pipeline.md) §3). So every box is snug to the actual symbol — the resistor/inductor stay tight perpendicular to the leads (≈±0.25 around the zigzag/humps), the capacitor reaches its plates (±0.45), and the LED's box follows its emission arrows (asymmetric, y0=−0.6, y1=0.3). This drives label clearance (§5.8) and the hit/selection region (§5.4), so the box tracks the drawn symbol rather than a typed constant.
 
 **Variants (per-instance boolean attributes).** A component's *kind* may declare boolean variants in `components/definitions.json` (`{name, token, mode}`); the active set is stored generically in `Component.variants` (a `{name: bool}` map). The Properties panel's `VariantSection` auto-generates one checkbox per declared variant, and toggling pushes an undoable `SetVariantCommand`. A `suffix`-mode variant appends a keyword suffix (diode `filled` → `KIND*` and the `*` SVG); an `option`-mode variant adds a node option (MOSFET `body_diode` → `bodydiode` and the `*_bodydiode` SVG, e.g. `node[nigfete, bodydiode, anchor=gate]`). This generalises the former hardcoded `filled`/`body_diode` fields. In the `.hv` file only active variants are stored (`"variants": {"filled": true}`); legacy `filled`/`body_diode` keys are still read for back-compat (§9).
 
@@ -511,7 +511,7 @@ All four MOSFET variants share the same pin x-offset (≈0.98 GU from gate, brid
 | `npn` | NPN BJT | `base` (0,0), `collector` (1.0,−1.0), `emitter` (1.0,1.0) | `l` |
 | `pnp` | PNP BJT | `base` (0,0), `emitter` (1.0,−1.0), `collector` (1.0,1.0) | `l` |
 
-Both BJTs are placed with `anchor=B` (base pin) at `Component.position` and **scaled** (`xscale=1.1905, yscale=1.2987`, computed from the measured anchors) so the collector/emitter land exactly on the (1.0, ±1.0) GU registry pins — the symbol is stretched onto the grid rather than bridged with a diagonal stub (see [`spec/component-editor.md`](spec/component-editor.md) §4; MOSFETs are scaled likewise, with one small residual lead for the source's sub-grid y). For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
+Both BJTs are placed with `anchor=B` (base pin) at `Component.position` and **scaled** (`xscale=1.1905, yscale=1.2987`, computed from the measured anchors) so the collector/emitter land exactly on the (1.0, ±1.0) GU registry pins — the symbol is stretched onto the grid rather than bridged with a diagonal stub (see [`spec/component-pipeline.md`](spec/component-pipeline.md) §4; MOSFETs are scaled likewise, with one small residual lead for the source's sub-grid y). For NPN: collector at top-right (Qt y = −1.0), emitter at bottom-right (Qt y = +1.0). For PNP: emitter at top-right, collector at bottom-right.
 
 #### Digital blocks (flip-flops, multiplexers, ALU)
 
@@ -752,7 +752,7 @@ export fail.
 > scale and/or lead alignment) into `components/definitions.json` + `geometry.json`,
 > and `REGISTRY`, the codegen tables, and the `svgsym` canvas transform are all
 > built from that data. The per-component scale/leads are measured, not
-> hand-typed. See [`spec/component-editor.md`](spec/component-editor.md) §4 — that
+> hand-typed. See [`spec/component-pipeline.md`](spec/component-pipeline.md) §4 — that
 > is the authoritative procedure for adding/aligning a component. The
 > detailed steps below are retained only as historical background on the geometry
 > the generator now produces automatically.
@@ -867,7 +867,7 @@ local_y = (pin_svg_y - anchor_y) / 28.348
 The `REGISTRY` entry and the codegen tables for a CircuiTikZ symbol are **no
 longer hand-written**. They are built at import time from
 `components/definitions.json` by `app/components/library.py` (see
-[`spec/component-editor.md`](spec/component-editor.md)). Add the component's pins,
+[`spec/component-pipeline.md`](spec/component-pipeline.md)). Add the component's pins,
 alignment (`anchor_pin`/`scale`/`leads`), and metadata as one entry in that
 file (via `components/generate_components.py`, using `app/components/render.py` to
 measure the anchors); the `bbox` is computed from the rendered ink extent. The
@@ -885,7 +885,7 @@ the remaining Component-Editor step.
 To add a new CircuiTikZ component type:
 
 1. Add an entry to `components/definitions.json` (emission, `tikz`, pins with their measured offsets/anchors, `anchor_pin`, labels, variants) — measure the pin anchors with `app/components/render.py`. The leads/scale and the `bbox` are computed automatically (the `bbox` from the rendered ink extent ∪ pins).
-2. Run `components/generate_components.py` to render the geometry into `geometry.json` and rebuild `definitions.json`. `REGISTRY`, the codegen tables, and the `svgsym` placement all build from this data — no `registry.py`/`circuitikz.py`/`svgsym.py` constants are edited (see [`spec/component-editor.md`](spec/component-editor.md)).
+2. Run `components/generate_components.py` to render the geometry into `geometry.json` and rebuild `definitions.json`. `REGISTRY`, the codegen tables, and the `svgsym` placement all build from this data — no `registry.py`/`circuitikz.py`/`svgsym.py` constants are edited (see [`spec/component-pipeline.md`](spec/component-pipeline.md)).
 3. *(Only if the component needs special canvas behaviour.)* Add a `ComponentItem` subclass + an `ITEM_CLASSES` row in `app/canvas/items.py` — for a custom `boundingRect`, hit-testing, or resize. Plain symbols need nothing here: the lookup is `ITEM_CLASSES.get(kind, ComponentItem)`, and the base class paints any kind from its geometry. `_DISPLAY_ORDER` in `registry.py` is a preference, not a requirement — an unlisted kind still appears (at the end of its palette category); edit it only to fix an unusual position.
 4. No changes to the schematic model, code generator, or UI layout are required.
 
@@ -1612,7 +1612,7 @@ CircuiTikZ's internal pin anchors do not land on the 0.25-GU grid, so the node i
 placed by its origin pin (`anchor=…`, or by centre for the op amp) and aligned
 with a **computed** per-axis scale (`xscale=`/`yscale=`) and/or short bridge
 leads — both derived from the measured anchors and stored in
-`components/definitions.json` (see [`spec/component-editor.md`](spec/component-editor.md)
+`components/definitions.json` (see [`spec/component-pipeline.md`](spec/component-pipeline.md)
 §4). The canvas geometry carries the same scale + leads, so the two agree.
 BJTs/MOSFETs are scaled onto the grid; the op amp extends leads to its outward
 pins.
@@ -2237,15 +2237,6 @@ template and the PDF/EPS/SVG/PNG export path and `build_snippet` never pass
 `dark`, so the distributed figure remains white-paper/black-ink regardless of the
 UI theme.
 
-**Tools menu.** **Tools ▸ Component Editor…** opens the standalone component
-editor (`app/componenteditor/window.py`) — a developer tool for authoring/aligning
-CircuiTikZ component symbols (it writes `components/definitions.json` +
-`geometry.json`; see [`spec/component-editor.md`](spec/component-editor.md)). It
-can also be launched independently with `python -m app.componenteditor`.
-Because it renders/measures symbols via `latex` + `dvisvgm`, the **Tools menu is
-shown only when that toolchain is on `PATH`** (`_component_editor_available`) — a
-packaged end-user build, which ships no toolchain, hides it.
-
 **Welcome screen.** The canvas slot is a `QStackedWidget`: page 0 is a painted
 `_WelcomeScreen`, page 1 is the live `SchematicView`. Before any document is
 active the welcome screen shows **only** the Heaviside unit step function H(t)
@@ -2612,12 +2603,9 @@ heaviside/
 │   │   ├── registry.py            # REGISTRY: bespoke literals + library-derived kinds
 │   │   ├── library.py             # loads components/definitions.json → ComponentDefs,
 │   │   │                          #   codegen tables, origin_svg, variant helpers
-│   │   └── render.py              # render a symbol + measure pin anchors (latex/dvisvgm)
-│   ├── componenteditor/           # Component editor (spec/component-editor.md)
-│   │   ├── renderer.py            # Qt-free render/save core (shared with the CLI)
-│   │   ├── draft.py               # editing model: validation + preview helpers
-│   │   ├── window.py              # standalone Qt editor window
-│   │   └── __main__.py            # python -m app.componenteditor
+│   │   ├── render.py              # render a symbol + measure pin anchors (latex/dvisvgm)
+│   │   └── generate.py            # Qt-free render/save/alignment/validation core
+│   │                              #   (spec/component-pipeline.md; drives the batch generator)
 │   ├── schematic/
 │   │   ├── model.py               # Component, Wire, Schematic dataclasses + geometry helpers
 │   │   │                          #   (simplify_points, component_pin_positions,
@@ -2664,7 +2652,7 @@ heaviside/
     ├── test_components_library.py # definitions.json → registry/codegen reconstruction
     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
     ├── test_latex_security.py     # LaTeX-pipeline security: -no-shell-escape + no shell=True (mathrender, preview, component render)
-    ├── test_componenteditor.py    # editor renderer/draft core + offscreen window smoke
+    ├── test_generate.py           # component pipeline core: data entries, alignment, validation, store
     ├── test_screenshots.py        # README example-gallery renderer: manifest/README sync + framed render (offscreen Qt)
     ├── test_packaging.py          # Linux AppImage assets + AppDir assembly + host-arch ARCH selection (pure)
     └── test_version.py            # runtime version resolution (source + frozen fallback + spec bundling tripwire)

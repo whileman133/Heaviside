@@ -171,11 +171,11 @@ def parse_path(d: str) -> QPainterPath:
 # ---------------------------------------------------------------------------
 #
 # Every symbol is rendered (components/generate_components.py) inside a fixed bounding
-# box with its origin pin at TeX (0,0) and short leads bridging every other pin
-# to its registry grid offset.  So a single constant SVG point — the library's
-# ``origin_svg`` — maps to the component's local origin for ALL kinds, and the
-# placement is a pure translate-then-uniform-scale: no per-component anchors,
-# rotation, or scale corrections (the leads put every pin on the grid).
+# box, centre-placed at TeX (0,0), with a per-axis scale baked into the geometry
+# so its pins sit at their (scaled) anchor positions.  So a single constant SVG
+# point — the library's ``origin_svg`` — maps to the component's local origin for
+# ALL kinds, and the placement is a pure translate-then-uniform-scale: no
+# per-component anchors or rotation.
 
 _PX_PER_PT = GRID_PX / SVG_PT_PER_GU
 
@@ -184,8 +184,8 @@ def local_transform() -> QTransform:
     """Affine map from SVG point coordinates to local pixel coordinates.
 
     Computed fresh from the library's ``origin_svg`` on every call, so callers
-    that may reload the component store (the component editor) always see the
-    current origin.  The canvas hot path uses the cached :func:`_local_transform`.
+    that may reload the component store always see the current origin.  The
+    canvas hot path uses the cached :func:`_local_transform`.
     """
     ox, oy = library.origin_svg()
     t = QTransform()

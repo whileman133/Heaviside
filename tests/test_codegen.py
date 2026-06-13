@@ -145,11 +145,10 @@ def test_switches_and_choke_emit_keywords() -> None:
     assert "to[opening switch]" in generate(_schematic(_comp("opening")))
     assert "to[closing switch]" in generate(_schematic(_comp("closing")))
     spdt_src = generate(_schematic(_comp("spdt")))
-    # The SPDT is an anchor-pinned (at `in`) scaled node, like the MOSFET/BJT: its
-    # xscale/yscale land the out anchors on the grid, so no bridge leads are
-    # needed (the out terminals connect at the scaled node anchors directly).
+    # The SPDT is a centre-placed scaled node (§4): its per-axis xscale/yscale
+    # land the terminals on the grid; no anchor= placement, no bridge leads.
     assert "node[spdt" in spdt_src
-    assert "anchor=in" in spdt_src
+    assert "anchor=" not in spdt_src
     assert "xscale=" in spdt_src and "yscale=" in spdt_src
 
 
@@ -391,10 +390,9 @@ def test_opamp_node() -> None:
     """Op-amp produces node[op amp] syntax."""
     comp = _comp("op amp", position=(1.0, 2.0))
     src = generate(_schematic(comp))
-    assert "node[op amp]" in src
-    # Output is normalised toward the origin; the op-amp's pins extend left/below
-    # its origin, so the node lands at (2,1).
-    assert "(2,1)" in src
+    # Centre-placed and per-axis scaled (§4) — xscale only (yscale==1 omitted).
+    assert "node[op amp, xscale=1.0504]" in src
+    assert "anchor=" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -536,25 +534,26 @@ def test_digital_blocks_take_no_bipole_label() -> None:
 # ---------------------------------------------------------------------------
 
 def test_npn_node() -> None:
-    """NPN BJT is scaled so its collector/emitter land on the grid (no stubs);
-    placed anchor=B (spec/component-editor.md §4)."""
+    """NPN BJT is centre-placed and per-axis scaled so its anchors land on the
+    grid — no anchor= option, no lead stubs (spec/component-pipeline.md §4)."""
     comp = _comp("npn", position=(2.0, 3.0))
     src = generate(_schematic(comp))
-    assert "node[npn, xscale=1.1905, yscale=1.2987, anchor=B]" in src
+    assert "node[npn, xscale=0.8929, yscale=0.974]" in src
+    assert "anchor=" not in src
 
 
 def test_pnp_node() -> None:
-    """PNP BJT is scaled (anchor=B), same as NPN."""
+    """PNP BJT is centre-placed and scaled, same as NPN."""
     comp = _comp("pnp", position=(1.0, 1.0))
     src = generate(_schematic(comp))
-    assert "node[pnp, xscale=1.1905, yscale=1.2987, anchor=B]" in src
+    assert "node[pnp, xscale=0.8929, yscale=0.974]" in src
 
 
 def test_npn_no_bridge_leads() -> None:
-    """NPN lands C/E on grid by scaling — no bridge lead wires are needed."""
+    """NPN lands its pins by scaling — no bridge lead wires are emitted."""
     comp = _comp("npn", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "xscale=1.1905" in src
+    assert "xscale=0.8929" in src
     assert ".C) -- " not in src
     assert ".E) -- " not in src
 
@@ -578,60 +577,62 @@ def test_not_gate_label_emitted_as_label_above() -> None:
 
 
 def test_npn_pin_offsets() -> None:
-    """NPN: base (0,0), collector (1,-1) [top], emitter (1,1) [bottom]."""
+    """NPN (centre-placed, §4): base half a GU left of centre, collector top and
+    emitter bottom at the centre column, all on the 0.25 grid."""
     from app.components.registry import REGISTRY
     defn = REGISTRY["npn"]
     pin_map = {p.name: p.offset for p in defn.pins}
-    assert pin_map["base"]      == (0.0,  0.0)
-    assert pin_map["collector"] == (1.0, -1.0)
-    assert pin_map["emitter"]   == (1.0,  1.0)
+    assert pin_map["base"]      == (-0.75, 0.0)
+    assert pin_map["collector"] == (0.0, -0.75)
+    assert pin_map["emitter"]   == (0.0,  0.75)
 
 
 def test_pnp_pin_offsets() -> None:
-    """PNP: base (0,0), emitter (1,-1) [top], collector (1,1) [bottom]."""
+    """PNP (centre-placed): base left, emitter top, collector bottom — the
+    emitter/collector swap of NPN."""
     from app.components.registry import REGISTRY
     defn = REGISTRY["pnp"]
     pin_map = {p.name: p.offset for p in defn.pins}
-    assert pin_map["base"]      == (0.0,  0.0)
-    assert pin_map["emitter"]   == (1.0, -1.0)
-    assert pin_map["collector"] == (1.0,  1.0)
+    assert pin_map["base"]      == (-0.75, 0.0)
+    assert pin_map["emitter"]   == (0.0, -0.75)
+    assert pin_map["collector"] == (0.0,  0.75)
 
 
 def test_nmos_node() -> None:
-    """nigfete is scaled (anchor=gate) so drain/source align with the grid; a
-    short residual lead bridges the source's sub-grid y offset."""
+    """nigfete is centre-placed and per-axis scaled so its pins align with the
+    grid — no anchor= option and no residual lead stub."""
     comp = _comp("nigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfete, xscale=1.0204, yscale=0.962, anchor=gate]" in src
-    assert ".source) -- " in src  # small residual lead
+    assert "node[nigfete, xscale=1.0204, yscale=0.974]" in src
+    assert ".source) -- " not in src  # no lead bridges
 
 
 def test_nmos_depletion_node() -> None:
-    """nigfetd is scaled (anchor=gate), same as nigfete."""
+    """nigfetd is centre-placed and scaled, same as nigfete."""
     comp = _comp("nigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[nigfetd, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert "node[nigfetd, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_pmos_node() -> None:
-    """pigfete is scaled (anchor=gate) — the y-mirror of nigfete."""
+    """pigfete is centre-placed and scaled — the y-mirror of nigfete."""
     comp = _comp("pigfete", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfete, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert "node[pigfete, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_pmos_depletion_node() -> None:
-    """pigfetd is scaled (anchor=gate), same as pigfete."""
+    """pigfetd is centre-placed and scaled, same as pigfete."""
     comp = _comp("pigfetd", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "node[pigfetd, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert "node[pigfetd, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_nmos_bodydiode() -> None:
     """nigfete with body_diode=True emits the bodydiode option (with the scale)."""
     comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
-    assert "node[nigfete, bodydiode, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert "node[nigfete, bodydiode, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_nmos_no_bodydiode() -> None:
@@ -645,19 +646,20 @@ def test_pmos_bodydiode() -> None:
     """pigfete with body_diode=True emits the bodydiode option."""
     comp = Component(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
-    assert "node[pigfete, bodydiode, xscale=1.0204, yscale=0.962, anchor=gate]" in src
+    assert "node[pigfete, bodydiode, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_pmos_pin_offsets() -> None:
-    """PMOS source is above gate (Qt y=-0.5) and drain is below (Qt y=+1.0)."""
+    """PMOS (centre-placed): gate one GU left and a touch up, source above the
+    centre column, drain below it — positioned relative to the component origin."""
     from app.schematic.model import component_pin_positions
     comp = _comp("pigfete", position=(2.0, 3.0))
     pins = {p.name: off for p, off in
             zip(__import__("app.components.registry", fromlist=["REGISTRY"]).REGISTRY["pigfete"].pins,
                 component_pin_positions(comp))}
-    assert pins["gate"]   == (2.0, 3.0)
-    assert pins["source"] == (3.0, 2.5)   # 1 GU right, 0.5 GU above
-    assert pins["drain"]  == (3.0, 4.0)   # 1 GU right, 1 GU below
+    assert pins["gate"]   == (1.0, 2.75)   # offset (-1.0, -0.25)
+    assert pins["source"] == (2.0, 2.25)   # offset (0.0, -0.75)
+    assert pins["drain"]  == (2.0, 3.75)   # offset (0.0, 0.75)
 
 
 # ---------------------------------------------------------------------------
@@ -1976,7 +1978,9 @@ def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )
-    w = Wire(id="g", points=[(5.0, 5.0), (3.0, 5.0)], z_order=1)
+    # The gate pin is now at the scaled anchor offset (-1.0, 0.25) from the
+    # centre-placed node, i.e. (4.0, 5.25); a wire ending there keeps the anchor.
+    w = Wire(id="g", points=[(4.0, 5.25), (3.0, 5.25)], z_order=1)
     src = generate(_schematic(fet, wires=(w,)))
     assert ".gate)" in src                    # references the MOSFET gate anchor
 
@@ -1989,10 +1993,10 @@ def test_logic_gate_emits_height_group_no_yscale():
     """A parametric gate is emitted in a local group that sets its body height
     (so inputs land on grid without a node yscale that would oval the bubble):
     { \\ctikzset{…/height=H}  \\draw … node[and port, number inputs=N, xscale=…]; }."""
-    # Default value (2 inputs).
+    # Default value (2 inputs). Centre-placed (no anchor=), height-sized, xscale only.
     src2 = generate(_schematic(_comp("and")))
-    assert "node[and port, number inputs=2, xscale=0.974" in src2
-    assert "anchor=out" in src2
+    assert "node[and port, number inputs=2, xscale=1.0823" in src2
+    assert "anchor=" not in src2
     assert "yscale" not in src2                                    # height, not yscale
     assert r"\ctikzset{tripoles/american and port/height=0.7143}" in src2
     # the height is set in a group, before the node, and reverts:
@@ -2014,7 +2018,7 @@ def test_scaled_gate_scales_via_height_and_xscale_no_leads():
     c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 3}, scale=0.5)
     src = generate(_schematic(c), y_flip=True)
-    assert "number inputs=3, xscale=0.487" in src          # 0.974 × 0.5
+    assert "number inputs=3, xscale=0.54115" in src        # 1.0823 × 0.5
     assert "yscale" not in src                              # pitch comes from height
     assert "tripoles/american and port/height=0.5357" in src   # 1.0714 × 0.5
     assert ".in 1) --" not in src                          # no lead stubs
@@ -2027,7 +2031,7 @@ def test_scaled_even_input_gate_emits_no_lead_stubs():
     c = Component(id=_uid(), kind="or", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 4}, scale=0.5)
     src = generate(_schematic(c), y_flip=True)
-    assert "number inputs=4, xscale=0.487" in src and "yscale" not in src
+    assert "number inputs=4, xscale=0.54115" in src and "yscale" not in src
     assert "tripoles/american or port/height=0.7143" in src   # 1.4286 × 0.5
     for i in (1, 2, 3, 4):
         assert f".in {i}) --" not in src                   # no lead stub for any input

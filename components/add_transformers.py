@@ -36,7 +36,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.components import render          # noqa: E402
-from app.componenteditor import renderer   # noqa: E402
+from app.components import generate as renderer   # noqa: E402
 
 CATEGORY = "Inductors"
 

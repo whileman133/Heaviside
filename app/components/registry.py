@@ -8,7 +8,7 @@ assembled from two sources:
   BJTs, grounds, rails) are built from ``components/definitions.json`` via
   :func:`app.components.library.library_component_defs` — their pins, bbox, and
   alignment data are measured/generated, not hand-typed (see
-  ``spec/component-editor.md``); and
+  ``spec/component-pipeline.md``); and
 * the **bespoke kinds** (the resizable annotations ``open``/``short`` and the
   drawing primitives ``bipole``/``rect``/``circle``/``text_node``) are defined as
   literals below — they are not derived from a CircuiTikZ command.

@@ -39,7 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.componenteditor import renderer  # noqa: E402
+from app.components import generate as renderer  # noqa: E402
 
 # Label-slot presets (which CircuiTikZ annotation quick-keys a device accepts).
 PASSIVE = ["l", "l_", "v", "v^", "i", "i_"]   # two-terminal passive / meter / switch

@@ -72,10 +72,15 @@ _OFFGRID_PIN_KINDS = frozenset({
     # Thyristor/triac: the two axial terminals are on-grid, but the off-axis gate
     # pin sits at the native CircuiTikZ gate anchor (off-grid, magnet-connected).
     "thyristor", "triac",
-    # Centre-placed SPDT/rotary switches (uniform scale, native throw anchors —
-    # asymmetric, so off the grid; a non-uniform scale that landed them on-grid
-    # would shear the switch blade in the LaTeX output, §5.4).
+    # Centre-placed SPDT/rotary switches: the anisotropy cap forces a uniform
+    # scale (a non-uniform one would shear the blade, §4), so their asymmetric
+    # native throw anchors don't all land on the grid (magnet-connected).
     "cute spdt up", "cute spdt down", "cute spdt mid", "rotaryswitch",
+    # Parametric logic gates are centre-placed (§4): the algorithm grids the
+    # (more numerous) inputs, leaving the single output off-grid at the scaled
+    # output anchor (magnet-connected). The base kind keyword carries no suffix.
+    "and", "or", "nand", "nor", "xor", "xnor",
+    "eand", "enand", "enor", "eor", "exnor", "exor",
 })
 
 
@@ -100,39 +105,51 @@ def test_all_pins_on_quarter_grid() -> None:
             )
 
 
-def test_centre_placed_nodes_use_uniform_scale() -> None:
-    """A centre-placed (`anchor_pin` null) multi-terminal node must scale
-    *uniformly* (sx == sy). A non-uniform node scale shears the symbol's strokes
-    anisotropically in the LaTeX output (e.g. a thick, slanted switch blade), but
-    the canvas re-strokes every path at a uniform width — so a non-uniform scale
-    silently desyncs the canvas from the rendered output. (Regression: the cute
-    SPDT / rotary switches were authored anchor-pinned with a non-uniform scale
-    that sheared the blade; they are now centre-placed with a uniform scale.)"""
+def test_node_scale_within_anisotropy_cap() -> None:
+    """A multi-terminal node's per-axis scale may differ between axes only within
+    the configured anisotropy cap (§4). A strongly non-uniform node scale shears
+    the symbol's strokes anisotropically in the LaTeX output (e.g. a thick, slanted
+    switch blade), but the canvas re-strokes every path at a bucketed uniform width
+    — so it would silently desync from the rendered output. The cap keeps that
+    shear imperceptible (transistors ≈5-9%) and forces the switches/blocks uniform.
+    Pins land off-grid (magnet) rather than shearing past the cap."""
     import json
+    from app.components.generate import SCALE_ANISOTROPY_MAX
     from app.resources import resource_path
+
+    def _check(kind: str, scale) -> None:
+        sx, sy = scale
+        hi, lo = max(sx, sy), min(sx, sy)
+        assert lo > 0 and hi / lo <= SCALE_ANISOTROPY_MAX + 1e-6, (
+            f"{kind}: node scale {scale} exceeds the anisotropy cap "
+            f"{SCALE_ANISOTROPY_MAX} (would shear strokes in the output)"
+        )
 
     comps = json.loads(
         open(resource_path("components", "definitions.json"), encoding="utf-8").read()
     )["components"]
     for kind, e in comps.items():
-        if e.get("emission") == "node" and e.get("anchor_pin") is None and e.get("scale"):
-            sx, sy = e["scale"]
-            assert abs(sx - sy) < 1e-6, (
-                f"{kind}: centre-placed node has non-uniform scale {e['scale']} "
-                f"(shears strokes in the output; use a uniform scale)"
-            )
+        if e.get("emission") != "node":
+            continue
+        if e.get("scale"):
+            _check(kind, e["scale"])
+        for combo in e.get("param", {}).get("n_data", {}).values():
+            if combo.get("scale"):
+                _check(f"{kind} (param)", combo["scale"])
+        for combo in e.get("n_data", {}).values():     # mux/demux
+            if combo.get("scale"):
+                _check(f"{kind} (combo)", combo["scale"])
 
 
-def test_spdt_pins_anchor_aligned() -> None:
-    """The SPDT switch is an anchor-pinned (at `in`) scaled node whose anchors
-    land on the grid (regression for misaligned pins/leads): `in` at the origin,
-    the two throws one GU to the right at ±0.25 GU, and a derived xscale/yscale.
-    """
+def test_spdt_pins_centre_placed_and_gridded() -> None:
+    """The SPDT switch is a centre-placed scaled node (§4): its three terminals
+    sit at their scaled anchor positions, symmetric about the centre — `in` half a
+    GU left, the two throws half a GU right at ±0.25 GU. All on the 0.25 grid."""
     defn = REGISTRY["spdt"]
     offsets = {p.name: tuple(p.offset) for p in defn.pins}
-    assert offsets["in"] == (0.0, 0.0)
-    assert offsets["out1"] == (1.0, -0.25)
-    assert offsets["out2"] == (1.0, 0.25)
+    assert offsets["in"] == (-0.5, 0.0)
+    assert offsets["out1"] == (0.5, -0.25)
+    assert offsets["out2"] == (0.5, 0.25)
 
 
 # ---------------------------------------------------------------------------

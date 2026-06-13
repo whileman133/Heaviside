@@ -38,19 +38,19 @@ MULTI-TERMINAL COMPONENT PLACEMENT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 CircuiTikZ multi-terminal nodes (op amp, MOSFETs, BJTs) have internal pin
-anchors that do not land on the 0.25-GU grid.  Alignment is **lead-only**: the
-node is placed by its origin pin (``anchor=…``, or by centre for the op amp) and
-a short lead wire bridges every other pin's anchor to its grid coordinate, e.g.
-``(node_id.drain) -- (grid_coord)``.  There are no per-component scale
-corrections.
+anchors that do not land on the 0.25-GU grid.  Alignment is **scale-only** (§4):
+every node is centre-placed and a per-axis ``xscale=…, yscale=…`` lands its
+anchors on the grid (pins that can't reach it stay off-grid, reached by the
+magnet).  Connecting wires reference each pin's named anchor ``(node.anchor)``.
+There are no ``anchor=`` placements and no lead bridges.
 
 These placement/alignment tables (``_MULTI_TERMINAL_KINDS``,
-``_MULTI_TERMINAL_ANCHOR_PIN``, ``_PIN_TO_CTIKZ_ANCHOR``, ``_MULTI_TERMINAL_LEADS``)
+``_MULTI_TERMINAL_EXTRA_OPTS``, ``_PIN_TO_CTIKZ_ANCHOR``)
 are **derived** from ``components/definitions.json`` via
 ``app.components.library.build_codegen_tables`` — they are not hand-maintained.
-The canvas (``app/canvas/svgsym.py``) draws the same lead bridges (baked into the
+The canvas (``app/canvas/svgsym.py``) draws the same scaled symbol (baked into the
 geometry by ``components/generate_components.py``), so the canvas and the LaTeX agree.
-See ``spec/component-editor.md``.
+See ``spec/component-pipeline.md``.
 
 Named anchor references
 -----------------------
@@ -158,7 +158,7 @@ def _translate_to_origin(schematic: Schematic) -> Schematic:
 # via app/components/library.py), not hand-maintained.  The library carries every
 # CircuiTikZ symbol's emission mode, pin→anchor mapping, and alignment (scale /
 # lead stubs); the two-terminal annotations open/short are bespoke (no symbol in
-# the file) so they are merged in here.  See spec/component-editor.md.
+# the file) so they are merged in here.  See spec/component-pipeline.md.
 # ---------------------------------------------------------------------------
 
 _CODEGEN_TABLES = _library.build_codegen_tables()
@@ -177,7 +177,7 @@ _DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
 #: Body-scale factor applied to every diode in both the output and the canvas.
 #: Single-sourced in app/components/library.py (re-exported here under the
-#: historical public name); the renderer (app/componenteditor/renderer.py)
+#: historical public name); the renderer (app/components/generate.py)
 #: reads the same constant, so the two cannot drift.
 DIODE_SYMBOL_SCALE: float = _library.DIODE_SYMBOL_SCALE
 
@@ -300,7 +300,7 @@ def generate(
         # named-anchor reference like (node_abc.gate) would point at a node that
         # does not exist yet → a LaTeX compile error. Such wires fall back to
         # absolute coordinates (use_refs=False); the registry pin coords already
-        # connect exactly via the leads/xscale (see module docstring), so there
+        # connect exactly via the scaled anchor (see module docstring), so there
         # is no geometric loss. Foreground wires come after and keep named refs.
         refs = pin_coord_to_ref if use_refs else None
         return _wire_draw_statement(wire, hops_by_wire.get(wire.id, []), refs, _y)
@@ -656,60 +656,31 @@ def _multi_terminal_line(
     for s in style:   # local voltage=european / current=european (per annotation)
         kind_arg = f"{kind_arg}, {s}"
 
-    # Determine placement coordinate and anchor option.
-    anchor_info = _MULTI_TERMINAL_ANCHOR_PIN.get(comp.kind)
-    if anchor_info:
-        ctikz_anchor_name, registry_pin_name = anchor_info
-        pin_index = next(
-            (i for i, p in enumerate(defn.pins) if p.name == registry_pin_name), None
-        )
-        if pin_index is not None and pin_index < len(pin_positions):
-            px, py = pin_positions[pin_index]
-            coord = f"({_fmt(px)},{_fmt(y_fn(py))})"
-            kind_arg = f"{kind_arg}, anchor={ctikz_anchor_name}"
-        else:
-            x, y = comp.position
-            coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    else:
-        x, y = comp.position
-        coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-
+    # Every multi-terminal node is centre-placed (§4): the node sits at the
+    # component position, and its pins connect via their named anchors
+    # `(node.anchor)` (see pin_coord_to_ref in generate()) — no anchor= option,
+    # no lead stubs.
+    x, y = comp.position
+    coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
     node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
 
     lines = [node_line]
-    # Static residual leads (op-amp/MOSFET) declared in the library.
-    for ctikz_anchor, pin_name in _MULTI_TERMINAL_LEADS.get(comp.kind, []):
-        pin_index = next(
-            (i for i, p in enumerate(defn.pins) if p.name == pin_name), None
-        )
-        if pin_index is not None and pin_index < len(pin_positions):
-            px, py = pin_positions[pin_index]
-            lines.append(
-                f"({node_id}.{ctikz_anchor}) -- ({_fmt(px)},{_fmt(y_fn(py))})"
-            )
     # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
     # checked inner-dot anchor (the dot variants, §5.4).
     for mark in _library.dot_marks(comp):
         lines.append(f"({node_id}.{mark['anchor']}) node[circ]{{}}")
-    # A scaled logic gate needs no lead stubs: its pins sit at the true scaled
-    # node anchor, so connecting wires attach directly at `(node.anchor)` (see
-    # pin_coord_to_ref in generate()).
     if len(lines) == 1:
-        return node_line  # single-point node / no residual leads
+        return node_line  # single-point node / no polarity dots
     return "\n    ".join(lines)
 
 
 # Alignment tables, all derived from the component data file (see classification
-# block above).  Each kind's data:
-#   _MULTI_TERMINAL_LEADS: kind → [(ctikz_anchor, registry_pin), …] bridge stubs
-#       (e.g. op amp leads each terminal out to its grid pin).
-#   _MULTI_TERMINAL_ANCHOR_PIN: kind → (ctikz_anchor, registry_pin) the node is
-#       placed by (e.g. MOSFET anchor=gate, BJT anchor=B); absent → placed by centre.
-#   _MULTI_TERMINAL_EXTRA_OPTS: kind → "xscale=…, yscale=…" stretch that lands the
-#       anchors on grid (e.g. MOSFET "xscale=1.0167", BJT "xscale=1.181, yscale=1.287").
-#   _PIN_TO_CTIKZ_ANCHOR: kind → {registry_pin: ctikz_anchor} for every pin.
-_MULTI_TERMINAL_LEADS: dict[str, list[tuple[str, str]]] = _CODEGEN_TABLES["leads"]
-_MULTI_TERMINAL_ANCHOR_PIN: dict[str, tuple[str, str]] = _CODEGEN_TABLES["anchor_pin"]
+# block above). Every multi-terminal node is centre-placed and aligned by scale
+# alone (§4):
+#   _MULTI_TERMINAL_EXTRA_OPTS: kind → "xscale=…, yscale=…" per-axis stretch that
+#       lands the anchors on grid (e.g. BJT "xscale=0.8929, yscale=0.974").
+#   _PIN_TO_CTIKZ_ANCHOR: kind → {registry_pin: ctikz_anchor} for every pin, so a
+#       connecting wire references `(node.anchor)`.
 _MULTI_TERMINAL_EXTRA_OPTS: dict[str, str] = _CODEGEN_TABLES["extra_opts"]
 _PIN_TO_CTIKZ_ANCHOR: dict[str, dict[str, str]] = _CODEGEN_TABLES["pin_to_ctikz"]
 

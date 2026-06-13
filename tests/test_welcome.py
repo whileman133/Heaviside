@@ -31,7 +31,6 @@ from app.ui.mainwindow import (  # noqa: E402
     _HELP_SHORTCUT_GROUPS,
     _HelpDialog,
     _WelcomeScreen,
-    _component_editor_available,
 )
 
 _ALL_GROUPS = _HELP_SHORTCUT_GROUPS + _HELP_GESTURE_GROUPS
@@ -47,19 +46,6 @@ def _no_startup_modals(monkeypatch):
     monkeypatch.setattr(
         mw.MainWindow, "_maybe_check_for_updates_on_startup", lambda self: None
     )
-
-
-def test_component_editor_menu_gated_on_toolchain(monkeypatch):
-    """The Component Editor (a developer tool needing latex/dvisvgm) is surfaced
-    only when that toolchain is present — so a packaged end-user build hides it."""
-    import app.ui.mainwindow as mw
-    monkeypatch.setattr(mw.shutil, "which", lambda name: None)
-    assert _component_editor_available() is False
-    monkeypatch.setattr(mw.shutil, "which", lambda name: f"/usr/bin/{name}")
-    assert _component_editor_available() is True
-    # Requires *both* tools, not just one.
-    monkeypatch.setattr(mw.shutil, "which", lambda name: "/x" if name == "latex" else None)
-    assert _component_editor_available() is False
 
 
 @pytest.mark.parametrize("group", _ALL_GROUPS)

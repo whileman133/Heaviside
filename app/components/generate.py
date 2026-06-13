@@ -2,13 +2,16 @@
 Render/save core for component definitions (Qt-free).
 
 Renders a CircuiTikZ symbol in the fixed-bounding-box / origin-at-zero /
-lead-to-grid scheme (spec ``spec/component-editor.md`` §2–§4) and writes the two
-data files: the geometry ``geometry.json`` and the registry/codegen
-``definitions.json`` (plus the single ``origin_svg`` constant).
+lead-to-grid scheme (spec ``spec/component-pipeline.md`` §2–§4) and writes the
+two data files: the geometry ``geometry.json`` and the registry/codegen
+``definitions.json`` (plus the single ``origin_svg`` constant and the
+``circuitikz_version`` generation stamp).
 
-Shared by ``components/generate_components.py`` (batch: re-render everything) and the
-GUI's Save (``render_one`` / ``save_component`` for a single component), so there
-is exactly one renderer.
+``components/generate_components.py`` (batch: re-render everything) is the
+main driver; the ``components/`` authoring scripts use the incremental
+``save_component`` / ``save_muxdemux``. (Formerly ``app/componenteditor/
+renderer.py`` — the GUI editor it served was removed once the automated
+measurement/alignment pipeline made manual fix-ups redundant.)
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import tomllib
 from pathlib import Path
 
 from app.canvas.style import SVG_PT_PER_GU
@@ -31,6 +35,25 @@ BORDER_PT = 2
 
 DEFINITIONS_PATH = Path(resource_path("components", "definitions.json"))
 GEOMETRY_PATH = Path(resource_path("components", "geometry.json"))
+
+# ---------------------------------------------------------------------------
+# Generation-time configuration (spec/component-pipeline.md §4). Read once, at
+# import, from components/generation.toml — a generation-only file (the running
+# app never imports this module). Tunes the alignment search and the parametric
+# height pre-pass.
+# ---------------------------------------------------------------------------
+CONFIG_PATH = Path(resource_path("components", "generation.toml"))
+with open(CONFIG_PATH, "rb") as _f:
+    _CONFIG = tomllib.load(_f)
+
+GRID_GU: float = _CONFIG["alignment"]["grid_gu"]
+SCALE_MIN: float = _CONFIG["alignment"]["scale_min"]
+SCALE_MAX: float = _CONFIG["alignment"]["scale_max"]
+SNAP_TOL_GU: float = _CONFIG["alignment"]["snap_tolerance_gu"]
+SCALE_ANISOTROPY_MAX: float = _CONFIG["alignment"]["scale_anisotropy_max"]
+GATE_INPUT_PITCH_GU: float = _CONFIG["gates"]["input_pitch_gu"]
+MUX_DATA_PITCH_GU: float = _CONFIG["muxdemux"]["data_pitch_gu"]
+MUX_SELECT_SPACING_GU: float = _CONFIG["muxdemux"]["select_spacing_gu"]
 
 
 # ---------------------------------------------------------------------------
@@ -60,24 +83,6 @@ def ctikzset(entry: dict) -> list[str]:
     return cs
 
 
-def lead_pins(entry: dict) -> list[dict]:
-    """Pins that get a bridge lead by default: every pin except the placement
-    origin (all pins when ``anchor_pin`` is null, e.g. the centre-placed op amp)."""
-    ap = entry.get("anchor_pin")
-    if ap is None:
-        return list(entry["pins"])
-    return [p for p in entry["pins"] if p["name"] != ap]
-
-
-def entry_leads(entry: dict) -> list[dict]:
-    """The leads to draw/emit: the explicit ``leads`` list if present (computed
-    residual leads after scaling), else a lead to every non-origin pin (the
-    lead-only default for un-scaled kinds like the op amp)."""
-    if "leads" in entry:
-        return [{"anchor": ld["anchor"], "to": list(ld["to"])} for ld in entry["leads"]]
-    return [{"anchor": p["anchor"], "to": list(p["offset"])} for p in lead_pins(entry)]
-
-
 def _scale_opt(entry: dict) -> str:
     """``", xscale=…, yscale=…"`` node option for the entry's scale (or "")."""
     scale = entry.get("scale")
@@ -92,7 +97,7 @@ def _scale_opt(entry: dict) -> str:
 
 
 def render_body(entry: dict, *, suffix: str = "", option: str = "") -> str:
-    """Build the TikZ body: origin pin at (0,0), optional scale, leads to grid."""
+    """Build the TikZ body: centre at (0,0), optional per-axis scale."""
     tikz, emission, pins = entry["tikz"], entry["emission"], entry["pins"]
     bbox = rf"\useasboundingbox ({-BBOX},{-BBOX}) rectangle ({BBOX},{BBOX});"
 
@@ -101,17 +106,10 @@ def render_body(entry: dict, *, suffix: str = "", option: str = "") -> str:
     if not library.is_multi_terminal_entry(entry):
         return bbox + "\n" + rf"\draw (0,0) node[{tikz}] {{}};"
 
-    ap = entry.get("anchor_pin")
+    # Every multi-terminal node is centre-placed and aligned by scale alone
+    # (§4): no anchor= placement, no lead stubs — pins sit at the scaled anchor.
     head = tikz + option + _scale_opt(entry)
-    if ap is not None:
-        oa = next(p["anchor"] for p in pins if p["name"] == ap)
-        node = rf"\node[{head}, anchor={oa}] (X) at (0,0) {{}};"
-    else:
-        node = rf"\node[{head}] (X) at (0,0) {{}};"
-    leads = "".join(
-        rf"\draw (X.{ld['anchor']}) -- {_tex(ld['to'])};" for ld in entry_leads(entry)
-    )
-    return bbox + "\n" + node + leads
+    return bbox + "\n" + rf"\node[{head}] (X) at (0,0) {{}};"
 
 
 def geometry(entry: dict, *, suffix: str = "", option: str = "") -> dict:
@@ -158,79 +156,95 @@ def measure_origin(sample: dict) -> tuple[float, float]:
 # Alignment computation (for the migration / editor)
 # ---------------------------------------------------------------------------
 
-def compute_alignment(measured: dict, targets: dict, *, tol: float = 0.01):
-    """Compute a per-axis scale that lands pins on the grid, plus residual leads.
+def _snap(v: float) -> float:
+    """Round *v* (GU) to the nearest pin-grid multiple."""
+    return round(v / GRID_GU) * GRID_GU
 
-    *measured* / *targets* map each (non-origin) pin name to its offset from the
-    origin pin — measured CircuiTikZ anchor vs. desired grid position.  Returns
-    ``((sx, sy), [residual_pin_names])``: ``(sx, sy)`` is the common
-    target/measured ratio per axis when it is consistent across all pins (so a
-    single scale lands them, e.g. the BJT), else 1.0 for that axis; the residual
-    list is the pins still off-grid after scaling (they need a bridge lead, e.g.
-    the MOSFET drain in y).
+
+def _axis_scale(coords: list[float]) -> float:
+    """The best per-axis scale for one axis's measured anchor *coords* (§4).
+
+    Candidate scales are ``1.0`` plus, for each coordinate, the factor that lands
+    *that* coordinate exactly on the grid — clamped to ``[SCALE_MIN, SCALE_MAX]``
+    so the search can't collapse toward the origin or distort past the bound.
+    The winner maximises the count of coordinates that land on the grid, tie-broken
+    toward ``1.0`` (least distortion) then toward the smaller scale (deterministic,
+    so regeneration is bit-stable). Returned rounded to 4 dp.
     """
-    names = [n for n in targets if n in measured]
+    cands = {1.0}
+    for v in coords:
+        if abs(v) > 1e-3:
+            s = _snap(v) / v
+            if SCALE_MIN <= s <= SCALE_MAX:
+                cands.add(round(s, 6))
 
-    def axis_scale(i: int) -> float:
-        movable = [n for n in names if abs(measured[n][i]) > 1e-6]
-        ratios = [targets[n][i] / measured[n][i] for n in movable]
-        if not ratios:
-            return 1.0
-        if max(ratios) - min(ratios) <= 1e-2:   # consistent → one scale lands all (BJT)
-            return sum(ratios) / len(ratios)
-        # Inconsistent (e.g. MOSFET drain vs source in y): pick the candidate scale
-        # that minimises the worst residual; the rest get a short bridge lead.
-        return min(ratios, key=lambda s: max(abs(measured[n][i] * s - targets[n][i]) for n in movable))
+    def on_grid(s: float) -> int:
+        return sum(1 for v in coords if abs(s * v - _snap(s * v)) < SNAP_TOL_GU)
 
-    sx, sy = axis_scale(0), axis_scale(1)
-    residual = [
-        n for n in names
-        if abs(measured[n][0] * sx - targets[n][0]) > tol
-        or abs(measured[n][1] * sy - targets[n][1]) > tol
+    best = max(cands, key=lambda s: (on_grid(s), -abs(s - 1.0), -s))
+    return round(best, 4)
+
+
+def _scale_for(measured: dict[str, tuple], anchors: list[str]) -> tuple[float, float]:
+    """The per-axis ``(sx, sy)`` for a set of *measured* anchor positions — the
+    shared core of `best_alignment` (fixed nodes) and `render_muxdemux`.
+
+    Per-axis while the two axes stay within ``SCALE_ANISOTROPY_MAX`` of each
+    other; beyond that the symbol falls back to a **single uniform scale**
+    (computed over both axes' coordinates). The cap protects thick-diagonal-stroke
+    symbols (switch blades) from shearing in the LaTeX export, where the canvas —
+    which buckets stroke widths — could not follow (§4)."""
+    present = [a for a in anchors if a in measured]
+    xs = [measured[a][0] for a in present]
+    ys = [measured[a][1] for a in present]
+    sx, sy = _axis_scale(xs), _axis_scale(ys)
+    hi, lo = max(sx, sy), min(sx, sy)
+    if lo > 0 and hi / lo > SCALE_ANISOTROPY_MAX:
+        sx = sy = _axis_scale(xs + ys)   # one uniform scale (best-effort over both)
+    return sx, sy
+
+
+def _grid_offset(v: float) -> float:
+    """One scaled pin coordinate, snapped to the grid when it lands within
+    ``SNAP_TOL_GU`` of a grid line (so an on-grid pin gets the clean value, e.g.
+    ``0.5`` not ``0.49``); a genuinely off-grid pin keeps its true scaled value
+    (reached by the magnet). The ``+ 0.0`` normalises ``-0.0`` to ``0.0``."""
+    s = _snap(v)
+    out = s if abs(v - s) < SNAP_TOL_GU else v
+    return round(out, 4) + 0.0
+
+
+def _scaled_pins(pins: list[dict], measured: dict[str, tuple],
+                 sx: float, sy: float) -> list[dict]:
+    """*pins* with each anchored pin's ``offset`` set to its grid-snapped scaled
+    anchor position; un-anchored pins pass through unchanged."""
+    return [
+        {**p, "offset": [_grid_offset(sx * measured[p["anchor"]][0]),
+                         _grid_offset(sy * measured[p["anchor"]][1])]}
+        if p.get("anchor") in measured else dict(p)
+        for p in pins
     ]
-    return (round(sx, 4), round(sy, 4)), residual
 
 
-def fit_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
-    """Measure *entry*'s CircuiTikZ anchors and derive its alignment.
+def best_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
+    """Measure *entry*'s anchors and derive its uniform alignment (§4).
 
-    Returns ``(scale, leads)`` where ``scale`` is ``[sx, sy]`` (or ``None`` when
-    no stretch is needed) and ``leads`` bridges each residual pin to its grid
-    target.  This is the single source of the alignment used by both the editor's
-    **Fit pins to grid** and the batch generator — so a CircuiTikZ change reflows
-    the alignment automatically on re-generation.  Requires the toolchain (it
-    renders to measure); a non-multi-terminal entry returns ``(None, [])``.
+    Returns ``(scale, pins)``: ``scale`` is the per-axis ``[sx, sy]`` (or ``None``
+    when ``[1.0, 1.0]``), and ``pins`` is *entry*'s pins with each anchored pin's
+    ``offset`` set to its scaled measured position (relative to the node centre).
+    Pins that don't land on the grid keep their true scaled offset and are reached
+    by the canvas magnet. Non-multi-terminal entries pass through unchanged.
+    Requires the toolchain (it renders to measure).
     """
     if not library.is_multi_terminal_entry(entry):
-        return None, []
+        return None, list(entry["pins"])
     pins = entry["pins"]
-    anchor_of = {p["name"]: p.get("anchor") for p in pins}
-    anchors = [a for a in anchor_of.values() if a]
-    if not anchors:
-        return None, []
-
-    ap = entry.get("anchor_pin")
-    if ap is None:
-        # Centre-placed: every pin is chosen outward of the body, so bridge each
-        # with a clean axis-aligned lead.  Scaling here would distort the symbol's
-        # form (e.g. stretch the op-amp triangle), so we deliberately don't.
-        return None, [{"anchor": anchor_of[p["name"]], "to": list(p["offset"])}
-                      for p in pins if p.get("anchor")]
-
-    # Anchor-pinned: stretch the symbol so its anchors land on the grid pins, and
-    # bridge whatever residual a single scale can't remove (e.g. the MOSFET source).
+    anchors = [p["anchor"] for p in pins if p.get("anchor")]
     measured = render.measure_anchors(entry["tikz"], anchors, ctikzset=ctikzset(entry))
-    ox, oy = measured[anchor_of[ap]]
-    other = [p for p in pins if p["name"] != ap]
-    rel = {p["name"]: (round(measured[p["anchor"]][0] - ox, 4),
-                       round(measured[p["anchor"]][1] - oy, 4))
-           for p in other if p.get("anchor") in measured}
-    targets = {p["name"]: tuple(p["offset"]) for p in other if p["name"] in rel}
-
-    (sx, sy), residual = compute_alignment(rel, targets)
-    scale = None if (abs(sx - 1.0) <= 1e-9 and abs(sy - 1.0) <= 1e-9) else [sx, sy]
-    leads = [{"anchor": anchor_of[n], "to": list(targets[n])} for n in residual]
-    return scale, leads
+    sx, sy = _scale_for(measured, anchors)
+    out_pins = _scaled_pins(pins, measured, sx, sy)
+    scale = None if (sx == 1.0 and sy == 1.0) else [sx, sy]
+    return scale, out_pins
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +336,7 @@ def compute_bbox(geom: dict, origin: tuple[float, float], pins: list[dict],
 
 
 def data_entry(kind: str, entry: dict) -> dict:
-    """The definitions.json record for *kind*: authored fields + computed leads."""
+    """The definitions.json record for *kind*: authored fields + computed scale."""
     out: dict = {
         "display_name": entry["display_name"],
         "category": entry["category"],
@@ -338,10 +352,8 @@ def data_entry(kind: str, entry: dict) -> dict:
         ],
     }
     if library.is_multi_terminal_entry(entry):
-        out["anchor_pin"] = entry.get("anchor_pin")
         if entry.get("scale"):
             out["scale"] = [round(float(s), 4) for s in entry["scale"]]
-        out["leads"] = entry_leads(entry)
         if entry.get("ctikzset"):    # static shape settings (e.g. inductor=cute)
             out["ctikzset"] = list(entry["ctikzset"])
     if entry.get("variants"):
@@ -359,14 +371,14 @@ def geometry_entries(kind: str, entry: dict) -> dict[str, dict]:
 
 
 def realigned(entry: dict) -> dict:
-    """Return *entry* with its ``scale``/``leads`` re-derived from a fresh anchor
-    measurement (no-op for non-multi-terminal kinds).  Makes the alignment a
-    *computed* property of the current CircuiTikZ library rather than a stored
-    constant, so re-generation reflows it automatically (see ``fit_alignment``)."""
+    """Return *entry* with its `scale` and pin offsets re-derived from a fresh
+    anchor measurement (the uniform `best_alignment`, §4); a no-op for
+    non-multi-terminal kinds. Makes alignment a *computed* property of the
+    current CircuiTikZ library, so re-generation reflows it automatically."""
     if not library.is_multi_terminal_entry(entry):
         return entry
-    scale, leads = fit_alignment(entry)
-    out = {**entry, "leads": leads}
+    scale, pins = best_alignment(entry)
+    out = {**entry, "pins": pins}
     if scale is not None:
         out["scale"] = scale
     else:
@@ -399,13 +411,13 @@ def param_pins(entry: dict, n: int) -> list[dict]:
 
 
 def _param_entry_at(entry: dict, n: int) -> dict:
-    """A concrete (non-parametric) entry for value *n* — param tikz + computed pins."""
+    """A concrete (non-parametric) entry for value *n* — param tikz + pin
+    names/anchors (the offsets are placeholders, re-derived by best_alignment)."""
     p = entry["param"]
     base = {k: v for k, v in entry.items() if k != "param"}
     return {**base,
             "tikz": entry["tikz"] + ", " + p["option"].format(n=n),
-            "pins": param_pins(entry, n),
-            "anchor_pin": p["output"]["name"]}
+            "pins": param_pins(entry, n)}
 
 
 def _gate_height(entry: dict, n: int, height_key: str, target_pitch: float) -> float:
@@ -421,15 +433,17 @@ def _gate_height(entry: dict, n: int, height_key: str, target_pitch: float) -> f
 
 
 def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
-    """Render every value of a parametric component.
+    """Render every value of a parametric component (logic gates).
 
-    Returns ``(geometry_by_key, data_entry)``.  The data entry is an ordinary
-    multi_terminal record at the default value plus a ``param`` block carrying the
-    declaration and per-N ``scale``/``leads``/``bbox`` (geometry keyed ``kind:N``,
-    with the default also aliased under the plain key for static lookups)."""
+    Each value runs the §4 pre-pass (set the gate body height so the inputs sit
+    at ``GATE_INPUT_PITCH_GU``) then the uniform ``best_alignment`` — centre-placed,
+    per-axis scale, **measured** pins (like mux/demux). Returns
+    ``(geometry_by_key, data_entry)``: the data entry is an ordinary multi_terminal
+    record at the default value plus a ``param`` block carrying the declaration and
+    per-N ``scale``/``pins``/``bbox`` (and ``height`` for gates). Geometry is keyed
+    ``kind:N``, with the default also aliased under the plain key."""
     p = entry["param"]
     height_key = p.get("height_key")            # gates: set body height (round bubble)
-    target_pitch = p["input"]["pitch"]
     geoms: dict[str, dict] = {}
     n_data: dict[str, dict] = {}
     for n in range(int(p["min"]), int(p["max"]) + 1):
@@ -438,25 +452,28 @@ def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
         if height_key:
             # Size the body so inputs land at the grid pitch — no node yscale, so
             # the inversion bubble stays round and the code stays idiomatic.
-            height = _gate_height(entry, n, height_key, target_pitch)
+            height = _gate_height(entry, n, height_key, GATE_INPUT_PITCH_GU)
             e_n = {**e_n, "ctikzset": [f"{height_key}={height}"]}
-        scale, leads = fit_alignment(e_n)
-        g = geometry({**e_n, "scale": scale, "leads": leads})
+        scale, pins = best_alignment(e_n)
+        e_n = {**e_n, "scale": scale, "pins": pins}
+        g = geometry(e_n)
         geoms[param_geometry_key(kind, n)] = g
-        nd = {"scale": scale, "leads": leads, "bbox": compute_bbox(g, origin, e_n["pins"])}
+        nd = {"scale": scale,
+              "pins": [{"name": q["name"], "offset": list(q["offset"]),
+                        "anchor": q.get("anchor")} for q in pins],
+              "bbox": compute_bbox(g, origin, pins)}
         if height is not None:
             nd["height"] = height
         n_data[str(n)] = nd
     default = int(p["default"])
     geoms[geometry_key(kind)] = geoms[param_geometry_key(kind, default)]  # static alias
-    e_def = _param_entry_at(entry, default)
+    dflt = n_data[str(default)]
     # Store the *base* tikz keyword (not the concrete "…, number inputs=2"); codegen
     # re-appends the param option per instance, so storing the concrete form would
     # double it on the next regeneration.
-    de = data_entry(kind, {**e_def, "tikz": entry["tikz"],
-                           "scale": n_data[str(default)]["scale"],
-                           "leads": n_data[str(default)]["leads"]})
-    de["bbox"] = n_data[str(default)]["bbox"]
+    de = data_entry(kind, {**_param_entry_at(entry, default), "tikz": entry["tikz"],
+                           "scale": dflt["scale"], "pins": dflt["pins"]})
+    de["bbox"] = dflt["bbox"]
     de["param"] = {**{k: v for k, v in p.items() if k != "n_data"}, "n_data": n_data}
     return geoms, de
 
@@ -464,14 +481,24 @@ def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
 def render_store(authored: dict[str, dict]) -> tuple[dict, dict, tuple[float, float]]:
     """Render every component: returns (geometry, components_data, origin_svg).
 
-    Alignment (``scale``/``leads``) is re-derived per multi-terminal component, so
-    the output reflects the current CircuiTikZ library, not the stored values."""
+    The ``scale`` and pin offsets are re-derived per multi-terminal component
+    (``best_alignment``, §4), so the output reflects the current CircuiTikZ
+    library, not the stored values."""
     origin = measure_origin(authored["R"]) if "R" in authored else measure_origin(
         next(iter(authored.values()))
     )
     geometry: dict[str, dict] = {}
     components: dict[str, dict] = {}
     for kind in sorted(authored):
+        if "muxdemux" in authored[kind]:
+            # Two-parameter mux/demux: every (data, select) combo is rendered
+            # and measured. Regression guard: routed as a plain node, these
+            # would silently lose params/n_data and every kind:data:select
+            # geometry combo.
+            geoms, de = render_muxdemux(kind, authored[kind], origin)
+            geometry.update(geoms)
+            components[kind] = de
+            continue
         if is_parametric(authored[kind]):
             geoms, de = render_parametric(kind, authored[kind], origin)
             geometry.update(geoms)
@@ -496,18 +523,35 @@ def load_authored() -> dict[str, dict]:
     return data.get("components", data)
 
 
-def write_store(geometry: dict, components: dict, origin: tuple[float, float]) -> None:
+def measure_circuitikz_version() -> str | None:
+    """The installed CircuiTikZ version, from a minimal probe compile.
+
+    ``None`` when the package reports no version. Used by the batch generator
+    to stamp ``definitions.json`` with the version the library was rendered
+    against, so symbol/anchor drift is diagnosable later."""
+    _svg, log = render.render_svg(r"\draw (0,0) -- (0.25,0);", border_pt=BORDER_PT)
+    return render.circuitikz_version(log)
+
+
+def write_store(geometry: dict, components: dict, origin: tuple[float, float],
+                circuitikz_version: str | None = None) -> None:
+    """Write both data files. *circuitikz_version* stamps definitions.json with
+    the version the library was generated against (omitted when unknown)."""
     GEOMETRY_PATH.write_text(json.dumps(geometry, indent=2) + "\n", encoding="utf-8")
+    data: dict = {"origin_svg": list(origin)}
+    if circuitikz_version:
+        data["circuitikz_version"] = circuitikz_version
+    data["components"] = components
     DEFINITIONS_PATH.write_text(
-        json.dumps({"origin_svg": list(origin), "components": components},
-                   indent=2, ensure_ascii=False) + "\n",
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
 
 def save_component(kind: str, entry: dict) -> None:
     """Add/replace one component: merge its geometry into geometry.json and its
-    record into definitions.json (re-using the existing origin_svg)."""
+    record into definitions.json (re-using the existing origin_svg and the
+    batch-generation circuitikz_version stamp)."""
     data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
     components = data.get("components", data)
     origin = tuple(data["origin_svg"]) if "origin_svg" in data else measure_origin(entry)
@@ -518,7 +562,8 @@ def save_component(kind: str, entry: dict) -> None:
     de = data_entry(kind, entry)
     de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
     components[kind] = de
-    write_store(geometry, components, origin)
+    write_store(geometry, components, origin,
+                circuitikz_version=data.get("circuitikz_version"))
 
 
 # ---------------------------------------------------------------------------
@@ -528,48 +573,26 @@ def save_component(kind: str, entry: dict) -> None:
 # select-line count — so the geometry is rendered for each value combination and
 # the pins are *measured* (the configurable trapezoid's anchors don't sit on the
 # grid) and baked into ``n_data`` per combo, along with the concrete ``muxdemux
-# def`` option codegen re-emits. The shape is centre-placed (``anchor_pin`` null,
-# like the op amp); a wire snaps onto the off-grid pin via the magnet.
+# def`` option codegen re-emits. Like every node it is centre-placed and aligned
+# by the uniform per-axis scale (§4); a wire snaps onto an off-grid pin via the
+# magnet. The body size follows the [muxdemux] config knobs.
 # ---------------------------------------------------------------------------
-
-def best_alignment_scale(measured: dict[str, tuple]) -> float:
-    """A single uniform scale that lands **as many** of the measured anchor
-    coordinates as possible on the 0.25-GU grid — the best-effort grid alignment
-    for a symbol whose native anchors are off-grid (flip-flops, mux/demux).
-
-    Candidates are each non-trivial coordinate's snap-ratio (the factor that puts
-    that coordinate on the grid); the winner aligns the most coordinates, ties
-    broken toward 1.0 (least distortion). Pins the scale can't bring on-grid (a
-    mux's slanted select pins) just stay off-grid and connect via the magnet."""
-    def _snap(v: float) -> float:
-        return 0.0 if v == 0 else (1.0 if v > 0 else -1.0) * math.floor(abs(v) / 0.25 + 0.5) * 0.25
-
-    cands = {1.0}
-    for (x, y) in measured.values():
-        for v in (x, y):
-            if abs(v) > 0.1:
-                cands.add(round(_snap(v) / v, 6))
-
-    def aligned(s: float) -> int:
-        return sum(1 for (x, y) in measured.values() for v in (x * s, y * s)
-                   if abs(v) > 1e-9 and abs(v - _snap(v)) < 1e-3)
-
-    return max(cands, key=lambda s: (aligned(s), -abs(s - 1.0)))
-
 
 def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tuple[str, str]]]:
     """The concrete ``muxdemux def`` option, the measured (unscaled) anchors, and
     the (pin-name, anchor) pairs for one (data, select) combo of a *mux*/*demux*.
-    ``Lh``/``Rh`` track the data count (2× keeps the data-pin pitch constant);
-    ``w`` tracks the select count so the bottom pins don't crowd."""
-    w = sel + 1
+    ``Lh``/``Rh`` track the data count (scaled by ``MUX_DATA_PITCH_GU``); ``w``
+    tracks the select count (scaled by ``MUX_SELECT_SPACING_GU``) so the bottom
+    pins don't crowd. The defaults (1.0/1.0) reproduce the original body."""
+    dh = round(2 * data * MUX_DATA_PITCH_GU, 4)
+    w = round(sel * MUX_SELECT_SPACING_GU + 1, 4)
     if role == "mux":      # data inputs on the left, one output right, selects below
-        defstr = (f"muxdemux def={{Lh={2 * data}, Rh=2, NL={data}, "
+        defstr = (f"muxdemux def={{Lh={dh}, Rh=2, NL={data}, "
                   f"NR=1, NB={sel}, NT=0, w={w}}}")
         pairs = ([(f"in{i}", f"lpin {i + 1}") for i in range(data)]
                  + [("out", "rpin 1")])
     else:                  # demux: one input left, data outputs right, selects below
-        defstr = (f"muxdemux def={{Lh=2, Rh={2 * data}, NL=1, "
+        defstr = (f"muxdemux def={{Lh=2, Rh={dh}, NL=1, "
                   f"NR={data}, NB={sel}, NT=0, w={w}}}")
         pairs = ([("in", "lpin 1")]
                  + [(f"out{i}", f"rpin {i + 1}") for i in range(data)])
@@ -582,9 +605,9 @@ def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     """Render every (data, select) combo of a mux/demux. Returns
     ``(geometry_by_key, data_entry)`` — geometry keyed ``kind:data:select`` (the
     default aliased under the plain key), and a multi-parameter data entry whose
-    ``n_data[<data>,<select>]`` holds the baked option, alignment scale, measured
-    pins, and bbox. A best-effort uniform scale lands the data pins on the grid;
-    the slanted select pins stay off-grid (magnet)."""
+    ``n_data[<data>,<select>]`` holds the baked option, per-axis scale, measured
+    pins, and bbox. The uniform per-axis alignment (§4) lands the data pins on the
+    grid; the slanted select pins stay off-grid (magnet)."""
     rec = entry["muxdemux"]
     role, dname, sname = rec["role"], rec["data_param"], rec["select_param"]
     specs = {s["name"]: s for s in entry["params"]}
@@ -596,24 +619,26 @@ def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     for d in range(int(dspec["min"]), int(dspec["max"]) + 1):
         for s in range(int(sspec["min"]), int(sspec["max"]) + 1):
             opt, measured, pairs = _muxdemux_combo(role, d, s)
-            sc = best_alignment_scale(measured)
-            pins = [{"name": nm, "anchor": a,
-                     "offset": [round(measured[a][0] * sc, 4), round(measured[a][1] * sc, 4)]}
-                    for nm, a in pairs]
-            ce = {**base, "tikz": "muxdemux", "emission": "node", "anchor_pin": None,
-                  "pins": pins, "leads": [], "scale": [round(sc, 6), round(sc, 6)]}
+            sx, sy = _scale_for(measured, [a for _, a in pairs])
+            pins = _scaled_pins([{"name": nm, "anchor": a} for nm, a in pairs],
+                                measured, sx, sy)
+            scale = [sx, sy]
+            ce = {**base, "tikz": "muxdemux", "emission": "node",
+                  "pins": pins, "scale": scale}
             g = geometry(ce, option=", " + opt)
             geoms[f"{geometry_key(kind)}:{d}:{s}"] = g
-            n_data[f"{d},{s}"] = {"option": opt, "scale": [round(sc, 6), round(sc, 6)],
+            n_data[f"{d},{s}"] = {"option": opt, "scale": scale,
                                   "pins": pins, "bbox": compute_bbox(g, origin, pins)}
     dd, sd = int(dspec["default"]), int(sspec["default"])
     geoms[geometry_key(kind)] = geoms[f"{geometry_key(kind)}:{dd}:{sd}"]   # static alias
     default = n_data[f"{dd},{sd}"]
     de = {
         "display_name": entry["display_name"], "category": entry["category"],
-        "emission": "node", "tikz": "muxdemux", "labels": [], "anchor_pin": None,
+        "emission": "node", "tikz": "muxdemux", "labels": [],
         "pins": default["pins"], "bbox": default["bbox"],
-        "params": entry["params"], "n_data": n_data,
+        # The authoring rec is persisted so the batch generator (render_store)
+        # can re-render the combos from definitions.json alone.
+        "params": entry["params"], "muxdemux": rec, "n_data": n_data,
     }
     return geoms, de
 
@@ -628,4 +653,64 @@ def save_muxdemux(kind: str, entry: dict) -> None:
     geoms, de = render_muxdemux(kind, entry, origin)
     geometry.update(geoms)
     components[kind] = de
-    write_store(geometry, components, origin)
+    write_store(geometry, components, origin,
+                circuitikz_version=data.get("circuitikz_version"))
+
+
+# ---------------------------------------------------------------------------
+# Authored-entry validation (pre-flight for the batch generator)
+# ---------------------------------------------------------------------------
+
+EMISSIONS = ("path", "node")
+PIN_GRID = 0.25
+
+
+def _on_grid(v: float) -> bool:
+    n = v / PIN_GRID
+    return abs(n - round(n)) < 1e-6
+
+
+def validate_entry(kind: str, entry: dict) -> list[str]:
+    """Human-readable problems with an authored entry (empty == well-formed).
+
+    Only a **path** bipole's two axial terminals are authored grid positions —
+    they define the device span. Every node pin's offset is *derived* by
+    `best_alignment` (measured, and legitimately off-grid for the magnet), so the
+    grid check does not apply to it; a ``muxdemux`` entry carries no authored
+    pins at all (every combo is measured), and a bipole's pins beyond the first
+    two are off-axis taps (thyristor/triac gate).
+    """
+    errs: list[str] = []
+    if not kind.strip():
+        errs.append("Kind is required.")
+    if not entry.get("tikz", "").strip():
+        errs.append("CircuiTikZ keyword is required.")
+    if entry.get("emission") not in EMISSIONS:
+        errs.append(f"Emission must be one of {', '.join(EMISSIONS)}.")
+    if "muxdemux" in entry:
+        return errs
+
+    pins = entry.get("pins", [])
+    if not pins:
+        errs.append("At least one pin is required.")
+    names = [p["name"] for p in pins]
+    if len(set(names)) != len(names):
+        errs.append("Pin names must be unique.")
+    is_path = entry.get("emission") == "path"
+    for i, p in enumerate(pins):
+        if not p["name"].strip():
+            errs.append("Every pin needs a name.")
+        if is_path and i < 2:        # the two axial terminals = the authored span
+            ox, oy = p["offset"]
+            if not (_on_grid(ox) and _on_grid(oy)):
+                errs.append(f"Pin {p['name']!r} offset {(ox, oy)} is not on the 0.25 GU grid.")
+
+    bbox = entry.get("bbox")
+    if not (isinstance(bbox, (list, tuple)) and len(bbox) == 4):
+        errs.append("bbox must be four numbers (x0, y0, x1, y1).")
+
+    if library.is_multi_terminal_entry(entry):
+        for p in pins:
+            if not (p.get("anchor") or "").strip():
+                errs.append(f"Multi-terminal pin {p['name']!r} needs a CircuiTikZ anchor.")
+    return errs

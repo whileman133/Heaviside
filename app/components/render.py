@@ -1,7 +1,7 @@
 r"""
-Measure a CircuiTikZ symbol (spec: ``spec/component-editor.md`` §3).
+Measure a CircuiTikZ symbol (spec: ``spec/component-pipeline.md`` §3).
 
-This is the whole point of the component editor: instead of hand-measuring pin
+This is the foundation of the component pipeline: instead of hand-measuring pin
 positions and scale/lead corrections off a compiled figure (the brittle
 PROJECT_SPEC §5.5 ritual), render the symbol and read its pin **anchors**
 automatically.
@@ -38,6 +38,7 @@ _HREF = "{http://www.w3.org/1999/xlink}href"
 _DOC = r"""\documentclass[border=%(border)dpt]{standalone}
 \usepackage[american]{circuitikz}
 \begin{document}
+\ifdefined\pgfcircversion\typeout{HVCTIKZVERSION \pgfcircversion}\fi
 \begin{circuitikz}
 %(ctikzset)s
 %(body)s
@@ -120,6 +121,23 @@ def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = No
 # Anchor name may contain spaces (logic gates use ``in 1``/``in 2``/…), so capture
 # the name non-greedily up to the " = " that precedes the coordinates.
 _ANCHOR_RE = re.compile(r"HVANCHOR (.+?) = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt")
+
+# The HVCTIKZVERSION line typeset by _DOC's probe (circuitikz's own
+# \pgfcircversion macro), and a fallback on the package's log banner for
+# versions that predate the macro.
+_CTIKZ_VERSION_RE = re.compile(r"HVCTIKZVERSION\s+(\S+)")
+_CTIKZ_BANNER_RE = re.compile(r"circuitikz[^\n]*?version\s+([0-9][\w.\-]*)",
+                              re.IGNORECASE)
+
+
+def circuitikz_version(log: str) -> str | None:
+    """The CircuiTikZ version a compile *log* reports, or ``None``.
+
+    Every ``_DOC`` compile typesets ``HVCTIKZVERSION <\\pgfcircversion>``; the
+    package banner line is the fallback. Used to stamp ``definitions.json``
+    with the version the component library was generated against."""
+    m = _CTIKZ_VERSION_RE.search(log) or _CTIKZ_BANNER_RE.search(log)
+    return m.group(1) if m else None
 
 
 def measure_anchors(tikz_keyword: str, anchors: list[str], *, border_pt: int = 10,

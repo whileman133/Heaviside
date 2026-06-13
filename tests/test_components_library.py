@@ -1,5 +1,5 @@
 """
-Tests for the component library (spec: ``spec/component-editor.md``).
+Tests for the component library (spec: ``spec/component-pipeline.md``).
 
 ``REGISTRY`` and the ``circuitikz`` codegen tables are now built from
 ``components/definitions.json`` (via ``app/components/library.py``).  These tests
@@ -53,17 +53,19 @@ def test_resistor_def():
 
 def test_op_amp_def():
     a = REGISTRY["op amp"]
+    # Centre-placed and scaled (§4): pins at the scaled triangle edge, no leads.
     assert a.pins == [
-        PinDef("+", (-1.5, 0.5)), PinDef("-", (-1.5, -0.5)), PinDef("out", (1.5, 0.0)),
+        PinDef("+", (-1.25, 0.5)), PinDef("-", (-1.25, -0.5)), PinDef("out", (1.25, 0.0)),
     ]
-    assert a.bbox == (-1.5, -1.0, 1.5, 1.0)
+    assert a.bbox == (-1.25, -1.0, 1.25, 1.0)
     assert a.label_slots == ["l"]
 
 
 def test_nigfete_def():
     m = REGISTRY["nigfete"]
+    # Centre-placed: gate left, drain/source at the centre column (§4).
     assert m.pins == [
-        PinDef("gate", (0.0, 0.0)), PinDef("drain", (1.0, -1.0)), PinDef("source", (1.0, 0.5)),
+        PinDef("gate", (-1.0, 0.25)), PinDef("drain", (0.0, -0.75)), PinDef("source", (0.0, 0.75)),
     ]
     # Variants are generic per-instance state now; the kind is a plain Component.
     assert m.component_class is Component
@@ -206,34 +208,30 @@ def test_multi_terminal_kinds():
 
 
 def test_scale_corrections_golden():
-    # BJT/MOSFET are scaled so their pins land on the grid (no diagonal stubs);
-    # the op amp uses leads instead (it is absent here).  Checked per-kind so that
-    # newly imported scaled components don't break the curated values.
+    # Every multi-terminal node is centre-placed and scaled (per-axis) so its pins
+    # land on the grid (§4) — including the op amp, which formerly used leads.
+    # A unit axis is omitted (op amp yscale=1.0).  Checked per-kind so a re-import
+    # that shifts a curated value is caught.
     expected = {
-        "npn": "xscale=1.1905, yscale=1.2987",
-        "pnp": "xscale=1.1905, yscale=1.2987",
-        "nigfete": "xscale=1.0204, yscale=0.962",
-        "nigfetd": "xscale=1.0204, yscale=0.962",
-        "pigfete": "xscale=1.0204, yscale=0.962",
-        "pigfetd": "xscale=1.0204, yscale=0.962",
+        "npn": "xscale=0.8929, yscale=0.974",
+        "pnp": "xscale=0.8929, yscale=0.974",
+        "nigfete": "xscale=1.0204, yscale=0.974",
+        "nigfetd": "xscale=1.0204, yscale=0.974",
+        "pigfete": "xscale=1.0204, yscale=0.974",
+        "pigfetd": "xscale=1.0204, yscale=0.974",
+        "op amp": "xscale=1.0504",
     }
     for kind, opts in expected.items():
         assert cg._MULTI_TERMINAL_EXTRA_OPTS[kind] == opts
-    assert "op amp" not in cg._MULTI_TERMINAL_EXTRA_OPTS
 
 
-def test_leads_golden():
-    # op amp extends clean leads; BJT scales fully (no leads); MOSFET adds a
-    # single small residual lead for the source's sub-grid y offset.
-    assert cg._MULTI_TERMINAL_LEADS["op amp"] == [("+", "+"), ("-", "-"), ("out", "out")]
-    assert cg._MULTI_TERMINAL_LEADS["npn"] == []
-    assert cg._MULTI_TERMINAL_LEADS["nigfete"] == [("source", "source")]
-
-
-def test_anchor_pin_golden():
-    assert cg._MULTI_TERMINAL_ANCHOR_PIN["nigfete"] == ("gate", "gate")
-    assert cg._MULTI_TERMINAL_ANCHOR_PIN["npn"] == ("B", "base")
-    assert "op amp" not in cg._MULTI_TERMINAL_ANCHOR_PIN  # placed by centre
+def test_no_leads_or_anchor_pin_tables():
+    """The lead-bridge and anchor-pin codegen tables are gone (§4): alignment is
+    scale-only and every node is centre-placed."""
+    assert not hasattr(cg, "_MULTI_TERMINAL_LEADS")
+    assert not hasattr(cg, "_MULTI_TERMINAL_ANCHOR_PIN")
+    assert "leads" not in cg._CODEGEN_TABLES
+    assert "anchor_pin" not in cg._CODEGEN_TABLES
 
 
 def test_pin_to_ctikz_golden():
@@ -247,9 +245,9 @@ def test_diode_kinds_golden():
 
 def test_diode_scale_single_sourced():
     """The diode body scale is defined once (library) and shared by the codegen
-    and the component-editor renderer — the canvas SVG assets and the emitted
+    and the pipeline renderer (generate.py) — the canvas SVG assets and the emitted
     ``\\ctikzset{diodes/scale=…}`` can never drift apart."""
-    from app.componenteditor import renderer
+    from app.components import generate as renderer
 
     assert library.DIODE_SYMBOL_SCALE == 0.8           # golden value
     assert cg.DIODE_SYMBOL_SCALE == library.DIODE_SYMBOL_SCALE
@@ -259,7 +257,7 @@ def test_diode_scale_single_sourced():
 def test_geometry_key_single_sourced():
     """``geometry_key`` is canonical in the library; svgsym and the renderer
     re-export the same function (byte-identical duplicates are gone)."""
-    from app.componenteditor import renderer
+    from app.components import generate as renderer
 
     assert renderer.geometry_key is library.geometry_key
     assert library.geometry_key("op amp") == "op_amp"

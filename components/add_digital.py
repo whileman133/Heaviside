@@ -41,7 +41,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.componenteditor import renderer  # noqa: E402
+from app.components import generate as renderer  # noqa: E402
 
 CATEGORY = "Logic"
 
@@ -138,7 +138,8 @@ def main() -> int:
         removed |= defs["components"].pop(old, None) is not None
         geom.pop(old, None)
     if removed:
-        renderer.write_store(geom, defs["components"], tuple(defs["origin_svg"]))
+        renderer.write_store(geom, defs["components"], tuple(defs["origin_svg"]),
+                             circuitikz_version=defs.get("circuitikz_version"))
         print(f"  - removed superseded fixed kinds: {', '.join(_SUPERSEDED)}")
 
     entries = _entries()

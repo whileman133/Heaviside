@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.components import library, render            # noqa: E402
-from app.componenteditor import renderer              # noqa: E402
+from app.components import generate as renderer              # noqa: E402
 
 ORIGIN = library.origin_svg()
 
@@ -164,7 +164,8 @@ def main() -> int:
     new = {kw: entry for kw, entry in accepted.items() if kw not in authored}
     authored.update(new)
     geometry, components, origin = renderer.render_store(authored)
-    renderer.write_store(geometry, components, origin)
+    renderer.write_store(geometry, components, origin,
+                         circuitikz_version=renderer.measure_circuitikz_version())
     print(f"\nWrote {len(new)} new components; definitions.json now has {len(components)}.")
     print("Added:", ", ".join(sorted(new)))
     return 0

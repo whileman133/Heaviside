@@ -889,10 +889,11 @@ def _wire_with_pin_endpoint(scene: SchematicScene):
     return scene.schematic.wires[0]
 
 
-def test_logic_gate_placed_full_size_pins_on_grid(scene: SchematicScene):
+def test_logic_gate_placed_full_size(scene: SchematicScene):
     """A logic gate is placed at the full default scale (1.0), matching the digital
-    blocks; at 1.0 its base pins are on the 0.25-GU grid (no scaled layout). A
-    non-gate also keeps scale 1.0."""
+    blocks (no scaled layout). Its inputs land on the 0.25-GU grid; the centre-
+    placed output sits at the scaled output anchor (off-grid, magnet-connected,
+    §4). A non-gate also keeps scale 1.0."""
     from app.schematic.model import component_pin_positions
     from app.components import library
     g = scene.place_component("and", (10.0, 10.0))   # 2 inputs by default
@@ -901,9 +902,14 @@ def test_logic_gate_placed_full_size_pins_on_grid(scene: SchematicScene):
     assert abs(r.scale - 1.0) < 1e-9
     # At scale 1.0 there is no scaled layout — base pins are used directly.
     assert library.gate_layout(g) is None
-    on_grid = all(abs(round(y / 0.25) * 0.25 - y) < 1e-9 and abs(round(x / 0.25) * 0.25 - x) < 1e-9
-                  for x, y in component_pin_positions(g))
-    assert on_grid
+    # pins are [out, in1, in2]; the inputs are on grid, the output is not.
+    pos = component_pin_positions(g)
+
+    def _on_grid(p):
+        return all(abs(round(v / 0.25) * 0.25 - v) < 1e-9 for v in p)
+
+    assert _on_grid(pos[1]) and _on_grid(pos[2])    # inputs gridded
+    assert not _on_grid(pos[0])                      # output at scaled anchor
 
 
 def test_set_component_scale_is_undoable(scene: SchematicScene):

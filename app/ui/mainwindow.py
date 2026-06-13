@@ -22,7 +22,6 @@ The preview occupies the lower-right of the bottom strip, beside the source.
 
 from __future__ import annotations
 
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,13 +116,6 @@ def _system_is_dark() -> bool:
     # Unknown: compare the default window/text lightness.
     pal = QGuiApplication.palette()
     return pal.color(QPalette.Window).lightness() < pal.color(QPalette.WindowText).lightness()
-
-
-def _component_editor_available() -> bool:
-    """The Component Editor is a developer tool: it renders/measures CircuiTikZ
-    symbols via ``latex`` + ``dvisvgm``, which a packaged end-user build does not
-    ship.  Surface it only when that toolchain is on PATH."""
-    return bool(shutil.which("latex") and shutil.which("dvisvgm"))
 
 
 # The application palette as the platform provided it, captured before the
@@ -728,18 +720,6 @@ class MainWindow(QMainWindow):
         act_compile.setShortcut(QKeySequence("Ctrl+Return"))
         act_compile.triggered.connect(self._on_compile_now)
         view_menu.addAction(act_compile)
-
-        # Tools menu — the Component Editor authors/aligns CircuiTikZ symbols and
-        # shells out to the latex + dvisvgm developer toolchain, so it only appears
-        # when that toolchain is present (a source checkout, not a packaged
-        # end-user build).  The menu holds only this item, so skip it entirely
-        # otherwise rather than show an empty menu.
-        if _component_editor_available():
-            tools_menu = mb.addMenu("&Tools")
-            act_comp_editor = QAction("&Component Editor…", self)
-            act_comp_editor.setToolTip("Author / align CircuiTikZ component symbols")
-            act_comp_editor.triggered.connect(self._on_component_editor)
-            tools_menu.addAction(act_comp_editor)
 
         # Help menu.
         help_menu = mb.addMenu("&Help")
@@ -1693,14 +1673,6 @@ class MainWindow(QMainWindow):
 
     def _on_about(self) -> None:
         _AboutDialog(self).exec()
-
-    def _on_component_editor(self) -> None:
-        """Open the standalone component editor (kept referenced so it persists)."""
-        from app.componenteditor.window import ComponentEditorWindow
-        self._component_editor = ComponentEditorWindow(self)
-        self._component_editor.setWindowFlag(Qt.Window, True)
-        self._component_editor.show()
-        self._component_editor.raise_()
 
     def _on_help_shortcuts(self) -> None:
         _HelpDialog(self).exec()

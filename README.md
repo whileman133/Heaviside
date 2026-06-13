@@ -37,7 +37,24 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 * **Symbols and blocks.** Passives, sources, semiconductors, op-amps, and configurable logic gates, plus boxes, circles, and free text for block diagrams.
 * **Exports that stay current.** Every save refreshes `.pdf` and `.png` siblings alongside your schematic — add `.tex`/`.svg`/`.eps` in Preferences — so your paper's figures never go stale.
 
+## Why another CircuiTikZ editor?
+
+An excellent tool for drawing CircuiTikZ already exists:
+[CircuiTikZ Designer](https://circuit2tikz.tf.fau.de/designer/), a browser app
+that's great for sketching circuits and copying out the code quickly. Heaviside solves a different problem: **maintaining circuit figures over the life of a project**, where diagrams are documents you keep and revise over years.
+
+* **A source file, not a one-off drawing.** Schematics live in versioned `.hv` files alongside your manuscript; every save refreshes the co-located `.pdf`/`.png` figures (and `.tex` fragment), so what's in your paper never drifts from what's in the editor.
+* **True CircuiTikZ, not an imitation.** Heaviside doesn't imitate CircuiTikZ to draw a preview—the preview shows the true output compiled with `pdflatex`. The palette symbols are extracted from compiled CircuiTikZ, with pin positions measured from pgf anchors rather than traced by hand, and canvas labels are typeset by your local `latex` when it's installed.
+* **A desktop app, offline.** Native file associations, your local TeX installation, and no dependency on a server staying up.
+
+If you want a quick diagram in the browser with nothing to install, use Designer. If your circuits are part of a LaTeX/Overleaf/LyX writing workflow, Heaviside is built for you.
+
 ## Download
+
+> **LaTeX is required for PDF preview and export.** These features need `pdflatex` with the `circuitikz`
+> package on your `PATH`. EPS/SVG also need
+> [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo` or
+> [Inkscape](https://inkscape.org/), used automatically when Poppler isn't installed.
 
 - **macOS**  
     Apple Silicon: [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg)  
@@ -57,11 +74,6 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
   "Bookworm"), [build from source](#building-from-source) instead.
 
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
-
-> **LaTeX is required for PDF preview and PDF/PNG exports.** These features need `pdflatex` with the `circuitikz`
-> package on your `PATH`. EPS/SVG also need
-> [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo` or
-> [Inkscape](https://inkscape.org/), used automatically when Poppler isn't installed.
 
 ## Getting started
 
@@ -84,7 +96,7 @@ All releases, with checksums and notes, on the [Releases page](https://github.co
 
 ## Architecture
 
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from AI coding assistants. The test suite (1000+ tests) and spec are kept in sync.
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from Large-Language Models (LLMs). The test suite (1000+ tests) and spec are kept in sync.
 
 Heaviside is split into a **View** layer built on Qt and a
 **Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.
@@ -128,6 +140,25 @@ uv run python scripts/build.py    # or: uv run pyinstaller --noconfirm --clean h
 icons from `assets/icon.png`, ensures the bundled license texts are present, and
 runs PyInstaller. Output is `dist/Heaviside.app` on macOS and `dist/Heaviside/`
 elsewhere. Build configuration lives in [`heaviside.spec`](heaviside.spec).
+
+### Regenerating the component library (after a CircuiTikZ update)
+
+The palette symbols and their pin positions aren't hand-drawn — they're
+extracted from compiled CircuiTikZ output (`latex` + `dvisvgm`), with anchors
+measured via pgf's `\pgfpointanchor` (see
+[`app/components/render.py`](app/components/render.py)). When a new CircuiTikZ
+release moves or redraws symbols, re-render the shipped library with the
+**single sanctioned script**:
+
+```sh
+python components/generate_components.py   # needs latex + dvisvgm (+ Ghostscript for filled symbols)
+uv run pytest                              # the suite guards the regenerated data files
+```
+
+It treats `components/definitions.json` as the source of truth and rewrites it
+plus `components/geometry.json`, re-measuring each multi-terminal symbol's
+anchors so grid alignment reflows automatically, and stamps the file with the
+CircuiTikZ version it rendered against (`circuitikz_version`).
 
 ## Documentation
 

@@ -1,0 +1,52 @@
+# Component-generation configuration (spec/component-pipeline.md §4).
+#
+# Read at *generation time* by app/components/generate.py (stdlib tomllib) — it
+# tunes how `components/generate_components.py` aligns and sizes symbols. It is
+# NOT shipped to or read by the running app (that reads only the generated
+# definitions.json / geometry.json). Change a value here, then re-run
+#   python components/generate_components.py
+# to regenerate the library.
+
+[alignment]
+# The pin grid: pins are aligned to integer multiples of this (GU).
+grid_gu = 0.25
+
+# Scale bounds for the best-effort alignment search. Two jobs: (1) fence the
+# "maximise on-grid pins" objective away from its degenerate optimum (a near-zero
+# scale collapses everything onto the origin, trivially "on grid"); (2) cap how
+# much a symbol may be stretched/shrunk to reach the grid. At +/-30% all 49 node
+# kinds that *can* align do (43/49); a tighter window (e.g. +/-20%) strands the
+# switches and European gates off-grid (magnet-reached) rather than distorting
+# them. Widen only if you accept more distortion to pull more pins on-grid.
+scale_min = 0.7
+scale_max = 1.3
+
+# How close (GU) a scaled pin coordinate must sit to a grid line to count as
+# "on grid". Absorbs sub-thousandth measurement/rounding noise.
+snap_tolerance_gu = 0.02
+
+# Anisotropy cap on the per-axis scale: the ratio of the larger to the smaller
+# axis scale may not exceed this. Alignment is per-axis (independent sx, sy)
+# while the axes stay within this ratio; beyond it the symbol falls back to a
+# single uniform scale. This protects symbols with thick diagonal strokes (a
+# switch blade): the canvas buckets stroke widths to thin/thick, so a strongly
+# non-uniform scale would shear the blade in the LaTeX export but not on the
+# canvas, desyncing the two. 1.15 keeps transistors (≈5-9% anisotropy) per-axis
+# and forces the switches (≈30-70%) uniform.
+scale_anisotropy_max = 1.15
+
+[gates]
+# Parametric logic gates (and / or / nand / nor / xor / …). The gate body
+# height is computed so adjacent inputs sit this far apart (GU). Raise it to
+# make every logic gate taller (inputs further apart); lower it for compact
+# gates. Height — not a node yscale — is used so the inversion bubble stays
+# round.
+input_pitch_gu = 0.5
+
+[muxdemux]
+# Parametric multiplexers / demultiplexers. The data side (Lh/Rh) is sized so
+# adjacent data pins sit this far apart (GU)...
+data_pitch_gu = 1.0
+# ...and the select side width (w) is sized from the select-pin count and this
+# spacing (GU). Raise either to enlarge the mux/demux body.
+select_spacing_gu = 1.0
