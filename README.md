@@ -94,28 +94,6 @@ All releases, with checksums and notes, on the [Releases page](https://github.co
    **Preferences → Export**). You can also export on demand from the
    **File → Export** menu (`.tex`, `.pdf`, `.svg`, `.eps`, `.png`).
 
-## Architecture
-
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from Large-Language Models (LLMs). The test suite (1000+ tests) and spec are kept in sync.
-
-Heaviside is split into a **View** layer built on Qt and a
-**Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.
-
-![Heaviside architecture: a Qt View layer (UI shell, canvas, undoable commands, preview engine) above a pure-Python Model layer (schematic model, component library, CircuiTikZ generator) that emits LaTeX source and a rendered preview](docs/images/architecture.svg)
-
-```
-app/
-  canvas/      # QGraphicsScene/View, items, undo commands, SVG symbol rendering
-  codegen/     # Schematic → CircuiTikZ source
-  components/  # Component model + registry of component kinds
-  preview/     # pdflatex compile worker and LaTeX templating
-  schematic/   # data model, JSON I/O, validation
-  ui/          # main window, palette, properties, source panel
-main.py        # entry point
-components/     # Generated symbol data (geometry.json, definitions.json) + generator
-tests/         # pytest suite
-```
-
 ## Building from source
 
 Heaviside uses [`uv`](https://docs.astral.sh/uv/) and targets **Python ≥ 3.11**. Python dependencies (PySide6, pydantic, qtawesome) are declared in
@@ -199,3 +177,26 @@ build bundles **inside** the distributable (see `heaviside.spec`):
 This keeps Heaviside itself fully MIT — the LGPL touches only the bundled Qt
 portion, and you are not required to open any of your own code. See
 `licenses/THIRD_PARTY_LICENSES.md` for the full details.
+
+
+## Architecture
+
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from Large-Language Models (LLMs). The test suite (1000+ tests) and spec are kept in sync.
+
+Heaviside is split into a **View** layer built on Qt and a
+**Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.
+
+![Heaviside architecture: a Qt View layer (UI shell, canvas, undoable commands, preview engine) above a pure-Python Model layer (schematic model, component library, CircuiTikZ generator) that emits LaTeX source and a rendered preview](docs/images/architecture.svg)
+
+```
+app/
+  canvas/      # QGraphicsScene/View, items, undo commands, SVG symbol rendering
+  codegen/     # Schematic → CircuiTikZ source
+  components/  # Component model + registry of component kinds
+  preview/     # pdflatex compile worker and LaTeX templating
+  schematic/   # data model, JSON I/O, validation
+  ui/          # main window, palette, properties, source panel
+main.py        # entry point
+components/     # Generated symbol data (geometry.json, definitions.json) + generator
+tests/         # pytest suite
+```

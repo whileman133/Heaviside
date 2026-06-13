@@ -1540,11 +1540,14 @@ class PropertiesPanel(QWidget):
         # Scrollable column of sections. The QScrollArea otherwise paints an
         # opaque `Base` fill (white on the native style) for its viewport, which
         # reads as a distinct inset box; the Document tab looks "clear" because it
-        # is a plain transparent widget showing the tab pane. Make the viewport and
-        # content **transparent** (object-name-scoped so the rule does not cascade
-        # onto the native form controls) so the body shows the pane like the
-        # Document tab. A scoped stylesheet on a scroll widget de-natives its
-        # scrollbars, so we theme them cleanly (matching the source panel, §10.4).
+        # is a plain transparent widget showing the tab pane. We make the viewport
+        # and content transparent and theme the scrollbar — but **without a
+        # stylesheet on the scroll area or its content**: a stylesheet on any
+        # ancestor switches the whole descendant subtree to Qt's stylesheet
+        # rendering, which draws the form controls compact/non-native (they look
+        # squished). Object-name scoping does NOT prevent that — the mere presence
+        # of the sheet does it. So transparency comes from autoFillBackground and
+        # the scrollbar is themed on the scrollbar widget itself (_apply_scroll_style).
         scroll = QScrollArea()
         self._scroll = scroll
         scroll.setWidgetResizable(True)
@@ -1554,6 +1557,7 @@ class PropertiesPanel(QWidget):
         outer.addWidget(scroll)
 
         content = QWidget()
+        self._content = content
         content.setObjectName("inspContent")
         col = QVBoxLayout(content)
         # Reserve room on the right so the vertical scrollbar never overlaps the
@@ -1587,15 +1591,17 @@ class PropertiesPanel(QWidget):
         self._apply_scroll_style()
 
     def _apply_scroll_style(self) -> None:
-        """Transparent viewport/content (so the body shows the tab pane like the
-        Document tab) plus a clean themed scrollbar. Re-applied on a theme swap so
-        the scrollbar colours follow. The ``#id`` selectors keep the transparency
-        off the native form controls."""
-        self._scroll.setStyleSheet(
-            "QScrollArea { background: transparent; border: none; }"
-            "#inspViewport, #inspContent { background: transparent; }"
-            + theme.scrollbar_qss()
-        )
+        """Theme the scrollbar and make the body transparent (so it shows the tab
+        pane like the Document tab) **without putting a stylesheet on the scroll
+        area or its content** — a stylesheet on any ancestor of the form controls
+        forces them into Qt's compact stylesheet rendering (they look squished).
+        So: transparency via ``autoFillBackground(False)``, and the scrollbar
+        styled on the scrollbar widget itself. Re-applied on a theme swap so the
+        scrollbar colours follow."""
+        for w in (self._scroll, self._scroll.viewport(), self._content):
+            w.setAutoFillBackground(False)
+        self._scroll.verticalScrollBar().setStyleSheet(theme.scrollbar_qss())
+        self._scroll.horizontalScrollBar().setStyleSheet(theme.scrollbar_qss())
 
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene

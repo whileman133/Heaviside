@@ -17,6 +17,27 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
+def test_inspector_controls_have_no_ancestor_stylesheet(_app):
+    """Regression: a stylesheet on the scroll area or its content forces every
+    descendant form control into Qt's compact stylesheet rendering, so the
+    text fields / spinboxes / combos render *squished* (non-native). The panel
+    must theme the scrollbar on the scrollbar widget itself and get its
+    transparency from autoFillBackground — leaving the controls' ancestors free
+    of any stylesheet so the controls stay native."""
+    from app.ui.properties import PropertiesPanel
+
+    panel = PropertiesPanel()
+    # No stylesheet on any ancestor of the form controls.
+    assert panel._scroll.styleSheet() == ""
+    assert panel._content.styleSheet() == ""
+    assert panel._scroll.viewport().styleSheet() == ""
+    # Transparency comes from the attribute, not a sheet.
+    assert panel._scroll.viewport().autoFillBackground() is False
+    assert panel._content.autoFillBackground() is False
+    # The scrollbar is still themed — on the scrollbar widget directly.
+    assert panel._scroll.verticalScrollBar().styleSheet() != ""
+
+
 def test_param_section_does_not_leak_labels_on_rebind(_app):
     """Regression: the parametric spinbox section rebinds on every spinner step;
     it must refresh in place, not stack a new "inputs" label each time."""

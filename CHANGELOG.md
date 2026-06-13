@@ -45,6 +45,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Preferences → Tools.
 
 ### Fixed
+- **Form controls (text fields, spin boxes) no longer render squished.** On the
+  macOS native style these render at a compact ~21px while combo boxes are ~32px,
+  so they looked cramped throughout the app. A `QProxyStyle` now floors their
+  height (keeping fully native rendering — only the size hint changes), applied
+  process-wide so every panel and dialog is consistent. Separately, the Properties
+  inspector no longer puts a stylesheet on its scroll area (which had forced its
+  controls into Qt's non-native rendering); the scrollbar is themed on the
+  scrollbar widget and the body transparency comes from `autoFillBackground`.
 - **Batch component regeneration is faithful again (developer tooling).**
   `components/generate_components.py` silently degraded 26 library entries: the
   parametric mux/demux lost their `params`/`n_data` and all 120 size-combo

@@ -125,6 +125,11 @@ def main() -> None:
     app.setApplicationName("Heaviside")
     app.setOrganizationName("Heaviside")
 
+    # Give the native form controls room to breathe (macOS renders text fields /
+    # spin boxes at a squished ~21px); applied before any widget is built.
+    from app.ui.controlstyle import install as install_control_style
+    install_control_style(app)
+
     # Crash guard: installed after the app name is set so the log lands in the
     # right app-data folder. An uncaught exception logs + informs, never exits.
     _install_excepthooks()

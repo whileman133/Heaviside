@@ -1,0 +1,22 @@
+% CircuiTikZ schematic exported from Heaviside.
+% Include in your document with \input{<this file>}.
+% Your document preamble must contain:
+%   \usepackage[american]{circuitikz}
+%   \usetikzlibrary{arrows.meta}
+%   \ctikzset{voltage=american, current=american, resistor=american}
+% SECURITY: label and text fields below are raw LaTeX taken verbatim from the
+% schematic (.hv) file. If that file came from an untrusted source, compile
+% WITHOUT shell-escape (the default; e.g. `pdflatex -no-shell-escape`).
+\begin{circuitikz}
+  \draw
+    (3.75,-2.5) to[vC, mirror, l_={$\bar{C}_\mathrm{s}(\theta_\mathrm{s,avg}(t))$}] (3.75,-0.5)
+    (1.5,-0.25) to[vR, l={$\bar{R}_\mathrm{dc}(\theta_\mathrm{s,avg}(t))$}] (3.5,-0.25)
+    (0.25,-0.25) to[open, v=$v_\mathrm{cell}$] (0.25,-2.75)
+    (0.25,-0.25) to[short, i=$i_\mathrm{app}$] (1.25,-0.25)
+    (3.75,-0.5) -- (3.75,-0.25) -- (3.5,-0.25)
+    (3.75,-2.5) -- (3.75,-2.75) -- (0.25,-2.75)
+    (1.5,-0.25) -- (1.25,-0.25)
+  ;
+  \node[ocirc] at (0.25,-2.75) {};
+  \node[ocirc] at (0.25,-0.25) {};
+\end{circuitikz}
