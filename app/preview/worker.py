@@ -3,9 +3,12 @@ Preview worker (spec §8.1).
 
 PreviewWorker
 -------------
-A ``QThread``-backed ``QObject`` that compiles a CircuiTikZ source string to a
-rendered ``QImage`` on a background thread so the main UI thread is never
-blocked.
+A ``QThread``-backed ``QObject`` that compiles a CircuiTikZ source string to PDF
+on a background thread (so the heavy pdflatex run never blocks the UI), then
+renders that PDF to a ``QImage`` **on the UI thread**. The QImage — the only Qt
+object in the path — is deliberately built on the UI thread, never on the worker:
+constructing Qt objects off the UI thread races the UI garbage collector and
+corrupts the heap (PROJECT_SPEC §8.1).
 
 Typical usage::
 
@@ -49,15 +52,20 @@ _SCHEMATIC_DEBOUNCE_MS = 500
 
 
 class _SchematicCompileWorker(QObject):
-    """Internal object that lives on the worker thread and does the actual work."""
+    """Internal object that lives on the worker thread and does the actual work.
 
-    preview_ready = Signal(QImage)
+    It produces only the compiled **PDF bytes** (Qt-free); the ``QImage`` is
+    rendered on the UI thread by :class:`PreviewWorker`. No Qt object is ever
+    constructed on this worker thread — see the threading invariant in
+    PROJECT_SPEC §8.1 (constructing Qt objects off the UI thread races the UI
+    garbage collector and corrupts the heap)."""
+
+    pdf_ready = Signal(bytes)        # compiled PDF; rendered to a QImage on the UI thread
     preview_error = Signal(str)
     compile_started = Signal()
 
-    def __init__(self, dpi: int) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self._dpi = dpi
         self.source: str = ""
         # Written on the main thread before a dispatch, read here on the worker
         # thread (same ordering guarantee as ``source``). Dark renders the
@@ -66,13 +74,12 @@ class _SchematicCompileWorker(QObject):
 
     @Slot()
     def do_compile(self) -> None:
-        """Called (via queued connection) on the worker thread."""
+        """Called (via queued connection) on the worker thread. Qt-free: compiles
+        to PDF bytes; the QImage render happens on the UI thread."""
         self.compile_started.emit()
         try:
             tex = build_tex(self.source, dark=self.dark)
-            pdf_bytes = compile_tex(tex)
-            image = pdf_to_qimage(pdf_bytes, dpi=self._dpi)
-            self.preview_ready.emit(image)
+            self.pdf_ready.emit(compile_tex(tex))
         except CompileError as exc:
             self.preview_error.emit(exc.log or str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -101,8 +108,9 @@ class PreviewWorker(QObject):
         super().__init__(parent)
 
         self._stopped = False
+        self._dpi = dpi
         self._thread = QThread()
-        self._worker = _SchematicCompileWorker(dpi=dpi)
+        self._worker = _SchematicCompileWorker()
         self._worker.moveToThread(self._thread)
 
         # Always stop the worker thread before the application exits, even if the
@@ -114,8 +122,12 @@ class PreviewWorker(QObject):
         if app is not None:
             app.aboutToQuit.connect(self.shutdown)
 
-        # Forward signals from the internal worker to this object.
-        self._worker.preview_ready.connect(self.preview_ready)
+        # Forward signals from the internal worker. The compiled PDF is rendered
+        # to a QImage in _on_pdf_ready, which runs on THIS object's (UI) thread —
+        # the pdf_ready connection crosses threads, so it is delivered queued. Qt
+        # objects (the QImage) are therefore built on the UI thread, never on the
+        # worker (PROJECT_SPEC §8.1).
+        self._worker.pdf_ready.connect(self._on_pdf_ready)
         self._worker.preview_error.connect(self.preview_error)
         self._worker.compile_started.connect(self.compile_started)
 
@@ -179,3 +191,16 @@ class PreviewWorker(QObject):
         """
         from PySide6.QtCore import QMetaObject, Qt  # local import avoids top-level Qt dep
         QMetaObject.invokeMethod(self._worker, "do_compile", Qt.ConnectionType.QueuedConnection)
+
+    @Slot(bytes)
+    def _on_pdf_ready(self, pdf_bytes: bytes) -> None:
+        """Render the compiled PDF to a QImage and emit ``preview_ready``.
+
+        Runs on the UI thread (this object's thread; the ``pdf_ready`` signal
+        crosses from the worker thread queued), so the QImage — the only Qt object
+        in the compile path — is never constructed on the worker (PROJECT_SPEC §8.1).
+        """
+        try:
+            self.preview_ready.emit(pdf_to_qimage(pdf_bytes, dpi=self._dpi))
+        except Exception as exc:  # noqa: BLE001
+            self.preview_error.emit(str(exc))

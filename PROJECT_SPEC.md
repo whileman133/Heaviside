@@ -1633,6 +1633,26 @@ Compilation runs in a `QThread` (`PreviewWorker`). The main thread is never bloc
 
 The worker thread is always stopped before the application exits: `PreviewWorker` connects its (idempotent) `shutdown()` to `QApplication.aboutToQuit`, and the main window's `closeEvent` also calls it. This covers every exit path (window close, `app.quit()`, or a teardown that bypasses the window) and prevents Qt's "QThread destroyed while still running" abort.
 
+> **Threading invariant — never construct Qt objects on a worker thread.**
+> No `QImage`, `QPixmap`, `QPainter`, `QPainterPath`, `QColor`, `QTransform`,
+> `QFont`, or any `QObject` may be created (or have its last reference dropped) on
+> a thread other than the UI/main thread. Worker threads (the preview `QThread`,
+> the `render_async` `QThreadPool`, the auto-export pool, any future `QRunnable`)
+> must produce only **plain Python/Qt-free data** — strings, `bytes`, dataclasses,
+> file paths — and hand it back to the UI thread (a queued signal), which builds
+> the Qt objects. *Why:* constructing a Qt object off the UI thread mutates
+> shiboken's wrapper bookkeeping; if the UI thread garbage-collects at the same
+> moment, the two race and corrupt the heap — a non-deterministic crash, reliable
+> on aarch64 (Raspberry Pi) and intermittent elsewhere. This bit two render paths
+> (label `QPainterPath`, §5.8; preview `QImage`, here) and is the rule that keeps
+> it from recurring. **Established Qt-free worker → UI-thread-builds pattern:**
+> the `render_async` pool emits an SVG string and `_dispatch` builds the
+> `QPainterPath` (§5.8); the preview worker emits PDF `bytes` and
+> `PreviewWorker._on_pdf_ready` builds the `QImage`. **Known exception (tracked):**
+> auto-export PNG still renders its `QImage` on the export pool worker
+> (`_run_auto_export_job`); it is far lower-risk (a single, unshared, short-lived
+> image on a user-initiated save) and slated to move to the same pattern.
+
 ### 8.2 Equation Preview
 
 The Properties Panel does not provide per-field equation previews. Component annotations are rendered as typeset math directly on the canvas (§5.8); the full schematic preview (§8.1) remains the authoritative rendered view of the complete diagram.
