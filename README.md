@@ -8,9 +8,9 @@
 [![Release](https://img.shields.io/github/v/release/whileman133/Heaviside?include_prereleases&display_name=tag&sort=semver)](https://github.com/whileman133/Heaviside/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. Heaviside is a desktop tool for researchers, educators, and engineers that integrates into LaTeX, Overleaf, and LyX workflows with minimum effort.
+An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations using [CircuiTikZ](https://github.com/circuitikz/circuitikz). Heaviside is a desktop tool for researchers, educators, and engineers that integrates into LaTeX, Overleaf, and LyX workflows with minimum effort.
 
-> **Heaviside is a work in progress.** If a symbol, CircuiTikZ convention, or workflow detail you need is missing or doesn't render the way you'd expect, I'd love to hear it. Open a [Discussion](https://github.com/whileman133/Heaviside/discussions) for ideas and questions, or [file an issue](https://github.com/whileman133/Heaviside/issues/new) for bugs.
+> **Heaviside is a work in progress.** If symbols, CircuiTikZ output, or workflow details you need are missing, I'd love to hear about it. Open a [Discussion](https://github.com/whileman133/Heaviside/discussions) for ideas and questions, or [file an issue](https://github.com/whileman133/Heaviside/issues/new) for bugs.
 
 <table>
   <tr>
