@@ -36,21 +36,18 @@ def pytest_collection_modifyitems(config, items) -> None:  # noqa: ANN001
 
 @pytest.fixture(autouse=True)
 def _quiesce_render_pool():
-    """Drain in-flight async label renders at the end of every test.
+    """Drain in-flight async label renders at the end of every test (hygiene).
 
-    ``render_async`` (``app/preview/mathrender``) typesets labels on a
-    ``QThreadPool``. If a worker is still rendering (heavy Python object churn
-    inside ziamath) when pytest-qt's teardown runs ``_process_events`` — which
-    delivers a queued render result, repositions a canvas item, and can trigger a
-    **garbage collection** on the UI thread — the GC walks the object graph while a
-    worker concurrently mutates it, and the process segfaults. (Reliably masked
-    until the deterministic palette refcount crash was fixed by requiring 3.12;
-    this is the rare ~1/15 flake underneath it.)
-
-    Waiting for the pool to finish and flushing the queued results here closes the
-    window: the dispatch/GC happens while no worker is active. Runs as a fixture
-    finalizer, i.e. before pytest-qt's ``_process_events`` teardown hook. Mirrors
-    the app's own ``aboutToQuit`` pool drain. No-op when the pool was never used.
+    The actual cross-thread render crash is fixed in ``app/preview/mathrender``:
+    workers now produce only the Qt-free SVG and the UI thread builds the
+    ``QPainterPath``, so no worker ever constructs Qt objects (verified — that
+    alone took the rare aarch64 flake from ~1/15 to 0/30 with this fixture
+    disabled). This fixture is **belt-and-suspenders**: it stops a worker's queued
+    result from being delivered across a test boundary during pytest-qt teardown,
+    keeping the suite deterministic and avoiding "QThread destroyed while running"
+    noise. It mirrors the app's own ``aboutToQuit`` pool drain and is a no-op when
+    the pool was never used. Runs as a fixture finalizer, before pytest-qt's
+    ``_process_events`` teardown hook.
     """
     yield
     try:

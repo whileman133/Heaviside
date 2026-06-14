@@ -75,6 +75,13 @@ version reset to 0.1.0 — this is the first release of the current line.)
   priority, making the endpoints easy to grab and move.
 
 ### Fixed
+- **Crash during heavy label rendering (notably on ARM/Raspberry Pi).** Canvas
+  labels were typeset on worker threads that built the vector `QPainterPath`
+  off the UI thread; when the UI thread garbage-collected at the same moment, the
+  cross-thread Qt heap activity could corrupt memory and crash the app — reliably
+  on aarch64, intermittently elsewhere. Workers now produce only the (Qt-free) SVG
+  and the UI thread builds the path, so no Qt objects are ever created off the UI
+  thread (verified: 0 crashes in 30 stress runs on aarch64, vs ~1 in 15 before).
 - **Voltage/current annotation endpoints no longer "stick" near a pin.** Dragging
   an annotation endpoint had a 0.5 GU dead-zone that froze it near the other end
   and made the origin handle resist small drags. The endpoint now follows the

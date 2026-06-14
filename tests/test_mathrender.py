@@ -474,7 +474,7 @@ def test_render_path_does_not_cache_transient_failure(monkeypatch, _clean_memos)
 
     def _fail_then_succeed(fragment, **kw):  # noqa: ANN001
         calls["n"] += 1
-        return None if calls["n"] <= 2 else _FAKE_SVG  # fragment+baseline fail first
+        return None if calls["n"] <= 1 else _FAKE_SVG  # the fragment SVG fails first
 
     monkeypatch.setattr(_mr, "_compile_svg", _fail_then_succeed)
     assert render_path("$R_1$", "latex") is None          # transient failure

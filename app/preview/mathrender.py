@@ -388,15 +388,17 @@ def _warn_ziamath_unavailable_once(exc: BaseException) -> None:
     )
 
 
-def _ziamath_path(fragment: str) -> QPainterPath | None:
-    """Render *fragment* to a QPainterPath via ziamath, or ``None`` if ziamath is
-    missing or the fragment fails to typeset.
+def _ziamath_svg(fragment: str) -> str | None:
+    """Generate the ziamath SVG for *fragment* — **Qt-free**, so it is safe on a
+    worker thread — or ``None`` if ziamath is missing or the fragment fails to
+    typeset.
 
     Uses ``ziamath.Text`` (mixed text with inline math delimited by ``$…$``), which
     matches the fragment convention the LaTeX engine consumes (``\\strut %FRAGMENT%``
     in a document body): plain text renders verbatim and ``$…$`` spans typeset as
     math.  (``ziamath.Latex`` is math-only — it would render the ``$`` delimiters
-    as literal dollar glyphs.)
+    as literal dollar glyphs.)  The SVG becomes a QPainterPath separately, on the
+    UI thread (:func:`_path_from_svg`).
     """
     with _ziamath_lock:
         try:
@@ -411,10 +413,26 @@ def _ziamath_path(fragment: str) -> QPainterPath | None:
             _warn_ziamath_unavailable_once(exc)
             return None
         try:
-            svg = ziamath.Text(fragment, size=TEMPLATE_PT).svg()
+            return ziamath.Text(fragment, size=TEMPLATE_PT).svg()
         except Exception:  # noqa: BLE001 - any parse/layout failure -> raw-text fallback
             return None
-    return _ziamath_svg_to_path(svg)
+
+
+def _render_svg(fragment: str, engine: str) -> str | None:
+    """Produce the SVG for *fragment* with *engine* — the expensive, **Qt-free**
+    half of a render, safe to run on a worker thread. ziamath generates it in
+    process; latex shells out (disk-cached, see :func:`_compile_svg`)."""
+    if engine == "ziamath":
+        return _ziamath_svg(fragment)
+    return _compile_svg(fragment)
+
+
+def _raw_path(svg: str | None, engine: str) -> QPainterPath | None:
+    """Parse *svg* into an un-normalised QPainterPath (creates Qt objects, so
+    **UI thread only**), or ``None``."""
+    if not svg:
+        return None
+    return _ziamath_svg_to_path(svg) if engine == "ziamath" else _svg_to_path(svg)
 
 
 # ---------------------------------------------------------------------------
@@ -472,11 +490,9 @@ def _calibrated_baseline(engine: str) -> float:
     with _baseline_lock:
         if engine in _baseline_memo:
             return _baseline_memo[engine]
-    if engine == "ziamath":
-        p = _ziamath_path("x")
-    else:
-        svg = _compile_svg("x")
-        p = _svg_to_path(svg) if svg else None
+    # Build the calibration glyph's path on the calling (UI) thread — _raw_path
+    # creates Qt objects, so this must not run on a worker.
+    p = _raw_path(_render_svg("x", engine), engine)
     if p is None or p.isEmpty():
         return 0.0                      # fallback — NOT memoised; retried later
     value = p.boundingRect().bottom()
@@ -510,10 +526,10 @@ def _ziamath_baseline_y() -> float:
 # In-process render memo.  A bounded LRU that — unlike the previous
 # ``lru_cache(512)`` — **never stores None**, so a transient failure (tool
 # hiccup, race on a cold disk cache) cannot blank a fragment for the whole
-# session; the next request simply retries.  Thread-safe: render_path is called
-# from the render_async QThreadPool workers (up to 2 concurrently) as well as
-# the UI thread.  The slow compile runs *outside* the lock; if two threads race
-# the same fragment, both compute and the last write wins (identical results).
+# session; the next request simply retries.  It caches the finished QPainterPath,
+# which is only ever built on the UI thread (sync ``render_path`` and the async
+# ``_dispatch``), so accesses are single-threaded; the lock is kept as a cheap
+# guard.
 _render_lock = threading.Lock()
 _render_memo: "OrderedDict[tuple[str, str], QPainterPath]" = OrderedDict()
 _RENDER_MEMO_MAX = 512
@@ -526,6 +542,28 @@ def _render_memo_clear() -> None:
         _render_memo.clear()
     with _baseline_lock:
         _baseline_memo.clear()
+
+
+def _memo_store(key: "tuple[str, str]", path: QPainterPath) -> None:
+    """Insert *path* into the bounded render memo, evicting the oldest entries."""
+    with _render_lock:
+        _render_memo[key] = path
+        _render_memo.move_to_end(key)
+        while len(_render_memo) > _RENDER_MEMO_MAX:
+            _render_memo.popitem(last=False)
+
+
+def _path_from_svg(svg: str | None, engine: str) -> QPainterPath | None:
+    """Build the normalised QPainterPath from *svg* — the **Qt half** of a render,
+    UI-thread only (creates QPainterPath/QTransform). Normalised so the baseline
+    sits at y=0 and the left ink edge at x=0, so callers share a baseline. Returns
+    ``None`` when *svg* is missing or yields an empty path."""
+    path = _raw_path(svg, engine)
+    if path is None or path.isEmpty():
+        return None
+    norm = QTransform()
+    norm.translate(-path.boundingRect().left(), -_calibrated_baseline(engine))
+    return norm.map(path)
 
 
 def render_path(fragment: str, engine: str) -> QPainterPath | None:
@@ -547,23 +585,10 @@ def render_path(fragment: str, engine: str) -> QPainterPath | None:
         if cached is not None:
             _render_memo.move_to_end(key)
             return cached
-    if engine == "ziamath":
-        path = _ziamath_path(fragment)
-        baseline = _ziamath_baseline_y()
-    else:
-        svg = _compile_svg(fragment)
-        path = _svg_to_path(svg) if svg else None
-        baseline = _baseline_y()
-    if path is None or path.isEmpty():
+    result = _path_from_svg(_render_svg(fragment, engine), engine)
+    if result is None:
         return None                     # not memoised: transient failures retry
-    norm = QTransform()
-    norm.translate(-path.boundingRect().left(), -baseline)
-    result = norm.map(path)
-    with _render_lock:
-        _render_memo[key] = result
-        _render_memo.move_to_end(key)
-        while len(_render_memo) > _RENDER_MEMO_MAX:
-            _render_memo.popitem(last=False)
+    _memo_store(key, result)
     return result
 
 
@@ -608,25 +633,40 @@ class _RenderDispatcher(QObject):
     so it needs no lock.
     """
 
-    done = Signal(int, object)  # token, QPainterPath | None
+    done = Signal(int, object)  # token, SVG text | None  (a plain str, not a Qt object)
 
     def __init__(self) -> None:
         super().__init__()
-        self._callbacks: dict[int, object] = {}
+        self._callbacks: dict[int, tuple] = {}
         self._next_token = 0
         # AutoConnection: emitted from a pool thread, the receiver (this
         # object) lives on the UI thread, so delivery is queued.
         self.done.connect(self._dispatch)
 
-    def register(self, on_done) -> int:  # noqa: ANN001
+    def register(self, on_done, fragment: str, engine: str) -> int:  # noqa: ANN001
         self._next_token += 1
-        self._callbacks[self._next_token] = on_done
+        self._callbacks[self._next_token] = (on_done, fragment, engine)
         return self._next_token
 
-    def _dispatch(self, token: int, path) -> None:  # noqa: ANN001
-        cb = self._callbacks.pop(token, None)
-        if cb is not None:
-            cb(path)
+    def _dispatch(self, token: int, svg) -> None:  # noqa: ANN001
+        entry = self._callbacks.pop(token, None)
+        if entry is None:
+            return
+        on_done, fragment, engine = entry
+        # Build the QPainterPath HERE, on the UI thread. Workers only produce the
+        # Qt-free SVG string, so the UI-thread garbage collector never races a
+        # worker constructing Qt objects (the cross-thread heap corruption that
+        # crashed rendering-heavy sessions). Reuse the memo when warm.
+        key = (fragment, engine)
+        with _render_lock:
+            path = _render_memo.get(key)
+            if path is not None:
+                _render_memo.move_to_end(key)
+        if path is None:
+            path = _path_from_svg(svg, engine)
+            if path is not None:
+                _memo_store(key, path)
+        on_done(path)
 
 
 @lru_cache(maxsize=1)
@@ -635,21 +675,24 @@ def _dispatcher() -> _RenderDispatcher:
 
 
 class _RenderTask(QRunnable):
-    def __init__(self, fragment: str, token: int) -> None:
+    def __init__(self, fragment: str, engine: str, token: int) -> None:
         super().__init__()
         self._fragment = fragment
+        self._engine = engine
         self._token = token
 
     def run(self) -> None:  # noqa: D401 - QRunnable hook
+        # Compute only the Qt-free SVG on the worker; the QPainterPath is built on
+        # the UI thread in the dispatcher (no Qt-object creation off the UI thread).
         try:
-            path = render_latex(self._fragment)
+            svg = _render_svg(self._fragment, self._engine)
         except Exception:  # pragma: no cover - defensive; never kill the pool
-            path = None
+            svg = None
         # The dispatcher is module-permanent (the lru_cache holds it), so this
         # emit — and the runnable's destruction right after run() returns —
         # never lets a worker thread drop a QObject's last reference.
         try:
-            _dispatcher().done.emit(self._token, path)
+            _dispatcher().done.emit(self._token, svg)
         except RuntimeError:  # pragma: no cover - interpreter/app shutdown
             # Qt is tearing down (the dispatcher's C++ object is gone); the
             # result has no recipient anymore — drop it quietly.
@@ -682,8 +725,9 @@ def render_async(fragment: str, on_done) -> None:  # noqa: ANN001
     if not fragment:
         on_done(None)
         return
-    token = _dispatcher().register(on_done)
-    _pool().start(_RenderTask(fragment, token))
+    engine = _active_engine()
+    token = _dispatcher().register(on_done, fragment, engine)
+    _pool().start(_RenderTask(fragment, engine, token))
 
 
 # ---------------------------------------------------------------------------
