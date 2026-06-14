@@ -2709,6 +2709,8 @@ All unit tests live in `tests/` and are run with `pytest`. They must pass with n
 
 **Slow tests (`--run-slow`).** A test marked `@pytest.mark.slow` is **skipped by default** and runs only with `pytest --run-slow` (see `tests/conftest.py`). The one slow test is `test_render_store_reproduces_committed_files`, which re-renders every symbol through `latex`/`dvisvgm` (~3 min) to verify the committed `components/*.json` are reproducible. It is a **local/manual** check, **not run in CI**: it needs the TeX toolchain (which CI does not install) *and* the exact CircuiTikZ version the committed files were rendered with, so running it in CI would be both slow and version-fragile. Run it locally after regenerating components (`python components/generate_components.py`).
 
+**Render-pool drain (autouse).** `tests/conftest.py` defines an autouse fixture that, after each test, waits for the async label-render `QThreadPool` (`mathrender._pool`) to finish and flushes the queued results. Without it, a worker still typesetting a label (heavy Python allocation inside ziamath) can be live when pytest-qt's `_process_events` teardown delivers a render result and triggers a UI-thread **garbage collection** — the GC walks the object graph while the worker mutates it, and the process segfaults (a rare flake, ~1 run in 15 on aarch64). Draining first makes the dispatch/GC run while no worker is active. It mirrors the app's own `aboutToQuit` pool drain and is a no-op when the pool was never used.
+
 The individual test functions are the authoritative, self-documenting list of
 unit-level behavior; this section summarises what each test file covers rather
 than enumerating every function (which would duplicate the suite and inevitably
