@@ -36,11 +36,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-# The gallery: (example path, dark mode, output file name). At least one light
-# and one dark so the README shows both palettes. Referenced by README.md —
-# keep the file names in sync with the screenshot table there.
+# The static gallery: (example path, dark mode, output file name). Both dark —
+# the README's light-theme view is the demo GIF hero (docs/images/demo.gif), so
+# these example shots show off dark mode. Referenced by README.md — keep the file
+# names in sync with the screenshot table there.
 SHOTS: list[tuple[str, bool, str]] = [
-    ("examples/Power Electronics/Boost Converter.hv", False, "boost-converter-light.png"),
     ("examples/Logic Circuits/4-1 MUX.hv", True, "mux-4-1-dark.png"),
     ("examples/Battery Models/Porous Electrode Interface.hv", True, "porous-electrode-dark.png"),
 ]

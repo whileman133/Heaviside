@@ -37,6 +37,7 @@ from app.canvas.commands import (
     MacroCommand,
     MergeWireCommand,
     MoveCommand,
+    MoveEndpointCommand,
     MoveOptionsLabelCommand,
     MoveWireVertexCommand,
     PlaceCommand,
@@ -1013,25 +1014,16 @@ def test_vertex_move_via_stack():
 # MoveOptionsLabelCommand
 # ---------------------------------------------------------------------------
 
-def test_move_options_label_sets_offset():
+def test_move_options_label_do_undo_redo():
     stack = _stack()
-    comp = _resistor(comp_id="r1")
-    stack.push(PlaceCommand(comp))
+    stack.push(PlaceCommand(_resistor(comp_id="r1")))
     assert stack.schematic.components[0].label_offset is None
-
     stack.push(MoveOptionsLabelCommand("r1", (10.0, -20.0)))
     assert stack.schematic.components[0].label_offset == (10.0, -20.0)
-
-
-def test_move_options_label_undo():
-    stack = _stack()
-    comp = _resistor(comp_id="r1")
-    stack.push(PlaceCommand(comp))
-    stack.push(MoveOptionsLabelCommand("r1", (5.0, 3.0)))
-    assert stack.schematic.components[0].label_offset == (5.0, 3.0)
-
     stack.undo()
     assert stack.schematic.components[0].label_offset is None
+    stack.redo()
+    assert stack.schematic.components[0].label_offset == (10.0, -20.0)
 
 
 def test_move_options_label_undo_preserves_prior_offset():
@@ -1046,16 +1038,6 @@ def test_move_options_label_undo_preserves_prior_offset():
 
     stack.undo()
     assert stack.schematic.components[0].label_offset is None
-
-
-def test_move_options_label_redo():
-    stack = _stack()
-    comp = _resistor(comp_id="r1")
-    stack.push(PlaceCommand(comp))
-    stack.push(MoveOptionsLabelCommand("r1", (7.0, -4.0)))
-    stack.undo()
-    stack.redo()
-    assert stack.schematic.components[0].label_offset == (7.0, -4.0)
 
 
 def test_move_options_label_clears_offset():
@@ -1293,31 +1275,15 @@ def _open(comp_id: str | None = None, position=(0.0, 0.0)) -> Component:
     )
 
 
-def test_resize_sets_span_override():
+def test_resize_span_do_undo_redo():
     stack = _stack()
     stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
     stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
-    comp = stack.schematic.components[0]
-    assert comp.span_override == (4.0, 0.0)
-
-
-def test_resize_undo_restores_span():
-    stack = _stack()
-    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
-    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
+    assert stack.schematic.components[0].span_override == (4.0, 0.0)
     stack.undo()
-    comp = stack.schematic.components[0]
-    assert comp.span_override == (2.0, 0.0)
-
-
-def test_resize_redo():
-    stack = _stack()
-    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
-    stack.push(ResizeCommand("a", new_span=(4.0, 0.0), old_span=(2.0, 0.0)))
-    stack.undo()
+    assert stack.schematic.components[0].span_override == (2.0, 0.0)
     stack.redo()
-    comp = stack.schematic.components[0]
-    assert comp.span_override == (4.0, 0.0)
+    assert stack.schematic.components[0].span_override == (4.0, 0.0)
 
 
 def test_resize_reshapes_connected_wire():
@@ -1339,6 +1305,43 @@ def test_resize_undo_restores_wire():
     stack.undo()
     wire = stack.schematic.wires[0]
     assert wire.points[0] == (2.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# MoveEndpointCommand — drag the *origin* endpoint (terminal held fixed)
+# ---------------------------------------------------------------------------
+
+def test_move_endpoint_do_undo_redo():
+    """The origin moves to its new position and the span grows so the terminal
+    (origin (0,0) + old span (2,0) = world (2,0)) stays put; undo/redo restore."""
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    stack.push(MoveEndpointCommand(
+        "a", new_span=(4.0, 0.0), old_span=(2.0, 0.0),
+        new_position=(-2.0, 0.0), old_position=(0.0, 0.0)))
+    comp = stack.schematic.components[0]
+    assert (comp.position, comp.span_override) == ((-2.0, 0.0), (4.0, 0.0))
+    stack.undo()
+    comp = stack.schematic.components[0]
+    assert (comp.position, comp.span_override) == ((0.0, 0.0), (2.0, 0.0))
+    stack.redo()
+    comp = stack.schematic.components[0]
+    assert (comp.position, comp.span_override) == ((-2.0, 0.0), (4.0, 0.0))
+
+
+def test_move_endpoint_reshapes_wire_at_origin():
+    """A wire connected at the origin pin follows when the origin is dragged."""
+    stack = _stack()
+    stack.push(PlaceCommand(_open(comp_id="a", position=(0.0, 0.0))))
+    # Wire from the origin pin (0,0) down to (0,2).
+    stack.push(WireCommand(Wire(id="w1", points=[(0.0, 0.0), (0.0, 2.0)])))
+    stack.push(MoveEndpointCommand(
+        "a", new_span=(4.0, 0.0), old_span=(2.0, 0.0),
+        new_position=(-2.0, 0.0), old_position=(0.0, 0.0)))
+    wire = stack.schematic.wires[0]
+    assert wire.points[0] == (-2.0, 0.0)                 # endpoint followed origin
+    stack.undo()
+    assert stack.schematic.wires[0].points[0] == (0.0, 0.0)
 
 
 def test_codegen_open_uses_span_override():
@@ -1374,74 +1377,37 @@ def _wire_stack() -> tuple[UndoStack, str]:
     return UndoStack(sch), wid
 
 
-def test_set_wire_line_style_do_undo_redo():
+# Every single-field "Set*" wire command is the same generic do/undo/redo over
+# one attribute; one parametrized table proves them all. The non-trivial undo
+# (wire reshaping, collapse, macro/batch) is covered by the dedicated tests above.
+_WIRE_SETTERS = [
+    (SetWireLineStyleCommand, "line_style", "dashed", ""),
+    (SetWireLineWidthCommand, "line_width", 1.2, 0.4),
+    (SetWireNoJunctionDotsCommand, "no_junction_dots", True, False),
+    (SetWireNoTerminationDotsCommand, "no_termination_dots", True, False),
+    (SetWireStartMarkerCommand, "start_marker", "arrow", ""),
+    (SetWireEndMarkerCommand, "end_marker", "arrow", ""),
+    (SetWireStartLabelCommand, "start_label", "$x(t)$", ""),
+    (SetWireEndLabelCommand, "end_label", "$y(t)$", ""),
+    (SetWireStartLabelPlacementCommand, "start_label_placement", "above", ""),
+    (SetWireEndLabelPlacementCommand, "end_label_placement", "below", ""),
+    (SetWireMidLabelCommand, "mid_label", "$V_{bus}$", ""),
+    (SetWireMidLabelPosCommand, "mid_label_pos", 0.25, 0.5),
+]
+
+
+@pytest.mark.parametrize(
+    "cmd_cls, field, new, old", _WIRE_SETTERS,
+    ids=[c.__name__ for c, *_ in _WIRE_SETTERS],
+)
+def test_set_wire_attr_do_undo_redo(cmd_cls, field, new, old):
     stack, wid = _wire_stack()
-    stack.push(SetWireLineStyleCommand(wid, "dashed", ""))
-    assert stack.schematic.wires[0].line_style == "dashed"
+    stack.push(cmd_cls(wid, new, old))
+    assert getattr(stack.schematic.wires[0], field) == new
     stack.undo()
-    assert stack.schematic.wires[0].line_style == ""
+    assert getattr(stack.schematic.wires[0], field) == old
     stack.redo()
-    assert stack.schematic.wires[0].line_style == "dashed"
-
-
-def test_set_wire_line_width_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireLineWidthCommand(wid, 1.2, 0.4))
-    assert stack.schematic.wires[0].line_width == 1.2
-    stack.undo()
-    assert stack.schematic.wires[0].line_width == 0.4
-
-
-def test_set_wire_no_junction_dots_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireNoJunctionDotsCommand(wid, True, False))
-    assert stack.schematic.wires[0].no_junction_dots is True
-    stack.undo()
-    assert stack.schematic.wires[0].no_junction_dots is False
-
-
-def test_set_wire_no_termination_dots_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireNoTerminationDotsCommand(wid, True, False))
-    assert stack.schematic.wires[0].no_termination_dots is True
-    stack.undo()
-    assert stack.schematic.wires[0].no_termination_dots is False
-
-
-def test_set_wire_start_marker_do_undo_redo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireStartMarkerCommand(wid, "arrow", ""))
-    assert stack.schematic.wires[0].start_marker == "arrow"
-    stack.undo()
-    assert stack.schematic.wires[0].start_marker == ""
-    stack.redo()
-    assert stack.schematic.wires[0].start_marker == "arrow"
-
-
-def test_set_wire_end_marker_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireEndMarkerCommand(wid, "arrow", ""))
-    assert stack.schematic.wires[0].end_marker == "arrow"
-    stack.undo()
-    assert stack.schematic.wires[0].end_marker == ""
-
-
-def test_set_wire_start_label_do_undo_redo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireStartLabelCommand(wid, "$x(t)$", ""))
-    assert stack.schematic.wires[0].start_label == "$x(t)$"
-    stack.undo()
-    assert stack.schematic.wires[0].start_label == ""
-    stack.redo()
-    assert stack.schematic.wires[0].start_label == "$x(t)$"
-
-
-def test_set_wire_end_label_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireEndLabelCommand(wid, "$y(t)$", ""))
-    assert stack.schematic.wires[0].end_label == "$y(t)$"
-    stack.undo()
-    assert stack.schematic.wires[0].end_label == ""
+    assert getattr(stack.schematic.wires[0], field) == new
 
 
 def test_set_variant_do_undo_redo():
@@ -1454,42 +1420,6 @@ def test_set_variant_do_undo_redo():
     assert stack.schematic.components[0].variants.get("body_diode") in (False, None)
     stack.redo()
     assert stack.schematic.components[0].variants.get("body_diode") is True
-
-
-def test_set_wire_start_label_placement_do_undo_redo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireStartLabelPlacementCommand(wid, "above", ""))
-    assert stack.schematic.wires[0].start_label_placement == "above"
-    stack.undo()
-    assert stack.schematic.wires[0].start_label_placement == ""
-    stack.redo()
-    assert stack.schematic.wires[0].start_label_placement == "above"
-
-
-def test_set_wire_end_label_placement_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireEndLabelPlacementCommand(wid, "below", ""))
-    assert stack.schematic.wires[0].end_label_placement == "below"
-    stack.undo()
-    assert stack.schematic.wires[0].end_label_placement == ""
-
-
-def test_set_wire_mid_label_do_undo_redo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireMidLabelCommand(wid, "$V_{bus}$", ""))
-    assert stack.schematic.wires[0].mid_label == "$V_{bus}$"
-    stack.undo()
-    assert stack.schematic.wires[0].mid_label == ""
-    stack.redo()
-    assert stack.schematic.wires[0].mid_label == "$V_{bus}$"
-
-
-def test_set_wire_mid_label_pos_do_undo():
-    stack, wid = _wire_stack()
-    stack.push(SetWireMidLabelPosCommand(wid, 0.25, 0.5))
-    assert stack.schematic.wires[0].mid_label_pos == 0.25
-    stack.undo()
-    assert stack.schematic.wires[0].mid_label_pos == 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -1831,11 +1761,23 @@ def test_wire_attr_command_on_missing_wire_is_noop():
 def test_typed_component_wrong_class_raises_typeerror():
     """_typed_component raises an explicit TypeError (not an assert, which
     vanishes under -O) when the component is the wrong class."""
+    from app.canvas.commands import SetFontSizeCommand
+    s = _empty()
+    s.components.append(_resistor(comp_id="r"))      # plain Component, not Fonted
+    with pytest.raises(TypeError):
+        SetFontSizeCommand("r", 12.0, 10.0).do(s)
+
+
+def test_set_z_order_applies_to_plain_component():
+    """SetZOrderCommand now layers ANY component (z_order moved to the base
+    Component), not just drawing annotations; undo restores the baseline."""
     from app.canvas.commands import SetZOrderCommand
     s = _empty()
-    s.components.append(_resistor(comp_id="r"))      # plain Component, no z_order
-    with pytest.raises(TypeError):
-        SetZOrderCommand("r", 1, 0).do(s)
+    s.components.append(_resistor(comp_id="r"))      # plain circuit component
+    SetZOrderCommand("r", 3, 0).do(s)
+    assert s.components[0].z_order == 3
+    SetZOrderCommand("r", 3, 0).undo(s)
+    assert s.components[0].z_order == 0
 
 
 # ---------------------------------------------------------------------------

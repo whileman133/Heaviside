@@ -22,7 +22,12 @@ try:
 except Exception as exc:  # pragma: no cover - environment-dependent
     pytest.skip(f"Qt platform unavailable: {exc}", allow_module_level=True)
 
-from app.ui.preferences import Preferences, PreferencesDialog, _to_bool  # noqa: E402
+from app.ui.preferences import (  # noqa: E402
+    DEFAULT_COMPONENT_SHORTCUTS,
+    Preferences,
+    PreferencesDialog,
+    _to_bool,
+)
 
 
 @pytest.fixture
@@ -32,22 +37,23 @@ def prefs(tmp_path) -> Preferences:
 
 
 def test_export_defaults(prefs: Preferences) -> None:
-    """A fresh store reports PDF/PNG auto-export on — the two formats needing
-    only pdflatex — and TeX/EPS/SVG off (opt-in)."""
+    """A fresh store reports TeX/PDF/PNG auto-export on — the formats needing no
+    converter (TeX needs nothing; PDF/PNG need only pdflatex) — and EPS/SVG off
+    (opt-in, converter-dependent)."""
+    assert prefs.auto_export_tex is True
     assert prefs.auto_export_pdf is True
     assert prefs.auto_export_png is True
-    assert prefs.auto_export_tex is False
     assert prefs.auto_export_eps is False
     assert prefs.auto_export_svg is False
     assert prefs.force_ziamath is False  # auto engine selection by default
 
 
 def test_roundtrip_tex(prefs: Preferences) -> None:
-    assert prefs.auto_export_tex is False  # defaults off (PDF/PNG are the defaults)
-    prefs.auto_export_tex = True
-    assert prefs.auto_export_tex is True
+    assert prefs.auto_export_tex is True  # defaults on (the CircuiTikZ fragment)
     prefs.auto_export_tex = False
     assert prefs.auto_export_tex is False
+    prefs.auto_export_tex = True
+    assert prefs.auto_export_tex is True
 
 
 def test_tool_paths_default_empty(prefs: Preferences) -> None:
@@ -216,6 +222,70 @@ def test_png_dpi_clamped_to_dialog_range(prefs: Preferences) -> None:
     assert prefs.png_dpi == 72
     prefs._settings.setValue("export/png_dpi", "garbage")
     assert prefs.png_dpi == 300
+
+
+def test_component_shortcuts_default_and_roundtrip(prefs: Preferences) -> None:
+    """Unset → the built-in default map (incl. v/i → annotations); a custom map
+    round-trips."""
+    assert prefs.component_shortcuts == DEFAULT_COMPONENT_SHORTCUTS
+    assert prefs.component_shortcuts["v"] == "open"
+    assert prefs.component_shortcuts["i"] == "short"
+    prefs.component_shortcuts = {"q": "R", "x": "C"}
+    assert prefs.component_shortcuts == {"q": "R", "x": "C"}
+
+
+def test_component_shortcuts_sanitized(prefs: Preferences) -> None:
+    """A corrupt/hand-edited map drops reserved keys (s/w/p), non-letter or
+    multi-char keys, and unknown component kinds."""
+    prefs.component_shortcuts = {
+        "s": "R",          # reserved tool key → dropped
+        "ab": "C",         # multi-char key → dropped
+        "1": "L",          # non-letter → dropped
+        "z": "NOTAKIND",   # unknown kind → dropped
+        "q": "R",          # valid → kept
+    }
+    assert prefs.component_shortcuts == {"q": "R"}
+
+
+def test_component_shortcuts_corrupt_value_falls_back(prefs: Preferences) -> None:
+    """A non-JSON stored value falls back to the defaults rather than crashing."""
+    prefs._settings.setValue("keybindings/component_shortcuts", "{not json")
+    assert prefs.component_shortcuts == DEFAULT_COMPONENT_SHORTCUTS
+
+
+def test_shortcuts_tab_builds_and_restores_defaults(prefs: Preferences) -> None:
+    """The Shortcuts tab populates one row per binding; Restore defaults repopulates."""
+    dlg = PreferencesDialog(prefs)
+    assert dlg._shortcut_table.rowCount() == len(DEFAULT_COMPONENT_SHORTCUTS)
+    dlg._populate_shortcuts({"q": "R"})
+    assert dlg._shortcut_table.rowCount() == 1
+    dlg._populate_shortcuts(DEFAULT_COMPONENT_SHORTCUTS)
+    assert dlg._shortcut_table.rowCount() == len(DEFAULT_COMPONENT_SHORTCUTS)
+
+
+def test_dialog_accept_persists_shortcuts(prefs: Preferences) -> None:
+    """Accepting writes the edited shortcut table to Preferences."""
+    dlg = PreferencesDialog(prefs)
+    dlg._populate_shortcuts({"q": "R", "x": "C"})
+    dlg._on_accept()
+    assert prefs.component_shortcuts == {"q": "R", "x": "C"}
+
+
+def test_dialog_rejects_invalid_shortcut(prefs: Preferences, monkeypatch) -> None:
+    """A duplicate or reserved key keeps the dialog open (no accept, no write)."""
+    monkeypatch.setattr(
+        "app.ui.preferences.QMessageBox.warning", lambda *a, **k: None
+    )
+    for rows in ([("q", "R"), ("q", "C")],   # duplicate key
+                 [("s", "R")]):              # reserved tool key
+        dlg = PreferencesDialog(prefs)
+        dlg._shortcut_table.setRowCount(0)
+        for key, kind in rows:
+            dlg._add_shortcut_row(key, kind)
+        accepted = []
+        monkeypatch.setattr(dlg, "accept", lambda: accepted.append(True))
+        dlg._on_accept()
+        assert not accepted  # validation blocked the close
 
 
 def test_dialog_hint_labels_use_theme_token(prefs: Preferences) -> None:

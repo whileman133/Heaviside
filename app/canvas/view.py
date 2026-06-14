@@ -21,7 +21,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QCursor, QPainter
-from PySide6.QtWidgets import QGraphicsView
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QGraphicsView,
+    QLineEdit,
+    QPlainTextEdit,
+)
 
 from app.canvas.geometry import NUDGE_GU
 from app.canvas.items import LabelTextItem
@@ -54,6 +60,9 @@ class SchematicView(QGraphicsView):
         self._space_down = False
         self._pan_active = False
         self._pan_anchor = QPointF()
+        # key → component-kind placement map (configured in Preferences, §10.2);
+        # consulted from the Select tool in keyPressEvent. Empty until set.
+        self._placement_shortcuts: dict[str, str] = {}
 
         self._scene.mode_changed.connect(self._on_mode_changed)
 
@@ -69,16 +78,35 @@ class SchematicView(QGraphicsView):
     def zoom(self) -> float:
         return self._zoom
 
+    def set_placement_shortcuts(self, mapping: dict[str, str]) -> None:
+        """Install the key → component-kind placement map (spec §10.2). Keys are
+        normalised to lowercase so the lookup in ``keyPressEvent`` is canonical."""
+        self._placement_shortcuts = {k.lower(): v for k, v in mapping.items()}
+
     # ------------------------------------------------------------------
     # Mode sync
     # ------------------------------------------------------------------
 
     def _on_mode_changed(self, mode: Mode) -> None:
+        self.setDragMode(
+            QGraphicsView.ScrollHandDrag if mode == Mode.PAN
+            else QGraphicsView.RubberBandDrag
+        )
+        self._apply_mode_cursor()
+
+    def _apply_mode_cursor(self) -> None:
+        """Set the canvas cursor for the current mode, so the active tool reads at a
+        glance: a **crosshair** while wiring or placing (both are click-on-canvas-to-
+        add modes — WIRE in particular has no ghost to signal itself), an open hand
+        for pan, and the default arrow for select. Routed through here (rather than a
+        bare ``unsetCursor``) so a transient Space-pan restores the mode's cursor
+        instead of resetting to the arrow."""
+        mode = self._scene.mode
         if mode == Mode.PAN:
-            self.setDragMode(QGraphicsView.ScrollHandDrag)
             self.setCursor(Qt.OpenHandCursor)
+        elif mode in (Mode.WIRE, Mode.PLACE):
+            self.setCursor(Qt.CrossCursor)
         else:
-            self.setDragMode(QGraphicsView.RubberBandDrag)
             self.unsetCursor()
 
     # ------------------------------------------------------------------
@@ -153,8 +181,12 @@ class SchematicView(QGraphicsView):
     def _end_pan(self) -> None:
         self._pan_active = False
         self._scene.set_panning(False)
-        if self._scene.mode != Mode.PAN:
-            self.unsetCursor()
+        # Still holding Space → stay pan-ready (open hand); otherwise restore the
+        # mode's cursor (crosshair while wiring/placing, arrow in select).
+        if self._space_down:
+            self.setCursor(Qt.OpenHandCursor)
+        else:
+            self._apply_mode_cursor()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802, ANN001
         if event.button() == Qt.MiddleButton or (
@@ -241,11 +273,6 @@ class SchematicView(QGraphicsView):
             event.accept()
             return
 
-        if key == Qt.Key_R and mods == Qt.NoModifier:
-            self._scene.rotate_selected_cw()
-            event.accept()
-            return
-
         if key in (Qt.Key_Delete, Qt.Key_Backspace):
             self._scene.delete_selected()
             event.accept()
@@ -292,13 +319,49 @@ class SchematicView(QGraphicsView):
             event.accept()
             return
 
+        # Component placement shortcuts (§10.2). Same handler MainWindow delegates
+        # to, so the keys work whether or not the canvas holds focus; it guards text
+        # inputs / the label editor itself.
+        if self.handle_placement_key(event):
+            return
+
         super().keyPressEvent(event)
+
+    def handle_placement_key(self, event) -> bool:  # noqa: ANN001
+        """Window-wide component-placement dispatch (spec §10.2). Returns True iff it
+        consumed the key.
+
+        Plain keys only (rotate lives on ``Ctrl/⌘+R`` now, so the letters are free
+        for placement). Skips keys while a text field or an in-place label editor is
+        focused, so it never eats typed letters. A mapped key starts placing its
+        component — from the **Select** tool, or while a ghost is already up
+        (**Place** mode), where it **swaps** the active ghost to the new kind. It
+        stays inert while routing a wire or panning. Called from this view's
+        ``keyPressEvent`` (canvas focused) and from ``MainWindow.keyPressEvent``
+        (keys that bubble up from elsewhere)."""
+        if event.modifiers() != Qt.NoModifier:
+            return False
+        if isinstance(self._scene.focusItem(), LabelTextItem):
+            return False
+        if isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QAbstractSpinBox)):
+            return False
+        char = event.text().lower()
+        if len(char) != 1:
+            return False
+        if self._scene.mode not in (Mode.SELECT, Mode.PLACE):
+            return False
+        kind = self._placement_shortcuts.get(char)
+        if kind is None:
+            return False
+        self._scene.start_placement(kind)
+        event.accept()
+        return True
 
     def keyReleaseEvent(self, event) -> None:  # noqa: N802, ANN001
         if event.key() == Qt.Key_Space and not event.isAutoRepeat():
             self._space_down = False
-            if not self._pan_active and self._scene.mode != Mode.PAN:
-                self.unsetCursor()
+            if not self._pan_active:
+                self._apply_mode_cursor()  # restore the mode cursor (crosshair/arrow/hand)
             event.accept()
             return
         super().keyReleaseEvent(event)

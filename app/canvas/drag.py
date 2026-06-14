@@ -35,6 +35,7 @@ from PySide6.QtCore import QPointF
 from app.canvas.commands import (
     MacroCommand,
     MoveCommand,
+    MoveEndpointCommand,
     ResizeCommand,
 )
 from app.schematic.reshape import (
@@ -50,6 +51,7 @@ from app.canvas.geometry import (
     scene_to_gu,
     snap_point_gu,
     world_delta_to_local,
+    world_span_to_local,
 )
 from app.canvas.items import (
     JunctionDragItem,
@@ -189,10 +191,11 @@ class DragPreviewController:
     # Endpoint drag helpers (resizable components)
     # ------------------------------------------------------------------
 
-    def endpoint_handle_at(self, scene_pos: QPointF) -> str | None:
-        """Return comp_id if *scene_pos* is over the terminal resize handle of any
-        resizable component, regardless of selection state.  Checks selected
-        items first."""
+    def endpoint_handle_at(self, scene_pos: QPointF) -> tuple[str, int] | None:
+        """Return ``(comp_id, handle_idx)`` if *scene_pos* is over a resize handle
+        of any resizable component, regardless of selection state — ``handle_idx``
+        is 1 for the terminal handle, 0 for the origin handle (line annotations
+        only). Checks selected items first."""
         scene = self._scene
         selected = scene.selectedItems()
         candidates = list(selected) + [
@@ -203,20 +206,27 @@ class DragPreviewController:
             if not isinstance(item, _ResizableTwoTerminalItem):
                 continue
             local = item.mapFromScene(scene_pos)
-            if item.terminal_handle_hit(local):
-                return item.component.id
+            idx = item.endpoint_handle_index_at(local)
+            if idx is not None:
+                return item.component.id, idx
         return None
 
     def preview_endpoint_drag(self, gu: tuple[float, float]) -> None:
-        """Live visual update while dragging the terminal endpoint (model untouched)."""
+        """Live visual update while dragging an endpoint (model untouched)."""
         if self.endpoint_drag is None:
             return
-        comp_id, _handle_idx, old_span = self.endpoint_drag
+        comp_id, handle_idx, old_span = self.endpoint_drag
         resolved = self._endpoint_local_delta(comp_id, gu)
         if resolved is None:
             return
         item, comp, dx, dy = resolved
-        if abs(dx) < 0.5 and abs(dy) < 0.5:
+        if handle_idx == 0:
+            self._preview_origin_drag(item, comp, old_span, gu)
+            return
+        # The cursor is already 0.25-grid-snapped, so the terminal follows it
+        # freely (no dead-zone); only an exact zero-length span is skipped so the
+        # annotation doesn't momentarily collapse onto its origin.
+        if dx == 0.0 and dy == 0.0:
             return
 
         # A rect/circle resizes as an anchored scale about its fixed corner, so
@@ -244,6 +254,45 @@ class DragPreviewController:
         # ResizeCommand); render its result as ghosts, applying nothing.
         result = compute_pin_drag_reshape(
             self._scene._schematic.wires, old_pin=old_pin, dx=pin_dx, dy=pin_dy
+        )
+        for wid, new_pts in result.new_points.items():
+            wire_item = self._scene._wire_items.get(wid)
+            if wire_item is not None and len(new_pts) >= 2:
+                wire_item.set_preview_points(new_pts)
+
+    def _origin_terminal_world(
+        self, comp, old_span: tuple[float, float]
+    ) -> tuple[tuple[float, float], tuple[float, float]]:
+        """``(old_origin, terminal)`` world positions for an origin drag — the
+        terminal is held fixed while the origin follows the cursor."""
+        ox, oy = comp.position
+        tx, ty = local_span_to_world(old_span, comp.rotation, comp.mirror)
+        return (ox, oy), (ox + tx, oy + ty)
+
+    def _preview_origin_drag(
+        self, item, comp, old_span: tuple[float, float], gu: tuple[float, float]
+    ) -> None:
+        """Live preview of an origin-endpoint drag: the origin follows the cursor,
+        the terminal stays fixed, and wires at the old origin follow (model
+        untouched)."""
+        old_origin, terminal = self._origin_terminal_world(comp, old_span)
+        new_origin = gu
+        new_span = world_span_to_local(
+            (terminal[0] - new_origin[0], terminal[1] - new_origin[1]),
+            comp.rotation, comp.mirror,
+        )
+        # The origin follows the (0.25-snapped) cursor freely — no dead-zone — so
+        # the handle never feels stuck on pickup; skip only an exact zero-length
+        # span (origin landed on the terminal).
+        if new_span == (0.0, 0.0):
+            return
+        item.set_preview_span(new_span)
+        item.setPos(gu_to_scene(*new_origin))
+
+        pin_dx = new_origin[0] - old_origin[0]
+        pin_dy = new_origin[1] - old_origin[1]
+        result = compute_pin_drag_reshape(
+            self._scene._schematic.wires, old_pin=old_origin, dx=pin_dx, dy=pin_dy
         )
         for wid, new_pts in result.new_points.items():
             wire_item = self._scene._wire_items.get(wid)
@@ -286,27 +335,63 @@ class DragPreviewController:
         item = self._scene._comp_items.get(comp_id)
         if comp is not None and isinstance(item, _ResizableTwoTerminalItem):
             item.component = comp
+            # An origin drag also moved the item visually (set_preview_span keeps
+            # position, but _preview_origin_drag calls setPos); restore it.
+            item.setPos(gu_to_scene(*comp.position))
 
     def commit_endpoint_drag(
         self,
         comp_id: str,
         old_span: tuple[float, float],
         gu: tuple[float, float],
+        handle_idx: int = 1,
     ) -> None:
-        """Commit a ResizeCommand for the dragged terminal endpoint."""
+        """Commit the dragged endpoint: a ResizeCommand for the terminal handle, or
+        a MoveEndpointCommand for the origin handle (which moves the component and
+        holds the terminal fixed)."""
         resolved = self._endpoint_local_delta(comp_id, gu)
         if resolved is None:
             return
-        item, _comp, dx, dy = resolved
-        dx = round(dx * 2) / 2
-        dy = round(dy * 2) / 2
-        if (abs(dx) < 0.5 and abs(dy) < 0.5) or (dx, dy) == old_span:
-            # No effective resize — undo the preview swap, push nothing.
+        item, comp, dx, dy = resolved
+        if handle_idx == 0:
+            self._commit_origin_drag(comp_id, comp, old_span, gu)
+            return
+        # Snap the span to the 0.25 GU grid (matching placement, wire vertices and
+        # the live preview), so what the user dragged is what commits.
+        dx = round(dx * 4) / 4
+        dy = round(dy * 4) / 4
+        if (dx == 0.0 and dy == 0.0) or (dx, dy) == old_span:
+            # Degenerate or unchanged — undo the preview swap, push nothing.
             self.restore_endpoint_preview(comp_id)
             return
         # Route through the scene's normal push path (one rebuild + one
         # schematic_changed, batch-aware) instead of poking the stack directly.
         self._scene._push(ResizeCommand(comp_id, (dx, dy), old_span))
+
+    def _commit_origin_drag(
+        self,
+        comp_id: str,
+        comp,  # noqa: ANN001
+        old_span: tuple[float, float],
+        gu: tuple[float, float],
+    ) -> None:
+        """Commit an origin-endpoint drag. The span is snapped to the 0.25 grid and
+        the origin recomputed so the terminal stays exactly fixed; a no-op (zero or
+        unchanged span) restores the preview and pushes nothing."""
+        old_origin, terminal = self._origin_terminal_world(comp, old_span)
+        raw_span = world_span_to_local(
+            (terminal[0] - gu[0], terminal[1] - gu[1]), comp.rotation, comp.mirror
+        )
+        new_span = (round(raw_span[0] * 4) / 4, round(raw_span[1] * 4) / 4)
+        if new_span == (0.0, 0.0) or new_span == old_span:
+            self.restore_endpoint_preview(comp_id)
+            return
+        # The origin that keeps the terminal fixed for the snapped span.
+        tx, ty = local_span_to_world(new_span, comp.rotation, comp.mirror)
+        new_origin = (terminal[0] - tx, terminal[1] - ty)
+        self._scene._push(
+            MoveEndpointCommand(comp_id, new_span, old_span, new_origin, old_origin)
+        )
 
     # ------------------------------------------------------------------
     # Wire-vertex drag

@@ -79,7 +79,7 @@ from app.components.registry import REGISTRY
 from app.components.style import (
     balance_braces,
     compose_style_options,
-    protect_label_commas,
+    protect_label_values,
     split_top_level,
 )
 from app.schematic.model import (
@@ -273,6 +273,14 @@ def generate(
     pin_coord_to_ref: dict[tuple[float, float], str] = {}
     all_pin_refs: dict[tuple[float, float], list[str]] = {}
     for comp in schematic.components:
+        # Only default-layer (z_order == 0) components define named anchors. A
+        # re-layered component is emitted in its own \draw before/after the main
+        # block, so a named reference to it from a wire in another layer could be a
+        # forward reference (compile error). Wires connecting to a layered
+        # component fall back to absolute pin coordinates instead, which connect
+        # exactly (see the module docstring), so nothing is lost geometrically.
+        if comp.z_order != 0:
+            continue
         defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
@@ -305,12 +313,23 @@ def generate(
         refs = pin_coord_to_ref if use_refs else None
         return _wire_draw_statement(wire, hops_by_wire.get(wire.id, []), refs, _y)
 
-    # Background layer (z_order < 0): drawing annotations *and* wires, emitted
-    # before \draw so they sit behind the main circuit. Sorted ascending by
-    # (z_order, document order) so lower/earlier items render furthest back.
+    def _emit_layer_component(comp: Component) -> list[str]:
+        """Layer-block lines for one component: a drawing annotation via its
+        standalone-command path, any other (circuit) kind via its own \\draw."""
+        if isinstance(comp, DrawingComponent):
+            return _drawing_component_lines(comp, _y)
+        return _component_layer_lines(
+            comp, _y, _rot,
+            voltage_european=voltage_european, current_european=current_european,
+        )
+
+    # Background layer (z_order < 0): components (drawing annotations *and* plain
+    # circuit kinds) and wires, emitted before \draw so they sit behind the main
+    # circuit. Sorted ascending by (z_order, document order) so lower/earlier
+    # items render furthest back.
     bg_items: list[tuple[int, int, str, object]] = []
     for i, comp in enumerate(schematic.components):
-        if isinstance(comp, DrawingComponent) and comp.z_order < 0:
+        if comp.z_order < 0:
             bg_items.append((comp.z_order, i, "c", comp))
     for i, wire in enumerate(schematic.wires):
         if wire.z_order < 0 and len(wire.points) >= 2:
@@ -318,7 +337,7 @@ def generate(
     bg_items.sort(key=lambda t: (t[0], t[1]))
     for _z, _i, _kind, obj in bg_items:
         if _kind == "c":
-            lines.extend(_drawing_component_lines(obj, _y))
+            lines.extend(_emit_layer_component(obj))
         else:
             # Absolute coords: the multi-terminal nodes aren't defined yet.
             lines.append("  " + _wire_layer_line(obj, use_refs=False))
@@ -326,15 +345,18 @@ def generate(
     # Nodes that need a local \ctikzset (a gate's body height, a cute/european
     # transformer's inductor shape) are emitted first, each in its own group so the
     # setting reverts afterward; their (global) node names then resolve for wires in
-    # the main \draw.
+    # the main \draw. A re-layered (z_order != 0) node is emitted in its own layer
+    # block instead, so skip it here.
     for comp in schematic.components:
-        if _node_group_ctikzset(comp):
+        if comp.z_order == 0 and _node_group_ctikzset(comp):
             lines.extend(_node_group_lines(comp, _y, _rot))
 
     lines.append(r"  \draw")
 
     draw_lines: list[str] = []
     for comp in schematic.components:
+        if comp.z_order != 0:
+            continue  # emitted in a background/foreground layer block
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
         draw_lines.extend(_component_lines(
@@ -409,12 +431,15 @@ def generate(
         for node in _wire_label_nodes(wire, _y):
             lines.append(f"  {node}")
 
-    # Foreground layer: drawing annotations (z_order >= 0) *and* wires
-    # (z_order > 0), emitted after the draw block so they appear in front of the
-    # circuit. Sorted ascending by (z_order, document order).
+    # Foreground layer, emitted after the draw block so it sits in front of the
+    # circuit. Drawing annotations at z_order >= 0 belong here (a drawing
+    # annotation is never part of the main \draw, so its 0 baseline is "in front");
+    # plain circuit components only when z_order > 0 (z == 0 stays in the main
+    # draw). Wires at z_order > 0. Sorted ascending by (z_order, document order).
     fg_items: list[tuple[int, int, str, object]] = []
     for i, comp in enumerate(schematic.components):
-        if isinstance(comp, DrawingComponent) and comp.z_order >= 0:
+        is_drawing = isinstance(comp, DrawingComponent)
+        if (is_drawing and comp.z_order >= 0) or (not is_drawing and comp.z_order > 0):
             fg_items.append((comp.z_order, i, "c", comp))
     for i, wire in enumerate(schematic.wires):
         if wire.z_order > 0 and len(wire.points) >= 2:
@@ -422,7 +447,7 @@ def generate(
     fg_items.sort(key=lambda t: (t[0], t[1]))
     for _z, _i, _kind, obj in fg_items:
         if _kind == "c":
-            lines.extend(_drawing_component_lines(obj, _y))
+            lines.extend(_emit_layer_component(obj))
         else:
             # Foreground wires come after the \draw block — named anchors resolve.
             lines.append("  " + _wire_layer_line(obj, use_refs=True))
@@ -458,6 +483,34 @@ def _component_lines(
         return []
     else:
         raise ValueError(f"Unknown component kind '{kind}'")
+
+
+def _component_layer_lines(
+    comp: Component,
+    y_fn=lambda y: y,
+    rot_fn=lambda r: r,
+    *,
+    voltage_european: bool = False,
+    current_european: bool = False,
+) -> list[str]:
+    """Standalone LaTeX statement(s) for one circuit component emitted **in its own
+    z-layer** (``z_order != 0``), outside the shared ``\\draw`` block.
+
+    A drawing annotation is handled by :func:`_drawing_component_lines`; this is
+    its counterpart for plain circuit kinds. A node that needs a local
+    ``\\ctikzset`` group (a gate's body height, a cute/european transformer) reuses
+    :func:`_node_group_lines` (already a self-contained group); every other kind's
+    path fragment is wrapped in its own ``\\draw …;``. Endpoints use **absolute
+    coordinates** (no ``pin_coord_to_ref``): a layered component contributes no
+    named anchor (see :func:`generate`), and absolute pin coords connect exactly.
+    """
+    if _node_group_ctikzset(comp):
+        return _node_group_lines(comp, y_fn, rot_fn)
+    frags = _component_lines(
+        comp, None, y_fn, rot_fn,
+        voltage_european=voltage_european, current_european=current_european,
+    )
+    return [rf"  \draw {frag};" for frag in frags]
 
 
 def _two_terminal_line(
@@ -1267,11 +1320,12 @@ def _rotate(span: tuple[float, float], rotation: int) -> tuple[float, float]:
 def _label_args(comp: Component) -> str:
     """Return comp.options for the ``to[]`` / ``node[]`` argument.
 
-    Label values containing commas (e.g. ``v=$\\phi(0,0)$``) are brace-protected
-    so TikZ's pgfkeys parser does not mis-split them into bogus keys (§7.3).
-    The options are brace-balanced first so an unmatched ``}`` cannot escape the
-    ``to[…]``/``node[…]`` bracket group (LaTeX-injection containment)."""
-    return protect_label_commas(balance_braces(comp.options))
+    Label values containing a comma (e.g. ``v=$\\phi(0,0)$``) or an equals sign
+    (e.g. ``l=$v=2$``) are brace-protected so TikZ's pgfkeys parser does not
+    mis-split them into bogus keys (§7.3). The options are brace-balanced first so
+    an unmatched ``}`` cannot escape the ``to[…]``/``node[…]`` bracket group
+    (LaTeX-injection containment)."""
+    return protect_label_values(balance_braces(comp.options))
 
 
 def _line_width_opt(comp: Component) -> str:
@@ -1322,7 +1376,7 @@ def _gate_label_args(comp: Component) -> str:
             out.append(f"label=above:{{{val.strip()}}}")
         elif seg.strip():
             out.append(seg.strip())
-    return protect_label_commas(", ".join(out))
+    return protect_label_values(", ".join(out))
 
 
 def _fmt(value: float) -> str:

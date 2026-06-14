@@ -130,6 +130,13 @@ class Mode(Enum):
     PAN = auto()
 
 
+#: Annotation kinds placed by a two-click span gesture (click start, click end)
+#: rather than the single-click ghost-follow placement (spec §6.2). The first
+#: click anchors the origin; the ghost then spans origin→cursor; the second click
+#: commits the span. The voltage (``open``) and current (``short``) annotations.
+_SPAN_PLACE_KINDS: frozenset[str] = frozenset({"open", "short"})
+
+
 # ---------------------------------------------------------------------------
 # Scene
 # ---------------------------------------------------------------------------
@@ -201,6 +208,9 @@ class SchematicScene(QGraphicsScene):
         self._place_rotation: int = 0
         self._place_mirror: bool = False
         self._ghost: ComponentItem | None = None
+        # Two-click span placement (open/short annotations, §6.2): the clicked
+        # origin once the first click lands, else None (awaiting the first click).
+        self._place_start_gu: tuple[float, float] | None = None
 
         # Wire-routing state
         self._wire_pts: list[tuple[float, float]] = []
@@ -355,9 +365,13 @@ class SchematicScene(QGraphicsScene):
         self._place_kind = kind
         self._place_rotation = 0
         self._place_mirror = False
+        self._place_start_gu = None
         self._mode = Mode.PLACE
         self._apply_item_flags()
-        self._spawn_ghost(kind)
+        # Span-placed annotations (open/short) show no ghost until the first click
+        # anchors the origin; every other kind follows the cursor immediately.
+        if kind not in _SPAN_PLACE_KINDS:
+            self._spawn_ghost(kind)
         self.mode_changed.emit(Mode.PLACE)
 
     def enter_wire_mode(self) -> None:
@@ -449,13 +463,20 @@ class SchematicScene(QGraphicsScene):
         rotation: int = 0,
         mirror: bool = False,
         options: str = "",
+        span_override: tuple[float, float] | None = None,
     ) -> Component:
-        """Place a component at *position* (GU) via an undoable PlaceCommand."""
+        """Place a component at *position* (GU) via an undoable PlaceCommand.
+
+        *span_override* sets a resizable two-terminal annotation's terminal offset
+        (used by two-click span placement, §6.2); ``None`` keeps the registry
+        ``default_span``."""
         defn = REGISTRY[kind]
         cls = defn.component_class
         extra: dict = {}
         if is_box_kind(kind):
             extra["z_order"] = -10
+        if span_override is not None:
+            extra["span_override"] = span_override
         # Logic gates are placed compact (a 0.25-GU input pitch); other kinds
         # keep the default scale of 1.0.
         from app.components import library
@@ -600,11 +621,42 @@ class SchematicScene(QGraphicsScene):
             if w.id in wire_ids
         ]
 
-    def paste(self) -> None:
-        """Paste clipboard contents offset by 1 GU, with new UUIDs."""
+    def cut_selection(self) -> None:
+        """Copy the selection to the clipboard, then delete it (one undoable
+        delete). A no-op when nothing is selected."""
+        if not self.selected_component_ids() and not self.selected_wire_ids():
+            return
+        self.copy_selection()
+        self.delete_selected()
+
+    def _clipboard_min_corner(self) -> tuple[float, float]:
+        """Top-left (min x, min y) of the clipboard group in GU — the anchor used
+        to position a cursor-targeted paste. Caller guarantees a non-empty
+        clipboard."""
+        xs: list[float] = [c.position[0] for c in self._clipboard_components]
+        ys: list[float] = [c.position[1] for c in self._clipboard_components]
+        for w in self._clipboard_wires:
+            xs.extend(x for x, _ in w.points)
+            ys.extend(y for _, y in w.points)
+        return (min(xs), min(ys))
+
+    def paste(self, at: tuple[float, float] | None = None) -> None:
+        """Paste clipboard contents with new UUIDs.
+
+        With *at* (snapped GU coordinates, e.g. the right-click point), the
+        group's top-left corner is anchored there — a "paste here". Without it
+        (the Ctrl+V path) the group is offset by a fixed 1 GU so a repeat paste
+        does not land exactly on the original. Either offset is a multiple of the
+        grid, so pasted items stay grid-valid.
+        """
         if not self._clipboard_components and not self._clipboard_wires:
             return
-        _OFFSET = 1.0
+        if at is None:
+            off = (1.0, 1.0)
+        else:
+            mx, my = self._clipboard_min_corner()
+            off = (at[0] - mx, at[1] - my)
+        ox, oy = off
         cmds: list[Command] = []
         new_comp_ids: list[str] = []
         new_wire_ids: list[str] = []
@@ -613,14 +665,14 @@ class SchematicScene(QGraphicsScene):
             new_id = str(uuid.uuid4())
             new_comp = copy.deepcopy(comp)
             new_comp.id = new_id
-            new_comp.position = (comp.position[0] + _OFFSET, comp.position[1] + _OFFSET)
+            new_comp.position = (comp.position[0] + ox, comp.position[1] + oy)
             cmds.append(PlaceCommand(new_comp))
             new_comp_ids.append(new_id)
             new_comps.append(new_comp)
         for wire in self._clipboard_wires:
             new_wire = copy.deepcopy(wire)
             new_wire.id = str(uuid.uuid4())
-            new_wire.points = [(x + _OFFSET, y + _OFFSET) for x, y in wire.points]
+            new_wire.points = [(x + ox, y + oy) for x, y in wire.points]
             cmds.append(WireCommand(new_wire))
             new_wire_ids.append(new_wire.id)
         # Split any existing wires whose segments the pasted pins land on.
@@ -841,8 +893,11 @@ class SchematicScene(QGraphicsScene):
     def rotate_selected_cw(self) -> None:
         """Rotate selected components and wires 90° CW around their group centroid."""
         if self._mode == Mode.PLACE:
-            self._place_rotation = (self._place_rotation + 90) % 360
-            self._update_ghost_transform()
+            # Span-placed annotations take their orientation from the two clicks,
+            # so rotation does not apply during their placement.
+            if self._place_kind not in _SPAN_PLACE_KINDS:
+                self._place_rotation = (self._place_rotation + 90) % 360
+                self._update_ghost_transform()
             return
         comp_ids = self.selected_component_ids()
         wire_ids = self.selected_wire_ids()
@@ -1139,24 +1194,20 @@ class SchematicScene(QGraphicsScene):
             )
 
     def set_component_z_order(self, component_id: str, new_z: int) -> None:
-        """Set z_order on a drawing annotation via an undoable SetZOrderCommand."""
-        from app.components.model import DrawingComponent
+        """Set z_order on any component via an undoable SetZOrderCommand."""
         from app.canvas.commands import SetZOrderCommand
         comp = self._component_by_id(component_id)
-        if comp is None or not isinstance(comp, DrawingComponent) or comp.z_order == new_z:
+        if comp is None or comp.z_order == new_z:
             return
         self._push(SetZOrderCommand(component_id, new_z, comp.z_order))
 
     def _z_ordered_objects(self) -> list[tuple[str, int]]:
-        """All objects carrying a z_order — drawing components and wires — as
-        ``(id, z_order)`` pairs. Wires and DrawingComponents share one stack
-        (the canvas ``setZValue`` and the codegen background/foreground blocks),
-        so front/back ordering spans both."""
-        from app.components.model import DrawingComponent
+        """All objects carrying a z_order — every component and wire — as
+        ``(id, z_order)`` pairs. Components and wires share one stack (the canvas
+        ``setZValue`` and the codegen background/foreground blocks), so front/back
+        ordering spans both."""
         out: list[tuple[str, int]] = [
-            (c.id, c.z_order)
-            for c in self._schematic.components
-            if isinstance(c, DrawingComponent)
+            (c.id, c.z_order) for c in self._schematic.components
         ]
         out += [(w.id, w.z_order) for w in self._schematic.wires]
         return out
@@ -1222,8 +1273,10 @@ class SchematicScene(QGraphicsScene):
     def mirror_selected(self) -> None:
         """Toggle mirror on selected components, or mirror the placement ghost."""
         if self._mode == Mode.PLACE:
-            self._place_mirror = not self._place_mirror
-            self._update_ghost_transform()
+            # Span-placed annotations take their orientation from the two clicks.
+            if self._place_kind not in _SPAN_PLACE_KINDS:
+                self._place_mirror = not self._place_mirror
+                self._update_ghost_transform()
             return
         for cid in self.selected_component_ids():
             comp = self._component_by_id(cid)
@@ -1529,6 +1582,53 @@ class SchematicScene(QGraphicsScene):
         if self._ghost is not None:
             self._ghost.setPos(self.gu_to_scene(*gu))
 
+    def _span_snap_target(self, scene_pos) -> tuple[float, float]:  # noqa: ANN001
+        """Magnet-snap a span-placement endpoint onto a nearby component pin or
+        wire (the same magnet wire drawing uses), else the 0.25 GU grid node — so
+        a voltage/current annotation can be drawn exactly across a component's
+        pins."""
+        gu = self.snap_point_gu(scene_pos)
+        target, _connectable = self.wire_snap_target(
+            gu, raw_gu=self.scene_to_gu(scene_pos)
+        )
+        return target
+
+    def _place_span_click(self, gu: tuple[float, float]) -> None:
+        """Handle a left-click while placing a span annotation (open/short).
+
+        The first click anchors the origin and spawns the ghost; the second click
+        commits the annotation with span = end − start and re-arms for the next
+        one (PLACE mode stays active). A zero-length second click is ignored so a
+        double-click never drops a degenerate annotation."""
+        if self._place_start_gu is None:
+            self._place_start_gu = gu
+            self._begin_span_ghost(gu)
+            return
+        start = self._place_start_gu
+        span = (gu[0] - start[0], gu[1] - start[1])
+        if span == (0.0, 0.0):
+            return                          # need a real second point
+        self.place_component(self._place_kind, start, span_override=span)
+        # Re-arm for another span placement (rapid repeated placement, §6.2).
+        self._place_start_gu = None
+        self._cancel_ghost()
+
+    def _begin_span_ghost(self, start: tuple[float, float]) -> None:
+        """Spawn the span-placement ghost anchored at *start* with a zero span
+        (it grows to follow the cursor on the next move)."""
+        self._spawn_ghost(self._place_kind)
+        self._update_span_ghost(start, start)
+
+    def _update_span_ghost(
+        self, start: tuple[float, float], end: tuple[float, float]
+    ) -> None:
+        """Position the span ghost at *start* and stretch it to *end*."""
+        if self._ghost is None:
+            return
+        self._ghost.setPos(self.gu_to_scene(*start))
+        if hasattr(self._ghost, "set_preview_span"):
+            self._ghost.set_preview_span((end[0] - start[0], end[1] - start[1]))
+
     def _cancel_ghost(self) -> None:
         if self._ghost is not None:
             self._remove_item(self._ghost)
@@ -1539,6 +1639,7 @@ class SchematicScene(QGraphicsScene):
         self._place_kind = None
         self._place_rotation = 0
         self._place_mirror = False
+        self._place_start_gu = None
 
     # ------------------------------------------------------------------
     # Wire routing
@@ -1927,7 +2028,14 @@ class SchematicScene(QGraphicsScene):
         self.cursor_moved.emit(gu[0], gu[1])
 
         if self._mode == Mode.PLACE:
-            self._move_ghost(gu)
+            if self._place_kind in _SPAN_PLACE_KINDS:
+                # The ghost only exists (and stretches) once the origin is set.
+                if self._place_start_gu is not None:
+                    self._update_span_ghost(
+                        self._place_start_gu, self._span_snap_target(event.scenePos())
+                    )
+            else:
+                self._move_ghost(gu)
             event.accept()
             return
 
@@ -2009,6 +2117,92 @@ class SchematicScene(QGraphicsScene):
                 return it
         return None
 
+    # ------------------------------------------------------------------
+    # Right-click context menu (components & wires)
+    # ------------------------------------------------------------------
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802, ANN001
+        """Show a per-item right-click menu (front/back layering) in SELECT mode.
+
+        Right-clicking an item that is not already part of the selection makes it
+        the sole selection first (standard desktop behaviour); right-clicking
+        inside an existing multi-selection keeps it, so the action applies to the
+        whole group. Empty space (or any non-SELECT mode) falls through.
+        """
+        if self._mode != Mode.SELECT:
+            super().contextMenuEvent(event)
+            return
+        item = self._selectable_item_at(event.scenePos())
+        if item is not None:
+            clicked_id = (
+                item.component.id if isinstance(item, ComponentItem) else item.wire.id
+            )
+            selected = (
+                set(self.selected_component_ids()) | set(self.selected_wire_ids())
+            )
+            if clicked_id not in selected:
+                self.clearSelection()
+                item.setSelected(True)
+        # Empty space keeps the current selection (so Copy/Cut still target it) and
+        # still offers Paste — so the menu always shows in SELECT mode.
+        self._show_item_context_menu(event)
+
+    def _show_item_context_menu(self, event) -> None:  # noqa: ANN001
+        """Build and exec the component/wire context menu at the cursor.
+
+        Edit actions operate on the current selection; Paste drops the clipboard
+        at the right-click point. Actions are enabled per state (a selection for
+        cut/copy/delete/layer, a non-empty clipboard for paste)."""
+        from PySide6.QtWidgets import QMenu
+        target_ids = self.selected_component_ids() + self.selected_wire_ids()
+        has_selection = bool(target_ids)
+        has_clipboard = bool(self._clipboard_components or self._clipboard_wires)
+        paste_at = self.snap_point_gu(event.scenePos())
+
+        menu = QMenu(event.widget())
+        act_cut = menu.addAction("Cut")
+        act_copy = menu.addAction("Copy")
+        act_paste = menu.addAction("Paste")
+        menu.addSeparator()
+        act_delete = menu.addAction("Delete")
+        menu.addSeparator()
+        act_front = menu.addAction("Bring to Front")
+        act_back = menu.addAction("Send to Back")
+
+        for act in (act_cut, act_copy, act_delete, act_front, act_back):
+            act.setEnabled(has_selection)
+        act_paste.setEnabled(has_clipboard)
+
+        act_cut.triggered.connect(self.cut_selection)
+        act_copy.triggered.connect(self.copy_selection)
+        act_paste.triggered.connect(lambda: self.paste(at=paste_at))
+        act_delete.triggered.connect(self.delete_selected)
+        act_front.triggered.connect(
+            lambda: self._layer_selection(target_ids, to_front=True)
+        )
+        act_back.triggered.connect(
+            lambda: self._layer_selection(target_ids, to_front=False)
+        )
+        menu.exec(event.screenPos())
+        event.accept()
+
+    def _layer_selection(self, ids: list[str], *, to_front: bool) -> None:
+        """Bring every id (components and/or wires) to the front, or send to back,
+        as one undoable step. Items are processed in current-z order so their
+        relative stacking is preserved within the moved group."""
+        if not ids:
+            return
+        zmap = dict(self._z_ordered_objects())
+        order = sorted(ids, key=lambda i: zmap.get(i, 0))
+        if not to_front:
+            order = list(reversed(order))   # highest first → stays on top of the back group
+        with self.batch("Bring to Front" if to_front else "Send to Back"):
+            for obj_id in order:
+                if to_front:
+                    self.bring_to_front(obj_id)
+                else:
+                    self.send_to_back(obj_id)
+
     def mousePressEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._panning:
             super().mousePressEvent(event)
@@ -2016,17 +2210,34 @@ class SchematicScene(QGraphicsScene):
 
         gu = self.snap_point_gu(event.scenePos())
 
+        # SELECT mode: the right button only raises the context menu (delivered
+        # separately as contextMenuEvent). Swallow the press so the default
+        # handler can't alter the selection out from under the menu.
+        if self._mode == Mode.SELECT and event.button() == Qt.RightButton:
+            event.accept()
+            return
+
         if self._mode == Mode.PLACE:
             if event.button() == Qt.RightButton:
-                self.set_mode(Mode.SELECT)
+                # During a span placement, the first right-click abandons the
+                # in-progress span (back to awaiting the first click); otherwise
+                # it leaves PLACE mode.
+                if self._place_start_gu is not None:
+                    self._place_start_gu = None
+                    self._cancel_ghost()
+                else:
+                    self.set_mode(Mode.SELECT)
                 event.accept()
                 return
             if event.button() == Qt.LeftButton and self._place_kind:
-                self.place_component(
-                    self._place_kind, gu,
-                    rotation=self._place_rotation,
-                    mirror=self._place_mirror,
-                )
+                if self._place_kind in _SPAN_PLACE_KINDS:
+                    self._place_span_click(self._span_snap_target(event.scenePos()))
+                else:
+                    self.place_component(
+                        self._place_kind, gu,
+                        rotation=self._place_rotation,
+                        mirror=self._place_mirror,
+                    )
                 # Stay in PLACE mode for rapid repeated placement (spec §6.2).
                 event.accept()
                 return
@@ -2074,15 +2285,19 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
-        # SELECT mode: a press on a resizable component's terminal handle starts
-        # an endpoint drag (takes priority over wire-auto-enter and vertex drag).
+        # SELECT mode: a press on a resizable component's endpoint handle starts
+        # an endpoint drag — either the terminal (handle 1) or, for line
+        # annotations, the origin (handle 0). Takes priority over wire-auto-enter
+        # and vertex drag, so clicking-and-holding an endpoint drags it instead of
+        # starting a wire from a coincident pin.
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
-            comp_id = self._drag.endpoint_handle_at(event.scenePos())
-            if comp_id is not None:
+            hit = self._drag.endpoint_handle_at(event.scenePos())
+            if hit is not None:
+                comp_id, handle_idx = hit
                 comp = self._component_by_id(comp_id)
                 if comp is not None:
                     old_span = comp.span_override if comp.span_override is not None else REGISTRY[comp.kind].default_span
-                    self._drag.endpoint_drag = (comp_id, 1, old_span)
+                    self._drag.endpoint_drag = (comp_id, handle_idx, old_span)
                     self._drag.endpoint_press_gu = self.snap_point_gu(event.scenePos())
                     # Select the item so resize handles become visible.
                     item = self._comp_items.get(comp_id)
@@ -2196,13 +2411,13 @@ class SchematicScene(QGraphicsScene):
 
         # Commit an endpoint drag if one is active.
         if self._drag.endpoint_drag is not None and event.button() == Qt.LeftButton:
-            comp_id, _handle_idx, old_span = self._drag.endpoint_drag
+            comp_id, handle_idx, old_span = self._drag.endpoint_drag
             press_gu = self._drag.endpoint_press_gu
             self._drag.endpoint_drag = None
             self._drag.endpoint_press_gu = None
             gu = self.snap_point_gu(event.scenePos())
             if gu != press_gu:
-                self._drag.commit_endpoint_drag(comp_id, old_span, gu)
+                self._drag.commit_endpoint_drag(comp_id, old_span, gu, handle_idx)
             else:
                 # No movement: clear any wire preview points set during the drag
                 # and restore the item's component — the preview swapped it for a

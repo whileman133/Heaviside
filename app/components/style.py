@@ -135,21 +135,24 @@ def _is_single_brace_group(value: str) -> bool:
     return depth == 0
 
 
-def protect_label_commas(options: str) -> str:
-    r"""Brace-protect option *values* whose commas TikZ would mis-split.
+def protect_label_values(options: str) -> str:
+    r"""Brace-protect option *values* that TikZ would otherwise mis-parse.
 
-    pgfkeys splits a ``key=value`` option list on commas and — unlike
-    :func:`split_top_level` — does **not** treat ``$...$`` as protecting them, so
-    a label like ``v=$\phi(0,0)$`` is read as the bogus keys ``v=$\phi(0`` and
-    ``0)$``.  Wrapping such a value in braces (``v={$\phi(0,0)$}``) makes pgfkeys
-    treat it atomically; rendering is unchanged.  Values that are already a
-    single ``{...}`` group, and segments without a comma, are left untouched.
+    pgfkeys parses a ``key=value`` option list by splitting on commas and then on
+    the **first** ``=`` of each entry — and, unlike :func:`split_top_level`, it
+    does **not** treat ``$...$`` as protecting either delimiter. So a value that
+    itself contains a comma (``v=$\phi(0,0)$`` → bogus keys ``v=$\phi(0`` / ``0)$``)
+    **or** an equals sign (``l=$v=2$`` → value ``$v`` plus a stray ``2$``, a
+    "forgotten $" compile error) is misread. Wrapping such a value in braces
+    (``v={$\phi(0,0)$}`` / ``l={$v=2$}``) makes pgfkeys treat it atomically;
+    rendering is unchanged. Values already a single ``{...}`` group, and segments
+    whose value has neither a comma nor an ``=``, are left untouched.
     """
     out: list[str] = []
     for seg in split_top_level(options):
         key, eq, val = seg.partition("=")
         v = val.strip()
-        if eq and "," in v and not _is_single_brace_group(v):
+        if eq and ("," in v or "=" in v) and not _is_single_brace_group(v):
             out.append(f"{key.strip()}={{{v}}}")
         else:
             out.append(seg.strip())

@@ -13,24 +13,32 @@ rest of the app never touches raw string keys.  It accepts an optional
 
 from __future__ import annotations
 
+import json
+
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSpinBox,
+    QTableWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from app.components.registry import REGISTRY
 from app.preview import tools as _tools
 from app.ui import theme
 
@@ -53,6 +61,38 @@ _KEY_DARK_OVERRIDE = "display/dark_override"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
 _KEY_CHECK_UPDATES = "updates/check_on_startup"
 _KEY_SKIPPED_VERSION = "updates/skipped_version"
+_KEY_COMPONENT_SHORTCUTS = "keybindings/component_shortcuts"
+
+#: Plain letters the canvas reserves for tools (select/wire/pan), so they can't be
+#: bound to component placement. ``r`` is *not* reserved — it is context-sensitive
+#: (rotate when there's a selection/ghost, else place its bound component).
+RESERVED_SHORTCUT_KEYS = frozenset({"s", "w", "p"})
+
+#: Built-in key → component-kind placement map (spec §10.2). Pressing the key from
+#: the Select tool starts placing that component; user-overridable in Preferences.
+#: ``v``/``i`` map to the voltage/current annotations (kinds ``open``/``short``).
+DEFAULT_COMPONENT_SHORTCUTS: dict[str, str] = {
+    "r": "R", "c": "C", "l": "L", "d": "D",
+    "g": "ground", "t": "npn", "v": "open", "i": "short",
+}
+
+
+def _sanitize_shortcuts(mapping: object) -> dict[str, str]:
+    """Coerce a stored/loaded shortcut map to a clean ``{single-letter: kind}`` dict:
+    drop keys that aren't one ``a``–``z`` letter, reserved tool keys, and values that
+    aren't a known component kind. Keeps the app safe against a hand-edited setting."""
+    if not isinstance(mapping, dict):
+        return {}
+    clean: dict[str, str] = {}
+    for raw_key, kind in mapping.items():
+        key = str(raw_key).lower()
+        if len(key) != 1 or not ("a" <= key <= "z"):
+            continue
+        if key in RESERVED_SHORTCUT_KEYS:
+            continue
+        if kind in REGISTRY:
+            clean[key] = kind
+    return clean
 
 
 def _hint_qss() -> str:
@@ -89,10 +129,11 @@ class Preferences:
 
     @property
     def auto_export_tex(self) -> bool:
-        # Off by default (though it needs no LaTeX install): the default
-        # sibling set is just PDF + PNG — the formats every consumer can use
-        # directly. Users embedding the CircuiTikZ source via \input opt in.
-        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=False)
+        # On by default: the CircuiTikZ `.tex` fragment is the primary output for
+        # the LaTeX/Overleaf/LyX audience (\input it into a paper), and unlike
+        # SVG/EPS it needs no pdflatex or converter — codegen always succeeds. With
+        # PDF + PNG it forms the default sibling set; EPS/SVG stay opt-in.
+        return _to_bool(self._settings.value(_KEY_AUTO_TEX), default=True)
 
     @auto_export_tex.setter
     def auto_export_tex(self, value: bool) -> None:
@@ -135,7 +176,8 @@ class Preferences:
     @property
     def auto_export_png(self) -> bool:
         # On by default: a raster preview for quick sharing/slides. Needs pdflatex
-        # (same non-fatal failure handling as SVG). PDF and EPS stay off by default.
+        # (same non-fatal failure handling as SVG). EPS/SVG stay off by default
+        # (converter-dependent).
         return _to_bool(self._settings.value(_KEY_AUTO_PNG), default=True)
 
     @auto_export_png.setter
@@ -249,6 +291,30 @@ class Preferences:
     @property
     def tool_paths(self) -> dict[str, str]:
         return {name: self.tool_path(name) for name in _tools.TOOLS}
+
+    # -- Component placement shortcuts ---------------------------------------
+
+    @property
+    def component_shortcuts(self) -> dict[str, str]:
+        """The key → component-kind placement map (spec §10.2).
+
+        Returns :data:`DEFAULT_COMPONENT_SHORTCUTS` when unset (first run), and the
+        stored map otherwise — always sanitized, so a corrupt/hand-edited value can
+        never bind a reserved key or an unknown kind."""
+        raw = self._settings.value(_KEY_COMPONENT_SHORTCUTS)
+        if raw is None or raw == "":
+            return dict(DEFAULT_COMPONENT_SHORTCUTS)
+        try:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            return dict(DEFAULT_COMPONENT_SHORTCUTS)
+        return _sanitize_shortcuts(parsed)
+
+    @component_shortcuts.setter
+    def component_shortcuts(self, value: dict[str, str]) -> None:
+        self._settings.setValue(
+            _KEY_COMPONENT_SHORTCUTS, json.dumps(_sanitize_shortcuts(value))
+        )
 
 
 class PreferencesDialog(QDialog):
@@ -436,6 +502,7 @@ class PreferencesDialog(QDialog):
 
         tabs.addTab(_page(group), "Export")
         tabs.addTab(_page(display_group, render_group), "Appearance")
+        tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
         tabs.addTab(_page(tools_group), "Tools")
         tabs.addTab(_page(self._chk_check_updates, updates_hint), "Updates")
 
@@ -443,6 +510,117 @@ class PreferencesDialog(QDialog):
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+    # -- Shortcuts tab -------------------------------------------------------
+
+    def _build_shortcuts_tab(self) -> QWidget:
+        """A key → component table for the placement shortcuts (spec §10.2)."""
+        # (label, kind) once, ordered by category then display name, so every row's
+        # component combo is built from the same sorted list.
+        self._kind_choices = [
+            (f"{d.display_name} ({k})", k)
+            for k, d in sorted(
+                REGISTRY.items(),
+                key=lambda kv: (kv[1].category, kv[1].display_name.lower()),
+            )
+        ]
+
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(6, 12, 6, 6)
+        v.setSpacing(8)
+
+        intro = QLabel(
+            "Press a key from the Select tool to start placing a component. "
+            "<b>r</b> is context-sensitive — it rotates when something is selected "
+            "(or while you're placing), and places its component only when nothing "
+            "is selected. <b>s</b>, <b>w</b>, and <b>p</b> are reserved for the "
+            "Select / Wire / Pan tools."
+        )
+        intro.setWordWrap(True)
+        intro.setStyleSheet(_hint_qss())
+        v.addWidget(intro)
+
+        self._shortcut_table = QTableWidget(0, 2)
+        self._shortcut_table.setHorizontalHeaderLabels(["Key", "Component"])
+        self._shortcut_table.verticalHeader().setVisible(False)
+        self._shortcut_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._shortcut_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        header = self._shortcut_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        v.addWidget(self._shortcut_table, 1)
+
+        btn_row = QHBoxLayout()
+        add = QPushButton("Add")
+        add.clicked.connect(lambda: self._add_shortcut_row("", ""))
+        remove = QPushButton("Remove selected")
+        remove.clicked.connect(self._remove_selected_shortcut)
+        restore = QPushButton("Restore defaults")
+        restore.clicked.connect(
+            lambda: self._populate_shortcuts(DEFAULT_COMPONENT_SHORTCUTS)
+        )
+        btn_row.addWidget(add)
+        btn_row.addWidget(remove)
+        btn_row.addStretch(1)
+        btn_row.addWidget(restore)
+        v.addLayout(btn_row)
+
+        self._populate_shortcuts(self._prefs.component_shortcuts)
+        return page
+
+    def _add_shortcut_row(self, key: str, kind: str) -> None:
+        table = self._shortcut_table
+        row = table.rowCount()
+        table.insertRow(row)
+
+        key_edit = QLineEdit(key)
+        key_edit.setMaxLength(1)
+        key_edit.setPlaceholderText("key")
+        # Lower-case as the user types so the stored map is canonical.
+        key_edit.textChanged.connect(
+            lambda text, e=key_edit: e.text() != text.lower() and e.setText(text.lower())
+        )
+        table.setCellWidget(row, 0, key_edit)
+
+        combo = QComboBox()
+        for label, k in self._kind_choices:
+            combo.addItem(label, k)
+        if kind:
+            idx = combo.findData(kind)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+        table.setCellWidget(row, 1, combo)
+
+    def _remove_selected_shortcut(self) -> None:
+        rows = {idx.row() for idx in self._shortcut_table.selectedIndexes()}
+        for row in sorted(rows, reverse=True):
+            self._shortcut_table.removeRow(row)
+
+    def _populate_shortcuts(self, mapping: dict[str, str]) -> None:
+        self._shortcut_table.setRowCount(0)
+        for key in sorted(mapping):
+            self._add_shortcut_row(key, mapping[key])
+
+    def _collect_shortcuts(self) -> tuple[dict[str, str] | None, str | None]:
+        """Read the table into a clean map, or return ``(None, error)`` on a bad row
+        (non-letter key, a reserved tool key, or a duplicate key)."""
+        reserved_names = {"s": "Select", "w": "Wire", "p": "Pan"}
+        mapping: dict[str, str] = {}
+        table = self._shortcut_table
+        for row in range(table.rowCount()):
+            key = table.cellWidget(row, 0).text().strip().lower()
+            kind = table.cellWidget(row, 1).currentData()
+            if not key:
+                continue  # an empty key row is simply ignored
+            if len(key) != 1 or not ("a" <= key <= "z"):
+                return None, f"“{key}” is not a single letter a–z."
+            if key in RESERVED_SHORTCUT_KEYS:
+                return None, f"“{key}” is reserved for the {reserved_names[key]} tool."
+            if key in mapping:
+                return None, f"“{key}” is bound to more than one component."
+            mapping[key] = kind
+        return mapping, None
 
     def _browse_tool(self, name: str) -> None:
         """Pick an executable for tool *name* via a file dialog."""
@@ -469,6 +647,13 @@ class PreferencesDialog(QDialog):
 
     def _on_accept(self) -> None:
         """Persist the checkbox state to the Preferences store and close."""
+        # Validate the shortcut table first so an invalid binding keeps the dialog
+        # open (and nothing is persisted) rather than silently dropping a row.
+        shortcuts, error = self._collect_shortcuts()
+        if error is not None:
+            QMessageBox.warning(self, "Invalid shortcut", error)
+            return
+        self._prefs.component_shortcuts = shortcuts
         self._prefs.auto_export_tex = self._chk_tex.isChecked()
         self._prefs.auto_export_pdf = self._chk_pdf.isChecked()
         self._prefs.auto_export_eps = self._chk_eps.isChecked()

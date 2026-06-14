@@ -179,6 +179,10 @@ class Component:                        # circuit components (R, C, L, op amp, �
                                         #   precede the required base fields); there is no border_width.
                                         #   Canvas scales by line_width/0.4; codegen emits `line width=<w>pt`
                                         #   (symbols via _line_width_opt, blocks via compose_style_options).
+    z_order: int = 0                    # layer (front/back), shared by EVERY component and wire.
+                                        #   <0 behind / >0 in front of the z=0 circuit baseline. Maps to the
+                                        #   canvas setZValue; in LaTeX a z≠0 component is emitted in its own
+                                        #   \draw before/after the main block (§7.6). Persisted only when ≠ 0.
     scale: float = 1.0                  # LOGIC GATES ONLY (kinds whose CircuiTikZ keyword ends in " port").
                                         #   Uniform body multiplier about the `out` pin; pins sit at the true
                                         #   scaled anchor (base × scale, generally off-grid; no leads — §5.4).
@@ -189,8 +193,9 @@ class Component:                        # circuit components (R, C, L, op amp, �
 # are generic `variants` entries (the kind declares them in definitions.json).
 
 @dataclass
-class DrawingComponent(Component):      # base for text_node, rect, bipole
-    z_order: int = 0                    # layer order (negative = behind circuit elements)
+class DrawingComponent(Component):      # marker base for text_node, rect, circle, bipole
+    pass                                # no extra fields — z_order now lives on Component;
+                                        # routes these kinds through the drawing-annotation paths
 
 # Capability mixins — standalone dataclasses, never instantiated alone.
 # CRITICAL: concrete classes must list mixins BEFORE DrawingComponent, or
@@ -269,7 +274,7 @@ class Wire:
 
 `"above"`/`"below"` exist so a label on a wire meeting a **block-diagram shape** (rect/circle) — where the off-end direction points *into* the shape — sits cleanly beside the wire without overlapping the shape or the line. Labels are orthogonal to markers and to the automatic dots — they do **not** suppress an `ocirc` (a labelled open terminal is allowed; the arrow marker, if present, is what suppresses it). In the LaTeX output each non-empty label is a `\node[anchor=…, inner sep=0] at (x,y) {…};` whose anchor is set per the placement above. `inner sep=0` strips the node's default ~3.3 pt padding so the visible gap equals the 0.1 GU offset and matches the canvas (whose label clearance has no padding). On the canvas the label is typeset math (via the shared async `render_async` path, §8.4) positioned just beyond the endpoint. **Double-clicking a rendered label** opens an in-place editor — the shared `LabelTextItem` (`QGraphicsTextItem`) pre-filled with the raw LaTeX fragment, positioned at the label; **Enter** or focus-loss commits via `set_wire_start_label`/`set_wire_end_label`, **Escape** cancels, mirroring component-label editing (§5.8). The display label is hidden while editing and restored when editing ends (commit *or* cancel, via `LabelTextItem`'s end-callback). A label can also be **started from a bare endpoint**: double-clicking *any* wire endpoint (no label yet) — free **or connected to a component pin / drawing element** — opens the same editor for that end (§6.4), so no inspector trip is needed to add one.
 
-**Layer / hop priority.** `z_order` layers the wire exactly like `DrawingComponent.z_order` (positive = front, negative = behind, 0 = default) and additionally decides **which wire hops** where two wires cross without connecting: the higher-`z_order` wire arcs over the other (ties broken by position in the wire list). See §6.4 "Line-hops". On the canvas it maps to the wire item's `setZValue`; in the LaTeX output a `z_order < 0` wire is emitted before the main `\draw` block (behind) and a `z_order > 0` wire after it (in front), interleaved with `DrawingComponent`s by z-order; `z_order == 0` wires stay in the shared `\draw` path (§7.6).
+**Layer / hop priority.** `z_order` layers the wire exactly like `Component.z_order` (positive = front, negative = behind, 0 = default) and additionally decides **which wire hops** where two wires cross without connecting: the higher-`z_order` wire arcs over the other (ties broken by position in the wire list). See §6.4 "Line-hops". On the canvas it maps to the wire item's `setZValue`; in the LaTeX output a `z_order < 0` wire is emitted before the main `\draw` block (behind) and a `z_order > 0` wire after it (in front), interleaved with re-layered components by z-order; `z_order == 0` wires stay in the shared `\draw` path (§7.6).
 
 **Mid-wire label.** `mid_label` is a text/math caption drawn **over** the wire — centred on the wire at the fractional arc-length position `mid_label_pos` ∈ [0, 1] (`wire_point_at_fraction`), with an **opaque (white) backdrop** so the line does not run through the text. Same LaTeX-fragment convention as the endpoint labels. Use for captioning a signal/bus mid-run. It is **draggable along the wire** on the canvas: pressing the rendered label and dragging projects the cursor onto the polyline (`wire_fraction_at_point`) and, on release, commits the new fractional position via `set_wire_mid_label_pos` (`SetWireMidLabelPosCommand`); the position is a fraction of arc-length, so it survives reshaping the wire. Double-clicking the label opens the same in-place editor (`begin_label_edit("mid")`). A mid-label is added through the inspector's **Middle** field (it appears at the midpoint), then dragged/edited on the canvas. In the LaTeX output it is a `\node[fill=white, inner sep=1pt] at (x,y) {…};` emitted after the wire draw so it paints on top.
 
@@ -289,7 +294,7 @@ The root document object.
 ```python
 @dataclass
 class Schematic:
-    version: str                     # File-format version (§9.4), e.g. "0.3"; normalised on save
+    version: str                     # File-format version (§9.4), e.g. "0.4"; normalised on save
     name: str                        # User-visible schematic name
     components: list[Component]
     wires: list[Wire]
@@ -578,7 +583,11 @@ Single-terminal components are placed as `\node[kind] at (x,y) {};` in the gener
 |------|-------------|------|-------------|-----------|-------------|
 | `open` | Voltage Annotation | `in` (0,0), `out` (2,0) | (2,0) | Yes | `v`, `v^`, `v_`, `i`, `i_` |
 
-The `open` component renders a **translucent** (mostly-opaque) solid line between its two endpoints — drawn at `OPEN_ANNOTATION_OPACITY` (0.5) so it is visually distinct from both solid and dashed wires — with a voltage/current annotation from the options string. Unlike other components, its annotation **value label** is **centred over the middle of the line** rather than offset to a side, while its decoration — a current arrowhead centred on the line, or `±` voltage signs at the terminals — is drawn like CircuiTikZ's `to[open, …]` (see §5.8). When selected, square drag handles appear at both endpoints; dragging the terminal handle resizes the span (updating `Component.span_override`). The resize is undoable via `ResizeCommand`. Connected wires follow the moved endpoint.
+The `open` component renders a **translucent** (mostly-opaque) solid line between its two endpoints — drawn at `OPEN_ANNOTATION_OPACITY` (0.5) so it is visually distinct from both solid and dashed wires — with a voltage/current annotation from the options string. Unlike other components, its annotation **value label** is **centred over the middle of the line** rather than offset to a side, while its decoration — a current arrowhead centred on the line, or `±` voltage signs at the terminals — is drawn like CircuiTikZ's `to[open, …]` (see §5.8).
+
+**Placed by a two-click span gesture** (click the origin, then the terminal) rather than the single-click ghost-follow used by other components — see §6.2.
+
+**Both endpoints are draggable.** When selected, square drag handles appear at both endpoints, and a press on **either** handle starts an endpoint drag (`SchematicScene` press-handler precedence, ahead of vertex drag and SELECT-mode wire auto-start, so clicking-and-holding an endpoint that coincides with a connectable pin — e.g. a current annotation's — drags the endpoint instead of starting a wire). The two endpoints are symmetric: whichever is grabbed follows the cursor while the **other stays fixed**. Dragging the **terminal** handle holds the origin fixed and changes `span_override` only (undoable via `ResizeCommand`); dragging the **origin** handle holds the terminal fixed, shifting `Component.position` to the new origin and adjusting `span_override` so the terminal does not move (undoable via `MoveEndpointCommand`, the mirror image of `ResizeCommand`). Either way the dragged endpoint follows the cursor on the **0.25 GU grid** — the same node grid as placement and wire vertices, with **no dead-zone** (the handle is not sticky on pickup and does not freeze near the other endpoint) — and connected wires follow the moved endpoint (the terminal's wires stay put during an origin drag, and vice-versa). The origin handle is offered only by **line** annotations (`open`/`short`/`bipole`); boxes (`rect`/`circle`) resize as an anchored scale about their fixed first corner and expose only the terminal handle (`_ResizableTwoTerminalItem._origin_draggable`).
 
 #### Drawing Annotations
 
@@ -596,13 +605,13 @@ The `bipole` kind is a generic labelled rectangular box representing an arbitrar
 
 | Kind | Display Name | Category | Pins | Default Span | Resizable |
 |------|-------------|----------|------|-------------|-----------|
-| `bipole` | Generic Bipole | Misc | `in` (0,0), `out` (1,0) | (1,0) | Yes (right endpoint drag) |
+| `bipole` | Generic Bipole | Misc | `in` (0,0), `out` (1,0) | (1,0) | Yes (either endpoint drag) |
 
 **Model:** `BipoleComponent(FontedComponent, StyledComponent, DrawingComponent)` — composes both capability mixins (gains `font_*` for the label and `fill_color`/`line_style` for the box, plus the unified `Component.line_width` for the outline) over the `DrawingComponent` base (`z_order`). `options` holds a CircuiTikZ-style option string; the `t=` slot sets the label inside the box. Other slots (`l=`, `v=`, `i=`) are stored in options but not rendered in the LaTeX output (they don't apply to a standalone TikZ node).
 
 **Canvas rendering (`BipoleItem`):** Extends both `_DrawingAnnotationBase` (for z-order) and `_ResizableTwoTerminalItem` (for span/resize). Draws a rectangle of half-height `_BIPOLE_HALF_H` (0.25 GU) centered on the connecting line, from the origin pin to the terminal pin, using the `fill_color` and `line_style` from the StyledComponent fields and the unified `line_width` for the outline. The pen style is resolved from `line_style` via the shared `_resolve_pen_style()` helper (same mapping as `RectItem`), so dashed/dotted borders render on the canvas. The `t=` label is drawn centered inside the rectangle. Pin dots appear at both endpoints. A square resize handle at the terminal (right) endpoint is shown when selected. The hit region is the full rectangle interior plus the resize handle.
 
-**Resizing:** Dragging the right endpoint handle changes `span_override`. The resize directly controls the box width in both the canvas preview and the LaTeX output. Committed via `ResizeCommand`.
+**Resizing:** Dragging the **right (terminal)** endpoint handle changes `span_override` (committed via `ResizeCommand`); dragging the **left (origin)** handle moves the bipole's left end while holding the right fixed (committed via `MoveEndpointCommand`, see the `open` annotation note above). Either resize directly controls the box width in both the canvas preview and the LaTeX output.
 
 **Properties inspector:** The capability sections that apply to a bipole are `BipoleLabelSection` (label `t=` + other options), `FontSection`, `FillBorderSection` (line style + fill), `StrokeWidthSection` (the unified outline width, shared with symbols), `TransformSection` (rotation + mirror), and `LayerSection` (front/back + z-order). See §10.3 for the section architecture. `line_style` is edited through the shared `FillBorderSection` (the same control rect uses), so bipoles support dashed/dotted borders.
 
@@ -645,7 +654,7 @@ The canvas item draws the text centered at the position using a QFont with match
 
 New rects default to `z_order = -10` (behind circuit elements). TikZ color strings in `fill=` (e.g. `yellow!20`, `gray!15`) are resolved to Qt colors using the `color!percent` mixing formula (percent% of the named color blended with white) before rendering on the Qt canvas. The hit region for selection is the full rectangle interior (not just a band along the diagonal), so clicking anywhere inside the rect selects it.
 
-The `LayerSection` of the inspector — shared by all `DrawingComponent` kinds (text_node, rect, bipole) — shows **Move to front** and **Move to back** buttons. Wires carry their own `z_order` too and have the **same buttons** in `WireStyleSection` (§10.3). Both kinds drive the shared scene methods `bring_to_front(obj_id)` / `send_to_back(obj_id)`, which operate over **one combined z-stack** of every z-ordered object (drawing components **and** wires — they share the canvas `setZValue` and the codegen background/foreground blocks): "Move to front" sets `z_order` to `max(all other z-ordered objects' z_orders, 0) + 1`; "Move to back" to `min(…, 0) - 1`. The `0` baseline guarantees front is `≥ 1` (in front of the plain circuit elements at z 0) and back is `≤ -1` (behind them). Each dispatches to `set_wire_z_order` or `set_component_z_order` by id, so the move is undoable (`SetWireZOrderCommand` / `SetZOrderCommand`) and updates the Z-order spinbox. Code generation emits:
+**Layering applies to every component and wire.** `z_order` lives on the base `Component` (not just `DrawingComponent`) and on `Wire`, so *any* element can be sent to front/back. The `LayerSection` of the inspector — shared by all `DrawingComponent` kinds (text_node, rect, circle, bipole) — shows **Move to front** and **Move to back** buttons, and wires have the **same buttons** in `WireStyleSection` (§10.3); plain circuit components are layered through the **right-click context menu** (§6.9). All paths drive the shared scene methods `bring_to_front(obj_id)` / `send_to_back(obj_id)`, which operate over **one combined z-stack** of every z-ordered object (every component **and** wire — they share the canvas `setZValue` and the codegen background/foreground blocks): "Move to front" sets `z_order` to `max(all other z-ordered objects' z_orders, 0) + 1`; "Move to back" to `min(…, 0) - 1`. The `0` baseline guarantees front is `≥ 1` (in front of the plain circuit elements at z 0) and back is `≤ -1` (behind them). Each dispatches to `set_wire_z_order` or `set_component_z_order` by id, so the move is undoable (`SetWireZOrderCommand` / `SetZOrderCommand`) and updates the Z-order spinbox. Code generation emits:
 ```latex
 \draw[dashed, line width=1.5pt, fill=yellow!20] (x1,y1) rectangle (x2,y2);
 % solid with no extra options:
@@ -664,19 +673,20 @@ A text-free rect emits only its `\draw … rectangle …` line (byte-identical t
 1. **Shape.** `CircleItem` (a subclass of `RectItem` overriding only the outline paint and the hit `shape()`) draws an **ellipse inscribed in the bounding box** — a true circle when width == height, otherwise an ellipse. Code generation emits `\draw[style] (cx,cy) circle (r);` when square, else `\draw[style] (cx,cy) ellipse (rx and ry);` (centre = box centre; `rx = |dx|/2`, `ry = |dy|/2`), via `_circle_line`; a centred text `\node` follows (the shared `_centered_text_line`) when `options` is non-empty.
 2. **Connection points.** Only the **four cardinal points** N/S/E/W — the bounding-box edge midpoints (`circle_connection_points`, surfaced through `component_connection_points`) — accept wires, versus the rect's full perimeter. They are drawn as the same muted-red connection dots (`CircleItem._connection_dots_local` returns just the four), are wire-drawing snap targets, and auto-start a wire when an unconnected one is clicked (like rect edges, above). They follow on move (uniform translation) and resize (the same anchored-scale mapping, which keeps each cardinal point on its edge: N/S on the vertical centre line, E/W on the horizontal centre line). `CircleComponent` is a **sibling** of `RectComponent` (not a subclass) so code generation and painting distinguish the two shapes.
 
-**Z-order (`DrawingComponent.z_order`):** An integer field on `DrawingComponent` (default 0), stored in the JSON file (omitted when 0 for backward compat). Applies to `text_node`, `rect`, and `circle`. On the Qt canvas, maps to `QGraphicsItem.setZValue()`. In the LaTeX output, controls emission order:
+**Z-order (`Component.z_order`):** An integer field on the base `Component` (default 0), stored in the JSON file (omitted when 0 for backward compat). Applies to **every** component (plain circuit symbols and the drawing kinds) and, identically, to `Wire`. On the Qt canvas, maps to `QGraphicsItem.setZValue()` for all component items (set in `ComponentItem.__init__` and kept in sync by the `component` setter). In the LaTeX output, controls emission order:
 - `z_order < 0` → emitted **before** the main `\draw` block (behind circuit elements in the PDF).
-- `z_order ≥ 0` → emitted **after** the `\draw` block and junction/open-endpoint nodes (in front).
+- `z_order > 0` → emitted **after** the `\draw` block and junction/open-endpoint nodes (in front).
+- `z_order == 0` → the default layer: a plain circuit component stays in the shared `\draw` path; a drawing annotation is emitted after the block (it is never part of the shared path, so its 0 baseline reads as "in front").
 
-Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()`.
+A re-layered (`z_order ≠ 0`) circuit component is emitted in **its own** `\draw …;` statement (or, for a `\ctikzset`-group node like a gate or transformer, its own group) via `_component_layer_lines`. To keep the output compilable, only `z_order == 0` components contribute **named anchors** (`pin_coord_to_ref`); a wire connecting to a re-layered multi-terminal node therefore falls back to **absolute pin coordinates** (geometrically exact — see §7.6) instead of a possibly forward `(node.anchor)` reference. Changed via `SetZOrderCommand` (undoable) through `scene.set_component_z_order()`.
 
 **SetFontSizeCommand:** An undoable command that sets `TextNodeComponent.font_size`.
 
 **SetTextStyleCommand:** An undoable command that sets `font_bold`, `font_italic`, and `font_family` together on a `TextNodeComponent`. All three values are stored and restored atomically so a single undo reverts the entire style change.
 
-**SetZOrderCommand:** An undoable command that sets `DrawingComponent.z_order`.
+**SetZOrderCommand:** An undoable command that sets `Component.z_order` (any component).
 
-The palette category display order is: **Resistors → Capacitors → Inductors → Diodes → Transistors → Tubes → Amplifiers → Blocks → Gates (Am) → Gates (Eu) → Logic → Switches → Sources → Supplies → Instruments → Grounds → Transducers → Antennas → Misc → Annotations → Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. (**Tubes** = electron tubes; **Blocks** = signal-processing / RF blocks — amplifier/ADC/DAC/filter/phase-shifter/detector/VCO/gyrator; **Transducers** = loudspeaker/microphone/buzzer; **Antennas** = antenna. These are ordinary registry categories, set on each entry, so they need no special handling in `_palette_category`.) The palette refines the raw registry `category` for display (`palette._palette_category`): the raw **Logic** category splits three ways — the boolean **gates** split by symbol style into **Gates (Am)** / **Gates (Eu)**, while the logic **blocks** (flip-flops, mux/demux, ALU, adder — identified by their `flipflop`/`muxdemux`/`ALU`/`one bit adder` shape keyword, `palette._is_logic_block`) form their own **Logic** category. The power-supply rails + batteries (`_SUPPLY_KINDS`: `vcc`/`vdd`/`vee`/`vss`/`battery`/`battery1`) split out of the raw **Sources** category into a palette-only **Supplies** group (the actual sources, including the european ones, stay in Sources). This is a UI-grouping concern; the model `ComponentDef.category` is unchanged. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, the explicit display order (`registry._DISPLAY_ORDER`, via `registry.display_rank`) wins — so the **Inductors** group reads inductors → transformers → choke (all six transformer styles grouped, even though the european inductor `eL` then precedes the american transformers). For kinds **not** in that order, the palette falls back to grouping american-style first and european-style after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave (`palette._within_category_key`).
+The palette category display order is (read row-by-row, three cards per row to match the 3-column grid — §10.2): **Resistors | Inductors | Capacitors → Diodes | Transistors | Switches → Sources | Supplies | Grounds → Annotations | Amplifiers | Instruments → Gates (Am) | Gates (Eu) | Logic → Blocks | Tubes | Antennas → Transducers | Misc | Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. (**Tubes** = electron tubes; **Blocks** = signal-processing / RF blocks — amplifier/ADC/DAC/filter/phase-shifter/detector/VCO/gyrator; **Transducers** = loudspeaker/microphone/buzzer; **Antennas** = antenna. These are ordinary registry categories, set on each entry, so they need no special handling in `_palette_category`.) The palette refines the raw registry `category` for display (`palette._palette_category`): the raw **Logic** category splits three ways — the boolean **gates** split by symbol style into **Gates (Am)** / **Gates (Eu)**, while the logic **blocks** (flip-flops, mux/demux, ALU, adder — identified by their `flipflop`/`muxdemux`/`ALU`/`one bit adder` shape keyword, `palette._is_logic_block`) form their own **Logic** category. The power-supply rails + batteries (`_SUPPLY_KINDS`: `vcc`/`vdd`/`vee`/`vss`/`battery`/`battery1`) split out of the raw **Sources** category into a palette-only **Supplies** group (the actual sources, including the european ones, stay in Sources). This is a UI-grouping concern; the model `ComponentDef.category` is unchanged. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, the explicit display order (`registry._DISPLAY_ORDER`, via `registry.display_rank`) wins — so the **Inductors** group reads inductors → transformers → choke (all six transformer styles grouped, even though the european inductor `eL` then precedes the american transformers). For kinds **not** in that order, the palette falls back to grouping american-style first and european-style after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave (`palette._within_category_key`).
 
 **American vs. european shapes.** Both conventions are offered as *distinct
 components* sitting side by side in their category, rather than a global toggle:
@@ -754,131 +764,11 @@ export fail.
 > built from that data. The per-component scale/leads are measured, not
 > hand-typed. See [`spec/component-pipeline.md`](spec/component-pipeline.md) §4 — that
 > is the authoritative procedure for adding/aligning a component. The
-> detailed steps below are retained only as historical background on the geometry
-> the generator now produces automatically.
-
-CircuiTikZ multi-terminal nodes have internal pin anchor positions that do not
-fall on the 0.25-GU canvas grid. This section documents the procedure for
-aligning them when adding a new component.
-
-#### Background: two independent lead/correction mechanisms
-
-There are **two entirely separate mechanisms** that are easy to confuse. Both
-may be needed for a single component, but they serve different purposes:
-
-| Mechanism | Where | Purpose |
-|-----------|-------|---------|
-| **Tripole lead routing** in `tools/export_circuitikz_svgs.py` (the `TRIPOLES` table) | Canvas SVG export only | Extends the exported SVG paths so their endpoints (= the values read by `svgsym.py`) land on the grid. Has **no effect** on the LaTeX output. |
-| **`_MULTI_TERMINAL_LEADS`** in `app/codegen/circuitikz.py` | LaTeX output only | Emits explicit `\draw (node_id.PIN) -- (grid_coord)` bridge wires in the generated LaTeX to bridge from a CTikZ anchor to the registry grid position. Has **no effect** on the canvas. |
-| **`_MULTI_TERMINAL_EXTRA_OPTS`** (`xscale`/`yscale`) in `app/codegen/circuitikz.py` | LaTeX output only | Stretches the CTikZ symbol so its anchors land on the grid — **no bridge wires needed**. Also requires a matching scale in `svgsym.py` `Placement` when TRIPOLE_LEADS are NOT used for the canvas. |
-| **Logic-gate `Component.scale`** (per instance) in `_multi_terminal_line` | LaTeX **and** canvas | Multi-input gates fold the user size into the body **height** (× `scale`) and **xscale** (× `scale`, no yscale), landing each `.in k` anchor at `base × scale`; single-input gates (not/buffer) use `xscale`/`yscale`. **No lead stubs** — pins are at the true scaled anchor and a wire attaches at `(node.in k)` directly (§5.4). The canvas mirrors the scaled body + scaled pins. At scale 1.0 nothing changes. |
-
-**Critical invariant — scale correction and bridge wires are mutually exclusive
-for a given pin.** If `_MULTI_TERMINAL_EXTRA_OPTS` contains an xscale/yscale
-that moves a pin onto the grid, then `_MULTI_TERMINAL_LEADS` for that component
-must be `[]` (empty). Adding both double-corrects the position and produces
-misaligned symbols in the LaTeX output. Conversely, if bridge wires are used,
-do not add a scale correction for the same axis. (The per-instance logic-gate
-`Component.scale` does **not** use bridge leads at all: it sizes the gate so the
-`.in k` anchors land at `base × scale` — via the body **height** for multi-input
-gates, `xscale`/`yscale` for not/buffer — and connecting wires attach at those
-anchors directly, §5.4.)
-
-#### Step 1 — Measure actual CTikZ pin positions
-
-In a LaTeX document, place the node at `(0,0)` and use `\pgfpointanchor` to
-print each pin's coordinates in pt:
-
-```latex
-\node[KIND] (X) at (0,0) {};
-\path let \p1=(X.pinname) in
-  \pgfextra{\typeout{pinname x=\x1 y=\y1}};
-```
-
-Divide by **28.348 pt/GU** to convert to grid units. Note that these are in
-CircuiTikZ's Y-up space; negate Y to get Qt Y-down offsets.
-
-Alternatively, read the terminal endpoint coordinates directly from the
-re-exported `geometry.json` after adding TRIPOLE_LEADS (Step 4).
-
-#### Step 2 — Choose registry pin positions (0.25-GU snap)
-
-Round each measured pin position to the nearest 0.25 GU (the canvas minor grid,
-§3.1). These become the `PinDef.offset` values in `REGISTRY`. The registry pins
-define where wires connect on the canvas, so they must be on-grid.
-
-#### Step 3 — Choose an alignment strategy
-
-For each off-grid pin axis (x or y), choose **one** of the two strategies below.
-Do not mix them for the same axis.
-
-**Strategy A — Scale correction** (preferred when error > ~3 px on any axis):
-
-```
-xscale = snapped_pin_x / measured_pin_x
-yscale = snapped_pin_y / measured_pin_y
-```
-
-- Add to `_MULTI_TERMINAL_EXTRA_OPTS` in `app/codegen/circuitikz.py`:
-  ```python
-  "KIND": "xscale=1.181, yscale=1.287",
-  ```
-- Set `_MULTI_TERMINAL_LEADS["KIND"] = []` — **no bridge wires**.
-- If TRIPOLE_LEADS are NOT used for the canvas (Strategy A also corrects canvas):
-  add a matching `Placement(..., xscale=..., yscale=...)` in `app/canvas/svgsym.py`.
-- If TRIPOLE_LEADS ARE used for the canvas (SVG already extended to grid):
-  no `svgsym.py` scale is needed — the canvas is already correct.
-
-Examples: MOSFETs (xscale only, no TRIPOLE_LEADS), BJTs (xscale+yscale, with TRIPOLE_LEADS).
-
-**Strategy B — Bridge lead wires** (only when CTikZ anchors are already
-rectilinearly aligned with the grid, i.e. error ≤ ~3 px and diagonal leads
-are not needed):
-
-- Add TRIPOLE_LEADS in the export script to draw leads to the grid target.
-- Add `_MULTI_TERMINAL_LEADS["KIND"] = [(pin_name, ctikz_anchor), ...]` in codegen.
-- Set `_MULTI_TERMINAL_EXTRA_OPTS["KIND"]` to `""` or omit it — **no scale correction**.
-
-Example: op amp (lead wires from `.+`, `.-`, `.out` to ±1.5/0.5 GU grid positions,
-no xscale/yscale because CTikZ op amp leads are already axis-aligned with the grid).
-
-#### Step 4 — Update the SVG export leads (canvas only)
-
-In `tools/export_circuitikz_svgs.py`, add or update the component's entry in the
-`TRIPOLES` table with `leads` that draw lead stubs from each CTikZ anchor to the
-**snapped** registry pin coordinates (expressed in CTikZ space with the node at
-`(0,0)`). Re-run the script to regenerate the SVGs and `geometry.json`.
-
-After regeneration, read the lead endpoint SVG coordinates from `geometry.json`
-to determine the correct `svgsym.py` anchor:
-
-```python
-anchor = (base_lead_svg_x, base_lead_svg_y)  # primary pin lead final point
-```
-
-Verify local pixel coordinates from anchor:
-```python
-local_x = (pin_svg_x - anchor_x) / 28.348  # should match registry offset
-local_y = (pin_svg_y - anchor_y) / 28.348
-```
-
-#### Step 5 — Update the component data file (no longer hand-edited code)
-
-The `REGISTRY` entry and the codegen tables for a CircuiTikZ symbol are **no
-longer hand-written**. They are built at import time from
-`components/definitions.json` by `app/components/library.py` (see
-[`spec/component-pipeline.md`](spec/component-pipeline.md)). Add the component's pins,
-alignment (`anchor_pin`/`scale`/`leads`), and metadata as one entry in that
-file (via `components/generate_components.py`, using `app/components/render.py` to
-measure the anchors); the `bbox` is computed from the rendered ink extent. The
-kind then appears automatically (`_DISPLAY_ORDER` is only a preference).
-The five codegen tables (`_MULTI_TERMINAL_KINDS`, `_MULTI_TERMINAL_ANCHOR_PIN`,
-`_PIN_TO_CTIKZ_ANCHOR`, `_MULTI_TERMINAL_EXTRA_OPTS`, `_MULTI_TERMINAL_LEADS`) and
-the `REGISTRY` literal are derived from that data — they are not edited directly.
-
-The SVG geometry (`geometry.json`, Step 4) and the `svgsym.py` placement anchor
-are still produced/edited as described above; folding those into the data file is
-the remaining Component-Editor step.
+> detailed steps that once lived here (measure CTikZ anchors → snap to 0.25 GU →
+> scale-correct or bridge-lead → re-export SVGs) are now the generator's job; see
+> [`spec/component-pipeline.md`](spec/component-pipeline.md) §4 for the authoritative
+> procedure. Off-grid pins and how a wire still connects to them are specified in
+> §3.1 (off-grid exception) and §5.4.
 
 ### 5.6 Extensibility
 
@@ -951,202 +841,63 @@ than waiting for commit. When the preference is off, no such items exist.
 ### 5.8 On-Canvas Math Rendering (WYSIWYM labels)
 
 Component labels, `text_node` content, and `bipole` box text are shown as
-**typeset math**, rendered to vector by `app/preview/mathrender.py`. Two engines
-produce a `QPainterPath` from a fragment; both normalise to a shared baseline so
-they place identically (`render_path(fragment, engine)`):
+**typeset vector math** (`app/preview/mathrender.py`), so they stay crisp at every
+zoom (no raster step). A fragment follows the convention that plain text renders
+verbatim and `$…$` spans typeset as math. Two engines produce a baseline-normalised
+`QPainterPath`, so labels place identically regardless of which ran:
 
-- **`latex`** (the reference) reuses the exact toolchain that produces the
-  component symbols (§5.2): a fragment is wrapped in a `standalone` document and
-  run through `latex → dvisvgm --no-fonts → SVG`, parsed by `svgsym.parse_path()`.
-  The `latex` invocation passes **`-no-shell-escape`** for the same untrusted-input
-  reason as the full-schematic compile (§8.1) — and more pressingly, because a
-  label is typeset the instant a `.hv` file is *opened* (no preview/export gesture
-  required), so this is the most exposed LaTeX path. Covered by
+- **`latex`** (the reference) reuses the symbol toolchain (§5.2): wrap in a
+  `standalone` doc → `latex → dvisvgm → SVG` → parse. It passes **`-no-shell-escape`**
+  (§8.1) — and this is the **most exposed** LaTeX path, because a label is typeset
+  the instant a `.hv` file is *opened*, with no preview/export gesture. Covered by
   `tests/test_latex_security.py`.
-- **`ziamath`** is a pure-Python, **no-install** fallback (a declared dependency
-  that bundles the STIX Two Math OpenType-MATH font, with DejaVu Sans via
-  `ziafont` for plain text). Both packages load their fonts **at import time**, and
-  `ziamath` pulls in `latex2mathml`, which reads its `unimathsymbols.txt` symbol
-  table **at import time** too — so the PyInstaller bundle must ship all three
-  packages' data (`collect_data_files` for `ziamath`, `ziafont`, **and
-  `latex2mathml`** in `heaviside.spec`; guarded by
-  `test_pyinstaller_spec_bundles_ziamath_fonts`). Omitting any of them makes
-  `import ziamath` raise `FileNotFoundError` in the frozen app, which the guard
-  swallows — leaving canvas labels that rely on the vector path **blank** even
-  though it all works from source. (This was the cause of "no labels render when no
-  LaTeX is installed" on the packaged Linux/Windows builds.) The import guard
-  treats a missing module *or* missing bundled data as "fallback unavailable" and
-  returns no path rather than crashing; it also writes a one-time stderr warning
-  (`_warn_ziamath_unavailable_once`) so the otherwise-invisible failure is
-  diagnosable. It uses `ziamath.Text`,
-  which renders mixed text with inline math **delimited by `$…$`** — matching the
-  fragment convention the LaTeX engine consumes (`\strut %FRAGMENT%`), so plain
-  text renders verbatim and `$…$` spans typeset as math. (`ziamath.Latex` is
-  math-only and would draw the `$` delimiters as literal dollar glyphs.) The SVG —
-  glyphs as `<symbol viewBox><path>` placed by `<use x y width height>`, rule
-  geometry as `<rect>`, baseline at y=0, coordinates in pt at the requested
-  `size` — is converted to a `QPainterPath` by `_ziamath_svg_to_path()`. This
-  renders canvas labels even with **no `latex`/`dvisvgm` installed** (a subset,
-  not pixel-exact to LaTeX).
+- **`ziamath`** is a pure-Python, **no-install** fallback (bundled STIX Two Math /
+  DejaVu Sans fonts) that renders a subset, not pixel-exact to LaTeX. It needs no
+  `latex`/`dvisvgm`, so packaged builds show labels even where TeX is absent. Its
+  fonts and `latex2mathml`'s symbol table load at import time, so the frozen bundle
+  must ship all three packages' data (guarded by `test_mathrender.py`); a missing
+  module/data degrades to raw text with a one-time warning rather than crashing.
 
-No raster step is involved either way, so labels stay crisp at every zoom.
+**Engine selection.** Auto: `latex` when `latex`+`dvisvgm` are on `PATH`, else
+`ziamath`. A debug preference (§10.8) forces `ziamath`; toggling it re-typesets all
+labels via `SchematicScene.retypeset_labels()`.
 
-**Engine selection.** `_active_engine()` picks `latex` when `latex`+`dvisvgm`
-are on `PATH`, else `ziamath`. A debug preference (§10.8, `set_force_ziamath()`)
-forces `ziamath` even when LaTeX is present; toggling it re-typesets all existing
-labels via `SchematicScene.retypeset_labels()`. Renders are cached in-process per
-`(fragment, engine)`; the LaTeX SVG additionally caches on disk.
+**Per-side placement (orientation-aware).** The options string is parsed into the
+side-placed slot families (`l`/`v`/`i`/`a`; the in-body `t=` and styling flags are
+excluded). Each slot is placed **traversal-relative** to the component's on-screen
+lead axis: a per-family default side (`l` above, `v` below) with `^`/`_` overriding
+it, centred on the component and cleared past the body. Because the preview's Y-flip
+makes the rendered PDF match the canvas, the on-screen side equals the side
+CircuiTikZ draws — for rotated/mirrored bodies too. Resizable components
+(open/short/bipole) track their actual span, not the registry bbox. A **voltage
+source** flips its default (unsuffixed) `v=` to the opposite side (CircuiTikZ's
+source convention); explicit `v^`/`v_` are not flipped. Slot labels are
+counter-rotated upright and stack outward when several share a side.
 
-- **Baseline normalisation.** Every fragment is typeset behind a leading
-  `\strut`, which pins the baseline to a constant device-y across all fragments.
-  `render_latex()` returns the path normalised so the **baseline is at y=0** and
-  the **left ink edge at x=0** (ascenders negative, descenders positive). This
-  lets sibling labels on the same side share a baseline. `_baseline_y()`
-  calibrates the constant once from a render of `x` (a zero-depth glyph).
-- **Sizing.** Paths are in LaTeX pt at the template's 10 pt body size; callers
-  scale by `GRID_PX / _PT_PER_GU` (× `font_size / 10` where a per-component font
-  size applies), matching the QFont sizing used for text fallback.
-- **Per-side placement (orientation-aware).** `slot_fragments(options)` parses
-  the options string into `(slot_key, latex)` pairs for the side-placed families
-  (`l`/`v`/`i`/`a`); the in-body `t=` slot and styling flags are excluded.
-  `ComponentItem._slot_geometry()` derives the on-screen lead axis from the
-  *actual* lead terminals (`_lead_terminals_local()`, through the item
-  transform); resizable components (open/short/bipole) override it so the axis
-  and centre track the actual span, not the default registry bbox.
-  `_slot_direction(key, geom)` then chooses the offset direction. **All
-  families** (`l`/`v`/`i`/`a`) are **traversal-relative**: the plain/`^` form
-  sits left of the lead direction, the `_` form sits right, with `slot_side()`
-  supplying the per-family default (`l` above, `v` below) and the `^`/`_`
-  override. Because the preview's Y-flip makes the rendered PDF a faithful
-  visual match of the canvas, the on-screen side equals the side CircuiTikZ
-  draws the annotation on — for horizontal and rotated elements alike (e.g. on a
-  90°-rotated capacitor `l_` lands screen-left and `v^` screen-right, the
-  opposite sides CircuiTikZ produces). Voltage uses this **same** basis as the
-  label rather than a separate absolute-screen heuristic (which collapsed `l_`
-  and `v^` onto the same side on rotated components).
-  - **Voltage-source default-`v` flip.** A **voltage source** (`V`/`cV`/`vsourcesin`,
-    listed in `_VOLTAGE_SOURCE_KINDS`) draws its *default* (unsuffixed) `v=`
-    label on the **opposite** side from a passive — CircuiTikZ's source voltage
-    convention (the `+` terminal leads). `_slot_direction` flips the bare `v` to
-    the `above` side for those kinds; current sources (`I`/`cI`/`isourcesin`)
-    follow the passive default, and the explicit `v^`/`v_` forms are
-    component-independent (not flipped).
-  Labels are **centred on the component** and offset by the body's
-  perpendicular half-thickness (bbox half-height for horizontal leads,
-  half-width for vertical) plus a gap; **current** (`i=`) labels are the
-  exception — their arrow rides on the thin **exit lead**, so the label clears
-  the **arrowhead** (a small lead-relative gap), *not* the body, and therefore
-  does not float above tall-bodied or `short` parts (see the decoration note below).
-  Each `_SlotLabel` is counter-rotated to stay upright and stacks outward when
-  several share a direction.
-  - **Voltage/current decorations (`_AnnotationDecoration`).** Each `v=`/`i=`
-    slot also draws a CircuiTikZ-style decoration beside its text, following the
-    package default (`nooldvoltagedirection`, i.e. the european/electric-field
-    sign convention) for an `\usepackage[american]{circuitikz}` document:
-    - **Voltage, american style** (document `voltage_style="american"`, default):
-      a `+` glyph at the **first-traversed** pin and a `−` at the **second**
-      (`+` left / `−` right for a left-to-right passive), upright and hugging the
-      body on the label side. This matches the compiled, **Y-flipped** CircuiTikZ
-      preview (the canvas's visual ground truth): the preview negates Y so its
-      orientation equals the canvas's, and there the `+` lands at the first pin.
-    - **Voltage, european style**: a **curved arc** (quadratic Bézier) bowing toward
-      the label side, with the arrowhead at the head end — from the `+` terminal
-      toward the `−` (first → second pin; `v<` reverses it). Matches CircuiTikZ's
-      european voltage arrow shape, not a straight line.
-    - **Current** (`i=`): a bare **arrowhead** (no shaft, so it never overlaps the
-      body), drawn **larger** than the european voltage arrow (`_CUR_ARROW_HEAD` /
-      `_CUR_ARROW_HEAD_W`) to match CircuiTikZ's prominent current arrow, **on the
-      wire near the exit (second-pin) lead** at `_CUR_ARROW_TIP`·half-span, pointing
-      in the traversal (first → second pin) direction — matching CircuiTikZ's
-      default `i=` placement. **Bodyless** parts (`short`/`open`,
-      `_CURRENT_CENTERED_KINDS`) have no body in the middle, so their arrow is
-      centred on the wire's **midpoint** instead (again matching CircuiTikZ). The value label is centred **directly
-      over the arrowhead** (offset along the lead axis toward the second pin) at the
-      **arrowhead clearance** (`_CUR_ARROW_HEAD_W/2 + gap`, lead-relative — *not* the
-      body's perpendicular thickness, which floated the label above the wire), so it
-      does **not** stack perpendicularly above an `l=` label on the same side —
-      they clear each other *along* the wire (`L` centred over the body, `i_L` over
-      the exit-lead head).
-    - **Direction / polarity modifiers (`<` / `>`).** CircuiTikZ's `<`/`>` on a
-      `v=`/`i=` key are honoured on the canvas (parsed by `slot_reversed`; `>`
-      and no-modifier are the default/forward sense, `<` is reversed):
-      - **`i<`** reverses the current arrow direction **and** moves the arrowhead
-        to the **entry** (first-pin) lead — current flowing the other way is drawn
-        on the other side of the component (`i=`/`i>` ride the exit lead).
-      - **`v<`** swaps the polarity: the `−` leads (american) / the european arrow
-        points second → first pin (`v=`/`v>` keep `+` at the first pin).
-      The position modifiers `^`/`_` (which side) are independent of `<`/`>`
-      (which direction), so e.g. `i_<` is a below-the-wire reversed current.
-    - **Open annotation (`open`).** The bodyless `open` annotation component draws
-      its decoration like CircuiTikZ's `to[open, …]`:
-      - **`i=`**: the arrowhead is **centred on the line** (`_centered`) with the
-        value label **above** it, rather than out on a lead — `i<` then only flips
-        the arrow direction in place (it does not move, having no body).
-      - **`v=`** (american): the `±` signs are drawn at the **terminals** (just off
-        the line, since there is no body to clear) while the value label stays
-        **centred** on the line; `v<` swaps the polarity as for any component. In
-        the **european** style the curved voltage arrow is drawn and the label sits
-        **beside the arrow** (not centred on the line, where it would cross it).
-    The decoration is counter-rotated like the label so the ± glyphs stay upright,
-    while the arrows follow the on-screen lead axis (so a rotated/mirrored body
-    decorates correctly). The **european voltage arrow** reserves a perpendicular
-    band (`_DEC_BAND`) between the body and its text so the two never overlap; the
-    **american signs** sit at the terminals, and the **current arrowhead** rides on
-    the wire (no shaft, no band, no perpendicular stacking) — see above.
-    Polarity/direction are derived from the pin-0 → pin-1 traversal order — the
-    same basis the label sides and codegen use — and the decoration colour
-    follows the component's interactive/theme ink. The document
-    `voltage_style`/`current_style` (§7.2) selects american vs european; changing
-    it calls `SchematicScene.relayout_annotations()` to update existing
-    components. This is a readable, convention-faithful representation, **not** a
-    pixel-exact reproduction of CircuiTikZ's arrow geometry; `^`/`_` side
-    overrides and the voltage-source default-`v` flip are honoured, but other
-    direction modifiers (`invert`, `i<`/`i>`) are not parsed.
-    - **Centred placement.** `ComponentItem._labels_centered_on_axis()` (default
-      `False`) lets a component pin its labels *over* the lead axis instead of
-      beside it: when `True` the base clearance is zeroed and the label centre
-      is placed at the component centre (siblings still stack along the offset
-      direction). The `open` voltage annotation overrides it to `True` so its
-      label sits over the middle of the line, matching where CircuiTikZ draws
-      the arrow label. A centred label is painted over an opaque white backdrop
-      padded by `_LABEL_BG_PAD` (3 px) so the annotation line does not appear to
-      run into the text. Centred slots draw their own connecting line, so they get
-      **no** `_AnnotationDecoration` (no ± signs / arrow).
-- **Hover association.** Hovering the component body *or* any of its slot labels
-  highlights the whole group (body + all slot labels) in `COLOR_HOVER`, so it is
-  clear the labels belong to that component. `_SlotLabel` forwards hover events
-  to `ComponentItem._set_hovered()`, which repaints the body and every slot.
-- **Caching.** Two tiers: an in-process `lru_cache` of parsed paths, and an
-  on-disk cache of compiled SVG text keyed by a content hash (with a
-  `_RENDER_VERSION` prefix so template changes invalidate it). Only **successful**
-  renders are persisted, written atomically (temp file + rename) so a partial
-  write can't be read back as content. A failure is **not** cached: an empty or
-  missing entry is a miss and is retried, so a one-off transient failure never
-  poisons a good fragment permanently (the bug where an `l=$R$` label vanished
-  because an empty sentinel had been cached for `$R$`). The in-process cache still
-  prevents re-shelling for a genuinely bad fragment within a session. Reopening a
-  file re-parses cached SVGs without invoking `latex`.
-- **Async, non-blocking.** `render_async(fragment, on_done)` runs the compile on
-  a bounded `QThreadPool` (2 workers) and delivers the result back on the UI
-  thread via a queued signal. Until the path arrives items show raw text; if the
-  active engine yields nothing (e.g. `latex`/`dvisvgm` missing *and* the fragment
-  is outside ziamath's subset) the raw-text rendering simply persists, so the
-  canvas never blocks and degrades gracefully. Queued callbacks guard with
-  `shiboken6.isValid` so a render landing after its item was deleted is dropped.
-- **Single result dispatcher (thread-safety invariant).** All async results flow
-  through **one** process-lifetime `_RenderDispatcher` QObject, created lazily on
-  the UI thread (so `render_async` must be called on the UI thread); callbacks
-  are token-keyed and the map is touched only on the UI thread. Per-request
-  QObjects are prohibited: a request-scoped signals object's last Python
-  reference ends up held by the `QRunnable`, which the pool auto-deletes on the
-  **worker** thread — destroying a UI-thread-affine QObject off-thread is Qt
-  undefined behaviour and manifested as a nondeterministic CI segfault in the
-  main thread's event dispatch. Pinned by
-  `test_render_async_single_dispatcher_no_per_request_qobject` and
-  `test_render_async_callbacks_run_on_ui_thread`.
-- **ziamath is serialised.** ziamath/ziafont lay out glyphs through shared
-  module-level font state, so `_ziamath_path` holds a lock — the two pool
-  workers never typeset through ziamath concurrently.
+**Voltage/current decorations.** Each `v=`/`i=` slot draws a CircuiTikZ-style mark
+beside its text: for `v=`, american `+`/`−` signs at the two terminals or, when the
+document `voltage_style` is european, a curved voltage arrow; for `i=`, a bare
+arrowhead riding the exit lead in the traversal direction (centred on the line for
+bodyless `open`/`short`). The `<`/`>` direction modifiers and `^`/`_` side
+modifiers are honoured independently. The document `voltage_style`/`current_style`
+(§7.2) selects american vs european; changing it calls
+`SchematicScene.relayout_annotations()`. This is a convention-faithful
+representation, not a pixel-exact copy of CircuiTikZ's geometry. A component may opt
+to centre its label *over* the lead axis (the `open` annotation does, with an opaque
+backdrop so the line doesn't run through the text); centred labels draw no ±/arrow
+decoration.
+
+**Hover association.** Hovering the body or any of its slot labels highlights the
+whole group, so it is clear the labels belong to that component.
+
+**Caching & async.** Renders are cached in-process and (for LaTeX) on disk, keyed
+by content with a version prefix; only successes are cached, so a transient failure
+is retried rather than poisoning a fragment. `render_async` runs the compile off the
+UI thread on a small pool and delivers the result back on the UI thread; until it
+arrives the item shows raw text, so the canvas never blocks. All results flow
+through one process-lifetime dispatcher created on the UI thread (a per-request
+QObject would be destroyed off-thread — a Qt-undefined-behaviour segfault class
+pinned by `test_mathrender.py`); ziamath layout is serialised behind a lock.
 
 ### 5.9 Quarter-Grid Placement
 
@@ -1181,11 +932,13 @@ The canvas operates in one of the following mutually exclusive modes at any time
 | Mode | Trigger | Cursor |
 |------|---------|--------|
 | **Select** | Default; press `S` or `Escape`; click ↖ in tool ribbon | Arrow |
-| **Place** | Click component in palette | Crosshair + ghost component |
-| **Wire** | Press `W`; click ⌁ in tool ribbon | Pen |
+| **Place** | Click a palette entry, or press a component key (§10.2) | Crosshair (+ ghost component) |
+| **Wire** | Press `W`; click ⌁ in tool ribbon | Crosshair |
 | **Pan** | Press `P`; click ✋ in tool ribbon; or hold `Space` + drag (transient) | Open/closed hand |
 
 **Select**, **Wire**, and **Pan** are the three primary tools and are always accessible via the tool ribbon (§10.7). **Place** is entered automatically by clicking a palette entry and exits to **Select** on `Escape` or right-click. The tool ribbon buttons stay in sync with keyboard-driven mode changes.
+
+The view sets the cursor from the current mode (`SchematicView._apply_mode_cursor`, driven by `mode_changed`): a **crosshair** (`Qt.CrossCursor`) while **wiring or placing** — both are click-on-canvas-to-add modes, and Wire in particular has no ghost to signal itself, so the cursor is the affordance — an **open hand** for pan (closed while dragging), and the default **arrow** for select. A transient `Space`-pan restores the mode's cursor on release (so wiring stays a crosshair), and per-item hover cursors (a wire's move cursor, a text node's I-beam) still take precedence when the pointer is over them.
 
 ### 6.2 Component Placement
 
@@ -1194,6 +947,17 @@ The canvas operates in one of the following mutually exclusive modes at any time
 3. Left-click places the component at the snapped position and records an undoable `PlaceCommand`.
 4. Right-click or `Escape` cancels placement and returns to **Select** mode. `Escape` is registered as a **window-level shortcut** so it fires regardless of which widget (palette, canvas, etc.) currently holds keyboard focus — clicking a palette entry to start placement does not require a subsequent click on the canvas before Escape works.
 5. After placement, the canvas remains in **Place** mode for rapid repeated placement of the same component type.
+
+**Two-click span placement (voltage/current annotations).** The `open` (voltage)
+and `short` (current) annotations — the resizable two-terminal line kinds in
+`_SPAN_PLACE_KINDS` — are placed by a **two-click span gesture** instead of the
+single-click ghost-follow above, because their geometry *is* a span the user
+draws:
+- Choosing one in the palette enters **Place** mode but shows **no ghost yet**.
+- The **first** left-click anchors the **origin** and spawns the ghost, which then stretches from the origin to the cursor (via `set_preview_span`).
+- The **second** left-click sets the **terminal**; the annotation is committed with `position` = origin and `span_override` = end − origin (a `PlaceCommand`), then the gesture re-arms (Place mode stays active) for the next one.
+- **Endpoints magnet-snap to pins/wires.** Each click (and the live ghost) snaps through `_span_snap_target` — the **same magnet wire drawing uses** (`wire_snap_target`): onto a nearby component pin or wire if one is in range, else the 0.25 GU grid node. So a voltage/current annotation can be drawn exactly across a component's two pins. (A pin landing may be off-grid — a scaled gate pin — which is fine: `validate()` constrains wire vertices to the grid, not component positions.)
+- A zero-length second click (end == origin) is ignored, so a double-click never drops a degenerate annotation. **`Escape`** abandons the gesture and returns to Select; a **right-click** mid-gesture abandons the in-progress span (re-arming), and a right-click while awaiting the first click leaves Place mode. Rotation/mirror keys do not apply during a span placement — the orientation comes from the two clicks. Both endpoints (placement and later resize) use the 0.25 GU node grid.
 
 ### 6.3 Component Selection and Movement
 
@@ -1331,7 +1095,7 @@ off-grid pin whose nearest grid node equals the press node still reads as a drag
 
 #### Finalizing and mode transitions
 
-- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component.
+- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component. **A resizable line-annotation endpoint handle takes priority over this auto-start:** because the endpoint-drag check runs first in the press handler, pressing-and-holding an `open`/`short`/`bipole` endpoint drags that endpoint (§11 Annotations) even when it coincides with a connectable pin (a `short`'s endpoints connect), rather than starting a wire.
 - In **Select** mode, a **double-click on blank canvas** (no wire or component hit) enters **Wire** mode, starting a free wire from the snapped 0.25 GU grid point.
 - In **Select** mode, **double-clicking a wire's rendered label** — an endpoint label (`_WireEndLabel`) or the mid-wire label (`_WireMidLabel`) — opens its in-place text editor (§4.3) instead of routing. These checks run **before** the wire-body check so a rendered label isn't shadowed by the "double-click wire → edit mid-label" gesture. The **mid-wire label is also draggable**: a left-press on it (handled in the scene's `mousePressEvent`, ahead of vertex-drag/selection) starts a drag that slides it along the wire; `mouseMoveEvent` previews and `mouseReleaseEvent` commits the new fractional position. A no-movement press falls through to the double-click edit.
 - In **Select** mode, **double-clicking a wire endpoint** (any first/last vertex, via `wire_vertex_at` — endpoints are draggable, including connected ones) opens that endpoint's label editor (§4.3) — so a label can be started even when none is set yet and there is no rendered label to click. This applies to free endpoints **and endpoints connected to a component pin or a drawing element**. Interior vertices and the segment body fall through to the wire-body (split-and-start) gesture below. This check runs after the rendered-label check and before the wire-body check.
@@ -1447,11 +1211,15 @@ Notes:
 - `MacroCommand.do()` **unwinds on failure**: if a child command raises, the already-executed children are undone in reverse order before the exception propagates, so a failed composite (e.g. a multi-component inspector edit) never leaves a half-applied document. `UndoStack.push` records nothing when `do()` raises.
 - The stack is `UndoStack` (`app/canvas/commands.py`). Besides `push` (apply + record) it offers `record()` — record an **already-applied** command without re-executing it, used by `scene.batch()`, which applies each command immediately at push time (so later commands in the batch compute against the **live** document state) and records the wrapping `MacroCommand` once at the end. The stack also tracks the **save point**: `mark_save_point()` records the history position at each successful save/load/new, and `is_modified()` is true iff the current position differs from it — so undoing back to the saved state clears the window's dirty marker, while divergent edits (undo past the save point, then a new push) make the saved state unreachable and the document stays modified until the next save. The main window derives its modified state and the **Undo/Redo actions' enabled state** (`can_undo()` / `can_redo()`, synced after every command/undo/redo) from the stack.
 
-### 6.7 Copy / Paste
+### 6.7 Cut / Copy / Paste
 
-- `Ctrl+C` copies selected components and the wires entirely within the selection.
-- `Ctrl+V` enters **Place** mode with the copied group as a ghost; left-click places it and assigns new UUIDs to all pasted items.
-- `Ctrl+D` duplicates with a fixed offset of (1, 1) GU.
+An **internal clipboard** (`SchematicScene._clipboard_components` / `_clipboard_wires`, deep-copied; not the system `QClipboard`) backs these:
+
+- **Copy** (`Ctrl+C`, `copy_selection`) — deep-copies the selected components and selected wires into the clipboard. No-op when nothing is selected; not itself undoable (it only fills the clipboard).
+- **Cut** (`Ctrl+X`, `cut_selection`) — `copy_selection` followed by `delete_selected`, so it lands as the **single** undoable delete step. No-op when nothing is selected.
+- **Paste** (`Ctrl+V`, `paste`) — re-instantiates the clipboard with **new UUIDs**, pushes one `MacroCommand("Paste")`, returns to SELECT mode, and selects the pasted items. Pins landing on an existing wire split it (bundled into the same command). **Positioning:** the keyboard path offsets the group by a fixed **(1, 1) GU** (so a repeat paste does not cover the original); the context-menu path (§6.9) passes the right-click point as `paste(at=…)`, anchoring the group's **bounding-box top-left** at the snapped cursor ("paste here"). Both offsets are grid multiples, so pasted geometry stays grid-valid. No-op when the clipboard is empty.
+
+All three are also on the menu-bar **Edit** menu (Cut/Copy/Paste, standard shortcuts) and the right-click context menu (§6.9).
 
 ### 6.8 Graphics Item Lifetime (Memory-Safety Invariant)
 
@@ -1499,6 +1267,36 @@ without a native memory sanitizer), and by the structural-guard tests in
 `test_remove_item_ungrabs_grabbing_child`,
 `test_remove_item_keeps_unrelated_grab`, `test_reentrant_rebuild_coalesces`,
 `test_push_during_rebuild_signal_is_safe`). See §13.
+
+### 6.9 Right-Click Context Menu
+
+In **Select** mode, right-clicking opens a context menu
+(`SchematicScene.contextMenuEvent`, delivered to the scene by the view's default
+`contextMenuEvent` forwarding). The menu offers **Cut**, **Copy**, **Paste**
+(§6.7), **Delete**, and **Bring to Front** / **Send to Back** (§9.4 Z-order — the
+per-item entry point to the layering that every component and wire supports).
+Behaviour:
+
+- **Target resolution.** Right-clicking an item that is **not** already selected
+  makes it the **sole** selection first (standard desktop behaviour); right-clicking
+  **inside an existing multi-selection** keeps the whole selection, so the action
+  applies to the entire group. Right-clicking **empty space keeps the current
+  selection** and still raises the menu (so Paste is reachable); only a non-Select
+  mode falls through to the default handler.
+- **Action enablement.** Cut / Copy / Delete / Bring to Front / Send to Back are
+  enabled only when something is selected; Paste only when the clipboard is
+  non-empty.
+- **Paste here.** The menu's Paste passes the right-click point to `paste(at=…)`,
+  anchoring the clipboard group's top-left at the snapped cursor (§6.7), unlike the
+  fixed-offset keyboard paste.
+- **Layering action.** `_layer_selection` brings every target id (mixed components
+  **and** wires) to the front, or sends them to back, as **one undoable step**
+  (`scene.batch`), driving the shared `bring_to_front` / `send_to_back` methods.
+  Items are processed in current-z order so their **relative stacking is preserved**
+  within the moved group.
+- A Select-mode **right-button press is swallowed** in `mousePressEvent` so the
+  default handler cannot alter the selection out from under the menu (the menu is
+  raised by the separately delivered context-menu event).
 
 ---
 
@@ -1566,16 +1364,18 @@ voltage label's side) land where the canvas Flip-X puts them at every rotation.
 The key is emitted only when `mirror` is set; unmirrored output is unchanged.
 (Multi-terminal nodes flip via `xscale=-1` instead, §7.2.)
 
-**Comma protection.** The options string is mostly passed through verbatim, but
-each `key=value` label slot whose *value* contains a comma is brace-wrapped
-(`v=$\phi(0,0)$` → `v={$\phi(0,0)$}`) by `protect_label_commas()` (in
-`app/components/style.py`). TikZ's pgfkeys parser splits the `to[]`/`node[]`
-option list on commas and — unlike the canvas parser — does **not** treat
-`$...$` as protecting them, so an unwrapped comma inside a math label would be
-read as a bogus key and fail compilation. Values already enclosed in a single
-`{...}` group are left untouched. The shared `split_top_level()` splitter
-(commas not inside `$...$`/`{...}` or escaped) is the single source of truth for
-this, used by both the code generator and the canvas label parser (§5.8).
+**Value protection.** The options string is mostly passed through verbatim, but
+each `key=value` label slot whose *value* contains a **comma** (`v=$\phi(0,0)$` →
+`v={$\phi(0,0)$}`) **or an equals sign** (`l=$v=2$` → `l={$v=2$}`) is brace-wrapped
+by `protect_label_values()` (in `app/components/style.py`). TikZ's pgfkeys parser
+splits the `to[]`/`node[]` option list on commas and then on the *first* `=` of
+each entry, and — unlike the canvas parser — does **not** treat `$...$` as
+protecting either delimiter, so an unwrapped comma *or* inner `=` inside a math
+label is read as a bogus key and fails compilation (the `=` case manifests as a
+"forgotten `$`" error). Values already enclosed in a single `{...}` group are left
+untouched. The shared `split_top_level()` splitter (commas not inside
+`$...$`/`{...}` or escaped) is the single source of truth for this, used by both
+the code generator and the canvas label parser (§5.8).
 
 **Brace balancing (TeX-injection containment).** Every user text the generator
 emits inside a `{…}` brace group — the options string, node/text content, wire
@@ -1746,11 +1546,11 @@ canvas mirrors the same markers — see §10.5.
 
 **Line-hops** (optional) — when `generate()` is called with `mark_line_hops=True`, the hopping wire's `--` path is split at each crossing returned by `wire_crossings()` (§6.4) and a small semicircular bump is inserted there as a single cubic Bézier — `… -- (p0) .. controls (c1) and (c2) .. (p3) -- …` — sized by `HOP_RADIUS_GU` (the same GU constant the canvas uses, so the exported and on-screen arcs match). All bump coordinates pass through the same `_y` Y-flip as the rest of the figure, so the bump flips with it (no arc-angle sign juggling). The flag is driven by the **Draw line-hops** display preference (§10.8), defaults to `False` at the `generate()` layer (the app passes the preference, which defaults on), so output is unchanged unless requested.
 
-**Wire z-layering** — wires participate in the same z-order layering as drawing annotations (§7.7): a wire with `z_order < 0` is emitted as its own `\draw` statement in the **background** block (before the shared path, interleaved with `DrawingComponent`s by ascending z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays in the shared `\draw` path / per-wire styled statement as before — so default wires' output is unchanged. **Background wires use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) is defined in the main `\draw` block, so a background wire ending on one of its pins must **not** emit the named-anchor reference (e.g. `(node_abc.gate)`) — that would point at a node defined *later*, a LaTeX compile error. The background-layer emit therefore passes `pin_coord_to_ref=None` so those endpoints fall back to bare coordinates; the registry pin coords already connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss. Foreground wires come after the node definitions and keep named anchors.
+**Wire and component z-layering** — wires **and every component** participate in one z-order stack (§7.7): an object with `z_order < 0` is emitted in the **background** block (before the shared path, sorted ascending by z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays at the default layer (a circuit component in the shared `\draw` path / a drawing annotation after the block) — so default output is unchanged. A re-layered **circuit** component is emitted as its own `\draw …;` statement (`_component_layer_lines`), a `\ctikzset`-group node (gate/transformer) as its own group, and a drawing annotation via its standalone-command path. **Layer-block wires and any wire connecting to a re-layered node use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) defined in a layer block (or the main `\draw`) must not be referenced by name from elsewhere if that reference could precede the definition (a LaTeX compile error). The generator therefore builds `pin_coord_to_ref` from **only `z_order == 0` components**, and the background-layer wire emit passes `pin_coord_to_ref=None`; affected endpoints fall back to bare coordinates, which connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss.
 
 ### 7.7 Drawing Annotation Commands
 
-After junction and open-endpoint nodes, the generator emits standalone commands for drawing annotations (`text_node`, `rect`, `circle`). These produce nothing inside the `\draw` path block — `_component_lines()` returns `[]` for drawing kinds.
+After junction and open-endpoint nodes, the generator emits standalone commands for drawing annotations (`text_node`, `rect`, `circle`). These produce nothing inside the `\draw` path block — `_component_lines()` returns `[]` for drawing kinds. (A re-layered **circuit** component — `z_order ≠ 0` — is likewise lifted out of the shared `\draw` block into its own `\draw …;` statement in the matching background/foreground layer; see §7.6 "Wire and component z-layering" and `_component_layer_lines`.)
 
 **Text nodes** (`text_node`):
 
@@ -1832,15 +1632,7 @@ The Properties Panel does not provide per-field equation previews. Component ann
 
 ### 8.3 Options Label Auto-Placement (legacy)
 
-> **Superseded by §5.8.** Labels now render as per-slot vector math auto-placed on conventional sides of the body; they are not draggable and do not use `label_offset`. The legacy single-label auto-placement below still runs in the scene (it sets `label_offset` via a bundled `MoveOptionsLabelCommand`) for file/undo back-compat, but the canvas ignores the result.
-
-When a component's options string transitions from empty to non-empty for the first time (i.e. `Component.label_offset` is still `None`), the scene runs an auto-placement pass before committing the `EditCommand`. The algorithm:
-
-1. Builds eight candidate positions (above-centre, right-middle, below-centre, left-middle, and the four diagonal corners) at a fixed clearance distance from the component bbox in component-local pixel coordinates.
-2. Maps each candidate label rect to scene coordinates and scores it by total overlap area with every other component's bounding box.
-3. Selects the lowest-overlap candidate, preferring above-centre when there is a tie.
-4. If the default above-centre position has zero overlap, no `label_offset` is set.
-5. Otherwise the chosen offset is recorded via a `MoveOptionsLabelCommand` bundled with the `EditCommand` inside a `MacroCommand` so both are undone together.
+> **Superseded by §5.8.** Labels now render as per-slot vector math auto-placed on conventional sides of the body; they are not draggable and do not use `label_offset`. A legacy single-label overlap-avoidance pass still runs once (setting `label_offset` via a `MoveOptionsLabelCommand` bundled into the edit) so old files and the undo stack round-trip, but the canvas ignores the result. The `label_offset` field itself is documented in §4.2.
 
 ### 8.4 LaTeX Template
 
@@ -2017,7 +1809,7 @@ failure to write the `.bak` never blocks the save itself.
 
 ```json
 {
-  "version": "0.3",
+  "version": "0.4",
   "name": "My Schematic",
   "config": {
     "voltage_style": "american",
@@ -2101,13 +1893,14 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2", "0.3"}`); `save` always writes the **current** format version (`0.3`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2", "0.3", "0.4"}`); `save` always writes the **current** format version (`0.4`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
 - **0.1** — the initial (pre-1.0) format. The on-disk shape is **not yet stable**: while the project is in its early (alpha) phase it may change between releases without migration support, so a `.hv` file is not guaranteed to load in a later version. There are no earlier formats, so the loader performs no migration; it validates the file against the current schema and rejects anything it does not recognise. Once the format stabilises it will be promoted to `1.0` and later changes will document migration rules.
 - **0.2** — added the top-level `config` object (document voltage/current label styles, §9.2). A 0.1 file loads unchanged with american defaults.
 - **0.3** — covers the optional wire/component fields accumulated since 0.2 (`start_marker`/`end_marker`, the endpoint/mid labels and placements, `hop_mode`, `z_order`, `line_width`, `scale`, `params`, `variants`, `span_override`), so an **older build that would silently strip them refuses the file** instead of corrupting it on its next save. 0.1/0.2 files load unchanged; new documents declare 0.3.
+- **0.4** — extends `z_order` from drawing annotations to **every component** (any component can be sent to front/back, §9.4 Z-order). A 0.3 build would silently strip a plain component's `z_order` on save, so the bump makes it refuse the newer file. 0.1–0.3 files load unchanged (an absent `z_order` defaults to 0); new documents declare 0.4.
 
 ### 9.5 Bundled Examples
 
@@ -2163,94 +1956,29 @@ and, beneath them, the source/preview strip occupy the region to its right (so t
 source and preview no longer run underneath the palette).
 
 **Visual language.** A single flat theme unifies the chrome with the component
-palette — defined as colour tokens + stylesheet fragments in `app/ui/theme.py`
-(import the tokens; don't hard-code colours). The window background is the
-active surface (`MainWindow` sets its palette `Window`/`WindowText` colours,
-inherited by the central area, panels, splitter gaps, status bar). Both
-**toolbars** carry a hairline divider (`theme.top_toolbar_qss` / `ribbon_qss`),
-icons tinted `theme.ICON`, rounded soft-blue hovers (`theme.HOVER`), and the
-active tool shown as a soft-blue fill (the one accent `theme.ACCENT`) rather than
-the native highlight. **Form controls stay native and follow the colour scheme.** Form controls (line edits, spin boxes, combo boxes, checkboxes), dialogs, message boxes, tooltips, tab bars, native scrollbars, and the window background keep the platform-native look — restyling them via a stylesheet looked non-native (and a window-level stylesheet broke the palette-based window background). They follow light/dark **natively**: while the app tracks the OS appearance the OS drives them directly, and when the user **forces a mode** with the toolbar toggle — or launches with a saved Light/Dark override, which `__init__` now pins the same way — `MainWindow._apply_color_scheme` drives the application colour scheme via `QGuiApplication.styleHints().setColorScheme(Dark/Light)` (Qt 6.8+), so the native widgets re-render dark/light themselves. **Fallback when the platform ignores the request:** not every platform theme supports scheme forcing (Qt's `offscreen` platform — headless tests and the README screenshot job — and bare Linux sessions without a desktop theme); when `styleHints().colorScheme()` still disagrees after the set, `_apply_color_scheme` installs an explicit application palette built from the theme tokens (`_token_palette`: Window/Base/Button/Text/Highlight/Disabled roles from `SURFACE`/`SURFACE_ALT`/`BUTTON_BG`/`TEXT`/`ACCENT`/`ICON_MUTED`), and restores the captured pristine platform palette when the pin is released (System mode) or honoured again — previously the inspector sidebar stayed light in dark mode on such platforms. `_apply_window_palette` then re-snapshots the live `QApplication.palette()` (so native children inherit the right Base/Text/Button roles) and overrides only Window/WindowText with the chrome surface colour. Only the deliberately-flat chrome — toolbars, palette tiles, palette **search box**, side panels, and their scrollbars — is themed by scoped stylesheet/tokens, and the Copy PNG/PDF/SVG buttons set `theme.flat_button_qss()` directly (+ a pointer cursor). The inspector's header/section/hint labels carry a pinned colour and are re-inked on a swap (§10.3); plain field-row labels follow the palette.
+palette, defined as colour tokens + stylesheet fragments in `app/ui/theme.py`
+(import the tokens; don't hard-code colours). The deliberately-flat chrome —
+toolbars (hairline divider, `theme.ICON`-tinted icons, soft-blue `theme.ACCENT`
+active-tool fill), palette tiles, the palette search box, side panels, and their
+scrollbars — is themed by scoped stylesheet/tokens; native **form controls**
+(line edits, spin boxes, combos, checkboxes, dialogs, tooltips) keep the
+platform-native look and follow the colour scheme directly.
 
-**Theme — light / dark (follows the OS appearance, with a manual toggle).** The
-chrome and the canvas each carry a **switchable two-palette** design:
-`app/ui/theme.py` (chrome tokens) and `app/canvas/style.py` (canvas `COLOR_*`,
-including `COLOR_BACKGROUND`, `COLOR_GRID*`, and the symbol/wire ink
-`COLOR_NORMAL`) both expose `set_dark(on)` / `is_dark()` that rebind their
-module-level tokens. Canvas items read the colours **module-qualified**
-(`style.COLOR_*`) and re-read them on every repaint, so a swap takes effect on the
-next `update()`. `MainWindow` resolves the OS appearance via
-`QGuiApplication.styleHints().colorScheme()` (the `_system_is_dark` helper)
-**before** building the UI, and stays in sync by connecting `colorSchemeChanged`.
-A **theme radio group on the top toolbar** exposes **System / Light / Dark** as
-three checkable buttons in an exclusive `QActionGroup` (`_theme_group`, keyed in
-`_theme_actions`): all three are visible (a **monitor** for System, a **sun** for
-Light, a **moon** for Dark) and exactly one is active at a time. Triggering a
-button calls `_set_theme_mode` with that mode. To match the flat icon bar, the
-three render as plain **flat `QToolButton`s** — identical to the other toolbar
-buttons, auto-raised, sharing the toolbar's icon size and its standard soft-blue
-`:checked` tint on the active one — inside a zero-spacing container
-(`_theme_group_box`); the tight spacing (vs the toolbar's own 3px) is what reads
-them as a group. The icons re-tint via the standard `_themed_icon` list, so a
-theme change re-inks them automatically; `_sync_theme_action` only flips which is
-checked. A **dotted vertical divider** (`_theme_divider`, object name
-`toolbarDottedDivider`, styled by `theme.toolbar_dotted_divider_qss()` in the
-muted-icon ink) separates the theme group from the help/bug buttons on its right,
-distinct from the solid separators used elsewhere on the bar; it uses a vertical
-`Expanding` size policy so it runs almost the full height of the toolbar, and is
-re-styled on each theme change. The active mode is held in `_theme_mode`:
-
-* **System** — `_follow_system = True`; the theme tracks the OS appearance live
-  (`_on_color_scheme_changed` applies OS changes), and the application colour
-  scheme is left `Unknown` so native widgets follow the OS directly.
-* **Light** / **Dark** — pin the theme; `_apply_color_scheme` drives
-  `QGuiApplication.styleHints().setColorScheme(Light/Dark)` so native widgets
-  re-render to match, and OS changes are ignored.
-
-`_set_theme_mode` applies a mode and **persists** it: `Preferences.dark_override`
-stores `None` (System) / `"light"` / `"dark"`, re-read at the **next launch**
-(`MainWindow.__init__` resolves it *before* building the UI). So the chosen mode —
-including System — survives a relaunch. `_sync_theme_action` checks the button
-matching the active mode (leaving the other two unchecked) so a programmatic mode
-change keeps the group in sync.
-Toolbar/ribbon icons are built by `_themed_qicon`, which tints qtawesome icons
-with `theme.ICON` and — crucially — pins the **disabled** state to
-`theme.ICON_MUTED` explicitly. Without that, qtawesome defaults `color_disabled`
-to `palette(Disabled, Text)` *resolved when the icon is created*; the toolbar is
-built before `_apply_color_scheme` installs the dark palette at a dark-persisted
-launch, so disabled buttons (undo/redo) captured the light palette's dark ink and
-rendered near-black on the dark toolbar
-(`test_disabled_toolbar_icon_uses_muted_ink_not_palette`).
-`MainWindow._apply_theme` swaps both palettes,
-re-applies the toolbar/ribbon stylesheets, re-tints the registered toolbar icons,
-asks each side panel to `apply_theme()` (the palette also invalidates its
-ink-coloured thumbnail cache and rebuilds the tile grids; the **properties
-inspector** re-inks its header / section / hint labels — these carry an explicit
-stylesheet that pins the colour, so `PropertiesPanel.apply_theme` restyles each by
-object-name tag (`headerLabel`/`sectionLabel`/`hintLabel`); the palette's category
-**card names** likewise carry pinned ink and are re-inked when the cards rebuild),
-repaints the welcome screen and canvas, and sets the window palette. Labels with a
-stylesheet do not follow the window palette, so any themed text needs an explicit
-re-ink on a swap; plain field-row labels (no stylesheet) follow the palette and do
-not. On macOS the **native** form
-controls already follow the system appearance, so they are deliberately left
-alone — **except** the two chrome controls that the OS would otherwise leave
-light when the toolbar toggle forces a mode the OS isn't in: the **palette search
-box** (themed via `theme.line_edit_qss()`) and the **canvas scrollbars** (the
-`SchematicView` gets `theme.scrollbar_qss()`); both are re-applied on a swap. The
-**grid dots** read `style.COLOR_GRID` (integer) / `COLOR_GRID_SUB` (0.25 GU minor)
-— opaque, visibility-tuned values in *both* palettes (a too-faint dark grid was
-the reason they are opaque rather than low-alpha). The **on-screen LaTeX preview
-follows the theme** — in dark mode the
-preview is recompiled with `build_tex(source, dark=True)`, which gives the
-standalone document a dark `\pagecolor` and a light default `\color` (matching
-the canvas palette), and the preview panel's background matches so the figure
-blends in. This is the only consumer of the dark template: the preview worker
-(`PreviewWorker.set_dark`) sets it, and `_apply_theme` recompiles a shown preview
-on a swap. **All exports stay light** — `build_tex` defaults to the light
-template and the PDF/EPS/SVG/PNG export path and `build_snippet` never pass
-`dark`, so the distributed figure remains white-paper/black-ink regardless of the
-UI theme.
+**Theme — light / dark.** Both the chrome (`app/ui/theme.py`) and the canvas
+(`app/canvas/style.py` — `COLOR_*`) carry a switchable two-palette design; canvas
+items read the colours module-qualified and re-read them each repaint, so a swap
+takes effect on the next `update()`. A **System / Light / Dark** radio group on
+the toolbar selects the mode; **System** tracks the OS appearance live, **Light**/
+**Dark** pin it (driving `QGuiApplication.styleHints().setColorScheme`). The choice
+**persists across launch** (`Preferences.dark_override`, resolved before the UI is
+built). On platforms that ignore `setColorScheme` (Qt's `offscreen`, bare Linux
+sessions), an explicit application palette built from the theme tokens is installed
+as a fallback so the chrome still themes; on swap, `_apply_theme` re-tints toolbar
+icons, re-inks the stylesheet-pinned inspector/palette labels (which don't follow
+the palette), and repaints the canvas. The **on-screen LaTeX preview follows the
+theme** (dark mode recompiles with a dark `\pagecolor` via `build_tex(dark=True)`);
+**all exports stay light** — the PDF/EPS/SVG/PNG path and `build_snippet` never
+pass `dark`, so the distributed figure is always white-paper/black-ink.
 
 **Welcome screen.** The canvas slot is a `QStackedWidget`: page 0 is a painted
 `_WelcomeScreen`, page 1 is the live `SchematicView`. Before any document is
@@ -2316,7 +2044,8 @@ the handler is individually guarded so it can never raise itself.
 
 ### 10.2 Component Palette
 
-Left panel, fixed width `_PALETTE_WIDTH` (≈272px). A search box at the top
+Left panel, fixed width `_PALETTE_WIDTH` (≈340px — wide enough for the 3-column
+card grid). A search box at the top
 (focus with `Ctrl+/`), then a **scrolling region** holding the Categories /
 active-category / search-results sections, and a **pinned bottom region**
 holding "in use in document". The two regions **scroll independently** (each has
@@ -2329,24 +2058,25 @@ matter how far the categories are scrolled. The sections are
   above it; height capped at `_IN_USE_MAX_H` ≈ three tile rows, scrolling within
   itself past that). Rebuilt on `schematic_changed`; the whole bottom panel is
   hidden when the document is empty (or while a search is active).
-- **Categories** — a **2-column grid** of cards (the split gate groups use the
-  compact names "Gates (Am)" / "Gates (Eu)" so they fit). Each card shows the
+- **Categories** — a **3-column grid** of cards (the split gate groups use the
+  compact names "Gates (Am)" / "Gates (Eu)" so they fit). `_CATEGORY_ORDER` is
+  written row-by-row to match the grid (`_build_categories` fills it
+  left-to-right), so the cards read: Resistors | Inductors | Capacitors, then
+  Diodes | Transistors | Switches, and so on. Each card shows the
   **actual symbol of a representative component** for that category (`_CATEGORY_REP` → rendered by
   `_category_pixmap`, so the icons always match the components rather than using a
-  decorative stand-in), the category name, and a subtle right-aligned **letter**
-  (its keyboard shortcut, no box). Clicking a card (or pressing its letter) makes
+  decorative stand-in) and the category name. Clicking a card makes
   it the **active** category (highlighted); category order follows §5.4. The
   palette refines the raw registry `category` via `_palette_category`: the raw
   **Logic** category splits into the boolean **Gates (Am)** / **Gates (Eu)** (by
   symbol style) and a **Logic** blocks group (flip-flops, mux/demux, ALU, adder),
   and the supply rails + batteries (`_SUPPLY_KINDS`) split out of **Sources** into
   a **Supplies** group (a palette-only grouping; the model `category` is unchanged).
-- **&lt;active category&gt;** — the components in the active category; the first ten
-  tiles carry a subtle 1–9/0 keyboard hint in the **top-right** corner.
+- **&lt;active category&gt;** — the components in the active category.
 
 Components are **icon-only tiles**: a thumbnail rendered from the component's own
-`ComponentItem` (`_THUMB_SIZE`=48 in a `_TILE_SIZE`=64 tile, 3 columns — enlarged
-for readability, cached), with the `display_name` + kind shown as a hover
+`ComponentItem` (`_THUMB_SIZE`=48 in a `_TILE_SIZE`=64 tile, `_ITEM_COLS`=4 columns —
+enlarged for readability, cached), with the `display_name` + kind shown as a hover
 **tooltip** rather than inline. Clicking a tile calls `scene.start_placement(kind)`
 (enters **Place** mode). The scroll area uses the shared **`theme.scrollbar_qss`**
 (a clean rounded handle, no arrow buttons) — needed because once a stylesheet is
@@ -2358,13 +2088,30 @@ de-natives its scrollbars, so it uses the same clean themed scrollbar. (Its
 **form controls** stay native and follow the colour scheme.) It also reserves a
 right margin so the scrollbar doesn't cover the fields.
 
-**Keyboard shortcuts** (`MainWindow.keyPressEvent` → `_handle_palette_shortcut`,
-handled at the window level so it only fires for keys no focused child consumed —
-text inputs keep their typing and the canvas keeps R/S/W/P while focused, with no
-fragile focus checks): a **letter** (`_CATEGORY_LETTERS`, a unique mnemonic per
-category) selects that category; **digits 1–9 / 0** place the 1st–10th component of
-the active category via `place_active_index`. Modifier chords are ignored so they
-never shadow menu accelerators.
+**Component placement shortcuts.** Besides clicking a card then a tile, a single
+key can start placing a component directly. The dispatch lives in one method,
+`SchematicView.handle_placement_key` (§6, [view.py](app/canvas/view.py)), called
+both from the view's own `keyPressEvent` (canvas focused) **and** from
+`MainWindow.keyPressEvent` for any key that bubbles up unconsumed from another
+widget — so the shortcuts are **window-wide**, not canvas-focus-scoped. They are
+plain keys (no modifier); the handler **skips a focused text input (`QLineEdit` /
+`QPlainTextEdit` / `QAbstractSpinBox`) and the in-place label editor**, so typing
+into the search box, an options field, or a label is never hijacked. A mapped key
+acts in **Select** mode (place) and in **Place** mode — where it **swaps the
+active ghost** to the new kind — but stays inert while routing a wire or panning,
+so it never interrupts those. A hit calls `scene.start_placement(kind)` exactly
+like a tile click (annotations spawn their two-click span gesture; a same-kind
+press just restarts the ghost). The map is
+**configurable** in Preferences ▸ Shortcuts
+(§10.8); the built-in defaults are `DEFAULT_COMPONENT_SHORTCUTS`
+(`r`→resistor, `c`→capacitor, `l`→inductor, `d`→diode, `g`→ground,
+`t`→npn transistor, `v`→voltage annotation `open`, `i`→current annotation
+`short`). `s`/`w`/`p` are **reserved** for the Select/Wire/Pan tools and cannot be
+bound. **Rotate is `Ctrl+R`** (⌘R on macOS) — a window-level `QShortcut`
+(`MainWindow._rotate_shortcut` → `scene.rotate_selected_cw`, which rotates the
+selection or the placement ghost), deliberately a *modified* key so the plain
+letters stay free for placement (including swapping the ghost with `r`). The only
+other palette key is `Ctrl+/` (focus the search box, a window-level `QShortcut`).
 
 A non-empty **search** replaces the categories/active/in-use sections with a flat
 **Search results** grid of every component whose `kind` or `display_name` matches
@@ -2477,10 +2224,9 @@ light/dark theme via `apply_theme`.
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
-| Rotate selection 90° CW | `R` |
+| Rotate selection / placement ghost 90° CW (§10.2) | `Ctrl+R` (⌘R on macOS) |
+| Place a component by its key — or swap the active ghost (configurable, §10.2) | `r`/`c`/`l`/`d`/`g`/`t`/`v`/`i`, … |
 | Focus palette search | `Ctrl+/` |
-| Select component category (by its keycap letter) | letter key |
-| Place 1st–10th component of the active category | `1`–`9` / `0` |
 | Cycle, while hovering: endpoint-label position (over a label) / endpoint marker (over any endpoint) / line style (over the body) | `Tab` / `Shift+Tab` |
 | Cancel / Select mode | `Escape` |
 | Pan (transient) | `Space` + drag |
@@ -2522,14 +2268,28 @@ The dialog reads current values on open and writes them back only on **OK**;
 recompiles the preview so a display change (e.g. marking unconnected pins) is
 reflected immediately. Settings are organised into tabs — **Export**
 (auto-export-on-save formats + PNG resolution), **Appearance** (Display and
-Rendering options), **Tools** (external-tool paths), and **Updates** (the
+Rendering options), **Shortcuts** (the component placement keymap, §10.2),
+**Tools** (external-tool paths), and **Updates** (the
 startup update check, §11.2) — so the dialog stays compact as options grow.
+
+The **Shortcuts** tab edits the key → component placement map (§10.2) as a
+two-column table (Key, Component) with **Add** / **Remove selected** / **Restore
+defaults**. On **OK** the table is validated *before* anything is persisted: a
+non-letter key, a reserved tool key (`s`/`w`/`p`), or a duplicate key shows a
+warning and keeps the dialog open. The map is stored as JSON under
+`keybindings/component_shortcuts` and **sanitised on every read/write**
+(`_sanitize_shortcuts` — drops non-letter/reserved keys and unknown kinds), so a
+corrupt or hand-edited value can never bind a reserved key or a missing
+component; an unset value yields `DEFAULT_COMPONENT_SHORTCUTS`. `MainWindow`
+pushes the map to the view via `SchematicView.set_placement_shortcuts` at startup
+and again whenever the dialog is accepted, so a rebind takes effect without a
+restart.
 
 Current settings:
 
 | Setting | Key | Default | Effect |
 |---------|-----|---------|--------|
-| Auto-export TeX on save | `export/auto_tex_on_save` | off | After a successful save of `<name>.hv`, also write the includable `<name>.tex` snippet (§8.5) to the same directory. Pure Python — needs no LaTeX install — but off by default: the default sibling set is just PDF + PNG; users embedding the source via `\input` opt in. |
+| Auto-export TeX on save | `export/auto_tex_on_save` | **on** | After a successful save of `<name>.hv`, also write the includable `<name>.tex` snippet (§8.5) to the same directory. On by default: the `.tex` fragment is the primary output for the LaTeX/Overleaf/LyX audience (`\input` it into a paper), and unlike SVG/EPS it is pure Python — it needs no `pdflatex` or converter, so it always succeeds. With PDF + PNG it forms the default sibling set; EPS/SVG stay opt-in. |
 | Auto-export PDF on save | `export/auto_pdf_on_save` | **on** | After a successful save of `<name>.hv`, also write `<name>.pdf` to the same directory. On by default: PDF is the figure format LyX/Overleaf/pdflatex include natively, and it needs nothing beyond the pdflatex compile the preview already requires. |
 | Auto-export EPS on save | `export/auto_eps_on_save` | off | After a successful save, also write `<name>.eps` to the same directory. |
 | Auto-export SVG on save | `export/auto_svg_on_save` | **off** | After a successful save, also write `<name>.svg` to the same directory. Off by default: SVG serves non-LaTeX destinations and is the only format needing a PDF→vector converter (pdftocairo or Inkscape, §8.6) — defaulting it on made converter-less saves fail the export with a status-bar notice on every save. A missing tool still fails this export non-fatally (status bar), never the save. |
@@ -2539,6 +2299,7 @@ Current settings:
 | Draw line-hops | `display/line_hops` | **on** | Draw a small semicircular bump on the higher-`z_order` wire wherever two wires cross without connecting (§6.4) — on the **canvas**, and as a Bézier bump in the preview, source panel, and exports (§7.6). |
 | Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
 | Tool paths | `tools/pdflatex`, `tools/latex`, `tools/dvisvgm`, `tools/pdftocairo`, `tools/inkscape` | empty (auto-detect) | Explicit path to each external tool (§8.7). Blank = discover on `PATH`. A **Tools** group in the dialog provides a field + **Browse…** per tool with live status (found-on-PATH / will-use-this-path / not-found). Applied via `tools.set_tool_paths()` on accept, then the dependency check, label re-typeset, and recompile re-run. |
+| Component placement shortcuts | `keybindings/component_shortcuts` | `DEFAULT_COMPONENT_SHORTCUTS` (`r`/`c`/`l`/`d`/`g`/`t`/`v`/`i`) | The key → component-kind placement map (§10.2), edited in the **Shortcuts** tab and stored as JSON. Sanitised on read/write (reserved `s`/`w`/`p`, non-letter keys, and unknown kinds dropped). Applied to the canvas via `SchematicView.set_placement_shortcuts` at startup and on accept. |
 
 When any is enabled, `_do_save()` calls `_auto_export()`. The `.tex` snippet is
 generated directly (`generate()` → `build_snippet()`, pure Python — **no LaTeX
@@ -2711,92 +2472,19 @@ has it, so the no-LaTeX experience — the preview's "LaTeX not found" notice
 developer aid, not part of the file-association path; `_schematic_arg` ignores it
 (it is not a `.hv` path).
 
-**Windows installer (`HeavisideSetup.exe`).** The Windows release artifact is an
-**Inno Setup** installer ([`packaging/heaviside.iss`](packaging/heaviside.iss),
-built by `scripts/make_installer.py`, which runs `iscc` with the version/paths
-passed on the command line) — wrapping the `dist/Heaviside/` onedir build. It
-installs per-user (no UAC), adds Start Menu / optional Desktop shortcuts and an
-uninstaller (Add or remove programs), and registers the `.hv` association
-(`HKA\Software\Classes`, open command `"{app}\Heaviside.exe" "%1"`). The portable
-`.zip` is still published alongside it. The installer and `.exe` are
-Authenticode-signed in CI when the `WINDOWS_CERT_*` secrets are set, mirroring the
-conditional macOS signing (§11 / `docs/releasing.md`).
-
-**macOS disk image (`.dmg`).** The macOS release artifact is a
-drag-to-Applications **`.dmg`**, not a bare zip — the conventional install UX,
-and it nudges the user to move the app to `/Applications` (which avoids macOS
-App Translocation running it from a read-only random mount). `scripts/make_dmg.py`
-builds it from the (signed) `dist/Heaviside.app` using `dmgbuild` and
-`packaging/dmg_settings.py`; `scripts/make_dmg_background.py` (Pillow) generates
-the "drag here →" background art (committed PNGs at 1x/@2x, combined into a
-hi-DPI `.tiff` via `tiffutil`). `scripts/build.py` calls this automatically on
-macOS when `dmgbuild` is available; the release workflow signs the app, builds
-the `.dmg`, then signs/notarizes/staples the **`.dmg`** as one unit (`dmgbuild`
-is installed ad-hoc there, so it is not a project dependency and the locked
-environment stays frozen).
-
-**Linux AppImage (`Heaviside-linux-x86_64.AppImage` /
-`Heaviside-linux-aarch64.AppImage`).** The Linux release artifact is a
-self-contained **AppImage** — a single no-root, run-anywhere file, the Linux
-analogue of the `.dmg`/installer — built by `scripts/make_appimage.py` from the
-`dist/Heaviside/` onedir build, on **both x64 and arm64** (the release matrix
-runs `ubuntu-latest` and `ubuntu-24.04-arm`; the arm64 build serves Raspberry
-Pi OS 64-bit and other aarch64 Linux). The `ARCH` appimagetool embeds follows
-the build host (`platform.machine()`); the AppImage filename carries the same
-`uname -m` suffix, the portable tarball the matching `linux-x64`/`linux-arm64`
-name. PyInstaller does not bundle glibc, so both Linux binaries inherit the
-24.04 runners' floor: **glibc ≥ 2.38** (Debian 13 "Trixie" / Ubuntu 24.04+,
-documented in the README) — older distros run from source instead. AppImage (unlike Flatpak/Snap) is **not**
-sandboxed, so the app keeps direct access to the user's system `pdflatex`. The
-script assembles an **AppDir** — the onedir under `usr/bin/Heaviside/`; an `AppRun`
-that execs the bundled binary forwarding `argv`; a 256×256 icon rendered from
-`assets/icon.png` (Pillow); and the freedesktop integration files
-[`packaging/heaviside.desktop`](packaging/heaviside.desktop) (a Graphics/Science
-menu entry, `Exec=heaviside %f`), [`packaging/heaviside-mime.xml`](packaging/heaviside-mime.xml)
-(the `application/x-heaviside` MIME type, glob `*.hv`), and
-[`packaging/heaviside.appdata.xml`](packaging/heaviside.appdata.xml) (AppStream
-metainfo, component id `com.heaviside.editor`) — then runs `appimagetool` on it.
-The portable `.tar.gz` is still published alongside it. `scripts/build.py` calls
-this automatically on Linux when `appimagetool` is on `PATH` (else it prints a
-hint and leaves the onedir); the release workflow fetches `appimagetool` ad-hoc
-and sets `APPIMAGE_EXTRACT_AND_RUN=1` so it runs without FUSE on the runner. No
-Linux code-signing.
-
-**App icon.** The single source is `assets/icon.png`. `scripts/make_icons.py`
-(Pillow only, so it runs on any platform — no macOS `iconutil`/`sips`) generates
-both `assets/icon.ico` (Windows) and `assets/icon.icns` (macOS) from it;
-`heaviside.spec` selects the right format per platform. `build.py` regenerates
-both automatically when either is missing or older than the PNG, so updating the
-icon is just: replace `icon.png`, rebuild. The source PNG need not be square — it
-is padded onto a transparent square canvas first, so the icon is never distorted.
-(After replacing the icon you may need to clear the OS icon cache — relaunch the
-Dock on macOS, or note Windows caches `.exe` icons — to see the change on an
-already-seen bundle.)
-
-**README gallery screenshots.** The README's example-screenshot table at the
-top of the page (`docs/images/examples/*.png`) is generated, not
-hand-captured. `scripts/render_screenshots.py` opens three bundled examples
-(Boost Converter on the light theme; 4:1 MUX and Porous Electrode Interface on
-the dark one) in the real `MainWindow` under Qt's offscreen platform —
-palette, canvas, inspector, and the live CircuiTikZ source/PDF preview — then
-grabs the whole 1600×1000 window. Before each grab it waits for the
-async work to settle: the math-label pipeline drains (the dispatcher's
-callback map empties and the pool idles) and, when a `pdflatex` is available,
-the preview worker reports ready/error; then the view is fit to the
-schematic. Importing the script is side-effect-free (tests read the `SHOTS`
-manifest); `main()`'s bootstrap redirects QSettings to a throwaway directory
-(the developer's real preferences are neither read nor written), disables the
-startup update check (no network), and stubs `check_dependencies` to report the
-toolchain present (so the preview compiles rather than showing the no-LaTeX
-notice). The release workflow's
-`screenshots` job installs a minimal texlive (pdflatex + standalone +
-circuitikz, no dvisvgm — math labels go through the deterministic bundled
-ziamath fallback) so the preview pane compiles, re-runs the script on every
-version tag, and commits the images to `main` only when the pixels changed
-(`[skip ci]` docs-only commit), so the gallery always matches the latest
-release. The manifest (`SHOTS`) is the single source: tests assert each entry
-exists under `examples/`, both themes are represented, and the README
-references every output file (§13, `tests/test_screenshots.py`).
+**Release artifacts.** Each platform ships its conventional installer in addition
+to a portable archive, all assembled by `scripts/` helpers and the release
+workflow (mechanics in `docs/releasing.md`): Windows — an Inno Setup
+`HeavisideSetup.exe` (per-user, registers the `.hv` association) plus a `.zip`;
+macOS — a drag-to-Applications signed/notarized `.dmg` plus a zip; Linux — a
+self-contained **AppImage** built for **x64 and arm64** plus a `.tar.gz`. The
+Linux binaries inherit the build runners' **glibc ≥ 2.38** floor (older distros
+run from source). The app icon derives from the single `assets/icon.png`
+(`scripts/make_icons.py` → `.ico`/`.icns`). The README's example gallery
+(`docs/images/examples/*.png`) is generated by `scripts/render_screenshots.py`
+(offscreen `MainWindow` grabs of two bundled examples, both dark mode — the
+README's light-theme view is the demo GIF hero), regenerated on each version tag;
+its `SHOTS` manifest is the single source tested in `test_screenshots.py`.
 
 **Runtime resources.** Four resources are read at runtime and must be bundled:
 `assets/icon.png`, `components/geometry.json` (symbol geometry),
@@ -3059,56 +2747,31 @@ their pins — fails CI immediately. (The Qt-dependent checks run offscreen.)
 
 #### Code Generation (`test_codegen.py`)
 
-The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end.
-This includes the **document voltage/current styles** (american emits no
-`\ctikzset` line, so output is unchanged; european emits a picture-scoped
-`\ctikzset{voltage=european}` / `current=european`, combined when both), the
-`to[…]` syntax for every two-terminal kind (R, C, L, the diode
-family with filled/`*` variants and the picture-scoped `diodes/scale`), the
-`node[…]` syntax and computed scale/lead alignment for multi-terminal kinds
-(op amp leads; IGFET family `anchor=gate` + `xscale`/`yscale` + residual lead;
-BJT `xscale`/`yscale`; body-diode option), single-terminal nodes, and wires. It covers the determinism guarantee (`generate()` is pure),
-coordinate formatting (`_fmt`'s integer/half-integer/2-decimal rules),
-origin normalisation (§7.3 — a far-from-origin schematic emits source near `(0,0)`,
-relative geometry and grid alignment preserved, already-at-origin unchanged), the
-Y-flip convention, junction (`circ`) and open-endpoint (`ocirc`) node emission with all
-their suppression rules (pin-connected, voltage-annotation, degenerate-wire,
-custom-marker, and `no_junction_dots`/`no_termination_dots` cases), wire styling
-and z-layering (shared vs. standalone `\draw`, background/foreground ordering and
-the named-anchor-vs-absolute-coordinate rule), endpoint markers (`arrows.meta`
-tips), endpoint/mid labels and their placement and Y-flip-aware anchoring, drawing
-annotations (text nodes, rects, circles with centred text and fonts), bipole
-node styling, and the `build_tex`/`build_snippet`/`pdf_to_eps`/`pdf_to_svg`
-helpers (`arrows.meta` loading, preamble documentation, EPS/SVG conversion —
-including the missing-`pdftocairo` error and a round-trip when present). It
-also covers the **brace-balancing containment** (§7.2) at each emission site —
-a stray `}` in a text node, wire label, bipole label, or centred box text
-stays inside its brace group, balanced LaTeX is untouched — plus
-degenerate-wire rejection by generation-time validation and the **dark preview
-template** colours matching the canvas dark palette
-(`test_dark_template_colors_match_canvas_palette`).
+The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end —
+the `to[…]`/`node[…]` syntax and computed scale/lead alignment per kind, the
+document voltage/current styles, `generate()` determinism, coordinate formatting
+and origin normalisation (§7.3), the Y-flip convention, junction/open-endpoint
+emission with every suppression rule, wire styling and z-layering (shared vs.
+standalone `\draw`, background/foreground ordering, named-anchor-vs-absolute
+fallback), markers/labels and their Y-flip-aware anchoring, drawing annotations,
+and the `build_tex`/`build_snippet`/EPS/SVG helpers. The **brace-balancing
+containment** security rule (§7.2) is pinned at each emission site, along with
+generation-time degenerate-wire rejection and the dark-preview template colours.
 
 #### File I/O (`test_io.py`)
 
-Covers `save`/`load` round-trips for every component and wire field, the
-**document `config`** (voltage/current styles round-trip; `save` writes the
-`config` object at the current format version; a `0.1` file with no `config`
-loads with american defaults; an unrecognised style value coerces to american),
-the "defaults are omitted from the JSON" rule (which keeps plain documents
-compact), and load-time validation: every typed field rejects the wrong type with a
-`SchematicLoadError`, unknown versions and malformed/invalid JSON raise
-descriptive errors, and invariant violations are caught on load. Also covers that
-a `rect`'s `options` text is loaded verbatim (never parsed as a style string),
-`mid_label_pos` clamping, and that `save` is atomic UTF-8 with no BOM and leaves
-no `.tmp` file behind (even when the write fails). The **save/load hardening**
-(§9.1/§9.3/§9.4) is pinned here: format **0.3** round-trips and 0.1/0.2 files
-still load; an **invalid schematic raises `SchematicSaveError` and writes
-nothing** (an existing good file is never clobbered); overwriting keeps a
-**`.bak`** of the previous file; NaN/Infinity literals (and string-coerced
-NaN) raise a load error; an **oversized file is refused** before being read;
-empty/single-point wires are rejected on load; `load` never leaks a raw
-exception; and the rotation/`z_order` type strictness — an integral float
-`90.0` rotation is accepted, a non-integral float or boolean is rejected.
+Covers `save`/`load` round-trips for every component and wire field, the document
+`config` (voltage/current styles; american default for `0.1`), the omit-defaults
+rule, and load-time validation: typed fields reject the wrong type, unknown
+versions and malformed/invalid JSON raise descriptive errors, and invariant
+violations are caught on load. The save/load hardening (§9) is pinned: the current
+format round-trips and older versions still load; an invalid schematic raises
+`SchematicSaveError` and writes nothing (the existing file is never clobbered); a
+`.bak` of the previous file is kept; `save` is atomic UTF-8/no-BOM leaving no
+`.tmp`; NaN/Infinity and oversized files are refused; and rotation/`z_order`
+integral-float-vs-bool strictness. Several per-field round-trip cases are
+parametrized tables; the silent-data-loss guard (a serialized field added without
+a `_FORMAT_VERSION` bump) is what they protect (see CLAUDE.md).
 
 #### Registry (`test_registry.py`)
 
@@ -3123,26 +2786,14 @@ resizable, `CircleComponent`).
 
 #### Geometry Helpers (`test_model.py`)
 
-Covers the pure geometry and connectivity helpers in `app/schematic/model.py`.
-`simplify_points` collapses duplicate and redundant collinear vertices while
-preserving endpoints and genuine elbows (including the second-pass dedup for the
-A–B–A → A case) without mutating its input. `junction_points` emits a dot exactly
-where the degree (wire segment-ends plus coincident pins) is ≥ 3 — 3-/4-way
-meetings, T-splits, pin-on-pass-through — and not for pass-throughs, corners,
-end-to-end meetings, or a lone pin-plus-wire. `open_endpoints` and
-`unconnected_pins` are the complementary dangling-terminal sets (free wire ends
-vs. wireless pins), with their suppression rules for pin connections, voltage
-annotations (`NON_CONNECTING_KINDS`), degenerate single-point wires, custom
-endpoint markers, and the `no_junction_dots`/`no_termination_dots` flags.
-`wire_crossings` places one line-hop per genuine (non-connecting) H×V crossing on
-the higher-`z_order` wire and respects the `hop_mode` overrides (`never`/`always`)
-and the global preference, drawing no hop where the crossing is actually a
-connection or on annotation/collinear/self-crossing wires. Also covers
-`wire_splits_at` / `wire_corner_splits_at` (mid-segment and elbow split sites) and
-`component_pin_positions` (the rotate-then-mirror transform). Two named
-regressions are pinned here: `test_junction_no_spurious_dot_after_u_turn_drag`
-(an auto-elbow landing on a pin must not fabricate a junction dot) and the
-crossing tie-break ordering.
+Covers the pure geometry/connectivity helpers in `app/schematic/model.py`:
+`simplify_points` (collinear/duplicate collapse, no input mutation),
+`junction_points` (degree ≥ 3 dot rule), the complementary `open_endpoints` /
+`unconnected_pins` dangling-terminal sets and all their suppression rules
+(pin-connected, `NON_CONNECTING_KINDS`, degenerate wire, custom marker,
+`no_junction_dots`/`no_termination_dots`), `wire_crossings` line-hop placement
+(higher-`z_order` wire, `hop_mode` overrides), the split-site helpers, and
+`component_pin_positions` (rotate-then-mirror).
 
 #### Canvas Geometry (`test_geometry.py`)
 
@@ -3154,7 +2805,7 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 
 #### Commands (`test_commands.py`)
 
-In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command layer is unit-tested directly, including: `MoveCommand` wire-following (endpoint follows, rigid translate when both ends ride, auto-elbow, exact undo; select-all rigid translate of free endpoints; explicit `wire_ids` rigid translate for selected free wires; partial-move leaves unselected free endpoints anchored; a pin on a multi-wire junction does not drag the net but grows a fresh **re-stretch lead** to its new position — `test_move_off_multiwire_junction_restretches_lead`, `test_move_single_lead_still_follows` — with undo/redo restoring it); `SplitWireCommand` split-into-two / undo (two halves replace original, undo restores original); **wire decoration preservation** (`test_split_wire_preserves_labels_and_style` / `test_merge_wire_preserves_labels_and_style` / `test_move_collapsed_wire_restored_with_labels_on_undo` — a split routes start/end labels+markers to the matching half and whole-wire style to both, a merge carries each surviving end's label and the line style, and a move that collapses a labelled wire restores it verbatim on undo); **whole-wire move** (`test_move_wire_only_translates_and_taps_follow` — `MoveCommand([], delta, wire_ids=…)` rigidly translates a wire while a junction tap follows at the shared vertex and its far end stays); `MergeWireCommand` merge-two-halves / undo; `MoveWireVertexCommand` reshape + simplify + undo, plus collapse-to-a-point removes the wire (not a degenerate single-point wire) with undo/redo restoring it; `DeleteCommand` with component and wire ids; `MacroCommand` composing split + add (3 wires) as one undoable unit; `MoveOptionsLabelCommand` set/undo/redo/clear of `label_offset`; `SetWireLineStyleCommand` / `SetWireLineWidthCommand` / `SetWireNoJunctionDotsCommand` / `SetWireNoTerminationDotsCommand` do/undo/redo on a wire; **endpoint-label placement** (`SetWireStartLabelPlacementCommand` / `SetWireEndLabelPlacementCommand` do/undo/redo, setting `start_label_placement` / `end_label_placement`); **rect block-diagram edge connections** (`test_move_drags_wire_connected_to_rect_edge` / `test_move_rect_edge_wire_undo_restores` — a wire endpoint on a rect edge follows a `MoveCommand` and undo restores it; `test_resize_rect_far_edge_wire_follows_scaled` / `test_resize_rect_edge_wire_undo_restores` — under `ResizeCommand` a far-edge connection scales about the fixed corner while a near-edge connection stays put, with exact undo); **circle block-diagram cardinal connections** (`test_move_drags_wire_connected_to_circle_cardinal` — a wire on a circle's cardinal point follows a `MoveCommand`; `test_resize_circle_cardinal_wire_follows_scaled` / `test_resize_circle_cardinal_wire_undo_restores` — under `ResizeCommand` a far cardinal point scales about the fixed corner while the near one stays, with exact undo); and `GroupRotateCommand` (single-component spin-in-place, two-component centroid rotation, internal wire vertex rotation, boundary wire reshaping, undo/redo, plus a boundary wire that collapses to a point under the rotation is removed rather than left degenerate, with undo/redo restoring it). The newer regression coverage pins: **execution-time split resolution** (`test_split_wire_resolves_index_after_move_reshapes_wire` and the no-op cases — a split whose point is no longer on the wire, or that a bundled move reshaped onto an endpoint, is a clean undo-aware no-op); **sequential merge composition** (`test_sequential_merges_sharing_a_wire_compose` — deleting both taps of a bus merges the rail into one wire); **`MacroCommand` failure unwinding** (`test_macro_unwinds_executed_children_on_failure`, `test_undo_stack_push_failure_records_nothing`); **verbatim restore at the original index** of a wire removed by a vertex-drag / resize / junction-drag / group-rotate collapse (labels, markers, style, stacking included); **mirrored group rotation** (`test_group_rotate_mirrored_component_pins_follow`, `…_boundary_wire_stays_attached` — the −90 step, §6.6); **float-noise tolerance** in wire-following and deletion (`test_move_follows_wire_with_float_noise_endpoint`, `test_delete_removes_wire_with_float_noise_endpoint` — the `point_key` convention, §4.5); and the **`UndoStack` save point** (`mark_save_point`/`is_modified` round-trips, divergent-edit unreachability, and `record()` not re-executing).
+The pure (Qt-free) command layer is unit-tested directly (undo/redo behaviour also exercised via §13.3). Coverage spans every command class — `MoveCommand` (wire-following: endpoint-follow, rigid translate, auto-elbow, re-stretch lead off a multi-wire junction, whole-wire move with junction taps), `Split`/`MergeWireCommand`, `MoveWireVertexCommand` (reshape/simplify, collapse-removes-wire), `DeleteCommand`, `MacroCommand` (composition and failure-unwinding), `MoveOptionsLabelCommand`, the `ResizeCommand`/`MoveEndpointCommand` span/position math, the `Set*` attribute setters, and `GroupRotateCommand` (centroid rotation, boundary-wire reshape, mirrored −90 step). The non-trivial invariants are the focus: exact undo, **decoration preservation** across split/merge/collapse with **verbatim restore at the original list index**, block-diagram rect-edge / circle-cardinal connections following move and anchored-scale resize, execution-time split-index resolution (clean no-op when bundled reshapes move the point), `point_key` float-noise tolerance (§4.5), and the `UndoStack` save-point / `record()` semantics.
 
 #### Preview Worker (`test_worker.py`)
 
@@ -3166,11 +2817,24 @@ In addition to the undo/redo behaviors in §13.3, the pure (Qt-free) command lay
 
 #### Math Render (`test_mathrender.py`)
 
-On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always run: `_split_top_level` ignores commas inside `$…$`/`{…}`; `slot_fragments` pairs side-slot keys with values and drops `t=`, flags, and empty values; `slot_side` maps `^`/`_`/family to above/below; `label_display_latex` extraction. LaTeX render tests are gated on `latex`+`dvisvgm`: a fragment renders to a non-empty baseline-normalised `QPainterPath` (left ink at x=0, baseline at y=0); different fragments share the baseline; empty input yields `None`; the compiled SVG is cached on disk; and `render_async` delivers its result through the Qt event loop. The **ziamath** engine tests need no LaTeX (it is a bundled dependency): it renders text, mixed text+math, fractions and Greek to a non-empty baseline-normalised path; `$…$` delimiters typeset as math rather than literal dollar glyphs (`test_ziamath_strips_math_delimiters` — guards the `ziamath.Text` vs math-only `ziamath.Latex` choice); `_active_engine` selects `latex` when present else `ziamath`; `set_force_ziamath` forces ziamath; and auto-selection falls back to ziamath when `latex`/`dvisvgm` are absent. Packaging guards assert `heaviside.spec` keeps the `collect_data_files` lines for `ziamath`, `ziafont`, **and `latex2mathml`** (`test_pyinstaller_spec_bundles_ziamath_fonts`), and that `latex2mathml`'s `unimathsymbols.txt` table is actually collectable (`test_latex2mathml_data_file_is_collectable`) — so the import-time data (STIX Two Math / DejaVu Sans fonts and the symbol table) cannot silently drop out of the frozen bundle and leave canvas labels blank when no LaTeX is installed. The **cache hardening** is pinned here too: a transient render or baseline failure is **not memoised** (it is retried and self-heals; successes are memoised in a bounded memo), a **corrupt on-disk cache entry is discarded and recompiled** rather than trusted, and the disk cache directory is **per-user and private (0700)**, falling back to a fresh `mkdtemp` when the expected path has been squatted by another user. The **async delivery invariant** (§5.8) is pinned ungated: `test_render_async_single_dispatcher_no_per_request_qobject` — one process-lifetime dispatcher, no per-request signals QObject (the off-thread QObject-destruction segfault class), and this test's callback tokens drain after delivery; `test_render_async_callbacks_run_on_ui_thread` — results land on the UI thread even with the memo cleared and the pool churning.
+On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always
+run (slot splitting/side-mapping, `label_display_latex`); LaTeX-render tests are
+gated on `latex`+`dvisvgm`; the bundled **ziamath** fallback tests need no LaTeX.
+Covers engine selection (LaTeX when present else ziamath, `force_ziamath`
+override), baseline-normalised `QPainterPath` output, math-delimiter handling,
+disk-cache behaviour and hardening (failures not memoised, corrupt entries
+recompiled, per-user private cache dir), the single-dispatcher async-delivery
+invariant (results on the UI thread; no per-request QObject), and packaging
+guards that the bundled fonts + `latex2mathml` data stay in the frozen bundle.
 
 #### Symbol Geometry (`test_svgsym.py`)
 
-`symbol_paths` glyph reconstruction (from the **self-contained** geometry, §5.3): `test_geometry_is_self_contained_for_glyph_kind` — `cV`'s `+`/`−` marks are baked into the geometry's `glyphs` list (real path `d` + a 6-element affine `matrix`), so no `.svg` access is needed at run time; every path returned for `cV` has real geometry (no unresolved glyph-ref leaks through as an empty path); a glyph-bearing kind (`cV`) returns strictly more paths than a glyph-free one (`R`); and a plain symbol still renders its strokes. Guards against the `+`/`−` marks silently disappearing. **Fill rule** (§5.2): `test_filled_diode_body_is_filled` — the filled diode `D*` has a filled body path while plain `D` does not (so toggling the filled option visibly updates the canvas); `test_stroke_only_symbols_not_filled` — pure outline symbols (`L`/`C`/`R`) have no filled paths, guarding the rule against over-filling stroked bodies. Library-integrity tripwires were added: every library kind (including every variant and parametric-value combination) resolves to geometry, and `svgsym`'s `geometry_key` is a re-export of the single `app/components/library.py` definition (§7.2) — so the canvas and codegen kind→geometry mappings cannot drift.
+`symbol_paths` glyph reconstruction from the self-contained geometry (§5.3 —
+glyph marks like `cV`'s `+`/`−` are baked in, no run-time `.svg` access), the fill
+rule (§5.2 — `D*` filled, stroke-only `R`/`L`/`C` not), and library-integrity
+tripwires: every kind/variant/parametric-value resolves to geometry, and
+`geometry_key` is a single re-exported definition so canvas and codegen mappings
+cannot drift.
 
 #### LaTeX Security (`test_latex_security.py`)
 
@@ -3187,8 +2851,8 @@ SECURITY header comment in their output.
 
 The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
 isolated `QSettings` backed by a temp INI file (never touching the real user
-store): **PDF/PNG auto-export default on and TeX/EPS/SVG off**
-(`test_export_defaults` — the two defaults need only pdflatex),
+store): **TeX/PDF/PNG auto-export default on and EPS/SVG off**
+(`test_export_defaults` — the defaults need no converter: TeX needs nothing, PDF/PNG only pdflatex),
 mark-unconnected-pins defaults off, **line-hops
 defaults on** (`test_line_hops_default_on_and_roundtrip`); TeX/PDF/EPS/SVG/PNG, the
 `force_ziamath` render flag, and the display flags round-trip and persist across
@@ -3198,6 +2862,13 @@ return; the **per-tool path** accessors default to empty and round-trip (trimmed
 and the dialog persists all checkbox state **and the tool-path fields** on accept
 and discards them on cancel. The **update preferences** default correctly
 (`check_updates_on_startup` **on**, `skipped_update_version` empty) and round-trip.
+The **component placement shortcuts** (§10.2) default to `DEFAULT_COMPONENT_SHORTCUTS`
+(with `v`/`i` → the annotations) and round-trip; the map is **sanitised** (reserved
+`s`/`w`/`p`, non-letter/multi-char keys, and unknown kinds dropped) and a non-JSON
+stored value falls back to the defaults; the **Shortcuts** tab builds one row per
+binding, **Restore defaults** repopulates, accept persists the edited map, and a
+duplicate or reserved key is **rejected** (a warning, dialog stays open, nothing
+written).
 
 #### Update Notifier (`test_update.py`)
 
@@ -3217,33 +2888,20 @@ result on the Qt event loop (offscreen).
 
 #### External tools (`test_tools.py`)
 
-`app/preview/tools` resolution (§8.7), pure (no Qt): a configured override wins
-when it points at a runnable file; a non-runnable override is ignored and
-resolution falls back to `PATH`; `resolve` is `None` when neither yields a tool;
-a blank value clears an override; `set_tool_paths` ignores unknown keys; and
-`is_runnable` accepts only existing executable files (not directories or blanks).
-The **well-known-location tier** is covered too: `inkscape` is a first-class
-tool in `TOOLS`; a tool absent from `PATH` resolves through
-`_EXTRA_TOOL_CANDIDATES`; a non-runnable candidate is skipped; and an explicit
-override beats the candidates. The **EPS/SVG converter selection** (§8.6) is
-pinned in `test_codegen.py`: with both converters available `vector_converter`
-prefers `pdftocairo`; without Poppler the conversion runs Inkscape with the
-1.x CLI arguments (`--export-type`/`--export-filename`); with neither, the
-`CompileError` names both install options; and a **gated end-to-end** test
-(`test_pdf_to_svg_roundtrip_inkscape`, requires pdflatex + a real Inkscape)
-masks Poppler out and converts a compiled schematic PDF through Inkscape.
-The **Windows console suppression** (§8.1) is pinned too: `run_kwargs()`
-returns `creationflags=CREATE_NO_WINDOW` on Windows and `{}` elsewhere, and
-`compile_tex` forwards it to `subprocess.run` (regression for the console
-window that flashed over the app on every render).
+`app/preview/tools` resolution (§8.7), pure (no Qt): the override → `PATH` →
+well-known-location tiers, `is_runnable` validation, and `set_tool_paths`
+behaviour. The EPS/SVG converter selection (§8.6 — `pdftocairo` preferred,
+Inkscape 1.x fallback, error naming both) and the Windows console suppression
+(§8.1 — `CREATE_NO_WINDOW`) are pinned alongside (some in `test_codegen.py`).
 
 #### README gallery screenshots (`test_screenshots.py`)
 
 The release-time README gallery renderer (§11.1 "README gallery screenshots"),
-offscreen Qt: the `SHOTS` manifest names exactly three bundled examples that all
-exist on disk, with unique output names and at least one light **and** one dark
-entry; the README references every output file (manifest↔README drift guard);
-and an actual script run (in a **subprocess** — the script redirects QSettings
+offscreen Qt: the `SHOTS` manifest names exactly two bundled examples that all
+exist on disk, with unique output names and **all dark mode** (the README's
+light-theme view is the demo GIF hero); the README references the demo GIF **and**
+every output file (manifest↔README drift guard); and an actual script run (in a
+**subprocess** — the script redirects QSettings
 globally, which must not leak into the test process; importing the module is
 asserted side-effect-free by the same arrangement) captures the full dark-mode
 editor window: the PNG is exactly `WINDOW_SIZE`, predominantly dark, and shows
@@ -3274,64 +2932,25 @@ flat results grid (restored on clear); and clicking a tile calls
 
 #### Main window (`test_mainwindow.py`)
 
-`MainWindow` auto-export and label re-typeset, against an isolated `QSettings`
-and offscreen Qt. The **0.0.0 update-nag guard** is pinned here
-(`test_startup_update_check_skipped_when_version_unresolved`): an unresolved
-runtime version suppresses the automatic startup probe while a real version
-still probes. Version resolution itself lives in **`test_version.py`**: the
-source checkout resolves to the pyproject version; a simulated frozen layout
-(`sys._MEIPASS`) reads the bundled `pyproject.toml`; total failure yields the
-`0.0.0` sentinel; and `heaviside.spec` must keep bundling `pyproject.toml`
-(tripwire). The **explicit-palette fallback** (§10.1) is pinned here:
-forcing Dark on a platform that ignores `setColorScheme` (offscreen) flips the
-application palette's Base/Button/Text roles dark, Light flips them back, and
-System mode restores the pristine platform palette; the source pane's font is
-asserted to be the platform fixed-width font (no "Monospace" alias scan). The TeX-snippet auto-export writes `<name>.tex` **without**
-invoking the compiler (asserted by failing the test if `_compile_to_pdf` is
-called) — confirming it needs no `pdflatex`; with every auto-export preference
-off, nothing is written; and `SchematicScene.retypeset_labels()` runs over a
-labelled component without error (used when the math engine / ziamath preference
-changes, §8.4); and the **Document** inspector tab (`DocumentPropertiesPanel`)
-writes the chosen voltage/current styles onto the schematic **live** and emits
-`document_changed` (and `refresh()` reloads silently), and the inspector tabs
-switch between **Properties** (object selected) and **Document** (nothing
-selected) (§10.9); and **copy-to-clipboard** (§8.6) — copy-as-PNG sets a
-non-null clipboard image; copy-as-PDF exposes both the `com.adobe.pdf` UTI and
-`application/pdf` plus a raster fallback; copy-as-SVG exposes `public.svg-image` +
-`image/svg+xml` plus a raster fallback and asserts **no** `text/plain` flavor
-(the Office XML-paste regression); compile + convert are stubbed, so no LaTeX.
-The preview panel's Copy PDF/SVG buttons emit the copy-request signals. The
-**toolbar theme radio group** (`_theme_actions`, §10) flips both palettes and pins
-the choice (`_follow_system=False`), after which an OS appearance change is ignored;
-`_apply_theme` also swaps the canvas + chrome palettes together and re-applies the
-toolbar stylesheet. The **save/load flow** (§10.1) is covered: `_confirm_discard`
-offers Save/Don't Save/Cancel and actually saves (a cancelled save path is
-treated as Cancel); a `SchematicSaveError` is reported without clobbering the
-file; the **Undo/Redo actions track the stack** and the **modified state
-follows the undo-stack save point**; a new document declares the current
-format version; `load_path` opens a schematic, reports a bad file, and
-**warns about dangerous LaTeX** in labels; and **auto-export runs off the UI
-thread, is single-flight, and a failure in one format does not block the
-others**. The **Preferences menu placement** (§10.8) is pinned across platforms:
-off macOS the action carries `NoRole` and appears in **both** the Edit and File
-menus (`test_preferences_reachable_in_menus_off_macos`), while on macOS it keeps
-`PreferencesRole` and is **not** duplicated into File
-(`test_preferences_uses_app_menu_role_on_macos`) — both branches driven by
-monkeypatching `sys.platform`. The **no-LaTeX preview notice** (§8.7) is pinned:
-`_PreviewPanel.show_no_latex()` makes the centred notice the exclusive state
-(image and error hidden) and names the missing `pdflatex`
-(`test_preview_panel_no_latex_notice_is_exclusive_state`), and an auto-compile
-with `pdflatex` absent shows the notice and **does not** spawn the compile worker
-(`test_auto_compile_shows_no_latex_notice_and_skips_worker`). MainWindow tests
-stub the dependency check to "present" (an autouse fixture) so the notice and a
-doomed compile never fire in unrelated tests.
+`MainWindow` behaviours against an isolated `QSettings` and offscreen Qt. Covers:
+auto-export (TeX snippet without invoking the compiler; nothing written when all
+formats are off; runs off the UI thread, single-flight, one format's failure
+doesn't block others); the startup update-nag guard for an unresolved `0.0.0`
+version (resolution itself in `test_version.py`); the explicit-palette dark/light
+fallback and the toolbar theme radio group (§10.1); the save/load flow
+(`_confirm_discard` triad, `SchematicSaveError` without clobbering, Undo/Redo and
+modified-state tracking, dangerous-LaTeX warning on load); clipboard copy-as
+PNG/PDF/SVG flavors with the no-`text/plain` Office-paste guard (§8.6); the
+Document inspector tab and Properties/Document tab switching (§10.9); the
+cross-platform Preferences menu placement (§10.8); and the no-LaTeX preview notice
+(§8.7). `retypeset_labels()` is exercised for the math-engine-change path.
 
 #### Welcome screen & Help dialog (`test_welcome.py`)
 
 The Help dialog's reference tables (`_HELP_SHORTCUT_GROUPS` /
 `_HELP_GESTURE_GROUPS`, §10.1) are well-formed `(title, [(keys, description),…])`
 groups whose descriptions are full sentences (end with `.`); a few anchor
-shortcuts (`S`/`W`/`P`/`R`/`Ctrl+N`/`Ctrl+S`/`Ctrl+Z`/`Ctrl+Shift+Z`) and the
+shortcuts (`S`/`W`/`P`/`Ctrl+R`/`Ctrl+N`/`Ctrl+S`/`Ctrl+Z`/`Ctrl+Shift+Z`) and the
 three `Tab (over…)` hover-cycle rows plus `Shift+Tab` are present; anchor
 gestures (drag-endpoint, double-click, scroll-to-zoom) are present; `_HelpDialog`
 builds with a `QScrollArea` (its `_RefTable`s wrap descriptions) and paints
@@ -3348,7 +2967,7 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 
 **Preview↔commit parity** (`test_drag_parity.py`) drives real drag gestures offscreen, captures the last-frame ghost geometry (including re-stretch lead ghosts), commits, and asserts the committed model equals the preview exactly. The matrix covers: a straight drag pulling a connected wire, a component+wire co-drag where a junction tap follows, a re-stretch lead, contained-wire removal, a box resize with attached wires, and vertex drags that merge or collapse. These tests exist to fail if the shared reshape rules in `app/schematic/reshape.py` (§6.4) are ever forked between preview and commit again. **Scene memory-safety guards** (§6.8) are pinned in `test_scene.py`: removal ungrabs a grabbing item or descendant (and leaves unrelated grabs alone), a command pushed mid-grab is safe, and re-entrant `_rebuild_items` calls coalesce. **Float-noise containment** is pinned in `test_model.py` (`test_wire_contained_tolerates_float_noise`, `test_key_eps_derived_from_point_key_decimals`).
 
-These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable), the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step). The **`scene.batch()`** grouping is covered: several edits inside a batch collapse into one MacroCommand (a single undo reverts them all), and a one-command batch is pushed directly. The **slot labels & annotation decorations** (§5.8) are covered: per-side slot labels appear/hide with the options string and land on the correct (traversal-relative) sides under rotation, with the voltage-source default-`v` flip and same-side stacking; a `v=` slot draws the american ± signs by default and the european arrow when the document `voltage_style` is european (updating live via `relayout_annotations`), an `i=` slot draws a current arrow, a plain `l=` and the centred `open` annotation draw none, and the decoration axis follows the on-screen traversal direction (vertical on a 90°-rotated body). The **dotted-grid** background paints onto a device-space painter without error. Newer scene regressions pin: off-grid-pin routing and vertex drags (the first jog stays on the pin's lead line, a dragged vertex lands on — or slides along the axis of — an off-grid pin, and the spot between two adjacent off-grid pins stays reachable); a drag does **not** resurrect a suppressed termination dot (the live preview honours the same junction/termination opt-outs as the committed render, `test_open_endpoints_overrides_match_committed`); wires follow a gate's pins when its scale or input count changes; whole-wire drags translate the wire with junction taps following; and releasing a resize/endpoint handle without moving leaves no stale preview.
+These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable) — now spanning **every** component, including plain circuit symbols (their canvas z-value tracks the model), reached through the **right-click context menu** (target resolution against the selection, front/back as one undoable batch preserving relative order, the swallowed right-button press) as well as the inspector buttons; the context menu's **Cut/Copy/Paste** (§6.7) is covered too — cut copies-then-deletes in one undoable step, paste-at-cursor anchors the group's top-left at the click while the keyboard paste keeps its fixed 1 GU offset, both no-op on an empty selection/clipboard, and an empty-space right-click still raises the menu; plus the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step). The **`scene.batch()`** grouping is covered: several edits inside a batch collapse into one MacroCommand (a single undo reverts them all), and a one-command batch is pushed directly. The **slot labels & annotation decorations** (§5.8) are covered: per-side slot labels appear/hide with the options string and land on the correct (traversal-relative) sides under rotation, with the voltage-source default-`v` flip and same-side stacking; a `v=` slot draws the american ± signs by default and the european arrow when the document `voltage_style` is european (updating live via `relayout_annotations`), an `i=` slot draws a current arrow, a plain `l=` and the centred `open` annotation draw none, and the decoration axis follows the on-screen traversal direction (vertical on a 90°-rotated body). The **dotted-grid** background paints onto a device-space painter without error. Newer scene regressions pin: off-grid-pin routing and vertex drags (the first jog stays on the pin's lead line, a dragged vertex lands on — or slides along the axis of — an off-grid pin, and the spot between two adjacent off-grid pins stays reachable); a drag does **not** resurrect a suppressed termination dot (the live preview honours the same junction/termination opt-outs as the committed render, `test_open_endpoints_overrides_match_committed`); wires follow a gate's pins when its scale or input count changes; whole-wire drags translate the wire with junction taps following; releasing a resize/endpoint handle without moving leaves no stale preview; and a line annotation is draggable from **either** endpoint — the origin handle (`open`/`short`/`bipole`, not boxes) holds the terminal fixed while moving the component (`MoveEndpointCommand`), a `short`'s origin press drags rather than auto-starting a wire, and connected wires follow the dragged origin. The **component placement shortcuts** (§10.2) are covered at the view: a mapped plain key (incl. `v`/`i` → the annotations) starts placement from the Select tool; pressing a key while a ghost is up (Place mode) **swaps** it to the new kind; plain `r` places a resistor rather than rotating (it no longer rotates — rotate moved to `Ctrl+R`); and the keys are inert in Wire mode. The **window-wide** delegation and the **`Ctrl+R` rotate** shortcut are covered in `test_mainwindow.py` (a key bubbling up to `MainWindow` still places; a Ctrl-chord and a focused text input are ignored; `_rotate_shortcut` is bound to `Ctrl+R` and rotates the selection). The **mode cursor** (§6.1) is covered: the view shows a crosshair in Wire/Place mode, an open hand in Pan, the arrow in Select, and a transient `Space`-pan restores the crosshair on release.
 
 The **inspector** (`test_properties.py`) additionally covers **multi-select bulk edit**: `PropertiesPanel.show_components` over several same-kind components binds the sections (`bind_multi`) and an `OptionsSection` edit applies to all of them as one undo step; over a **mixed-kind** selection it binds only the shared `multi_kind_safe` sections — a resistor + capacitor edit a shared stroke-width and rotation as one undo step (`OptionsSection` suppressed), and a resistor + rectangle (a symbol + a block) edit the **unified** stroke/outline width together via the single `StrokeWidthSection` while the symbol-only options and block-only fill are suppressed. **Logic-gate size** is covered by `test_scale_section_applies_to_gates_only_and_is_undoable` (the `ScaleSection` shows for gates only and pushes an undoable `SetComponentScaleCommand`), with the geometry/codegen side tested elsewhere: true-scaled-anchor pins and the full-size (1.0) placement default (`test_logic_gate_placed_full_size_pins_on_grid`, `test_set_component_scale_is_undoable`, and the placement-ghost default scale `test_placement_ghost_uses_default_scale` in `test_scene.py`), the `scale` round-trip + back-compat (`test_component_scale_roundtrip` in `test_io.py`), the height/xscale sizing with **no lead stubs** even for even-input gates (`test_scaled_*` in `test_codegen.py`), and that a wire to a scaled gate's pin attaches at the true `(node.in k)` anchor (`test_wire_to_scaled_gate_pin_attaches_at_node_anchor`). The **off-grid pin magnet** is covered in `test_wiregeometry.py` (`test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor`, `test_unconnected_pin_at_grabs_offgrid_gate_pin`), the **validation relaxation** in `test_model.py` (`test_wire_endpoint_on_offgrid_gate_pin_is_valid`, `test_wire_offgrid_vertex_not_on_a_pin_is_invalid`, `test_wire_corner_aligned_with_offgrid_pin_is_valid`), and the **on-grid corner routing** in `test_scene.py` (`test_route_to_offgrid_pin_keeps_corner_on_grid`). **Multi-wire bulk edit** is covered by `test_multi_wire_select_edits_all_as_one_undo_step` (`show_wires` over several wires binds them and a line-width or marker edit applies to all as one undo step). The inspector's **edit-loss guards** (§10.3) are pinned in `test_properties.py`: unbinding a section (or calling the panel-level `flush_pending_edits`) commits a pending debounced edit instead of dropping it; a programmatic reload does not clobber a focused field; a bipole `t=` label whose math contains commas (`$f(a,b)$`) survives extraction and round-trips; combo loads preserve hand-authored fill/line-style values that match no preset; and a Document-tab style change is undoable (`test_document_panel_change_is_undoable`).
 

@@ -7,8 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-06-13
 
-Baseline release. Earlier 0.1–0.3 tags were withdrawn and the version reset to
-0.1.0; this is the first release of the current line.
+First public release of Heaviside. (Earlier 0.1–0.3 tags were withdrawn and the
+version reset to 0.1.0 — this is the first release of the current line.)
+
+### Added
+- **Single-key component placement.** Press a key to start placing a component —
+  defaults: `r`/`c`/`l`/`d` = resistor/capacitor/inductor/diode, `g` = ground,
+  `t` = transistor, `v`/`i` = voltage/current annotation. Pressing another key
+  **while a ghost is up swaps it** to that component, so you can change your mind
+  without going back to the palette. The keys work window-wide (regardless of
+  which panel has focus, but never while typing in a text field) and are
+  **configurable** in **Preferences ▸ Shortcuts** (a key→component table with
+  Add / Remove / Restore defaults). `s`/`w`/`p` stay reserved for the
+  Select/Wire/Pan tools.
+- **Right-click context menu for components and wires** with **Cut**, **Copy**,
+  **Paste**, **Delete**, **Bring to Front**, and **Send to Back**. Right-clicking
+  an unselected item targets just it; right-clicking inside a multi-selection acts
+  on the whole group; right-clicking empty space still offers Paste. Menu **Paste
+  drops the clipboard at the cursor** ("paste here"), while `Ctrl+V` keeps its
+  fixed 1 GU offset.
+- **Cut** (`Ctrl+X`, and the Edit menu) — copies the selection, then deletes it as
+  one undoable step.
+- **Front/back layering now works on every component**, not just drawing
+  annotations (rect/text/circle/bipole) and wires. Plain circuit symbols
+  (resistors, transistors, sources, …) can be sent to front/back too, on the
+  canvas and in the generated LaTeX.
+
+### Changed
+- **Wire and Place modes now show a crosshair cursor**, so it's obvious at a glance
+  when you're routing a wire or placing a component (previously the cursor stayed a
+  plain arrow in Wire mode, which was easy to miss). Pan still shows the hand cursor;
+  Select stays the arrow.
+- **Rotate moved to `Ctrl+R`** (`⌘R` on macOS), freeing the plain `R` key to place
+  a resistor (and to swap a live placement ghost). Rotate still turns the current
+  selection or the placement ghost 90° clockwise.
+- **Component palette reorganized into a 3-column grid of category cards** (was
+  two columns), regrouped so related categories sit together (Resistors |
+  Inductors | Capacitors, Diodes | Transistors | Switches, …). The panel is a
+  little wider to fit the three columns.
+- **Voltage and current annotations are now placed by drawing their span** —
+  click the start point, then click the end point — instead of dropping a
+  fixed-size ghost. The ghost appears after the first click and stretches to the
+  cursor; the second click places the annotation. Endpoints **magnet-snap to
+  component pins** (the same magnet wire drawing uses), so an annotation can be
+  drawn exactly across a component. (Other components are unchanged: single-click
+  ghost placement.)
+- **File format bumped to 0.4.** `z_order` is now stored on every component (it
+  was previously only saved for drawing annotations). Older files (0.1–0.3) still
+  open; a 0.3-era build will refuse a 0.4 file rather than silently dropping a
+  component's layer on save.
+- **Voltage/current annotations (and the generic bipole) are now draggable from
+  either endpoint.** Previously only the terminal handle could be dragged; now a
+  press on either endpoint handle drags that end while the other stays fixed —
+  the origin handle moves the component and adjusts its span so the terminal
+  doesn't move (`MoveEndpointCommand`). Boxes (rect/circle) are unchanged (they
+  still resize from the far corner only).
+- **Clicking and holding an annotation endpoint drags it instead of starting a
+  wire.** A current annotation's endpoints sit on connectable pins, so a press
+  there used to auto-enter wire mode; the endpoint-drag gesture now takes
+  priority, making the endpoints easy to grab and move.
+
+### Fixed
+- **Voltage/current annotation endpoints no longer "stick" near a pin.** Dragging
+  an annotation endpoint had a 0.5 GU dead-zone that froze it near the other end
+  and made the origin handle resist small drags. The endpoint now follows the
+  cursor smoothly on the 0.25 GU grid (matching placement and wire vertices).
+- **Labels with an equals sign now compile** (e.g. `l=$v=2$`). The value is
+  brace-wrapped in the generated LaTeX (`l={$v=2$}`) so CircuiTikZ's option parser
+  doesn't split on the inner `=` — previously such a label produced a "forgotten
+  `$`" compile error. No escaping needed; just type it.
+
+### Removed
+- **Per-component keyboard shortcuts in the palette.** The category mnemonic
+  letters (R/C/L/…) and the 1–9/0 "place the Nth component" digits — and their
+  on-card letter / on-tile number badges — are gone; place components by clicking
+  a category card then a component tile. `Ctrl+/` (focus the search box) is
+  unchanged.
 
 ### Changed
 - **Component alignment is now a single uniform algorithm.** Every multi-terminal
@@ -23,15 +97,13 @@ Baseline release. Earlier 0.1–0.3 tags were withdrawn and the version reset to
   new `components/generation.toml`. Internal pipeline change; no `.hv` format
   change, but saved figures re-export with the new symbol geometry.
 
-- **Auto-export defaults are now PDF + PNG.** Saving a schematic writes
-  `<name>.pdf` and `<name>.png` siblings by default — the two formats that
-  need only `pdflatex` (PDF is included natively by LyX/Overleaf; PNG is
-  rendered by the app's own PDF engine). The TeX snippet, EPS, and SVG
-  siblings are now opt-in (Preferences → Export); SVG/EPS are the only
-  formats needing a PDF→vector converter (Poppler or Inkscape), so a
-  converter-less system no longer fails an export on every save. Installs
-  that saved an explicit choice keep it; otherwise the sibling set changes
-  from `.tex`/`.svg`/`.png` to `.pdf`/`.png` until re-configured.
+- **Auto-export defaults are TeX + PDF + PNG.** Saving a schematic writes
+  `<name>.tex`, `<name>.pdf`, and `<name>.png` siblings by default. The `.tex`
+  fragment is the primary output for the LaTeX/Overleaf/LyX audience (`\input` it
+  into a paper) and is pure codegen — it needs no LaTeX at all; PDF and PNG need
+  only `pdflatex`. EPS and SVG stay opt-in (Preferences → Export): they're the
+  only formats needing a PDF→vector converter (Poppler or Inkscape), so a
+  converter-less system never fails an export on every save.
 
 ### Added
 - **The project is now an installable package, so `uv run heaviside` works.**

@@ -368,6 +368,106 @@ def test_view_fit_ignores_origin_helper_items(scene: SchematicScene):
     assert view.zoom > 0.5
 
 
+def test_view_placement_shortcuts(scene: SchematicScene, monkeypatch):
+    """From the Select tool with nothing selected, a mapped plain key starts
+    placing its component — including v/i → the voltage/current annotations (§10.2)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    view.set_placement_shortcuts({"r": "R", "c": "C", "v": "open", "i": "short"})
+    started: list[str] = []
+    monkeypatch.setattr(scene, "start_placement", lambda k: started.append(k))
+
+    def press(key, text):
+        view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, key, Qt.NoModifier, text))
+
+    press(Qt.Key_R, "r")            # nothing selected → r places a resistor
+    press(Qt.Key_C, "c")
+    press(Qt.Key_V, "v")
+    press(Qt.Key_I, "i")
+    assert started == ["R", "C", "open", "short"]
+
+
+def test_view_r_places_not_rotates(scene: SchematicScene, monkeypatch):
+    """Plain `r` always places a resistor now (rotate moved to Ctrl+R), even with a
+    component selected — it never rotates (§10.2)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    view.set_placement_shortcuts({"r": "R"})
+    comp = scene.place_component("R", (5.0, 5.0))
+    scene._comp_items[comp.id].setSelected(True)
+    placed: list[str] = []
+    rotated: list[bool] = []
+    monkeypatch.setattr(scene, "start_placement", lambda k: placed.append(k))
+    monkeypatch.setattr(scene, "rotate_selected_cw", lambda: rotated.append(True))
+
+    view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_R, Qt.NoModifier, "r"))
+    assert placed == ["R"] and rotated == []
+
+
+def test_view_placement_key_swaps_active_ghost(scene: SchematicScene):
+    """Pressing a mapped key while a ghost is up (PLACE mode) swaps it to the new
+    kind, so the user can change their mind without returning to the palette (§10.2)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    view.set_placement_shortcuts({"r": "R", "c": "C"})
+    scene.start_placement("R")  # resistor ghost (real placement, not mocked)
+    assert scene.mode == Mode.PLACE and scene._place_kind == "R"
+
+    view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
+    assert scene.mode == Mode.PLACE and scene._place_kind == "C"
+
+
+def test_view_placement_keys_inactive_while_wiring(scene: SchematicScene, monkeypatch):
+    """A mapped key does nothing in Wire mode, so it never interrupts wire routing."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    view.set_placement_shortcuts({"c": "C"})
+    scene.enter_wire_mode()
+    placed: list[str] = []
+    monkeypatch.setattr(scene, "start_placement", lambda k: placed.append(k))
+
+    view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
+    assert placed == []
+
+
+def test_view_cursor_reflects_mode(scene: SchematicScene):
+    """The canvas cursor signals the active tool: a crosshair while wiring or
+    placing, an open hand for pan, the default arrow for select (§6.1)."""
+    from PySide6.QtCore import Qt
+
+    view = SchematicView(scene)
+    scene.enter_wire_mode()
+    assert view.cursor().shape() == Qt.CrossCursor
+    scene.start_placement("R")
+    assert view.cursor().shape() == Qt.CrossCursor
+    scene.enter_pan_mode()
+    assert view.cursor().shape() == Qt.OpenHandCursor
+    scene.enter_select_mode()
+    assert view.cursor().shape() == Qt.ArrowCursor
+
+
+def test_view_space_pan_restores_wire_cursor(scene: SchematicScene):
+    """A transient Space-pan in Wire mode restores the crosshair on release, not the
+    default arrow (regression — the cursor must keep signalling Wire mode)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+
+    view = SchematicView(scene)
+    scene.enter_wire_mode()
+    view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_Space, Qt.NoModifier))
+    assert view.cursor().shape() == Qt.OpenHandCursor
+    view.keyReleaseEvent(QKeyEvent(QKeyEvent.KeyRelease, Qt.Key_Space, Qt.NoModifier))
+    assert view.cursor().shape() == Qt.CrossCursor
+
+
 def test_view_arrow_nudge_step(scene: SchematicScene):
     """Arrow keys nudge by one 0.25 GU minor-grid cell (§3.1)."""
     from PySide6.QtCore import Qt
@@ -621,6 +721,98 @@ def _wire_move(scene: SchematicScene, gu, shift=False):
     scene.mouseMoveEvent(e)
 
 
+# ---------------------------------------------------------------------------
+# Two-click span placement of voltage/current annotations (open / short)
+# ---------------------------------------------------------------------------
+
+def _press(scene: SchematicScene, gu, button=Qt.LeftButton):
+    e = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    e.setButton(button)
+    e.setScenePos(scene.gu_to_scene(*gu))
+    scene.mousePressEvent(e)
+
+
+@pytest.mark.parametrize("kind", ["open", "short"])
+def test_span_placement_two_clicks(scene: SchematicScene, kind: str):
+    """open/short are placed by clicking the start, then the end: no ghost until
+    the first click, a span ghost in between, and the annotation committed (origin
+    + span) on the second click — PLACE mode stays active for the next one."""
+    scene.start_placement(kind)
+    assert scene._ghost is None                      # no ghost before the first click
+    _wire_move(scene, (2.0, 0.0))
+    assert scene._ghost is None                      # still none while awaiting start
+
+    _press(scene, (0.0, 0.0))                         # first click → origin
+    assert scene._ghost is not None
+    _wire_move(scene, (3.0, 0.0))                     # ghost spans origin→cursor
+    assert scene._ghost.component.span_override == (3.0, 0.0)
+
+    _press(scene, (3.0, 0.0))                         # second click → place
+    assert len(scene.schematic.components) == 1
+    comp = scene.schematic.components[0]
+    assert comp.kind == kind
+    assert comp.position == (0.0, 0.0)
+    assert comp.span_override == (3.0, 0.0)
+    # Re-armed for another span placement, still in PLACE mode.
+    assert scene._mode == Mode.PLACE
+    assert scene._ghost is None and scene._place_start_gu is None
+
+
+def test_span_placement_snaps_endpoints_to_pins(scene: SchematicScene):
+    """A span-placement click near a component pin magnet-snaps to it (the same
+    magnet wire drawing uses), so an annotation can be drawn exactly across a
+    component's two pins."""
+    scene.place_component("R", (2.0, 0.0))            # pins at (2,0) and (4,0)
+    scene.start_placement("open")
+    _press(scene, (2.1, 0.05))                         # near the left pin
+    assert scene._place_start_gu == (2.0, 0.0)
+    _press(scene, (3.95, -0.05))                       # near the right pin
+    ann = next(c for c in scene.schematic.components if c.kind == "open")
+    assert ann.position == (2.0, 0.0)
+    assert ann.span_override == (2.0, 0.0)             # spans exactly pin-to-pin
+
+
+def test_span_placement_zero_length_click_ignored(scene: SchematicScene):
+    """A second click coinciding with the origin drops no annotation (so a
+    double-click can't create a degenerate zero-span annotation)."""
+    scene.start_placement("open")
+    _press(scene, (1.0, 1.0))
+    _press(scene, (1.0, 1.0))
+    assert scene.schematic.components == []
+    assert scene._place_start_gu == (1.0, 1.0)        # still armed at the origin
+
+
+def test_span_placement_escape_cancels(scene: SchematicScene):
+    """Escape mid-span abandons placement and returns to SELECT, leaving no ghost."""
+    scene.start_placement("short")
+    _press(scene, (0.0, 0.0))
+    assert scene._ghost is not None
+    scene.cancel_current()
+    assert scene._mode == Mode.SELECT
+    assert scene._ghost is None and scene._place_start_gu is None
+    assert scene.schematic.components == []
+
+
+def test_span_placement_right_click_abandons_then_exits(scene: SchematicScene):
+    """A right-click mid-span re-arms (stays in PLACE); a second right-click exits."""
+    scene.start_placement("open")
+    _press(scene, (0.0, 0.0))
+    _press(scene, (2.0, 0.0), button=Qt.RightButton)   # abandon the in-progress span
+    assert scene._mode == Mode.PLACE
+    assert scene._place_start_gu is None and scene._ghost is None
+    _press(scene, (2.0, 0.0), button=Qt.RightButton)   # leave PLACE
+    assert scene._mode == Mode.SELECT
+
+
+def test_normal_component_still_single_click_place(scene: SchematicScene):
+    """A non-span kind keeps the ghost-follow single-click placement."""
+    scene.start_placement("R")
+    assert scene._ghost is not None                   # ghost appears immediately
+    _press(scene, (2.0, 0.0))
+    assert len(scene.schematic.components) == 1
+    assert scene._mode == Mode.PLACE                  # stays for rapid placement
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))
@@ -824,23 +1016,17 @@ def test_collinear_anchor_is_simplified_away(scene: SchematicScene):
     assert scene.schematic.wires[0].points == [(2.0, 0.0), (6.0, 0.0)]
 
 
-def test_escape_clears_wire_preview(scene: SchematicScene):
+@pytest.mark.parametrize("teardown", ["cancel_current", "enter_select_mode"])
+def test_wire_preview_cleared_on_teardown(scene: SchematicScene, teardown: str):
+    """Both ways out of an in-progress wire — Escape (cancel_current) and a mode
+    change — drop the preview."""
     scene.place_component("R", (0.0, 0.0))
     scene.enter_wire_mode()
     _wire_press(scene, (2.0, 0.0))
     assert scene._wire_preview is not None
-    scene.cancel_current()
+    getattr(scene, teardown)()
+    assert scene._wire_preview is None
     assert scene._wire_pts == []
-    assert scene._wire_preview is None
-
-
-def test_mode_change_clears_wire_preview(scene: SchematicScene):
-    scene.place_component("R", (0.0, 0.0))
-    scene.enter_wire_mode()
-    _wire_press(scene, (2.0, 0.0))
-    assert scene._wire_preview is not None
-    scene.enter_select_mode()
-    assert scene._wire_preview is None
 
 
 def test_double_click_terminates_on_empty_space(scene: SchematicScene):
@@ -1024,23 +1210,13 @@ def test_whole_wire_drag_moves_wire_and_taps_follow(scene: SchematicScene):
     assert next(w for w in scene.schematic.wires if w.id == "tap").points == [(2.0, 2.0), (5.0, 2.0)]
 
 
-def test_vertex_hit_test_finds_draggable_corner(scene: SchematicScene):
+def test_vertex_hit_test_resolves_every_vertex(scene: SchematicScene):
+    """wire_vertex_at returns each vertex by index — the pin-connected endpoint
+    (0, draggable to disconnect), the corner (1), and the free end (2)."""
     w = _wire_with_pin_endpoint(scene)
-    hit = scene.wire_vertex_at(scene.gu_to_scene(2.0, 3.0))   # the corner
-    assert hit == (w.id, 1)
-
-
-def test_vertex_hit_test_returns_pin_endpoint(scene: SchematicScene):
-    w = _wire_with_pin_endpoint(scene)
-    # (2,0) is the wire endpoint sitting on the resistor's pin — now draggable
-    # (drag to disconnect), so it is returned.
-    assert scene.wire_vertex_at(scene.gu_to_scene(2.0, 0.0)) == (w.id, 0)
-
-
-def test_vertex_hit_test_free_endpoint_draggable(scene: SchematicScene):
-    w = _wire_with_pin_endpoint(scene)
-    hit = scene.wire_vertex_at(scene.gu_to_scene(5.0, 3.0))   # free end
-    assert hit == (w.id, 2)
+    assert scene.wire_vertex_at(scene.gu_to_scene(2.0, 0.0)) == (w.id, 0)  # pin end
+    assert scene.wire_vertex_at(scene.gu_to_scene(2.0, 3.0)) == (w.id, 1)  # corner
+    assert scene.wire_vertex_at(scene.gu_to_scene(5.0, 3.0)) == (w.id, 2)  # free end
 
 
 def test_no_locked_indices_all_vertices_draggable(scene: SchematicScene):
@@ -1947,13 +2123,8 @@ def test_connect_to_mid_segment_splits_target(scene: SchematicScene):
     assert [(2.0, 2.0), (4.0, 2.0)] in pts
     assert (2.0, 2.0) in scene._junction_items
 
-
-def test_mid_segment_split_is_one_undo(scene: SchematicScene):
-    a = scene.add_wire([(0.0, 2.0), (4.0, 2.0)])
-    scene.add_wire([(2.0, 2.0), (2.0, 5.0)])
-    assert len(scene.schematic.wires) == 3
-
-    scene.undo()   # single undo reverses split + new wire
+    # The split + new wire is a single undoable action.
+    scene.undo()
     assert len(scene.schematic.wires) == 1
     assert scene.schematic.wires[0].id == a.id
     assert scene.schematic.wires[0].points == [(0.0, 2.0), (4.0, 2.0)]
@@ -1990,13 +2161,7 @@ def test_connect_to_wire_corner_splits_l_wire(scene: SchematicScene):
     assert frozenset([(78.0, 2.0), (81.0, 2.0)]) in endpoint_sets
     assert (78.0, 2.0) in scene._junction_items
 
-
-def test_connect_to_wire_corner_split_is_one_undo(scene: SchematicScene):
-    """Corner-split + new wire is a single undoable action."""
-    elbow = scene.add_wire([(78.0, 0.0), (78.0, 2.0), (81.0, 2.0)])
-    scene.add_wire([(78.0, 2.0), (75.0, 2.0)])
-    assert len(scene.schematic.wires) == 3
-
+    # Corner-split + new wire is a single undoable action.
     scene.undo()
     assert len(scene.schematic.wires) == 1
     assert scene.schematic.wires[0].id == elbow.id
@@ -2039,15 +2204,8 @@ def test_drag_vertex_onto_segment_splits_target(scene: SchematicScene):
     assert mov.points[-1] == (2.0, 2.0)                          # moved onto it
     assert (2.0, 2.0) in scene._junction_items
 
-
-def test_drag_vertex_onto_segment_is_one_undo(scene: SchematicScene):
-    target = scene.add_wire([(0.0, 2.0), (4.0, 2.0)])
-    scene.add_wire([(2.0, 5.0), (2.0, 3.0)])
-    _sel_press(scene, (2.0, 3.0))
-    _sel_release(scene, (2.0, 2.1))
-    assert (2.0, 2.0) in scene._junction_items
-
-    scene.undo()   # single undo reverses split + move
+    # The split + vertex move is a single undoable action.
+    scene.undo()
     tgt = next(w for w in scene.schematic.wires if w.id == target.id)
     assert tgt.points == [(0.0, 2.0), (4.0, 2.0)]
     assert scene._junction_items == {}
@@ -2468,13 +2626,20 @@ def test_set_wire_marker_suppresses_open_circle(scene: SchematicScene):
     assert (4.0, 0.0) in scene._open_circle_items       # restored
 
 
-def test_set_wire_marker_noop_when_unchanged(scene: SchematicScene):
-    """Setting an unchanged marker pushes no command."""
-    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
-    can_undo_before = scene._stack.can_undo()
-    scene.set_wire_start_marker(wire.id, "")  # already none
-    scene.set_wire_end_marker(wire.id, "")    # already none
-    assert scene._stack.can_undo() == can_undo_before
+def test_wire_setters_noop_when_unchanged(scene: SchematicScene):
+    """Calling any wire setter with the value it already has pushes no command
+    (the shared no-op guard on every wire-attribute setter)."""
+    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
+    before = scene._stack.can_undo()
+    scene.set_wire_start_marker(wire.id, "")        # already none
+    scene.set_wire_end_marker(wire.id, "")
+    scene.set_wire_start_label(wire.id, "")         # already empty
+    scene.set_wire_end_label(wire.id, "")
+    scene.set_wire_mid_label(wire.id, "")
+    scene.set_wire_mid_label_pos(wire.id, 0.5)      # already default
+    scene.set_wire_line_style(wire.id, "")          # already solid
+    scene.set_wire_line_width(wire.id, 0.4)         # already default
+    assert scene._stack.can_undo() == before
 
 
 def test_set_wire_labels_undoable(scene: SchematicScene):
@@ -2487,15 +2652,6 @@ def test_set_wire_labels_undoable(scene: SchematicScene):
     scene.undo()  # undo end label
     assert next(x for x in scene.schematic.wires if x.id == wire.id).end_label == ""
     assert next(x for x in scene.schematic.wires if x.id == wire.id).start_label == "in"
-
-
-def test_set_wire_label_noop_when_unchanged(scene: SchematicScene):
-    """Setting an unchanged label pushes no command."""
-    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
-    can_undo_before = scene._stack.can_undo()
-    scene.set_wire_start_label(wire.id, "")  # already empty
-    scene.set_wire_end_label(wire.id, "")    # already empty
-    assert scene._stack.can_undo() == can_undo_before
 
 
 def test_tab_cycle_endpoint_marker(scene: SchematicScene):
@@ -2558,28 +2714,18 @@ def test_tab_cycle_empty_space_is_noop(scene: SchematicScene):
     assert changed is False
 
 
-def test_tab_cycle_marker_on_rect_connected_endpoint(scene: SchematicScene):
-    """A wire endpoint on a rect edge is pin-locked, but Tab still cycles its
-    arrow marker (not the line style)."""
-    scene.place_component("rect", (0.0, 0.0))     # 2x2 box; right edge x=2
-    # Wire from open space into the right-edge midpoint (2,1).
+@pytest.mark.parametrize("kind", ["rect", "circle"])
+def test_tab_cycle_marker_on_block_connected_endpoint(scene: SchematicScene, kind: str):
+    """A wire endpoint on a block-diagram connection point (rect edge / circle
+    cardinal) is pin-locked, but Tab still cycles its arrow marker, not the line
+    style."""
+    scene.place_component(kind, (0.0, 0.0))       # 2x2 box; east connection at (2,1)
     wire = scene.add_wire([(5.0, 1.0), (2.0, 1.0)])
-
-    changed = scene.cycle_at(scene.gu_to_scene(2.0, 1.0))   # endpoint on the edge
+    changed = scene.cycle_at(scene.gu_to_scene(2.0, 1.0))   # endpoint on the boundary
     assert changed is True
     w = next(x for x in scene.schematic.wires if x.id == wire.id)
     assert w.end_marker == "arrow"          # marker cycled
     assert w.line_style == ""               # line style untouched
-
-
-def test_tab_cycle_marker_on_circle_cardinal_endpoint(scene: SchematicScene):
-    """A wire endpoint on a circle cardinal point is also a Tab arrow target."""
-    scene.place_component("circle", (0.0, 0.0))   # 2x2; east cardinal (2,1)
-    wire = scene.add_wire([(5.0, 1.0), (2.0, 1.0)])
-
-    scene.cycle_at(scene.gu_to_scene(2.0, 1.0))
-    w = next(x for x in scene.schematic.wires if x.id == wire.id)
-    assert w.end_marker == "arrow"
 
 
 def test_cycle_wire_label_placement_steps_and_is_independent(scene: SchematicScene):
@@ -2637,14 +2783,6 @@ def test_set_wire_mid_label_and_pos(scene: SchematicScene):
     assert next(x for x in scene.schematic.wires if x.id == wire.id).mid_label_pos == 1.0
     scene.undo()  # undo the clamp
     assert next(x for x in scene.schematic.wires if x.id == wire.id).mid_label_pos == 0.25
-
-
-def test_mid_label_noop_when_unchanged(scene: SchematicScene):
-    wire = scene.add_wire([(0.0, 0.0), (4.0, 0.0)])
-    can_undo_before = scene._stack.can_undo()
-    scene.set_wire_mid_label(wire.id, "")        # already empty
-    scene.set_wire_mid_label_pos(wire.id, 0.5)   # already default
-    assert scene._stack.can_undo() == can_undo_before
 
 
 def test_mid_label_inline_edit_commits(scene: SchematicScene):
@@ -2734,15 +2872,6 @@ def test_wire_label_field_commits_on_editing_finished_not_typing(scene: Schemati
     # editingFinished (Enter / focus-out) commits.
     sec._end_label.editingFinished.emit()
     assert next(w for w in scene.schematic.wires if w.id == wire.id).end_label == "$y(t)$"
-
-
-def test_set_wire_style_noop_when_unchanged(scene: SchematicScene):
-    """Setting an unchanged wire style leaves the model (and undo state) alone."""
-    wire = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
-    can_undo_before = scene._stack.can_undo()
-    scene.set_wire_line_style(wire.id, "")    # already solid
-    scene.set_wire_line_width(wire.id, 0.4)   # already default
-    assert scene._stack.can_undo() == can_undo_before  # no new command pushed
 
 
 def test_properties_panel_shows_wire(scene: SchematicScene):
@@ -3417,6 +3546,159 @@ def test_front_back_baseline_and_undoable(scene: SchematicScene):
     assert scene._wire_by_id(a.id).z_order == 0
 
 
+def test_plain_component_front_back_and_canvas_zvalue(scene: SchematicScene):
+    """A plain circuit component (not a drawing annotation) can be layered now,
+    and its canvas item's z-value tracks the model."""
+    r = scene.place_component("R", (0.0, 0.0))
+    w = scene.add_wire([(5.0, 5.0), (7.0, 5.0)])
+    scene.set_wire_z_order(w.id, 4)
+    new_z = scene.bring_to_front(r.id)
+    assert new_z == 5                                  # max(4, 0) + 1
+    assert scene._component_by_id(r.id).z_order == 5
+    assert scene._comp_items[r.id].zValue() == 5
+    scene.undo()
+    assert scene._component_by_id(r.id).z_order == 0
+    assert scene._comp_items[r.id].zValue() == 0
+
+
+# ---------------------------------------------------------------------------
+# Right-click context menu — front/back for components and wires
+# ---------------------------------------------------------------------------
+
+def _context_event(scene: SchematicScene, gu):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QGraphicsSceneContextMenuEvent
+    ev = QGraphicsSceneContextMenuEvent(QGraphicsSceneContextMenuEvent.ContextMenu)
+    ev.setScenePos(scene.gu_to_scene(*gu))
+    ev.setScreenPos(QPoint(0, 0))
+    return ev
+
+
+def _capture_menu(scene: SchematicScene) -> dict:
+    """Replace the (blocking) menu popup with a capture of the scene state it
+    would build from: the selection it targets, and whether it was shown."""
+    captured: dict = {}
+
+    def fake_show(event):
+        captured["shown"] = True
+        captured["ids"] = scene.selected_component_ids() + scene.selected_wire_ids()
+        event.accept()
+
+    scene._show_item_context_menu = fake_show  # type: ignore[assignment]
+    return captured
+
+
+def test_context_menu_selects_clicked_item(scene: SchematicScene):
+    """Right-clicking an unselected item makes it the sole selection target."""
+    r1 = scene.place_component("R", (0.0, 0.0))
+    scene.place_component("R", (0.0, 2.0))
+    captured = _capture_menu(scene)
+    scene.contextMenuEvent(_context_event(scene, (0.0, 0.0)))
+    assert captured["ids"] == [r1.id]
+    assert scene.selected_component_ids() == [r1.id]
+
+
+def test_context_menu_keeps_existing_multiselection(scene: SchematicScene):
+    """Right-clicking inside a multi-selection applies to the whole group."""
+    r1 = scene.place_component("R", (0.0, 0.0))
+    r2 = scene.place_component("R", (0.0, 2.0))
+    scene._comp_items[r1.id].setSelected(True)
+    scene._comp_items[r2.id].setSelected(True)
+    captured = _capture_menu(scene)
+    scene.contextMenuEvent(_context_event(scene, (0.0, 2.0)))   # r2 is in the selection
+    assert set(captured["ids"]) == {r1.id, r2.id}
+
+
+def test_context_menu_empty_space_still_shows(scene: SchematicScene):
+    """Right-clicking empty space still raises the menu (for Paste) and leaves the
+    existing selection intact."""
+    r = scene.place_component("R", (0.0, 0.0))
+    scene._comp_items[r.id].setSelected(True)
+    captured = _capture_menu(scene)
+    scene.contextMenuEvent(_context_event(scene, (50.0, 50.0)))
+    assert captured.get("shown") is True
+    assert scene.selected_component_ids() == [r.id]   # selection untouched
+
+
+def test_context_menu_layer_selection_is_one_undo_step(scene: SchematicScene):
+    """_layer_selection (what the menu actions call) sends a mixed component/wire
+    group to back as a single undoable step and restores on undo."""
+    r = scene.place_component("R", (0.0, 0.0))
+    w = scene.add_wire([(4.0, 0.0), (4.0, 2.0)])
+    before = scene._stack.undo_count
+    scene._layer_selection([r.id, w.id], to_front=False)
+    assert scene._component_by_id(r.id).z_order < 0
+    assert scene._wire_by_id(w.id).z_order < 0
+    assert scene._stack.undo_count == before + 1        # one combined step
+    scene.undo()
+    assert scene._component_by_id(r.id).z_order == 0
+    assert scene._wire_by_id(w.id).z_order == 0
+
+
+def test_cut_selection_copies_then_deletes_in_one_step(scene: SchematicScene):
+    """cut_selection puts the item on the clipboard and removes it as one
+    undoable delete; undo brings it back."""
+    r = scene.place_component("R", (0.0, 0.0))
+    scene._comp_items[r.id].setSelected(True)
+    before = scene._stack.undo_count
+    scene.cut_selection()
+    assert scene._component_by_id(r.id) is None             # deleted
+    assert len(scene._clipboard_components) == 1            # on the clipboard
+    assert scene._stack.undo_count == before + 1           # single step
+    scene.undo()
+    assert scene._component_by_id(r.id) is not None         # restored
+
+
+def test_cut_with_no_selection_is_noop(scene: SchematicScene):
+    scene.place_component("R", (0.0, 0.0))
+    before = scene._stack.undo_count
+    scene.cut_selection()
+    assert scene._stack.undo_count == before
+    assert scene._clipboard_components == []
+
+
+def test_paste_at_cursor_anchors_group_top_left(scene: SchematicScene):
+    """paste(at=…) anchors the clipboard group's top-left corner at the click
+    point; the plain paste keeps the fixed 1 GU offset."""
+    r = scene.place_component("R", (2.0, 2.0))
+    scene._comp_items[r.id].setSelected(True)
+    scene.copy_selection()
+    scene.paste(at=(10.0, 5.0))
+    pasted = [c for c in scene.schematic.components if c.id != r.id]
+    assert len(pasted) == 1
+    assert pasted[0].position == (10.0, 5.0)               # top-left at cursor
+
+
+def test_paste_no_position_uses_fixed_offset(scene: SchematicScene):
+    r = scene.place_component("R", (2.0, 2.0))
+    scene._comp_items[r.id].setSelected(True)
+    scene.copy_selection()
+    scene.paste()
+    pasted = [c for c in scene.schematic.components if c.id != r.id]
+    assert pasted[0].position == (3.0, 3.0)                # original + 1 GU
+
+
+def test_paste_empty_clipboard_is_noop(scene: SchematicScene):
+    before = scene._stack.undo_count
+    scene.paste(at=(1.0, 1.0))
+    assert scene._stack.undo_count == before
+
+
+def test_right_click_press_does_not_clear_selection(scene: SchematicScene):
+    """A SELECT-mode right-button press is swallowed so it cannot disturb the
+    selection before the context menu runs."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+    r = scene.place_component("R", (0.0, 0.0))
+    scene._comp_items[r.id].setSelected(True)
+    ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    ev.setButton(Qt.RightButton)
+    ev.setScenePos(scene.gu_to_scene(0.0, 0.0))
+    scene.mousePressEvent(ev)
+    assert scene._mode == Mode.SELECT
+    assert scene.selected_component_ids() == [r.id]     # still selected
+
+
 def test_wire_inspector_move_buttons_call_through(scene: SchematicScene):
     """WireStyleSection's Move-to-front/back drive the scene front/back methods."""
     from app.ui.properties import WireStyleSection
@@ -3689,6 +3971,124 @@ def test_commit_endpoint_drag_routes_through_push(scene: SchematicScene):
     scene.undo()
     assert scene._component_by_id(comp.id).span_override is None or \
         scene._component_by_id(comp.id).span_override == old_span
+
+
+def test_endpoint_drag_has_no_dead_zone_near_origin(scene: SchematicScene):
+    """Regression: a 0.5 GU dead-zone used to freeze the preview near the other
+    endpoint (the 'sticks near a pin' bug). The terminal now follows the cursor
+    at 0.25 granularity right down to a 0.25 span, and that span commits."""
+    comp = scene.place_component("short", (5.0, 0.0))   # endpoints (5,0)-(7,0)
+    old_span = comp.span_override or (2.0, 0.0)
+    item = scene._comp_items[comp.id]
+    scene._drag.endpoint_drag = (comp.id, 1, old_span)
+    scene._drag.endpoint_press_gu = (7.0, 0.0)
+    # Drag the terminal to 0.25 from the origin — previously frozen at 0.5.
+    scene._drag.preview_endpoint_drag((5.25, 0.0))
+    assert item.component.span_override == (0.25, 0.0)   # followed, not stuck
+    scene._drag.commit_endpoint_drag(comp.id, old_span, (5.25, 0.0))
+    assert scene._component_by_id(comp.id).span_override == (0.25, 0.0)
+
+
+def test_origin_handle_moves_on_small_drag(scene: SchematicScene):
+    """Regression: the origin handle used to resist a sub-0.5 GU drag (dead-zone),
+    feeling stuck on pickup. A 0.25 GU origin drag now moves and commits."""
+    comp = scene.place_component("short", (5.0, 0.0))
+    old_span = comp.span_override or (2.0, 0.0)
+    item = scene._comp_items[comp.id]
+    scene._drag.endpoint_drag = (comp.id, 0, old_span)   # origin handle
+    scene._drag.endpoint_press_gu = (5.0, 0.0)
+    scene._drag.preview_endpoint_drag((4.75, 0.0))       # tiny 0.25 move
+    assert item.component.span_override == (2.25, 0.0)    # terminal held, origin moved
+    scene._drag.commit_endpoint_drag(comp.id, old_span, (4.75, 0.0), handle_idx=0)
+    c = scene._component_by_id(comp.id)
+    assert c.position == (4.75, 0.0) and c.span_override == (2.25, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Origin-endpoint drag — annotations are draggable from EITHER end
+# ---------------------------------------------------------------------------
+
+def _endpoint_release(scene: SchematicScene, gu):
+    rel = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseRelease)
+    rel.setButton(Qt.LeftButton)
+    rel.setScenePos(scene.gu_to_scene(*gu))
+    scene.mouseReleaseEvent(rel)
+
+
+def test_line_annotation_endpoints_are_both_draggable(scene: SchematicScene):
+    """Open/short/bipole line annotations expose an origin handle (index 0) and a
+    terminal handle (index 1); boxes (rect/circle) expose only the terminal."""
+    from PySide6.QtCore import QPointF
+    for kind in ("open", "short", "bipole"):
+        comp = scene.place_component(kind, (0.0, 0.0))
+        item = scene._comp_items[comp.id]
+        ep = item._endpoint_px()
+        assert item._origin_draggable() is True
+        assert item.endpoint_handle_index_at(QPointF(0.0, 0.0)) == 0
+        assert item.endpoint_handle_index_at(QPointF(ep.x(), ep.y())) == 1
+    for kind in ("rect", "circle"):
+        comp = scene.place_component(kind, (0.0, 0.0))
+        item = scene._comp_items[comp.id]
+        ep = item._endpoint_px()
+        assert item._origin_draggable() is False
+        assert item.endpoint_handle_index_at(QPointF(0.0, 0.0)) is None
+        assert item.endpoint_handle_index_at(QPointF(ep.x(), ep.y())) == 1
+
+
+def test_origin_drag_holds_terminal_fixed(scene: SchematicScene):
+    """Dragging the origin endpoint moves the component while the terminal stays
+    put; undo restores both position and span."""
+    from app.schematic.model import component_pin_positions
+    comp = scene.place_component("short", (2.0, 2.0))   # origin (2,2), term (4,2)
+    terminal = component_pin_positions(comp)[1]
+    _wire_press(scene, (2.0, 2.0))
+    assert scene._mode == Mode.SELECT
+    assert scene._drag.endpoint_drag is not None
+    assert scene._drag.endpoint_drag[1] == 0            # origin handle
+    _wire_move(scene, (0.0, 3.0))
+    _endpoint_release(scene, (0.0, 3.0))
+    pins = component_pin_positions(scene._component_by_id(comp.id))
+    assert pins[0] == (0.0, 3.0)                          # origin followed cursor
+    assert pins[1] == terminal                            # terminal unchanged
+    scene.undo()
+    assert component_pin_positions(scene._component_by_id(comp.id)) == [(2.0, 2.0), (4.0, 2.0)]
+
+
+def test_origin_press_does_not_enter_wire_mode(scene: SchematicScene):
+    """Regression: a current (short) annotation's origin coincides with a
+    connectable pin, so pressing-and-holding it used to auto-enter WIRE mode.
+    The endpoint handle now wins, so the press starts an origin drag instead."""
+    scene.place_component("short", (1.0, 1.0))
+    _wire_press(scene, (1.0, 1.0))
+    assert scene._mode == Mode.SELECT                     # NOT Mode.WIRE
+    assert scene._drag.endpoint_drag is not None
+    assert scene._drag.endpoint_drag[1] == 0
+
+
+def test_origin_drag_reshapes_connected_wire(scene: SchematicScene):
+    """A wire connected at the dragged origin follows; the terminal's wires don't."""
+    comp = scene.place_component("short", (2.0, 2.0))
+    w = scene.add_wire([(2.0, 2.0), (2.0, 5.0)])         # connected at the origin
+    _wire_press(scene, (2.0, 2.0))
+    _wire_move(scene, (0.0, 2.0))
+    _endpoint_release(scene, (0.0, 2.0))
+    pts = scene._wire_by_id(w.id).points
+    assert pts[0] == (0.0, 2.0)                           # endpoint followed origin
+    assert pts[-1] == (2.0, 5.0)                          # far end stayed
+    scene.undo()
+    assert scene._wire_by_id(w.id).points == [(2.0, 2.0), (2.0, 5.0)]
+
+
+def test_origin_drag_and_return_pushes_nothing(scene: SchematicScene):
+    """A press-and-release on the origin handle with no movement selects the item
+    and pushes no command, restoring it to its live model component."""
+    comp = scene.place_component("open", (0.0, 0.0))
+    item = scene._comp_items[comp.id]
+    before = scene._stack.undo_count
+    _wire_press(scene, (0.0, 0.0))
+    _endpoint_release(scene, (0.0, 0.0))
+    assert scene._stack.undo_count == before
+    assert item.component is scene._component_by_id(comp.id)
 
 
 # ---------------------------------------------------------------------------

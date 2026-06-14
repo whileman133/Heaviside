@@ -21,7 +21,6 @@ from typing import Any
 
 from app.components.model import (
     Component,
-    DrawingComponent,
     FontedComponent,
     StyledComponent,
 )
@@ -40,10 +39,14 @@ from app.schematic.validate import validate
 #: line_width, scale, params, variants, span_override) so an older build that
 #: would silently strip them refuses the file instead. 0.1/0.2 files load
 #: unchanged.
-_FORMAT_VERSION: str = "0.3"
+#: 0.4 extends ``z_order`` from drawing annotations to *every* component, so any
+#: component can be sent to front/back. A 0.3 build would silently strip a plain
+#: component's z_order on save, so the bump refuses the newer file; 0.1–0.3 files
+#: load unchanged (absent z_order defaults to 0).
+_FORMAT_VERSION: str = "0.4"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4"}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -227,7 +230,8 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         d["label_offset"] = list(c.label_offset)
     if c.span_override is not None:
         d["span_override"] = list(c.span_override)
-    if isinstance(c, DrawingComponent) and c.z_order != 0:
+    # Layer (front/back), carried by every component; omitted at the 0 baseline.
+    if c.z_order != 0:
         d["z_order"] = c.z_order
     # Active variants only (e.g. {"filled": true}); omitted when none are on.
     active = {name: True for name, on in c.variants.items() if on}
@@ -504,11 +508,12 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "scale": scale,
     }
 
-    if issubclass(cls, DrawingComponent):
-        raw_z = data.get("z_order", 0)
-        if not isinstance(raw_z, int) or isinstance(raw_z, bool):
-            raise SchematicLoadError(f"{ctx}.z_order must be an integer")
-        kwargs["z_order"] = raw_z
+    # z_order is carried by every component (0.4+); older files omit it for plain
+    # components and it defaults to 0.
+    raw_z = data.get("z_order", 0)
+    if not isinstance(raw_z, int) or isinstance(raw_z, bool):
+        raise SchematicLoadError(f"{ctx}.z_order must be an integer")
+    kwargs["z_order"] = raw_z
 
     if issubclass(cls, StyledComponent):
         kwargs["fill_color"] = str(data.get("fill_color", ""))

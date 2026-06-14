@@ -199,6 +199,24 @@ def test_resistor_horizontal() -> None:
     assert "(0,0) to[R] (2,0)" in src
 
 
+@pytest.mark.parametrize("kind", ["C", "L", "D", "zD", "leD"])
+def test_two_terminal_keyword_emission(kind: str) -> None:
+    """Every horizontal two-terminal kind emits `(0,0) to[<keyword>] (2,0)` — one
+    shared codegen path, so the resistor (geometry) + these (keyword mapping) +
+    the vertical voltage source below cover it; the kind→keyword map itself is
+    guarded by the registry/library tests."""
+    src = generate(_schematic(_comp(kind)))
+    assert f"(0,0) to[{kind}] (2,0)" in src
+
+
+@pytest.mark.parametrize("kind", ["D", "zD"])
+def test_filled_variant_emission(kind: str) -> None:
+    """The `filled` variant appends the `*` suffix (shared variant_tikz path)."""
+    comp = Component(id=_uid(), kind=kind, position=(0.0, 0.0), rotation=0,
+                     options="", variants={"filled": True})
+    assert f"(0,0) to[{kind}*] (2,0)" in generate(_schematic(comp))
+
+
 # ---------------------------------------------------------------------------
 # test_resistor_with_labels
 # ---------------------------------------------------------------------------
@@ -218,6 +236,15 @@ def test_label_value_with_comma_is_brace_protected() -> None:
     assert r"to[cV, v={$\phi(0,0^+)$}]" in src
 
 
+def test_label_value_with_equals_is_brace_protected() -> None:
+    """A label value containing an equals sign (e.g. `l=$v=2$`) is brace-protected
+    so pgfkeys does not split on the inner `=` and emit broken LaTeX — a value
+    with no comma/`=` (e.g. v=$V_s$) stays unbraced (regression)."""
+    comp = _comp("R", options=r"l=$v=2$, v=$V_s$")
+    src = generate(_schematic(comp))
+    assert r"to[R, l={$v=2$}, v=$V_s$]" in src
+
+
 def test_comma_free_label_value_left_unwrapped() -> None:
     """Values without commas are emitted verbatim (no needless braces)."""
     comp = _comp("R", options="l=$R_1$")
@@ -225,15 +252,17 @@ def test_comma_free_label_value_left_unwrapped() -> None:
     assert "to[R, l=$R_1$]" in src
 
 
-def test_protect_label_commas_unit() -> None:
-    """protect_label_commas wraps only comma-bearing values, idempotently."""
-    from app.components.style import protect_label_commas as p
+def test_protect_label_values_unit() -> None:
+    """protect_label_values wraps values bearing a comma or an inner `=`,
+    idempotently, leaving plain values and flags alone."""
+    from app.components.style import protect_label_values as p
 
-    assert p(r"v=$\phi(0,0)$") == r"v={$\phi(0,0)$}"
-    assert p("l=$R_1$") == "l=$R_1$"                      # no comma → untouched
-    assert p(r"l=$R$, v=$\phi(0,1)$") == r"l=$R$, v={$\phi(0,1)$}"
+    assert p(r"v=$\phi(0,0)$") == r"v={$\phi(0,0)$}"      # comma → wrapped
+    assert p(r"l=$v=2$") == r"l={$v=2$}"                  # inner = → wrapped
+    assert p("l=$R_1$") == "l=$R_1$"                      # neither → untouched
+    assert p(r"l=$v=2$, v=$V_s$") == r"l={$v=2$}, v=$V_s$"
     assert p(r"v={$\phi(0,0)$}") == r"v={$\phi(0,0)$}"    # already a brace group
-    assert p("mirror, scale=2") == "mirror, scale=2"      # flags unaffected
+    assert p("mirror, scale=2") == "mirror, scale=2"      # plain value/flags unaffected
     assert p("") == ""
 
 
@@ -250,16 +279,6 @@ def test_resistor_rotated_90() -> None:
     comp = _comp("R", rotation=90)
     src = generate(_schematic(comp))
     assert "(0,0) to[R] (0,2)" in src
-
-
-# ---------------------------------------------------------------------------
-# test_capacitor_horizontal
-# ---------------------------------------------------------------------------
-
-def test_capacitor_horizontal() -> None:
-    """Capacitor at (2,0) → output is normalised toward the origin: (0,0) to[C] (2,0)."""
-    src = generate(_schematic(_comp("C", position=(2.0, 0.0))))
-    assert "(0,0) to[C] (2,0)" in src
 
 
 def test_output_normalized_toward_origin() -> None:
@@ -309,33 +328,6 @@ def test_already_at_origin_is_unchanged() -> None:
     assert "(0,0) to[R] (2,0)" in src
 
 
-# ---------------------------------------------------------------------------
-# test_inductor_horizontal
-# ---------------------------------------------------------------------------
-
-def test_inductor_horizontal() -> None:
-    """Inductor at (0,0), rotation 0 → (0,0) to[L] (2,0)."""
-    src = generate(_schematic(_comp("L")))
-    assert "(0,0) to[L] (2,0)" in src
-
-
-# ---------------------------------------------------------------------------
-# test_diode_horizontal
-# ---------------------------------------------------------------------------
-
-def test_diode_horizontal() -> None:
-    """Diode at (0,0), rotation 0 → (0,0) to[D] (2,0)."""
-    src = generate(_schematic(_comp("D")))
-    assert "(0,0) to[D] (2,0)" in src
-
-
-def test_diode_filled() -> None:
-    """Filled diode → to[D*] in output."""
-    comp = Component(id=_uid(), kind="D", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
-    src = generate(_schematic(comp))
-    assert "(0,0) to[D*] (2,0)" in src
-
-
 def test_diode_emits_picture_scoped_scale() -> None:
     """A schematic containing a diode emits a picture-scoped `diodes/scale`
     inside the environment so the (large) default diode body is shrunk to match
@@ -352,29 +344,6 @@ def test_no_diode_scale_without_diodes() -> None:
     src = generate(_schematic(_comp("R"), _comp("C", position=(4.0, 0.0))))
     assert "diodes/scale" not in src
 
-
-def test_zener_diode() -> None:
-    """Zener diode → to[zD] in output."""
-    src = generate(_schematic(_comp("zD")))
-    assert "(0,0) to[zD] (2,0)" in src
-
-
-def test_zener_diode_filled() -> None:
-    """Filled Zener diode → to[zD*] in output."""
-    comp = Component(id=_uid(), kind="zD", position=(0.0, 0.0), rotation=0, options="", variants={"filled": True})
-    src = generate(_schematic(comp))
-    assert "(0,0) to[zD*] (2,0)" in src
-
-
-def test_led() -> None:
-    """LED → to[leD] in output."""
-    src = generate(_schematic(_comp("leD")))
-    assert "(0,0) to[leD] (2,0)" in src
-
-
-# ---------------------------------------------------------------------------
-# test_voltage_source
-# ---------------------------------------------------------------------------
 
 def test_voltage_source() -> None:
     """Voltage source at (0,0), rotation 0 → (0,0) to[V] (0,2)."""
@@ -533,20 +502,26 @@ def test_digital_blocks_take_no_bipole_label() -> None:
 # test_nmos_node
 # ---------------------------------------------------------------------------
 
-def test_npn_node() -> None:
-    """NPN BJT is centre-placed and per-axis scaled so its anchors land on the
-    grid — no anchor= option, no lead stubs (spec/component-pipeline.md §4)."""
-    comp = _comp("npn", position=(2.0, 3.0))
-    src = generate(_schematic(comp))
-    assert "node[npn, xscale=0.8929, yscale=0.974]" in src
+# Every BJT/IGFET is the same centre-placed-and-per-axis-scaled node path; one
+# parametrized table proves the kind→scale emission (the scale *values* are
+# independently verified in test_generate.py::test_best_alignment_*).
+_TRANSISTOR_SCALES = [
+    ("npn", "xscale=0.8929, yscale=0.974"),
+    ("pnp", "xscale=0.8929, yscale=0.974"),
+    ("nigfete", "xscale=1.0204, yscale=0.974"),
+    ("nigfetd", "xscale=1.0204, yscale=0.974"),
+    ("pigfete", "xscale=1.0204, yscale=0.974"),
+    ("pigfetd", "xscale=1.0204, yscale=0.974"),
+]
+
+
+@pytest.mark.parametrize("kind, scale", _TRANSISTOR_SCALES)
+def test_transistor_node_scale(kind: str, scale: str) -> None:
+    """Centre-placed and per-axis scaled so the anchors land on the grid:
+    `node[<kind>, <scale>]`, no `anchor=` option (spec/component-pipeline.md §4)."""
+    src = generate(_schematic(_comp(kind, position=(2.0, 3.0))))
+    assert f"node[{kind}, {scale}]" in src
     assert "anchor=" not in src
-
-
-def test_pnp_node() -> None:
-    """PNP BJT is centre-placed and scaled, same as NPN."""
-    comp = _comp("pnp", position=(1.0, 1.0))
-    src = generate(_schematic(comp))
-    assert "node[pnp, xscale=0.8929, yscale=0.974]" in src
 
 
 def test_npn_no_bridge_leads() -> None:
@@ -558,22 +533,14 @@ def test_npn_no_bridge_leads() -> None:
     assert ".E) -- " not in src
 
 
-def test_gate_label_emitted_as_label_above() -> None:
-    """Logic-port shapes reject the bipole ``l=`` quick key, so a gate's label
-    slot is emitted as ``label=above:{…}`` (which CircuiTikZ accepts), not ``l=``.
-    Above matches where the canvas draws the gate's ``l`` slot."""
-    comp = _comp("nand", options=r"l=$U$")
-    src = generate(_schematic(comp))
-    assert "label=above:{$U$}" in src
-    assert "l=$U$" not in src
-
-
-def test_not_gate_label_emitted_as_label_above() -> None:
-    """Non-parametric gates (not/buffer) take the same label path."""
-    comp = _comp("not", options=r"l=$Y$")
-    src = generate(_schematic(comp))
-    assert "label=above:{$Y$}" in src
-    assert "l=$Y$" not in src
+@pytest.mark.parametrize("kind, value", [("nand", "$U$"), ("not", "$Y$")])
+def test_gate_label_emitted_as_label_above(kind: str, value: str) -> None:
+    """Logic-port shapes reject the bipole ``l=`` quick key, so a gate's label slot
+    is emitted as ``label=above:{…}`` (parametric and non-parametric gates alike) —
+    above matches where the canvas draws the gate's ``l`` slot."""
+    src = generate(_schematic(_comp(kind, options=f"l={value}")))
+    assert f"label=above:{{{value}}}" in src
+    assert f"l={value}" not in src
 
 
 def test_npn_pin_offsets() -> None:
@@ -598,41 +565,13 @@ def test_pnp_pin_offsets() -> None:
     assert pin_map["collector"] == (0.0,  0.75)
 
 
-def test_nmos_node() -> None:
-    """nigfete is centre-placed and per-axis scaled so its pins align with the
-    grid — no anchor= option and no residual lead stub."""
-    comp = _comp("nigfete", position=(0.0, 0.0))
+@pytest.mark.parametrize("kind", ["nigfete", "pigfete"])
+def test_mosfet_bodydiode_emission(kind: str) -> None:
+    """The body_diode variant inserts the `bodydiode` option ahead of the scale."""
+    comp = Component(id=_uid(), kind=kind, position=(0.0, 0.0), rotation=0,
+                     options="", variants={"body_diode": True})
     src = generate(_schematic(comp))
-    assert "node[nigfete, xscale=1.0204, yscale=0.974]" in src
-    assert ".source) -- " not in src  # no lead bridges
-
-
-def test_nmos_depletion_node() -> None:
-    """nigfetd is centre-placed and scaled, same as nigfete."""
-    comp = _comp("nigfetd", position=(0.0, 0.0))
-    src = generate(_schematic(comp))
-    assert "node[nigfetd, xscale=1.0204, yscale=0.974]" in src
-
-
-def test_pmos_node() -> None:
-    """pigfete is centre-placed and scaled — the y-mirror of nigfete."""
-    comp = _comp("pigfete", position=(0.0, 0.0))
-    src = generate(_schematic(comp))
-    assert "node[pigfete, xscale=1.0204, yscale=0.974]" in src
-
-
-def test_pmos_depletion_node() -> None:
-    """pigfetd is centre-placed and scaled, same as pigfete."""
-    comp = _comp("pigfetd", position=(0.0, 0.0))
-    src = generate(_schematic(comp))
-    assert "node[pigfetd, xscale=1.0204, yscale=0.974]" in src
-
-
-def test_nmos_bodydiode() -> None:
-    """nigfete with body_diode=True emits the bodydiode option (with the scale)."""
-    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
-    src = generate(_schematic(comp))
-    assert "node[nigfete, bodydiode, xscale=1.0204, yscale=0.974]" in src
+    assert f"node[{kind}, bodydiode, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_nmos_no_bodydiode() -> None:
@@ -640,13 +579,6 @@ def test_nmos_no_bodydiode() -> None:
     comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="")
     src = generate(_schematic(comp))
     assert "bodydiode" not in src
-
-
-def test_pmos_bodydiode() -> None:
-    """pigfete with body_diode=True emits the bodydiode option."""
-    comp = Component(id=_uid(), kind="pigfete", position=(0.0, 0.0), rotation=0, options="", variants={"body_diode": True})
-    src = generate(_schematic(comp))
-    assert "node[pigfete, bodydiode, xscale=1.0204, yscale=0.974]" in src
 
 
 def test_pmos_pin_offsets() -> None:
@@ -1122,26 +1054,14 @@ def test_text_node_bold_italic() -> None:
     assert "{Hi};" in src
 
 
-def test_text_node_font_family_sans() -> None:
-    r"""text_node with font_family='sans' → \sffamily in font= option."""
+@pytest.mark.parametrize("family, macro", [("sans", r"\sffamily"), ("mono", r"\ttfamily")])
+def test_text_node_font_family(family: str, macro: str) -> None:
+    """text_node font_family maps to the matching LaTeX family macro in font=."""
     comp = TextNodeComponent(
         id=_uid(), kind="text_node", position=(1.0, 1.0),
-        rotation=0, options="T", mirror=False,
-        font_family="sans",
+        rotation=0, options="T", mirror=False, font_family=family,
     )
-    src = generate(_schematic(comp))
-    assert r"\sffamily" in src
-
-
-def test_text_node_font_family_mono() -> None:
-    r"""text_node with font_family='mono' → \ttfamily in font= option."""
-    comp = TextNodeComponent(
-        id=_uid(), kind="text_node", position=(1.0, 1.0),
-        rotation=0, options="T", mirror=False,
-        font_family="mono",
-    )
-    src = generate(_schematic(comp))
-    assert r"\ttfamily" in src
+    assert macro in generate(_schematic(comp))
 
 
 def test_text_node_font_all_options() -> None:
@@ -1461,41 +1381,84 @@ def test_z_order_default_is_zero() -> None:
     assert comp.z_order == 0
 
 
-def test_z_order_sorts_within_background_group() -> None:
-    """Two background rects are emitted in z_order ascending order (lower first = further back)."""
-    large = RectComponent(
-        id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="", mirror=False,
-        span_override=(4.0, 4.0), z_order=-2,
-    )
-    small = RectComponent(
-        id=_uid(), kind="rect", position=(1.0, 1.0),
-        rotation=0, options="dashed", mirror=False,
-        span_override=(2.0, 2.0), z_order=-1,
-    )
+@pytest.mark.parametrize("z_lo, z_hi", [(-2, -1), (1, 2)])
+def test_z_order_sorts_within_group(z_lo: int, z_hi: int) -> None:
+    """Within a layer block (background z<0 or foreground z>0) items emit in
+    ascending z_order — lower first (further back) — regardless of insertion
+    order. One shared `sorted(key=z_order)`, so the sign of z doesn't matter."""
+    big = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0,
+                        options="", mirror=False, span_override=(4.0, 4.0), z_order=z_lo)
+    small = RectComponent(id=_uid(), kind="rect", position=(1.0, 1.0), rotation=0,
+                          options="", mirror=False, span_override=(2.0, 2.0), z_order=z_hi)
     # Pass in reverse insertion order to prove sorting overrides insertion order.
-    src = generate(_schematic(small, large))
-    large_pos = src.index("rectangle (4,4)")
-    small_pos = src.index("rectangle (3,3)")
-    assert large_pos < small_pos, "Lower z_order rect must be emitted first (further back)"
+    src = generate(_schematic(small, big))
+    assert src.index("rectangle (4,4)") < src.index("rectangle (3,3)")
 
 
-def test_z_order_sorts_within_foreground_group() -> None:
-    """Two foreground rects are emitted in z_order ascending order."""
-    bottom = RectComponent(
-        id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, options="", mirror=False,
-        span_override=(4.0, 4.0), z_order=1,
+# ---------------------------------------------------------------------------
+# z_order on plain circuit components (extended from drawing annotations)
+# ---------------------------------------------------------------------------
+
+def test_plain_component_z_order_background_before_draw_block() -> None:
+    """A plain circuit component with z_order < 0 is emitted in its own \\draw
+    before the main draw block."""
+    back = Component(
+        id=_uid(), kind="R", position=(0.0, 0.0), rotation=0,
+        options="l=$R_b$", mirror=False, z_order=-1,
     )
-    top = RectComponent(
-        id=_uid(), kind="rect", position=(1.0, 1.0),
-        rotation=0, options="", mirror=False,
-        span_override=(2.0, 2.0), z_order=2,
+    front = Component(
+        id=_uid(), kind="R", position=(0.0, 2.0), rotation=0,
+        options="l=$R_f$", mirror=False,
     )
-    src = generate(_schematic(top, bottom))
-    bottom_pos = src.index("rectangle (4,4)")
-    top_pos = src.index("rectangle (3,3)")
-    assert bottom_pos < top_pos, "Lower z_order rect must be emitted first (further back)"
+    src = generate(_schematic(back, front))
+    back_pos = src.index("R_b")
+    draw_block_pos = src.index(r"\draw" + "\n")
+    assert back_pos < draw_block_pos, "z<0 component must precede the main \\draw block"
+
+
+def test_plain_component_z_order_foreground_after_draw_block() -> None:
+    """A plain circuit component with z_order > 0 is emitted after the main draw."""
+    comp = Component(
+        id=_uid(), kind="R", position=(0.0, 0.0), rotation=0,
+        options="l=$R_f$", mirror=False, z_order=1,
+    )
+    src = generate(_schematic(comp))
+    draw_semi = src.index("  ;")
+    comp_pos = src.index("R_f")
+    assert comp_pos > draw_semi, "z>0 component must follow the main \\draw block"
+
+
+def test_plain_component_default_layer_unchanged() -> None:
+    """A z_order==0 circuit component still emits inside the shared \\draw block."""
+    comp = Component(
+        id=_uid(), kind="R", position=(0.0, 0.0), rotation=0,
+        options="l=$R_0$", mirror=False,
+    )
+    src = generate(_schematic(comp))
+    # The component line is indented inside the \draw path (four-space indent),
+    # not a standalone "\draw (...)" statement.
+    assert "    (0,0) to[R" in src
+    assert r"\draw (0,0) to[R" not in src
+
+
+def test_layered_multiterminal_keeps_output_compilable() -> None:
+    """A multi-terminal component (named node) sent to back is emitted before the
+    main draw, and a connected default-layer wire falls back to absolute
+    coordinates instead of a forward node-anchor reference."""
+    op = Component(
+        id=_uid(), kind="op amp", position=(4.0, 0.0), rotation=0,
+        options="", mirror=False, z_order=-1,
+    )
+    from app.schematic.model import component_pin_positions
+    out_pin = component_pin_positions(op)[2]
+    wire = Wire(id=_uid(), points=[out_pin, (out_pin[0] + 2.0, out_pin[1])])
+    src = generate(_schematic(op, wires=[wire]))
+    # The op amp's node is defined before the main draw block...
+    node_pos = src.index("node[op amp")
+    draw_block_pos = src.index(r"\draw" + "\n")
+    assert node_pos < draw_block_pos
+    # ...and no wire references the node by name (would be a forward reference).
+    assert ".out)" not in src and "node_" not in src.split(r"\draw" + "\n", 1)[1]
 
 
 # ---------------------------------------------------------------------------

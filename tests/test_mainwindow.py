@@ -460,25 +460,60 @@ def test_theme_radio_group_reflects_persisted_mode(tmp_path):
     assert not win._theme_actions["dark"].isChecked()
 
 
-def test_palette_keyboard_shortcuts(tmp_path, monkeypatch):
-    """Letters select a category and digits place the Nth component; modifier
-    chords are ignored so they don't shadow menu accelerators (§10.2)."""
-    from PySide6.QtCore import QEvent, Qt
+def test_placement_shortcuts_are_window_wide(tmp_path, monkeypatch):
+    """A placement key delivered to the window (canvas not focused) still places —
+    MainWindow delegates to the view's handler. Modifier chords are ignored (§10.2)."""
+    from PySide6.QtCore import Qt
     from PySide6.QtGui import QKeyEvent
 
     win = _win(tmp_path)
-    started = []
+    started: list[str] = []
     monkeypatch.setattr(win._scene, "start_placement", lambda k: started.append(k))
 
-    def press(text, key, mods=Qt.NoModifier):
-        return win._handle_palette_shortcut(QKeyEvent(QEvent.KeyPress, key, mods, text))
+    win.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
+    assert started == ["C"]
+    # A Ctrl-chord (e.g. Ctrl+C copy) is never hijacked as a placement key.
+    win.keyPressEvent(
+        QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.ControlModifier, "c")
+    )
+    assert started == ["C"]
 
-    assert press("c", Qt.Key_C)                      # → Capacitors
-    assert win._palette._active_cat == "Capacitors"
-    assert press("1", Qt.Key_1)                      # place first capacitor
-    assert started == [win._palette._by_cat["Capacitors"][0]]
-    # A Ctrl-chord (e.g. Ctrl+C) must NOT be hijacked as the category letter.
-    assert not press("c", Qt.Key_C, Qt.ControlModifier)
+
+def test_placement_shortcuts_skip_text_inputs(tmp_path, monkeypatch):
+    """A placement key is ignored while a text field is focused, so typing into the
+    palette search (or the read-only source panel) is never hijacked (§10.2)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QKeyEvent
+    from PySide6.QtWidgets import QLineEdit
+
+    win = _win(tmp_path)
+    started: list[str] = []
+    monkeypatch.setattr(win._scene, "start_placement", lambda k: started.append(k))
+    # Pretend a text field holds focus (offscreen focus is unreliable to set).
+    monkeypatch.setattr(
+        "app.canvas.view.QApplication.focusWidget", staticmethod(lambda: QLineEdit())
+    )
+    win.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
+    assert started == []
+
+
+def test_rotate_shortcut_is_ctrl_r(tmp_path):
+    """Rotate is bound to Ctrl+R (⌘R on macOS), not a plain letter, so the letters
+    stay free for placement (§10.2)."""
+    from PySide6.QtGui import QKeySequence
+
+    win = _win(tmp_path)
+    assert win._rotate_shortcut.key() == QKeySequence("Ctrl+R")
+
+
+def test_ctrl_r_rotates_selection(tmp_path):
+    """Activating the rotate shortcut turns the selected component 90° CW."""
+    win = _win(tmp_path)
+    comp = win._scene.place_component("R", (5.0, 5.0))
+    win._scene._comp_items[comp.id].setSelected(True)
+    before = win._scene._component_by_id(comp.id).rotation
+    win._rotate_shortcut.activated.emit()  # simulate the Ctrl+R press
+    assert win._scene._component_by_id(comp.id).rotation == (before + 90) % 360
 
 
 def test_export_png_renders_at_dpi(tmp_path, monkeypatch):

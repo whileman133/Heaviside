@@ -102,18 +102,27 @@ class Component:
     stroke). Persisted (``schematic/io.py``) only when it differs from 0.4; a legacy
     file's ``border_width`` on a block is read back into this field."""
 
+    z_order: int = 0
+    """Canvas and code-generation layer, shared by every component and wire.
+
+    Positive values are drawn/emitted later (in front); negative values are
+    drawn/emitted earlier (behind); the default 0 is the baseline of the plain
+    circuit. In the LaTeX output a component with ``z_order < 0`` is emitted in
+    its own ``\\draw`` statement *before* the main draw block and ``z_order > 0``
+    *after* it (see :func:`app.codegen.circuitikz.generate`); a drawing
+    annotation (rect/text/bipole) keeps its existing background/foreground rule.
+    On the Qt canvas this maps directly to ``QGraphicsItem.setZValue()``.
+    Persisted (``schematic/io.py``) only when non-zero."""
+
 
 @dataclass
 class DrawingComponent(Component):
-    """Non-circuit visual element (text_node, rect). Carries a z-order for layering."""
+    """Non-circuit visual element (text_node, rect, circle, bipole).
 
-    z_order: int = 0
-    """Canvas and code-generation layer.
-
-    Positive values are drawn/emitted later (in front); negative values are
-    drawn/emitted earlier (behind).  In the LaTeX output, items with
-    z_order < 0 are emitted *before* the main ``\\draw`` block.
-    On the Qt canvas, maps directly to ``QGraphicsItem.setZValue()``.
+    A marker subclass: it carries no extra fields (``z_order`` now lives on the
+    base :class:`Component`) but routes these kinds through the drawing-annotation
+    code paths (no named circuit pins, emitted as standalone LaTeX commands) and
+    is matched by ``isinstance`` checks throughout the canvas and code generator.
     """
 
 

@@ -124,7 +124,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.3"
+    assert data["version"] == "0.4"
     assert data["config"] == {"voltage_style": "european", "current_style": "american"}
 
 
@@ -514,38 +514,41 @@ def test_label_offset_bad_type_raises(tmp_path: Path) -> None:
 # BipoleComponent fill_color / line_width round-trip (+ legacy border_width load)
 # ---------------------------------------------------------------------------
 
-def test_bipole_fill_color_roundtrip(tmp_path: Path) -> None:
-    """BipoleComponent.fill_color survives a save/load cycle."""
-    from app.components.model import BipoleComponent
-    comp = BipoleComponent(
-        id=_uid(), kind="bipole", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="t=Test",
-        span_override=(2.0, 0.0), fill_color="cyan!15",
-    )
-    s = Schematic(version="0.1", name="bipole-fill", components=[comp])
-    p = tmp_path / "bipole_fill.hv"
-    save(s, p)
-    s2 = load(p)
-    loaded = s2.components[0]
-    assert isinstance(loaded, BipoleComponent)
-    assert loaded.fill_color == "cyan!15"
+def _styled_component(kind: str, **overrides):
+    """A StyledComponent (bipole/rect) carrying the shared fill/line fields, used
+    by the parametrized styled-field tests below — the fill/line_width/line_style
+    codec is one shared path, so one representative per kind is enough."""
+    from app.components.model import BipoleComponent, RectComponent
+    cls = {"bipole": BipoleComponent, "rect": RectComponent}[kind]
+    span = (2.0, 0.0) if kind == "bipole" else (2.0, 2.0)
+    return cls(id=_uid(), kind=kind, position=(0.0, 0.0), rotation=0,
+               mirror=False, options="", span_override=span, **overrides)
 
 
-def test_bipole_line_width_roundtrip(tmp_path: Path) -> None:
-    """BipoleComponent.line_width (the unified outline width) survives save/load."""
-    from app.components.model import BipoleComponent
-    comp = BipoleComponent(
-        id=_uid(), kind="bipole", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="",
-        span_override=(2.0, 0.0), line_width=1.5,
-    )
-    s = Schematic(version="0.1", name="bipole-bw", components=[comp])
-    p = tmp_path / "bipole_bw.hv"
-    save(s, p)
-    s2 = load(p)
-    loaded = s2.components[0]
-    assert isinstance(loaded, BipoleComponent)
+@pytest.mark.parametrize("kind", ["bipole", "rect"])
+def test_styled_component_fields_roundtrip(tmp_path: Path, kind: str) -> None:
+    """fill_color / line_width / line_style (the shared StyledComponent fields)
+    survive a save/load cycle for every styled kind."""
+    comp = _styled_component(kind, fill_color="yellow!20",
+                             line_width=1.5, line_style="dashed")
+    save(Schematic(version="0.1", name="styled", components=[comp]),
+         tmp_path / "styled.hv")
+    loaded = load(tmp_path / "styled.hv").components[0]
+    assert loaded.fill_color == "yellow!20"
     assert abs(loaded.line_width - 1.5) < 1e-6
+    assert loaded.line_style == "dashed"
+
+
+@pytest.mark.parametrize("kind", ["bipole", "rect"])
+def test_styled_component_defaults_omitted(tmp_path: Path, kind: str) -> None:
+    """Default styled fields (incl. the legacy `border_width` alias) are omitted
+    from the saved JSON for every styled kind."""
+    comp = _styled_component(kind)
+    save(Schematic(version="0.1", name="styled", components=[comp]),
+         tmp_path / "styled.hv")
+    cd = json.loads((tmp_path / "styled.hv").read_text())["components"][0]
+    for key in ("fill_color", "line_style", "line_width", "border_width"):
+        assert key not in cd
 
 
 def test_legacy_border_width_loads_as_line_width(tmp_path: Path) -> None:
@@ -571,47 +574,9 @@ def test_legacy_border_width_loads_as_line_width(tmp_path: Path) -> None:
     assert abs(loaded.line_width - 1.5) < 1e-6
 
 
-def test_bipole_defaults_not_saved(tmp_path: Path) -> None:
-    """fill_color='' and line_width=0.4 are omitted from the saved JSON."""
-    from app.components.model import BipoleComponent
-    comp = BipoleComponent(
-        id=_uid(), kind="bipole", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="",
-        span_override=(1.0, 0.0),
-    )
-    s = Schematic(version="0.1", name="bipole-defaults", components=[comp])
-    p = tmp_path / "bipole_defaults.hv"
-    save(s, p)
-    raw = json.loads(p.read_text())
-    comp_dict = raw["components"][0]
-    assert "fill_color" not in comp_dict
-    assert "border_width" not in comp_dict
-    assert "line_width" not in comp_dict
-
-
 # ---------------------------------------------------------------------------
-# StyledComponent fill / border / line_style round-trip + rect text handling
+# Rect text handling (text vs. draw-style — rect-specific, not shared)
 # ---------------------------------------------------------------------------
-
-def test_rect_style_fields_roundtrip(tmp_path: Path) -> None:
-    """RectComponent fill_color/line_width/line_style survive a save/load cycle."""
-    from app.components.model import RectComponent
-    comp = RectComponent(
-        id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="",
-        span_override=(2.0, 2.0),
-        fill_color="yellow!20", line_width=1.5, line_style="dashed",
-    )
-    s = Schematic(version="0.1", name="rect-style", components=[comp])
-    p = tmp_path / "rect_style.hv"
-    save(s, p)
-    loaded = load(p).components[0]
-    assert isinstance(loaded, RectComponent)
-    assert loaded.fill_color == "yellow!20"
-    assert abs(loaded.line_width - 1.5) < 1e-6
-    assert loaded.line_style == "dashed"
-    assert loaded.options == ""
-
 
 def test_rect_text_roundtrip(tmp_path: Path) -> None:
     """A rect's centred text (options) and font fields survive save/load."""
@@ -664,22 +629,6 @@ def test_rect_text_kept_verbatim_not_parsed_as_style(tmp_path: Path) -> None:
     assert loaded.line_style == ""
 
 
-def test_bipole_line_style_roundtrip(tmp_path: Path) -> None:
-    """BipoleComponent.line_style survives a save/load cycle (dashed border support)."""
-    from app.components.model import BipoleComponent
-    comp = BipoleComponent(
-        id=_uid(), kind="bipole", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="t=Test",
-        span_override=(2.0, 0.0), line_style="dashed",
-    )
-    s = Schematic(version="0.1", name="bipole-ls", components=[comp])
-    p = tmp_path / "bipole_ls.hv"
-    save(s, p)
-    loaded = load(p).components[0]
-    assert isinstance(loaded, BipoleComponent)
-    assert loaded.line_style == "dashed"
-
-
 def test_component_scale_roundtrip(tmp_path: Path) -> None:
     """A logic gate's non-default scale survives save/load; the default (1.0) is
     omitted from the JSON, and a legacy gate file without `scale` loads at 1.0."""
@@ -697,23 +646,6 @@ def test_component_scale_roundtrip(tmp_path: Path) -> None:
     loaded = load(p).components
     assert abs(loaded[0].scale - 0.5) < 1e-9
     assert abs(loaded[1].scale - 1.0) < 1e-9        # absent → 1.0 (back-compat)
-
-
-def test_styled_defaults_not_saved(tmp_path: Path) -> None:
-    """Default fill_color/line_width/line_style are omitted from saved JSON."""
-    from app.components.model import RectComponent
-    comp = RectComponent(
-        id=_uid(), kind="rect", position=(0.0, 0.0),
-        rotation=0, mirror=False, options="", span_override=(2.0, 2.0),
-    )
-    s = Schematic(version="0.1", name="rect-defaults", components=[comp])
-    p = tmp_path / "rect_defaults.hv"
-    save(s, p)
-    comp_dict = json.loads(p.read_text())["components"][0]
-    assert "fill_color" not in comp_dict
-    assert "border_width" not in comp_dict
-    assert "line_width" not in comp_dict
-    assert "line_style" not in comp_dict
 
 
 def test_variant_roundtrip(tmp_path: Path) -> None:
@@ -766,216 +698,104 @@ def test_legacy_variant_keys_back_compat(tmp_path: Path) -> None:
 # Wire line_style / line_width round-trip
 # ---------------------------------------------------------------------------
 
-def test_roundtrip_wire_style(tmp_path: Path) -> None:
-    """A wire's line_style and line_width are serialised and restored."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
-             line_style="dashed", line_width=0.8)
-    original = Schematic(version="0.1", name="ws", wires=[w])
-    p = tmp_path / "ws.hv"
-    save(original, p)
-    loaded = load(p)
-    assert loaded.wires[0].line_style == "dashed"
-    assert loaded.wires[0].line_width == 0.8
+# A representative non-default value for every optional wire field. Setting them
+# all on one wire and round-tripping is the comprehensive coverage; the per-field
+# parametrized tables below cover default-omission and type validation. (Listing
+# every field here is also the silent-data-loss guard from CLAUDE.md: a new
+# serialized field must be added to these tables, which forces a _FORMAT_VERSION
+# bump to keep round-tripping.)
+_WIRE_FIELD_VALUES = {
+    "line_style": "dashed",
+    "line_width": 0.8,
+    "no_junction_dots": True,
+    "no_termination_dots": True,
+    "start_marker": "arrow",
+    "end_marker": "arrow",
+    "start_label": "in",
+    "end_label": "$y(t)$",
+    "start_label_placement": "above",
+    "end_label_placement": "below",
+    "mid_label": "$V_{bus}$",
+    "mid_label_pos": 0.25,
+    "z_order": -3,
+    "hop_mode": "never",
+}
 
 
-def test_wire_default_style_not_serialised(tmp_path: Path) -> None:
-    """Default style fields are omitted from the JSON (backward-compatible)."""
+def test_wire_all_fields_roundtrip(tmp_path: Path) -> None:
+    """Every optional wire field, set together on one wire, survives save+load."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)], **_WIRE_FIELD_VALUES)
+    save(Schematic(version="0.1", name="all", wires=[w]), tmp_path / "all.hv")
+    loaded = load(tmp_path / "all.hv").wires[0]
+    for field, value in _WIRE_FIELD_VALUES.items():
+        assert getattr(loaded, field) == value, field
+
+
+def test_wire_hop_mode_always_roundtrips(tmp_path: Path) -> None:
+    """The other hop_mode enum value round-trips too (the field table uses 'never')."""
+    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], hop_mode="always")
+    save(Schematic(version="0.1", name="hm", wires=[w]), tmp_path / "hm.hv")
+    assert load(tmp_path / "hm.hv").wires[0].hop_mode == "always"
+
+
+@pytest.mark.parametrize("field", list(_WIRE_FIELD_VALUES))
+def test_wire_default_field_omitted(tmp_path: Path, field: str) -> None:
+    """A wire left at defaults serialises none of the optional fields, so plain
+    wires' JSON stays minimal and older readers are unaffected."""
     w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    save(Schematic(version="0.1", name="ws", wires=[w]), tmp_path / "ws.hv")
-    raw = json.loads((tmp_path / "ws.hv").read_text())
-    assert "line_style" not in raw["wires"][0]
-    assert "line_width" not in raw["wires"][0]
+    save(Schematic(version="0.1", name="d", wires=[w]), tmp_path / "d.hv")
+    raw = json.loads((tmp_path / "d.hv").read_text())
+    assert field not in raw["wires"][0]
 
 
-def test_wire_missing_style_loads_defaults(tmp_path: Path) -> None:
-    """Old files without wire style fields load with the defaults."""
+def test_wire_missing_fields_load_defaults(tmp_path: Path) -> None:
+    """An old minimal wire (no optional keys) loads with every default."""
     doc = {
         "version": "0.1", "name": "old", "components": [],
         "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]]}],
     }
-    p = tmp_path / "old.hv"
-    p.write_text(json.dumps(doc))
-    loaded = load(p)
-    assert loaded.wires[0].line_style == ""
-    assert loaded.wires[0].line_width == 0.4
+    (tmp_path / "old.hv").write_text(json.dumps(doc))
+    w = load(tmp_path / "old.hv").wires[0]
+    assert (w.line_style, w.line_width) == ("", 0.4)
+    assert w.no_junction_dots is False and w.no_termination_dots is False
+    assert w.start_marker == "" and w.end_marker == ""
+    assert w.start_label == "" and w.end_label == ""
+    assert w.start_label_placement == "" and w.end_label_placement == ""
+    assert w.mid_label == "" and w.mid_label_pos == 0.5
+    assert w.z_order == 0 and w.hop_mode == ""
 
 
-def test_wire_bad_style_type_raises(tmp_path: Path) -> None:
+# (field, bad value) for the type-validated wire fields. line_style is
+# str-coerced on load (no type gate), so it is intentionally absent; hop_mode's
+# entry is an invalid *enum* value (also rejected, with the field named).
+_WIRE_BAD_TYPES = [
+    ("line_width", "wide"),
+    ("no_junction_dots", "yes"),
+    ("no_termination_dots", 1),
+    ("end_marker", 1),
+    ("start_label", 5),
+    ("end_label_placement", 3),
+    ("mid_label_pos", "halfway"),
+    ("z_order", "high"),
+    ("hop_mode", "sometimes"),
+]
+
+
+@pytest.mark.parametrize("field, bad_value", _WIRE_BAD_TYPES)
+def test_wire_bad_field_value_raises(tmp_path: Path, field: str, bad_value) -> None:
+    """A wrong-typed (or invalid-enum) wire field raises a SchematicLoadError
+    that names the offending field."""
     doc = {
         "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "line_width": "wide"}],
-    }
-    p = tmp_path / "bad.hv"
-    p.write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="line_width"):
-        load(p)
-
-
-def test_roundtrip_wire_no_junction_dots(tmp_path: Path) -> None:
-    """A wire's no_junction_dots flag round-trips through save+load."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], no_junction_dots=True)
-    save(Schematic(version="0.1", name="nj", wires=[w]), tmp_path / "nj.hv")
-    loaded = load(tmp_path / "nj.hv")
-    assert loaded.wires[0].no_junction_dots is True
-
-
-def test_wire_no_junction_dots_default_omitted(tmp_path: Path) -> None:
-    """The default (False) is omitted from the JSON; old files load as False."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    save(Schematic(version="0.1", name="nj", wires=[w]), tmp_path / "nj.hv")
-    raw = json.loads((tmp_path / "nj.hv").read_text())
-    assert "no_junction_dots" not in raw["wires"][0]
-
-
-def test_wire_no_junction_dots_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "no_junction_dots": "yes"}],
+        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]], field: bad_value}],
     }
     (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="no_junction_dots"):
+    with pytest.raises(SchematicLoadError, match=field):
         load(tmp_path / "bad.hv")
-
-
-def test_roundtrip_wire_no_termination_dots(tmp_path: Path) -> None:
-    """A wire's no_termination_dots flag round-trips through save+load."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], no_termination_dots=True)
-    save(Schematic(version="0.1", name="nt", wires=[w]), tmp_path / "nt.hv")
-    loaded = load(tmp_path / "nt.hv")
-    assert loaded.wires[0].no_termination_dots is True
-
-
-def test_wire_no_termination_dots_default_omitted(tmp_path: Path) -> None:
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    save(Schematic(version="0.1", name="nt", wires=[w]), tmp_path / "nt.hv")
-    raw = json.loads((tmp_path / "nt.hv").read_text())
-    assert "no_termination_dots" not in raw["wires"][0]
-
-
-def test_wire_no_termination_dots_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "no_termination_dots": 1}],
-    }
-    (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="no_termination_dots"):
-        load(tmp_path / "bad.hv")
-
-
-def test_roundtrip_wire_markers(tmp_path: Path) -> None:
-    """A wire's start_marker/end_marker survive a save+load cycle."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
-             start_marker="arrow", end_marker="arrow")
-    save(Schematic(version="0.1", name="mk", wires=[w]), tmp_path / "mk.hv")
-    loaded = load(tmp_path / "mk.hv")
-    assert loaded.wires[0].start_marker == "arrow"
-    assert loaded.wires[0].end_marker == "arrow"
-
-
-def test_wire_markers_default_omitted(tmp_path: Path) -> None:
-    """Empty markers are omitted from the JSON; old files load with defaults."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    save(Schematic(version="0.1", name="mk", wires=[w]), tmp_path / "mk.hv")
-    raw = json.loads((tmp_path / "mk.hv").read_text())
-    assert "start_marker" not in raw["wires"][0]
-    assert "end_marker" not in raw["wires"][0]
-
-
-def test_wire_marker_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "end_marker": 1}],
-    }
-    (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="end_marker"):
-        load(tmp_path / "bad.hv")
-
-
-def test_roundtrip_wire_labels(tmp_path: Path) -> None:
-    """A wire's start_label/end_label survive a save+load cycle."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
-             start_label="in", end_label="$y(t)$")
-    save(Schematic(version="0.1", name="lb", wires=[w]), tmp_path / "lb.hv")
-    loaded = load(tmp_path / "lb.hv")
-    assert loaded.wires[0].start_label == "in"
-    assert loaded.wires[0].end_label == "$y(t)$"
-
-
-def test_wire_labels_default_omitted(tmp_path: Path) -> None:
-    """Empty labels are omitted from the JSON (back-compat)."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    save(Schematic(version="0.1", name="lb", wires=[w]), tmp_path / "lb.hv")
-    raw = json.loads((tmp_path / "lb.hv").read_text())
-    assert "start_label" not in raw["wires"][0]
-    assert "end_label" not in raw["wires"][0]
-
-
-def test_roundtrip_wire_label_placement(tmp_path: Path) -> None:
-    """A wire's start/end label placement survives a save+load cycle."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)],
-             start_label="in", start_label_placement="above",
-             end_label="$y$", end_label_placement="below")
-    save(Schematic(version="0.1", name="lp", wires=[w]), tmp_path / "lp.hv")
-    loaded = load(tmp_path / "lp.hv").wires[0]
-    assert loaded.start_label_placement == "above"
-    assert loaded.end_label_placement == "below"
-
-
-def test_wire_label_placement_default_omitted(tmp_path: Path) -> None:
-    """Default ('' = off-end) placement is omitted from the JSON (back-compat)."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)], end_label="$y$")
-    save(Schematic(version="0.1", name="lp", wires=[w]), tmp_path / "lp.hv")
-    raw = json.loads((tmp_path / "lp.hv").read_text())
-    assert "start_label_placement" not in raw["wires"][0]
-    assert "end_label_placement" not in raw["wires"][0]
-
-
-def test_wire_label_placement_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "end_label_placement": 3}],
-    }
-    (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="end_label_placement"):
-        load(tmp_path / "bad.hv")
-
-
-def test_wire_label_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "start_label": 5}],
-    }
-    (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="start_label"):
-        load(tmp_path / "bad.hv")
-
-
-def test_roundtrip_wire_mid_label(tmp_path: Path) -> None:
-    """A wire's mid_label and mid_label_pos survive a save+load cycle."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)],
-             mid_label="$V_{bus}$", mid_label_pos=0.25)
-    save(Schematic(version="0.1", name="m", wires=[w]), tmp_path / "m.hv")
-    loaded = load(tmp_path / "m.hv")
-    assert loaded.wires[0].mid_label == "$V_{bus}$"
-    assert loaded.wires[0].mid_label_pos == 0.25
-
-
-def test_wire_mid_label_defaults_omitted(tmp_path: Path) -> None:
-    """Empty mid_label and the default 0.5 position are omitted from JSON."""
-    w = Wire(id=_uid(), points=[(0.0, 0.0), (4.0, 0.0)])
-    save(Schematic(version="0.1", name="m", wires=[w]), tmp_path / "m.hv")
-    raw = json.loads((tmp_path / "m.hv").read_text())
-    assert "mid_label" not in raw["wires"][0]
-    assert "mid_label_pos" not in raw["wires"][0]
 
 
 def test_wire_mid_label_pos_clamped_on_load(tmp_path: Path) -> None:
+    """An out-of-range mid_label_pos is clamped to [0, 1] on load."""
     doc = {
         "version": "0.1", "name": "m", "components": [],
         "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
@@ -983,81 +803,6 @@ def test_wire_mid_label_pos_clamped_on_load(tmp_path: Path) -> None:
     }
     (tmp_path / "m.hv").write_text(json.dumps(doc))
     assert load(tmp_path / "m.hv").wires[0].mid_label_pos == 1.0
-
-
-def test_wire_mid_label_pos_bad_type_raises(tmp_path: Path) -> None:
-    doc = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0.0, 0.0], [2.0, 0.0]],
-                   "mid_label_pos": "halfway"}],
-    }
-    (tmp_path / "bad.hv").write_text(json.dumps(doc))
-    with pytest.raises(SchematicLoadError, match="mid_label_pos"):
-        load(tmp_path / "bad.hv")
-
-
-# ---------------------------------------------------------------------------
-# Wire z_order round-trip (line-hop layering)
-# ---------------------------------------------------------------------------
-
-def test_roundtrip_wire_z_order(tmp_path: Path) -> None:
-    """A wire's non-zero z_order survives a save/load cycle; default stays absent."""
-    plain = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    layered = Wire(id=_uid(), points=[(0.0, 1.0), (2.0, 1.0)], z_order=-3)
-    original = Schematic(version="0.1", name="z", wires=[plain, layered])
-    p = tmp_path / "z.hv"
-    save(original, p)
-
-    # Default z_order is not persisted (keeps plain wires' JSON minimal).
-    raw = json.loads(p.read_text())
-    assert "z_order" not in raw["wires"][0]
-    assert raw["wires"][1]["z_order"] == -3
-
-    loaded = load(p)
-    assert loaded.wires[0].z_order == 0
-    assert loaded.wires[1].z_order == -3
-
-
-def test_wire_z_order_wrong_type_raises(tmp_path: Path) -> None:
-    """A non-integer wire z_order raises SchematicLoadError."""
-    data = {
-        "version": "0.1",
-        "name": "bad",
-        "components": [],
-        "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "z_order": "high"}],
-        "metadata": {},
-    }
-    p = tmp_path / "bad.hv"
-    p.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(SchematicLoadError, match="z_order"):
-        load(p)
-
-
-def test_roundtrip_wire_hop_mode(tmp_path: Path) -> None:
-    """A wire's hop_mode round-trips; the default "" is omitted from JSON."""
-    plain = Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 0.0)])
-    never = Wire(id=_uid(), points=[(0.0, 1.0), (2.0, 1.0)], hop_mode="never")
-    always = Wire(id=_uid(), points=[(0.0, 2.0), (2.0, 2.0)], hop_mode="always")
-    p = tmp_path / "hm.hv"
-    save(Schematic(version="0.1", name="hm", wires=[plain, never, always]), p)
-    raw = json.loads(p.read_text())
-    assert "hop_mode" not in raw["wires"][0]
-    assert raw["wires"][1]["hop_mode"] == "never"
-    assert raw["wires"][2]["hop_mode"] == "always"
-    loaded = load(p)
-    assert [w.hop_mode for w in loaded.wires] == ["", "never", "always"]
-
-
-def test_wire_hop_mode_invalid_raises(tmp_path: Path) -> None:
-    data = {
-        "version": "0.1", "name": "bad", "components": [],
-        "wires": [{"id": _uid(), "points": [[0, 0], [2, 0]], "hop_mode": "sometimes"}],
-        "metadata": {},
-    }
-    p = tmp_path / "bad.hv"
-    p.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(SchematicLoadError, match="hop_mode"):
-        load(p)
 
 
 # ---------------------------------------------------------------------------
@@ -1250,14 +995,36 @@ def test_component_z_order_bool_rejected(tmp_path: Path) -> None:
         load(p)
 
 
-def test_format_version_03_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.3; files declaring 0.1, 0.2 and 0.3 all load."""
+def test_plain_component_z_order_roundtrips(tmp_path: Path) -> None:
+    """z_order on a plain circuit component (not a drawing annotation) is written
+    when non-zero and read back (0.4 format)."""
+    comp = Component(id="r", kind="R", position=(0.0, 0.0), rotation=0,
+                     options="", z_order=-3)
+    s = Schematic(version="0.1", name="zc", components=[comp])
+    p = tmp_path / "zc.hv"
+    save(s, p)
+    data = json.loads(p.read_text(encoding="utf-8"))
+    assert data["components"][0]["z_order"] == -3
+    assert load(p).components[0].z_order == -3
+
+
+def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
+    """A z_order of 0 is omitted from the saved JSON to keep files compact."""
+    comp = Component(id="r", kind="R", position=(0.0, 0.0), rotation=0, options="")
+    s = Schematic(version="0.1", name="z0", components=[comp])
+    p = tmp_path / "z0.hv"
+    save(s, p)
+    assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
+
+
+def test_format_version_04_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.4; files declaring 0.1, 0.2, 0.3 and 0.4 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.3"
-    assert load(p).version == "0.3"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.4"
+    assert load(p).version == "0.4"
 
-    for old in ("0.1", "0.2"):
+    for old in ("0.1", "0.2", "0.3"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

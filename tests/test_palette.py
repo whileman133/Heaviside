@@ -102,9 +102,8 @@ def test_logic_split_into_gates_and_blocks():
 
 def test_library_buildout_categories_present():
     """The library build-out added Tubes / Blocks / Transducers / Antennas
-    categories (with unique shortcut letters and a representative icon kind), each
-    holding its new components."""
-    from app.ui.palette import _CATEGORY_REP, _CATEGORY_LETTERS
+    categories (each with a representative icon kind), holding its new components."""
+    from app.ui.palette import _CATEGORY_REP
 
     p = _palette()
     expected = {
@@ -117,14 +116,12 @@ def test_library_buildout_categories_present():
         assert cat in p._cards, f"{cat} card missing"
         for kind in members:
             assert kind in p._by_cat[cat], f"{kind} not in {cat}"
-        assert cat in _CATEGORY_REP and _CATEGORY_LETTERS.get(cat)
+        assert cat in _CATEGORY_REP
     # A handful of new kinds landed in the right existing categories.
     assert "varistor" in p._by_cat["Resistors"]
     assert "nigbt" in p._by_cat["Transistors"]
     assert "thyristor" in p._by_cat["Diodes"]
     assert "spst" in p._by_cat["Switches"]
-    # Letters stay globally unique (no collision from the four new categories).
-    assert len(set(_CATEGORY_LETTERS.values())) == len(_CATEGORY_LETTERS)
 
 
 def test_selecting_a_category_makes_it_active():
@@ -166,35 +163,17 @@ def test_clicking_a_tile_starts_placement(monkeypatch):
     assert started == ["C"]
 
 
-def test_select_category_by_letter():
-    """Each category's mnemonic letter activates it (keyboard shortcut path)."""
-    from app.ui.palette import _CATEGORY_LETTERS
+def test_category_order_is_row_major_three_columns():
+    """Categories are laid out three to a row, in the spec §5.4 order; the palette
+    no longer assigns per-category keyboard shortcuts (no letter badges)."""
+    import app.ui.palette as palette_mod
 
+    assert not hasattr(palette_mod, "_CATEGORY_LETTERS")
     p = _palette()
-    assert p.select_category_by_letter("C")        # Capacitors
-    assert p._active_cat == "Capacitors"
-    assert p.select_category_by_letter("d")        # case-insensitive → Diodes
-    assert p._active_cat == "Diodes"
-    assert not p.select_category_by_letter("?")    # unknown letter → no-op
-    assert p._active_cat == "Diodes"
-    # The letter map is unique (no two categories share a key).
-    assert len(set(_CATEGORY_LETTERS.values())) == len(_CATEGORY_LETTERS)
-
-
-def test_place_active_index(monkeypatch):
-    """Digit shortcuts place the Nth component of the active category."""
-    p = _palette()
-    started = []
-    monkeypatch.setattr(p._scene, "start_placement", lambda k: started.append(k))
-    p.select_category_by_letter("R")               # Resistors active
-    kinds = p._by_cat["Resistors"]
-    assert p.place_active_index(0)                  # press "1"
-    assert started == [kinds[0]]
-    assert p.place_active_index(2)                  # press "3"
-    assert started == [kinds[0], kinds[2]]
-    # Out-of-range index is ignored (no crash, returns False).
-    assert not p.place_active_index(999)
-    assert len(started) == 2
+    # Every palette category is present and the order reads row-by-row, with the
+    # first row being Resistors | Inductors | Capacitors.
+    assert p._ordered_cats[:3] == ["Resistors", "Inductors", "Capacitors"]
+    assert set(p._ordered_cats) == set(p._cards)
 
 
 def test_category_icons_render_from_representative_kind():
@@ -218,18 +197,14 @@ def test_search_box_does_not_grab_initial_focus():
     assert p._search.focusPolicy() == Qt.ClickFocus
 
 
-def test_grounds_uses_g_shortcut():
-    """Grounds is reachable via 'G'; the gate groups use 'O' and 'E', and the
-    Logic-blocks group uses 'K'."""
+def test_split_categories_are_selectable():
+    """The split categories — Grounds, the two gate groups, and the Logic-blocks
+    group — each render a card and become active when selected."""
     p = _palette()
-    assert p.select_category_by_letter("G")
-    assert p._active_cat == "Grounds"
-    assert p.select_category_by_letter("O")
-    assert p._active_cat == "Gates (Am)"
-    assert p.select_category_by_letter("E")
-    assert p._active_cat == "Gates (Eu)"
-    assert p.select_category_by_letter("K")
-    assert p._active_cat == "Logic"
+    for cat in ("Grounds", "Gates (Am)", "Gates (Eu)", "Logic"):
+        assert cat in p._cards
+        p._select_category(cat)
+        assert p._active_cat == cat
 
 
 def test_category_names_follow_dark_theme():

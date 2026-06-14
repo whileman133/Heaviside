@@ -3,9 +3,10 @@ Tests for scripts/render_screenshots.py — the README example-gallery renderer.
 
 The release workflow re-runs the script and commits the PNGs to main, so this
 guards: the manifest matches the bundled examples and the README, both themes
-are represented, and an actual run captures the full editor GUI (not a blank
-or canvas-only frame). The GUI shot runs in a subprocess because the script
-isolates QSettings globally — in-process that would leak into other tests.
+are represented (light = the demo GIF hero, dark = the example screenshots), and
+an actual run captures the full editor GUI (not a blank or canvas-only frame).
+The GUI shot runs in a subprocess because the script isolates QSettings globally
+— in-process that would leak into other tests.
 """
 
 from __future__ import annotations
@@ -33,20 +34,24 @@ _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
 
-def test_manifest_examples_exist_and_cover_both_themes() -> None:
-    """Every manifest entry points at a bundled example; both palettes appear."""
-    assert len(_mod.SHOTS) == 3
+def test_manifest_examples_exist() -> None:
+    """Every manifest entry points at a bundled example, with unique output names.
+    The static gallery is all dark mode; the README's light-theme view is the demo
+    GIF hero (guarded by test_readme_gallery_references_demo_gif_and_screenshots)."""
+    assert len(_mod.SHOTS) == 2
     names = [name for _, _, name in _mod.SHOTS]
     assert len(set(names)) == len(names), "output names must be unique"
     for rel, _dark, _name in _mod.SHOTS:
         assert (_ROOT / rel).is_file(), f"missing example: {rel}"
-    darks = [dark for _, dark, _ in _mod.SHOTS]
-    assert any(darks) and not all(darks), "need at least one dark and one light"
+    assert all(dark for _, dark, _ in _mod.SHOTS), "static gallery shots are dark mode"
 
 
-def test_readme_gallery_references_every_screenshot() -> None:
-    """The README screenshot table and the manifest cannot drift apart."""
+def test_readme_gallery_references_demo_gif_and_screenshots() -> None:
+    """The README hero (demo GIF) and every manifest screenshot must appear, so the
+    gallery and manifest can't drift apart and both themes stay represented
+    (light = the demo GIF, dark = the example screenshots)."""
     readme = (_ROOT / "README.md").read_text(encoding="utf-8")
+    assert "docs/images/demo.gif" in readme, "README missing the demo GIF hero"
     for _rel, _dark, name in _mod.SHOTS:
         assert f"docs/images/examples/{name}" in readme, f"README missing {name}"
 

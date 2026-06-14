@@ -121,6 +121,21 @@ def local_span_to_world(
     return (rx, ry)
 
 
+def world_span_to_local(
+    offset: tuple[float, float], rotation: int, mirror: bool
+) -> tuple[float, float]:
+    """Map a world-space terminal offset back into a component's local span axes.
+
+    The exact inverse of :func:`local_span_to_world`: undo the horizontal mirror
+    (negate world x) first, then the rotation. Used to derive the new span when an
+    annotation's *origin* endpoint is dragged while the terminal stays fixed.
+    """
+    wx, wy = offset
+    if mirror:
+        wx = -wx
+    return world_delta_to_local(wx, wy, rotation)
+
+
 # ---------------------------------------------------------------------------
 # Segment proximity
 # ---------------------------------------------------------------------------

@@ -37,7 +37,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
-from app.components.model import DrawingComponent, FontedComponent, TextNodeComponent
+from app.components.model import FontedComponent, TextNodeComponent
 from app.schematic.model import (
     Component,
     Schematic,
@@ -730,6 +730,52 @@ class ResizeCommand(Command):
         self._reshape_wires(schematic, old_pin, dx, dy)
 
 
+class MoveEndpointCommand(ResizeCommand):
+    """Drag the *origin* endpoint of a resizable two-terminal line annotation.
+
+    The mirror image of :class:`ResizeCommand`: instead of holding the origin
+    fixed and moving the terminal, it holds the terminal fixed and moves the
+    origin. It shifts the component's ``position`` to the new origin and sets
+    ``span_override`` so the terminal stays put; wires connected at the old
+    origin follow (via the same :func:`compute_pin_drag_reshape` rule), while
+    the terminal's wires do not move.
+
+    Inverse: restore the previous ``position``, ``span_override`` and wire
+    geometry (the latter two via :class:`ResizeCommand`).
+    """
+
+    label = "Move endpoint"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_span: tuple[float, float],
+        old_span: tuple[float, float],
+        new_position: tuple[float, float],
+        old_position: tuple[float, float],
+    ) -> None:
+        super().__init__(component_id, new_span, old_span)
+        self._new_position = new_position
+        self._old_position = old_position
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        old_origin = comp.position
+        comp.position = self._new_position
+        comp.span_override = self._new_span
+        dx = self._new_position[0] - self._old_position[0]
+        dy = self._new_position[1] - self._old_position[1]
+        self._reshape_wires(schematic, old_origin, dx, dy)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.position = self._old_position
+        super().undo(schematic)   # restores span_override + wire geometry
+
+    def redo(self, schematic: Schematic) -> None:
+        self.do(schematic)
+
+
 class SetFontSizeCommand(Command):
     """Set font_size on any FontedComponent (text_node, bipole)."""
 
@@ -755,7 +801,7 @@ class SetFontSizeCommand(Command):
 
 
 class SetZOrderCommand(Command):
-    """Set z_order on a drawing annotation component (text_node, rect)."""
+    """Set z_order (front/back layer) on any component."""
 
     label = "Set Z-Order"
 
@@ -765,12 +811,10 @@ class SetZOrderCommand(Command):
         self._old_z = old_z
 
     def do(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, DrawingComponent)
-        comp.z_order = self._new_z
+        _find_component(schematic, self._component_id).z_order = self._new_z
 
     def undo(self, schematic: Schematic) -> None:
-        comp = _typed_component(schematic, self._component_id, DrawingComponent)
-        comp.z_order = self._old_z
+        _find_component(schematic, self._component_id).z_order = self._old_z
 
 
 class SetTextStyleCommand(Command):

@@ -65,7 +65,7 @@ def test_help_groups_are_well_formed(group):
 
 def test_shortcuts_cover_core_actions():
     keys = {k for _, rows in _HELP_SHORTCUT_GROUPS for k, _ in rows}
-    for want in ("S", "W", "P", "R", "Ctrl+N", "Ctrl+S", "Ctrl+Z", "Ctrl+Shift+Z"):
+    for want in ("S", "W", "P", "Ctrl+R", "Ctrl+N", "Ctrl+S", "Ctrl+Z", "Ctrl+Shift+Z"):
         assert want in keys
     # The Tab-cycle group documents each implemented cycling target + reverse.
     assert sum(k.startswith("Tab (over") for k in keys) >= 3

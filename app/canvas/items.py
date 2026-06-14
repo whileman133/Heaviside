@@ -862,6 +862,11 @@ class ComponentItem(QGraphicsItem):
         t.rotate(component.rotation)
         self.setTransform(t)
 
+        # Layer: every component carries a z_order (front/back). Drawing
+        # annotations sit on the shared wire/component z-stack; plain circuit
+        # symbols default to 0 and move only when sent to front/back.
+        self.setZValue(component.z_order)
+
         # The LabelTextItem is now the in-place *editor* only (double-click);
         # display is handled by per-side _SlotLabel children.  It is hidden when
         # not editing and is not draggable (labels auto-place on their sides).
@@ -913,6 +918,7 @@ class ComponentItem(QGraphicsItem):
             self._options_item.end_edit(commit=False)
         self.prepareGeometryChange()
         self._component = comp
+        self.setZValue(comp.z_order)   # keep the canvas layer in sync (front/back)
         self._sync_options_item()
 
     def _on_options_commit(self, text: str) -> None:
@@ -1489,13 +1495,27 @@ class _ResizableTwoTerminalItem(ComponentItem):
         if self.isSelected() and not self._ghost:
             painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
             painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
-            painter.drawRect(
-                ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
-                _HANDLE_HALF * 2, _HANDLE_HALF * 2,
-            )
+            handles = [ep]
+            if self._origin_draggable():
+                handles.append(QPointF(0.0, 0.0))
+            for h in handles:
+                painter.drawRect(
+                    h.x() - _HANDLE_HALF, h.y() - _HANDLE_HALF,
+                    _HANDLE_HALF * 2, _HANDLE_HALF * 2,
+                )
 
     def _draw_body(self, painter: QPainter, color: str, ep: QPointF) -> None:
         raise NotImplementedError
+
+    def _origin_draggable(self) -> bool:
+        """Whether the *origin* endpoint can be dragged independently.
+
+        True for line annotations (open / short / bipole), whose two endpoints
+        are symmetric — either may be grabbed and moved while the other stays
+        put. Boxes (rect / circle) resize as an anchored scale about their fixed
+        corner and expose only the terminal handle, so they override to False.
+        """
+        return True
 
     def set_preview_span(self, span: tuple[float, float]) -> None:
         import dataclasses
@@ -1507,6 +1527,19 @@ class _ResizableTwoTerminalItem(ComponentItem):
         ep = self._endpoint_px()
         return (abs(local_pt.x() - ep.x()) <= _HANDLE_HALF + 2 and
                 abs(local_pt.y() - ep.y()) <= _HANDLE_HALF + 2)
+
+    def endpoint_handle_index_at(self, local_pt: QPointF) -> int | None:
+        """Return which resize handle *local_pt* is over: 1 = terminal, 0 = origin
+        (only when :meth:`_origin_draggable`), or None. The terminal wins a tie at
+        a zero-length annotation so a fresh annotation can still be stretched out."""
+        if self.terminal_handle_hit(local_pt):
+            return 1
+        if self._origin_draggable() and (
+            abs(local_pt.x()) <= _HANDLE_HALF + 2
+            and abs(local_pt.y()) <= _HANDLE_HALF + 2
+        ):
+            return 0
+        return None
 
 
 class OpenItem(_ResizableTwoTerminalItem):
@@ -2399,23 +2432,12 @@ class OpenCircleItem(QGraphicsItem):
 # ---------------------------------------------------------------------------
 
 class _DrawingAnnotationBase(ComponentItem):
-    """Base for drawing annotations (text_node, rect).
+    """Base for drawing annotations (text_node, rect, circle, bipole).
 
-    Applies ``component.z_order`` to the item's Qt z-value on construction and
-    whenever the component property is updated, so the canvas layer stays in
-    sync with the model without the scene needing to know about drawing kinds
-    specifically.
+    A thin marker subclass: z_order → Qt z-value is now handled by the base
+    :class:`ComponentItem` (every component carries a layer), so this only exists
+    to group the drawing-annotation kinds and host their shared style helpers.
     """
-
-    def __init__(self, component: "Component", parent=None) -> None:
-        super().__init__(component, parent)
-        self.setZValue(component.z_order)
-
-    @ComponentItem.component.setter  # type: ignore[misc]
-    def component(self, comp: "Component") -> None:
-        # Call the base setter (prepareGeometryChange + model update + label sync)
-        ComponentItem.component.fset(self, comp)  # type: ignore[attr-defined]
-        self.setZValue(comp.z_order)
 
 
 _RECT_STYLE_MAP: dict[str, Qt.PenStyle] = {
@@ -2598,6 +2620,11 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
     ``line_style``); the outline width is the unified ``Component.line_width``.
     No circuit pins.
     """
+
+    def _origin_draggable(self) -> bool:
+        # A box resizes as an anchored scale about its first corner, so only the
+        # opposite-corner (terminal) handle is draggable.
+        return False
 
     def _sync_options_item(self) -> None:
         # The centred text label (component.options) is drawn inline in
@@ -2959,10 +2986,14 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         if self.isSelected() and not self._ghost:
             painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
             painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
-            painter.drawRect(
-                ep.x() - _HANDLE_HALF, ep.y() - _HANDLE_HALF,
-                _HANDLE_HALF * 2, _HANDLE_HALF * 2,
-            )
+            handles = [ep]
+            if self._origin_draggable():
+                handles.append(QPointF(0.0, 0.0))
+            for h in handles:
+                painter.drawRect(
+                    h.x() - _HANDLE_HALF, h.y() - _HANDLE_HALF,
+                    _HANDLE_HALF * 2, _HANDLE_HALF * 2,
+                )
 
 
 # ---------------------------------------------------------------------------

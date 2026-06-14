@@ -40,7 +40,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
-    QAbstractSpinBox,
     QApplication,
     QDialog,
     QDialogButtonBox,
@@ -49,9 +48,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QLineEdit,
     QMainWindow,
-    QPlainTextEdit,
     QMessageBox,
     QScrollArea,
     QSizePolicy,
@@ -321,6 +318,7 @@ class MainWindow(QMainWindow):
         tools.set_tool_paths(self._prefs.tool_paths)
         self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
         self._scene.set_line_hops(self._prefs.line_hops)
+        self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
         mathrender.set_force_ziamath(self._prefs.force_ziamath)
 
         # -- Build UI -------------------------------------------------------
@@ -345,6 +343,13 @@ class MainWindow(QMainWindow):
         esc = QShortcut(QKeySequence(Qt.Key_Escape), self)
         esc.setContext(Qt.WindowShortcut)
         esc.activated.connect(self._scene.cancel_current)
+
+        # -- Window-level rotate: Ctrl+R (⌘R on macOS) rotates the selection or the
+        # placement ghost 90° CW. A window QShortcut so it fires regardless of focus,
+        # and a modified key so the plain letters stay free for placement (§10.2).
+        self._rotate_shortcut = QShortcut(QKeySequence("Ctrl+R"), self)
+        self._rotate_shortcut.setContext(Qt.WindowShortcut)
+        self._rotate_shortcut.activated.connect(self._scene.rotate_selected_cw)
 
         # -- Wire signals ---------------------------------------------------
         self._connect_signals()
@@ -561,39 +566,15 @@ class MainWindow(QMainWindow):
         relayout remains here."""
         self._scene.relayout_annotations()
 
-    # ------------------------------------------------------------------
-    # Palette keyboard shortcuts (§10.2)
-    # ------------------------------------------------------------------
-
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
-        """Window-level palette shortcuts: a letter selects a component category,
-        digits 1–9/0 place the Nth component of the active category.
-
-        This only fires for keys no focused child consumed, so text inputs keep
-        their typing and the canvas keeps R/S/W/P (rotate/tools) while it is
-        focused — no fragile focus checks needed."""
-        if not self._handle_palette_shortcut(event):
-            super().keyPressEvent(event)
-
-    def _handle_palette_shortcut(self, event) -> bool:  # noqa: ANN001
-        # Plain keys only — never shadow menu/app accelerators.
-        if event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier):
-            return False
-        # Belt-and-suspenders: never act while a text input is focused (a
-        # read-only QPlainTextEdit can ignore letters, which would propagate here).
-        if isinstance(QApplication.focusWidget(), (QLineEdit, QPlainTextEdit, QAbstractSpinBox)):
-            return False
-
-        key = event.key()
-        if Qt.Key_1 <= key <= Qt.Key_9:
-            return self._palette.place_active_index(key - Qt.Key_1)
-        if key == Qt.Key_0:
-            return self._palette.place_active_index(9)
-
-        text = event.text().upper()
-        if len(text) == 1 and text.isalpha():
-            return self._palette.select_category_by_letter(text)
-        return False
+        """Window-level component-placement shortcuts (§10.2). A key that no focused
+        child consumed bubbles up here; delegate it to the canvas view's placement
+        handler so the shortcuts work regardless of which widget holds focus (the
+        view already covers the canvas-focused case). The handler guards text inputs
+        and the in-place label editor, so typing is never hijacked."""
+        if self._view.handle_placement_key(event):
+            return
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     # Menu bar
@@ -680,6 +661,11 @@ class MainWindow(QMainWindow):
         edit_menu.addAction(self._act_redo)
 
         edit_menu.addSeparator()
+
+        self._act_cut = QAction("Cu&t", self)
+        self._act_cut.setShortcut(QKeySequence.Cut)
+        self._act_cut.triggered.connect(self._scene.cut_selection)
+        edit_menu.addAction(self._act_cut)
 
         self._act_copy = QAction("&Copy", self)
         self._act_copy.setShortcut(QKeySequence.Copy)
@@ -1475,6 +1461,7 @@ class MainWindow(QMainWindow):
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
             self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
             self._scene.set_line_hops(self._prefs.line_hops)
+            self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
             # Apply configured tool paths first so the engine choice, re-typeset,
             # and recompile below all see the updated discovery (§8.7 / §10.8).
             tools.set_tool_paths(self._prefs.tool_paths)
@@ -1843,16 +1830,18 @@ _HELP_SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("W",            "Wire tool — click to route an orthogonal wire."),
         ("P",            "Pan mode — left-drag the canvas to pan (persistent)."),
         ("Space + drag", "Pan the canvas without leaving the current tool."),
-        ("R",            "Rotate the selection 90° clockwise."),
+        ("Ctrl+R",       "Rotate the selection (or the placement ghost) 90° "
+                         "clockwise (⌘R on macOS)."),
         ("Arrows",       "Nudge the selection 0.25 units (one minor-grid cell)."),
         ("Esc",          "Cancel placing/wiring and return to the Select tool."),
     ]),
     ("Component palette", [
         ("Ctrl+/",       "Focus the palette search box."),
-        ("Letter key",   "Jump to a category by its keycap letter (R=Resistors, "
-                         "C=Capacitors, L=Inductors, D=Diodes, …). The canvas keeps "
-                         "R/S/W/P while it is focused."),
-        ("1 – 9, 0",     "Place the 1st–10th component of the active category."),
+        ("Letter keys",  "Place a component by its key — from the Select tool, or "
+                         "while a ghost is up (pressing another key swaps the kind). "
+                         "Defaults: r/c/l/d=resistor/capacitor/inductor/diode, "
+                         "g=ground, t=transistor, v/i=voltage/current annotation. "
+                         "Customize in Preferences ▸ Shortcuts."),
     ]),
     ("Tab — cycle the item under the cursor", [
         ("Tab (over a label)",

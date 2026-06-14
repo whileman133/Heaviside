@@ -28,6 +28,14 @@ htmlcov/
 *.log
 *.synctex.gz
 
+# Screen recordings (demo GIF *source* — re-recorded and large; never commit the
+# raw video. The final optimized GIF, if committed, lives under docs/images/.
+# Keep working recordings in a local media/ scratch dir or attach to a Release.)
+media/
+*.mp4
+*.mkv
+*.mov
+
 # Local scratch / generated artifacts
 scratch_canvas.py
 component_gallery.png

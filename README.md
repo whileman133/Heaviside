@@ -10,11 +10,13 @@
 
 An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for building publication-quality circuit diagrams with typeset mathematical annotations. Heaviside is a desktop tool for researchers, educators, and engineers that integrates into LaTeX, Overleaf, and LyX workflows with minimum effort.
 
+> **Heaviside is a work in progress.** If a symbol, CircuiTikZ convention, or workflow detail you need is missing or doesn't render the way you'd expect, I'd love to hear it. Open a [Discussion](https://github.com/whileman133/Heaviside/discussions) for ideas and questions, or [file an issue](https://github.com/whileman133/Heaviside/issues/new) for bugs.
+
 <table>
   <tr>
     <td align="center" colspan="2">
-    <img src="docs/images/examples/boost-converter-light.png" alt="Boost converter example open in the Heaviside editor, light mode"><br>
-      <sub><b>Boost Converter</b> · light mode</sub>
+    <img src="docs/images/demo.gif" alt="Building an RC low-pass filter in Heaviside — drawing, wiring, and labeling while the CircuiTikZ source and compiled LaTeX preview update live"><br>
+      <sub><b>Live editing</b> · draw, wire, and label while the CircuiTikZ source and compiled preview update</sub>
     </td>
   </tr>
   <tr>
@@ -35,7 +37,7 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
 * **Typeset math.** Component and wire labels are LaTeX (`$R_1$`, `$v(t)$`), rendered on the canvas as they'll appear in print.
 * **Smart wiring.** Right-angle routing with automatic junction dots, open-terminal markers, and line hops at crossings.
 * **Symbols and blocks.** Passives, sources, semiconductors, op-amps, and configurable logic gates, plus boxes, circles, and free text for block diagrams.
-* **Exports that stay current.** Every save refreshes `.pdf` and `.png` siblings alongside your schematic — add `.tex`/`.svg`/`.eps` in Preferences — so your paper's figures never go stale.
+* **Exports that stay current.** Every save refreshes `.tex`, `.pdf`, and `.png` siblings alongside your schematic so your paper's figures never go stale.
 
 ## Why another CircuiTikZ editor?
 
@@ -43,7 +45,7 @@ An excellent tool for drawing CircuiTikZ already exists:
 [CircuiTikZ Designer](https://circuit2tikz.tf.fau.de/designer/), a browser app
 that's great for sketching circuits and copying out the code quickly. Heaviside solves a different problem: **maintaining circuit figures over the life of a project**, where diagrams are documents you keep and revise over years.
 
-* **A source file, not a one-off drawing.** Schematics live in versioned `.hv` files alongside your manuscript; every save refreshes the co-located `.pdf`/`.png` figures (and `.tex` fragment), so what's in your paper never drifts from what's in the editor.
+* **A source file, not a one-off drawing.** Schematics live in versioned `.hv` files alongside your manuscript, and every save refreshes the co-located figures — so what's in your paper never drifts from what's in the editor.
 * **True CircuiTikZ, not an imitation.** Heaviside doesn't imitate CircuiTikZ to draw a preview—the preview shows the true output compiled with `pdflatex`. The palette symbols are extracted from compiled CircuiTikZ, with pin positions measured from pgf anchors rather than traced by hand, and canvas labels are typeset by your local `latex` when it's installed.
 * **A desktop app, offline.** Native file associations, your local TeX installation, and no dependency on a server staying up.
 
@@ -51,10 +53,9 @@ If you want a quick diagram in the browser with nothing to install, use Designer
 
 ## Download
 
-> **LaTeX is required for PDF preview and export.** These features need `pdflatex` with the `circuitikz`
-> package on your `PATH`. EPS/SVG also need
+> **The core editor runs and produces CircuiTikZ without a LaTeX installation,** but live preview and PDF/PNG export require `pdflatex` with the `circuitikz` package. For EPS/SVG export, 
 > [Poppler](https://poppler.freedesktop.org/)'s `pdftocairo` or
-> [Inkscape](https://inkscape.org/), used automatically when Poppler isn't installed.
+> [Inkscape](https://inkscape.org/) is required.
 
 - **macOS**  
     Apple Silicon: [Heaviside-macos-arm64.dmg](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-macos-arm64.dmg)  
@@ -89,8 +90,8 @@ All releases, with checksums and notes, on the [Releases page](https://github.co
 5. **Watch the source and preview.** The CircuiTikZ source and a live compiled
    PDF preview update as you work. Press **Ctrl/Cmd+Return** to force a recompile.
 6. **File → Save** writes the `.hv` source and, on
-   every save, automatically refreshes the co-located `.pdf` and `.png` exports so
-   your paper's figures stay current (add `.tex`/`.svg`/`.eps` siblings in
+   every save, automatically refreshes the co-located `.tex`, `.pdf`, and `.png`
+   exports so your paper's figures stay current (add `.svg`/`.eps` siblings in
    **Preferences → Export**). You can also export on demand from the
    **File → Export** menu (`.tex`, `.pdf`, `.svg`, `.eps`, `.png`).
 
@@ -181,7 +182,7 @@ portion, and you are not required to open any of your own code. See
 
 ## Architecture
 
-> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from Large-Language Models (LLMs). The test suite (1000+ tests) and spec are kept in sync.
+> **Built spec-first with AI assistance.** Heaviside was developed from a detailed written specification with help from Large-Language Models (LLMs). The test suite (1200+ tests) and spec are kept in sync.
 
 Heaviside is split into a **View** layer built on Qt and a
 **Model** layer of plain Python. The model, comprising the schematic data, the component library, and the CircuiTikZ generator, holds the logic and is testable without a display. The UI and canvas sit on top of the model.
