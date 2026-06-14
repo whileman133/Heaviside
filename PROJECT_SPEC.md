@@ -1648,10 +1648,10 @@ The worker thread is always stopped before the application exits: `PreviewWorker
 > it from recurring. **Established Qt-free worker → UI-thread-builds pattern:**
 > the `render_async` pool emits an SVG string and `_dispatch` builds the
 > `QPainterPath` (§5.8); the preview worker emits PDF `bytes` and
-> `PreviewWorker._on_pdf_ready` builds the `QImage`. **Known exception (tracked):**
-> auto-export PNG still renders its `QImage` on the export pool worker
-> (`_run_auto_export_job`); it is far lower-risk (a single, unshared, short-lived
-> image on a user-initiated save) and slated to move to the same pattern.
+> `PreviewWorker._on_pdf_ready` builds the `QImage`; the auto-export worker
+> (`_run_auto_export_job`) writes the Qt-free formats and returns the PDF `bytes`
+> in its `_AutoExportResult`, and `MainWindow._on_auto_export_finished` renders the
+> PNG `QImage` on the UI thread. No worker thread constructs a Qt object.
 
 ### 8.2 Equation Preview
 

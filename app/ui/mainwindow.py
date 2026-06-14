@@ -180,12 +180,28 @@ class _AutoExportJob:
     png_dpi: int
 
 
-def _run_auto_export_job(job: _AutoExportJob) -> str:
-    """Execute *job* (worker thread) and return the status-bar message.
+@dataclass
+class _AutoExportResult:
+    """What an auto-export run produced. ``png`` is a **deferred** render: the
+    worker leaves the ``QImage`` construction to the UI thread (PROJECT_SPEC §8.1
+    — no Qt objects on worker threads), so it carries only the Qt-free PDF bytes,
+    target path, and dpi for the UI thread to render. ``written``/``failed`` are
+    mutated on the UI thread once the PNG is rendered."""
 
-    Each format is independent: with several enabled (TeX/SVG/PNG default on),
-    a failure in one — e.g. SVG when Poppler is absent — must not skip the
-    others (PNG needs only pdflatex). Outcomes are collected and reported once.
+    written: list[str]
+    failed: list[str]
+    compile_error: str | None = None
+    png: "tuple[bytes, Path, int] | None" = None
+
+
+def _run_auto_export_job(job: _AutoExportJob) -> _AutoExportResult:
+    """Execute *job* (worker thread) and return its result.
+
+    Each format is independent: with several enabled (TeX/PDF/PNG default on), a
+    failure in one — e.g. SVG when Poppler is absent — must not skip the others.
+    The PNG is **not rendered here**: building its ``QImage`` on a worker thread
+    would race the UI garbage collector (§8.1), so the result carries the compiled
+    PDF bytes for the UI thread to render (see ``_on_auto_export_finished``).
     """
     written: list[str] = []
     failed: list[str] = []
@@ -203,15 +219,13 @@ def _run_auto_export_job(job: _AutoExportJob) -> str:
         _export(".tex", lambda t: t.write_text(build_snippet(job.source),
                                                encoding="utf-8"))
 
+    png: "tuple[bytes, Path, int] | None" = None
     # Image formats share a single pdflatex compile.
     if job.want_pdf or job.want_eps or job.want_svg or job.want_png:
         try:
             pdf_bytes = compile_tex(build_tex(job.source))
         except (CompileError, OSError, RuntimeError) as exc:
-            if written:
-                return ("Auto-exported " + ", ".join(written)
-                        + f" · compile failed ({exc})")
-            return f"Auto-export failed ({exc})"
+            return _AutoExportResult(written, failed, compile_error=str(exc))
         if job.want_pdf:
             _export(".pdf", lambda t: t.write_bytes(pdf_bytes))
         if job.want_eps:
@@ -219,22 +233,28 @@ def _run_auto_export_job(job: _AutoExportJob) -> str:
         if job.want_svg:
             _export(".svg", lambda t: t.write_bytes(pdf_to_svg(pdf_bytes)))
         if job.want_png:
-            def _png(target: Path) -> None:
-                image = pdf_to_qimage(pdf_bytes, dpi=job.png_dpi)
-                if not image.save(str(target), "PNG"):
-                    raise OSError(f"could not write {target.name}")
-            _export(".png", _png)
+            png = (pdf_bytes, job.path.with_suffix(".png"), job.png_dpi)
 
-    msg = "Auto-exported " + ", ".join(written) if written else ""
-    if failed:
-        msg = (msg + " · " if msg else "") + "failed: " + "; ".join(failed)
+    return _AutoExportResult(written, failed, png=png)
+
+
+def _format_export_message(result: _AutoExportResult) -> str:
+    """Status-bar message for a finished auto-export (PNG already rendered)."""
+    if result.compile_error is not None:
+        if result.written:
+            return ("Auto-exported " + ", ".join(result.written)
+                    + f" · compile failed ({result.compile_error})")
+        return f"Auto-export failed ({result.compile_error})"
+    msg = "Auto-exported " + ", ".join(result.written) if result.written else ""
+    if result.failed:
+        msg = (msg + " · " if msg else "") + "failed: " + "; ".join(result.failed)
     return msg or "Auto-export: nothing written"
 
 
 class _AutoExportSignals(QObject):
     """Queued bridge from the worker task back to the UI thread."""
 
-    finished = Signal(str)   # the status-bar message
+    finished = Signal(object)   # an _AutoExportResult (Qt-free data)
 
 
 class _AutoExportTask(QRunnable):
@@ -247,11 +267,11 @@ class _AutoExportTask(QRunnable):
 
     def run(self) -> None:  # noqa: D102 — QRunnable hook
         try:
-            message = _run_auto_export_job(self._job)
+            result = _run_auto_export_job(self._job)
         except Exception as exc:  # noqa: BLE001 — never let a job kill the pool
-            message = f"Auto-export failed ({exc})"
+            result = _AutoExportResult([], [f"auto-export ({exc})"])
         try:
-            self._signals.finished.emit(message)
+            self._signals.finished.emit(result)
         except RuntimeError:
             pass   # signals object destroyed during app shutdown
 
@@ -1439,10 +1459,21 @@ class MainWindow(QMainWindow):
         self._auto_export_signals = signals   # keep alive until the task reports
         QThreadPool.globalInstance().start(_AutoExportTask(job, signals))
 
-    def _on_auto_export_finished(self, message: str) -> None:
+    def _on_auto_export_finished(self, result: _AutoExportResult) -> None:
         # The app may be closing while a job runs: never touch destroyed widgets.
         if not _qt_is_valid(self):
             return
+        # Render the PNG HERE, on the UI thread — Qt objects must not be built on a
+        # worker (§8.1). The worker handed back only the Qt-free PDF bytes.
+        if result.png is not None:
+            pdf_bytes, target, dpi = result.png
+            try:
+                if pdf_to_qimage(pdf_bytes, dpi=dpi).save(str(target), "PNG"):
+                    result.written.append(target.name)
+                else:
+                    result.failed.append(f"{target.name} (could not write)")
+            except Exception as exc:  # noqa: BLE001 — never block on a bad render
+                result.failed.append(f"{target.name} ({exc})")
         self._auto_export_busy = False
         self._auto_export_signals = None
         pending = self._auto_export_pending
@@ -1450,7 +1481,7 @@ class MainWindow(QMainWindow):
             self._auto_export_pending = None
             self._dispatch_auto_export(pending)
             return
-        self._status_compile.setText(message)
+        self._status_compile.setText(_format_export_message(result))
 
     def _on_preferences(self) -> None:
         """Open the modal Preferences dialog (§10.8).
