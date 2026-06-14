@@ -62,7 +62,8 @@ If you want a quick diagram in the browser with nothing to install, use Designer
     Intel: [build from source](#building-from-source)
 - **Windows (x64)**  
     Installer: [Heaviside-windows-x64-setup.exe](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64-setup.exe)   
-    Portable: [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)
+    Portable: [Heaviside-windows-x64.zip](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-windows-x64.zip)  
+    *Not yet code-signed — on first run Windows SmartScreen shows a warning; click **More info → Run anyway**.*
 - **Linux (x64)**  
     AppImage: [Heaviside-linux-x86_64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x86_64.AppImage)  
     Portable: [Heaviside-linux-x64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-x64.tar.gz)
@@ -72,7 +73,8 @@ If you want a quick diagram in the browser with nothing to install, use Designer
 
   The Linux binaries need glibc ≥ 2.38 (Ubuntu 24.04+, Debian 13 "Trixie" —
   including Raspberry Pi OS Trixie). On older distros (e.g. Debian 12
-  "Bookworm"), [build from source](#building-from-source) instead.
+  "Bookworm"), [build from source](#building-from-source) instead. Make an
+  AppImage executable before running it: `chmod +x Heaviside-*.AppImage`.
 
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 
