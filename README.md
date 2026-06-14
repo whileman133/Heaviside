@@ -97,7 +97,7 @@ All releases, with checksums and notes, on the [Releases page](https://github.co
 
 ## Building from source
 
-Heaviside uses [`uv`](https://docs.astral.sh/uv/) and targets **Python ≥ 3.11**. Python dependencies (PySide6, pydantic, qtawesome) are declared in
+Heaviside uses [`uv`](https://docs.astral.sh/uv/) and targets **Python ≥ 3.12**. Python dependencies (PySide6, pydantic, qtawesome) are declared in
 [`pyproject.toml`](pyproject.toml) and installed by `uv`. (As when running a downloaded build, the preview and exports need `pdflatex` on your `PATH`, and EPS/SVG export additionally needs Poppler — see [Download](#download).)
 
 ```sh

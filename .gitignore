@@ -36,6 +36,11 @@ media/
 *.mkv
 *.mov
 
+# Core dumps (a crashing test under the offscreen Qt platform can drop an 800 MB
+# `core` in the repo root).
+core
+core.*
+
 # Local scratch / generated artifacts
 scratch_canvas.py
 component_gallery.png

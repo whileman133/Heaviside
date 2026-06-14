@@ -7,7 +7,7 @@ hard rule for every change.
 ## Development setup
 
 Heaviside uses [`uv`](https://docs.astral.sh/uv/) for environment and dependency
-management and targets **Python ≥ 3.11**.
+management and targets **Python ≥ 3.12**.
 
 ```sh
 uv sync                       # create the environment and install dependencies

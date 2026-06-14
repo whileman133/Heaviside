@@ -34,6 +34,13 @@ version reset to 0.1.0 — this is the first release of the current line.)
   canvas and in the generated LaTeX.
 
 ### Changed
+- **Requires Python ≥ 3.12** (was 3.11). PySide6 6.11.1's bindings have a refcount
+  bug that over-decrements `None` during ordinary Qt widget operations (seen
+  building the component palette). On Python 3.11 (mortal `None`) this eventually
+  crashes the process — deterministically on aarch64 (Raspberry Pi), intermittently
+  elsewhere; on 3.12+ `None` is immortal (PEP 683), so the bug is harmless. The
+  bundled downloads ship their own 3.12 interpreter, so only running from source on
+  3.11 is affected.
 - **Wire and Place modes now show a crosshair cursor**, so it's obvious at a glance
   when you're routing a wire or placing a component (previously the cursor stayed a
   plain arrow in Wire mode, which was easy to miss). Pan still shows the hand cursor;

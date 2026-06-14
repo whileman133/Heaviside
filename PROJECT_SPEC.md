@@ -2604,7 +2604,7 @@ This creates `.venv/` in the project root, resolves all dependencies from `pypro
 name = "heaviside"
 version = "0.1.0"
 description = "Graphical editor for CircuiTikZ circuit diagrams"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "PySide6>=6.5",
     "pydantic>=2.0",
@@ -2678,7 +2678,9 @@ This is the expected invocation in any headless environment (e.g., a remote mach
 
 ### 12.6 Python Version
 
-The project targets **Python 3.11** or later. This is enforced by the `requires-python` field in `pyproject.toml`. uv will raise an error if the active Python interpreter does not meet this constraint.
+The project targets **Python 3.12** or later, enforced by the `requires-python` field in `pyproject.toml` and pinned for the bundled build by `.python-version` (3.12). uv raises an error if the active interpreter is older.
+
+**Why 3.12, not 3.11.** PySide6 6.11.1's C bindings have a refcount bug that over-decrements `None` across ordinary Qt widget operations (observed building the component palette — `QToolButton.setText`). On **Python 3.11** `None` is mortal, so the leak eventually drives its refcount to 0 and the interpreter aborts (`none_dealloc`) — deterministically on aarch64 (Raspberry Pi), intermittently on x86_64 (hence flaky CI). On **3.12+** `None` is immortal (PEP 683): decref/incref are no-ops, so the same leak is harmless and the process never crashes. Requiring 3.12 makes the third-party bug benign rather than papering over it. The bundled binaries ship their own 3.12 interpreter, so downloaders are unaffected regardless of their system Python.
 
 ### 12.7 System Dependencies
 
