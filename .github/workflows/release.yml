@@ -77,7 +77,7 @@ jobs:
       # Third-party actions are pinned to commit SHAs (not mutable tags) because
       # this workflow holds contents:write and the signing secrets. To bump one,
       # resolve the new tag: gh api repos/<owner>/<repo>/git/ref/tags/<tag>
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Linux: PyInstaller bundles the Qt shared libraries, but they must be
       # present on the build host for PyInstaller to find them. (Not needed on
@@ -339,7 +339,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # texlive: pdflatex + standalone + circuitikz so the editor's live PDF
       # preview pane compiles for the screenshots. (No dvisvgm — canvas math
@@ -400,7 +400,7 @@ jobs:
           merge-multiple: true
 
       - name: Create / update the GitHub Release
-        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           files: artifacts/**
           draft: true            # review the assets, then publish manually
