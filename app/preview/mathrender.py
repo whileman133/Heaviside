@@ -88,7 +88,7 @@ TEMPLATE_PT = 10.0
 _TEMPLATE = r"""\documentclass[border=0pt]{standalone}
 \usepackage{amsmath}
 \usepackage{amssymb}
-\begin{document}
+%PREAMBLE%\begin{document}
 \strut %FRAGMENT%
 \end{document}
 """
@@ -96,7 +96,39 @@ _TEMPLATE = r"""\documentclass[border=0pt]{standalone}
 # Bump when _TEMPLATE or the path-normalisation changes, to invalidate the
 # on-disk SVG cache (keyed by fragment text, which the template change alone
 # would not otherwise invalidate).
-_RENDER_VERSION = 2
+_RENDER_VERSION = 3
+
+
+# ---------------------------------------------------------------------------
+# Document label preamble (siunitx etc.)
+# ---------------------------------------------------------------------------
+#
+# Canvas labels are typeset in isolation by this module — *not* through the
+# pdflatex preview — so a label like ``\qty{10}{\ohm}`` renders nothing unless
+# the package that defines the macro is loaded here too. The active document's
+# preamble settings (§7.2) are mirrored into a module-level string that is
+# spliced into _TEMPLATE at compile time (the same global-config pattern as
+# ``_force_ziamath``). The string is part of both cache keys, so labels rendered
+# under different preambles never collide; changing it clears the in-memory memo
+# so existing labels refresh on the next request (the app then retypesets).
+#
+# Only the *latex* engine honours it — the ziamath fallback has no preamble
+# concept and cannot load siunitx, so siunitx labels stay blank without a LaTeX
+# install (consistent with ziamath being a math subset).
+_label_preamble = ""
+
+
+def set_label_preamble(text: str) -> None:
+    """Set the extra preamble (e.g. ``\\usepackage{siunitx}``) spliced into the
+    canvas label template. Mirrors the active document's preamble settings; the
+    app calls this when the document is loaded or its settings change, then
+    retypesets. A no-op when unchanged."""
+    global _label_preamble
+    text = text or ""
+    if text == _label_preamble:
+        return
+    _label_preamble = text
+    _render_memo_clear()  # stale paths refresh on the next request
 
 _HREF = "{http://www.w3.org/1999/xlink}href"
 _MATRIX_RE = re.compile(
@@ -141,8 +173,8 @@ def _cache_dir() -> Path:
     return d
 
 
-def _cache_key(fragment: str) -> str:
-    keyed = f"{_RENDER_VERSION}\x00{fragment}"
+def _cache_key(fragment: str, preamble: str = "") -> str:
+    keyed = f"{_RENDER_VERSION}\x00{preamble}\x00{fragment}"
     return hashlib.sha256(keyed.encode("utf-8")).hexdigest()[:32]
 
 
@@ -167,6 +199,14 @@ def _atomic_write(dest: Path, text: str) -> None:
             pass
 
 
+def _label_document(fragment: str, preamble: str) -> str:
+    """Fill _TEMPLATE for *fragment* with the document *preamble* spliced in
+    (empty = the plain amsmath/amssymb document). The %PREAMBLE% slot is filled
+    first so a ``%FRAGMENT%`` inside the fragment text can't disturb it."""
+    tex = _TEMPLATE.replace("%PREAMBLE%", f"{preamble}\n" if preamble else "")
+    return tex.replace("%FRAGMENT%", fragment)
+
+
 def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
     """Return dvisvgm SVG text for *fragment*, or ``None`` on failure.
 
@@ -178,7 +218,10 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
     cached for ``$R$``. Within a session, ``render_path``'s in-memory cache still
     prevents re-shelling for a genuinely bad fragment.
     """
-    cache_file = _cache_dir() / f"{_cache_key(fragment)}.svg"
+    # Snapshot the global once: a concurrent set_label_preamble must not make the
+    # cache key and the spliced template disagree within this call.
+    preamble = _label_preamble
+    cache_file = _cache_dir() / f"{_cache_key(fragment, preamble)}.svg"
     if cache_file.exists():
         try:
             text = cache_file.read_text(encoding="utf-8")
@@ -205,7 +248,7 @@ def _compile_svg(fragment: str, *, timeout: int = 20) -> str | None:
     if latex_exe is None or dvisvgm_exe is None:
         return None
 
-    tex = _TEMPLATE.replace("%FRAGMENT%", fragment)
+    tex = _label_document(fragment, preamble)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         (tmp_path / "m.tex").write_text(tex, encoding="utf-8")

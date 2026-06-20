@@ -2052,11 +2052,12 @@ class GroupRotateCommand(Command):
 
 
 class SetDocumentPropertiesCommand(Command):
-    """Set the per-document CircuiTikZ label-style conventions (spec §7.2).
+    """Set the per-document CircuiTikZ conventions and preamble (spec §7.2).
 
-    Edits the :class:`Schematic`'s ``voltage_style`` / ``current_style`` fields
-    (the Document inspector tab) as one undoable step. Only the fields whose
-    new value differs from the captured old value are written, so undo restores
+    Edits the :class:`Schematic`'s ``voltage_style`` / ``current_style`` label
+    styles plus the ``siunitx`` flag and free-form ``preamble`` string (the
+    Document inspector tab) as one undoable step. Only the fields whose new
+    value differs from the captured old value are written, so undo restores
     exactly what changed.
     """
 
@@ -2069,23 +2070,39 @@ class SetDocumentPropertiesCommand(Command):
         new_current: str,
         old_voltage: str,
         old_current: str,
+        new_siunitx: bool | None = None,
+        old_siunitx: bool | None = None,
+        new_preamble: str | None = None,
+        old_preamble: str | None = None,
     ) -> None:
         self._new_voltage = new_voltage
         self._new_current = new_current
         self._old_voltage = old_voltage
         self._old_current = old_current
+        self._new_siunitx = new_siunitx
+        self._old_siunitx = old_siunitx
+        self._new_preamble = new_preamble
+        self._old_preamble = old_preamble
 
     def do(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
             schematic.voltage_style = self._new_voltage
         if self._new_current != self._old_current:
             schematic.current_style = self._new_current
+        if self._new_siunitx is not None and self._new_siunitx != self._old_siunitx:
+            schematic.siunitx = self._new_siunitx
+        if self._new_preamble is not None and self._new_preamble != self._old_preamble:
+            schematic.preamble = self._new_preamble
 
     def undo(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
             schematic.voltage_style = self._old_voltage
         if self._new_current != self._old_current:
             schematic.current_style = self._old_current
+        if self._new_siunitx is not None and self._new_siunitx != self._old_siunitx:
+            schematic.siunitx = self._old_siunitx
+        if self._new_preamble is not None and self._new_preamble != self._old_preamble:
+            schematic.preamble = self._old_preamble
 
 
 class MacroCommand(Command):

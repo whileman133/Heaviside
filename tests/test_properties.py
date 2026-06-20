@@ -514,3 +514,32 @@ def test_document_panel_change_is_undoable(_app):
 
     scene.redo()
     assert scene.schematic.voltage_style == "european"
+
+
+def test_document_panel_preamble_settings_undoable(_app):
+    """The siunitx checkbox and custom-preamble editor push undoable commands;
+    undo restores them and refresh() reloads the controls."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import DocumentPropertiesPanel
+
+    scene = SchematicScene()
+    panel = DocumentPropertiesPanel()
+    panel.set_scene(scene)
+
+    panel._siunitx.setChecked(True)
+    assert scene.schematic.siunitx is True
+    assert scene.undo_stack.can_undo()
+    scene.undo()
+    assert scene.schematic.siunitx is False
+    panel.refresh()
+    assert panel._siunitx.isChecked() is False
+
+    # The preamble editor commits on focus-out (committed signal); drive it
+    # directly rather than simulating focus.
+    panel._preamble.setPlainText(r"\usepackage{mathtools}")
+    panel._preamble.committed.emit()
+    assert scene.schematic.preamble == r"\usepackage{mathtools}"
+    scene.undo()
+    assert scene.schematic.preamble == ""
+    panel.refresh()
+    assert panel._preamble.toPlainText() == ""

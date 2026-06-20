@@ -71,6 +71,10 @@ class _SchematicCompileWorker(QObject):
         # thread (same ordering guarantee as ``source``). Dark renders the
         # preview with a dark page; exports never go through this path.
         self.dark: bool = False
+        # Document preamble settings, captured on the main thread before each
+        # dispatch (same ordering guarantee as ``source``).
+        self.siunitx: bool = False
+        self.extra_preamble: str = ""
 
     @Slot()
     def do_compile(self) -> None:
@@ -78,7 +82,10 @@ class _SchematicCompileWorker(QObject):
         to PDF bytes; the QImage render happens on the UI thread."""
         self.compile_started.emit()
         try:
-            tex = build_tex(self.source, dark=self.dark)
+            tex = build_tex(
+                self.source, dark=self.dark,
+                siunitx=self.siunitx, extra_preamble=self.extra_preamble,
+            )
             self.pdf_ready.emit(compile_tex(tex))
         except CompileError as exc:
             self.preview_error.emit(exc.log or str(exc))
@@ -148,6 +155,12 @@ class PreviewWorker(QObject):
         """Render subsequent previews with a dark page (preview only). Set on the
         main thread; takes effect on the next compile."""
         self._worker.dark = dark
+
+    def set_preamble(self, siunitx: bool, extra_preamble: str) -> None:
+        """Apply the document's preamble settings to subsequent previews. Set on
+        the main thread; takes effect on the next compile."""
+        self._worker.siunitx = siunitx
+        self._worker.extra_preamble = extra_preamble
 
     def request_compile(self, circuitikz_source: str) -> None:
         """

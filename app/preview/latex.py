@@ -121,7 +121,50 @@ _SCHEMATIC_TEMPLATE_DARK = _SECURITY_HEADER + r"""\documentclass[border=4pt]{sta
    .replace("%HVFG%", _hex6(_canvas_style._DARK["COLOR_NORMAL"]))
 
 
-def build_tex(circuitikz_source: str, dark: bool = False) -> str:
+#: Marker that introduces the document-supplied custom preamble block, emitted
+#: only when a schematic actually carries extra preamble lines.
+_CUSTOM_PREAMBLE_HEADER = (
+    "% --- Custom preamble (from this document's settings) ---"
+)
+
+
+def _apply_preamble_options(
+    template: str, *, siunitx: bool, extra_preamble: str
+) -> str:
+    """Splice the document's preamble settings into a base template.
+
+    Both edits are no-ops at their defaults, so a document with siunitx off and
+    no custom preamble produces output byte-for-byte identical to the static
+    template (the documented invariant; see ``build_tex``).
+
+    * ``siunitx`` adds the option to CircuiTikZ's own option list
+      (``\\usepackage[american,siunitx]{circuitikz}``) rather than loading the
+      package separately — that is how CircuiTikZ integrates siunitx (issue #29).
+    * ``extra_preamble`` is spliced verbatim just before ``\\begin{document}``,
+      after the fixed packages so it can override them. It is raw LaTeX from the
+      .hv file and carries the same trust as label text (see ``_SECURITY_HEADER``).
+    """
+    if siunitx:
+        template = template.replace(
+            r"\usepackage[american]{circuitikz}",
+            r"\usepackage[american,siunitx]{circuitikz}",
+        )
+    extra = extra_preamble.strip("\n")
+    if extra.strip():
+        block = f"{_CUSTOM_PREAMBLE_HEADER}\n{extra}\n"
+        template = template.replace(
+            r"\begin{document}", block + r"\begin{document}", 1
+        )
+    return template
+
+
+def build_tex(
+    circuitikz_source: str,
+    dark: bool = False,
+    *,
+    siunitx: bool = False,
+    extra_preamble: str = "",
+) -> str:
     """
     Wrap a CircuiTikZ environment string in the minimal standalone template.
 
@@ -134,8 +177,15 @@ def build_tex(circuitikz_source: str, dark: bool = False) -> str:
     ink — used for the **preview only** so it reads against a dark UI. Exports
     always use the default (light) template, so the distributed figure stays
     white-paper/black-ink. The light output is byte-for-byte unchanged.
+
+    *siunitx* and *extra_preamble* are the per-document preamble settings stored
+    on the :class:`~app.schematic.model.Schematic`; at their defaults (off /
+    empty) the output is unchanged.
     """
     template = _SCHEMATIC_TEMPLATE_DARK if dark else _SCHEMATIC_TEMPLATE
+    template = _apply_preamble_options(
+        template, siunitx=siunitx, extra_preamble=extra_preamble
+    )
     return template.replace("% CIRCUITIKZ_SOURCE", circuitikz_source)
 
 
@@ -151,7 +201,12 @@ _SNIPPET_HEADER = r"""% CircuiTikZ schematic exported from Heaviside.
 """
 
 
-def build_snippet(circuitikz_source: str) -> str:
+def build_snippet(
+    circuitikz_source: str,
+    *,
+    siunitx: bool = False,
+    extra_preamble: str = "",
+) -> str:
     r"""
     Return an includable ``.tex`` snippet for *circuitikz_source*.
 
@@ -163,8 +218,28 @@ def build_snippet(circuitikz_source: str) -> str:
     The source must already be in CircuiTikZ Y-up convention — i.e. generated
     with ``generate(schematic, y_flip=True)`` — so the included figure renders
     in the same orientation as the canvas.
+
+    *siunitx* / *extra_preamble* are the document's preamble settings. A snippet
+    is ``\input`` into the host document's body, so it cannot add packages
+    itself; instead the required preamble is reflected in the comment block the
+    user must copy into their own preamble.
     """
-    return _SNIPPET_HEADER + circuitikz_source + "\n"
+    header = _SNIPPET_HEADER
+    if siunitx:
+        header = header.replace(
+            r"\usepackage[american]{circuitikz}",
+            r"\usepackage[american,siunitx]{circuitikz}",
+        )
+    extra = extra_preamble.strip("\n")
+    if extra.strip():
+        commented = "\n".join("%   " + line for line in extra.splitlines())
+        header = header.replace(
+            "% SECURITY:",
+            "% Plus this document's custom preamble:\n"
+            + commented + "\n% SECURITY:",
+            1,
+        )
+    return header + circuitikz_source + "\n"
 
 
 # ---------------------------------------------------------------------------

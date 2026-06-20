@@ -124,8 +124,35 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.4"
-    assert data["config"] == {"voltage_style": "european", "current_style": "american"}
+    assert data["version"] == "0.5"
+    assert data["config"] == {
+        "voltage_style": "european", "current_style": "american",
+        "siunitx": False, "preamble": "",
+    }
+
+
+def test_preamble_settings_roundtrip(tmp_path: Path) -> None:
+    """The siunitx flag and free-form preamble round-trip through save/load."""
+    s = Schematic(version="0.1", name="pre", siunitx=True,
+                  preamble="\\usepackage{mathtools}\n\\newcommand{\\R}{\\mathbb{R}}")
+    p = tmp_path / "pre.hv"
+    save(s, p)
+    loaded = load(p)
+    assert loaded.siunitx is True
+    assert loaded.preamble == "\\usepackage{mathtools}\n\\newcommand{\\R}{\\mathbb{R}}"
+
+
+def test_load_pre_0_5_defaults_preamble_off(tmp_path: Path) -> None:
+    """A 0.4 file (no siunitx/preamble) loads with the settings off/empty."""
+    p = tmp_path / "old.hv"
+    p.write_text(
+        '{"version": "0.4", "name": "old", "components": [], "wires": [], '
+        '"config": {"voltage_style": "american", "current_style": "american"}}',
+        encoding="utf-8",
+    )
+    loaded = load(p)
+    assert loaded.siunitx is False
+    assert loaded.preamble == ""
 
 
 def test_load_v01_defaults_config_to_american(tmp_path: Path) -> None:
@@ -1017,14 +1044,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_04_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.4; files declaring 0.1, 0.2, 0.3 and 0.4 all load."""
+def test_format_version_05_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.5; files declaring 0.1–0.5 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.4"
-    assert load(p).version == "0.4"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.5"
+    assert load(p).version == "0.5"
 
-    for old in ("0.1", "0.2", "0.3"):
+    for old in ("0.1", "0.2", "0.3", "0.4"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

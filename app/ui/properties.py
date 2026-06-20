@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QPushButton,
     QSpinBox,
+    QPlainTextEdit,
     QFrame,
     QScrollArea,
     QSizePolicy,
@@ -131,6 +132,21 @@ _HOP_STATE_TO_MODE = {
     Qt.Checked: "always",
 }
 _HOP_MODE_TO_STATE = {mode: state for state, mode in _HOP_STATE_TO_MODE.items()}
+
+
+class _PreambleEdit(QPlainTextEdit):
+    """Multi-line LaTeX editor that commits on focus-out.
+
+    A subclass (not an instance ``focusOutEvent`` override) because PySide6
+    dispatches Qt virtuals at the class level — an instance attribute would
+    never be called. Emits ``committed`` once focus leaves so the document's
+    free-form preamble is pushed as one undo step, not one per keystroke."""
+
+    committed = Signal()
+
+    def focusOutEvent(self, event) -> None:  # noqa: ANN001
+        super().focusOutEvent(event)
+        self.committed.emit()
 
 
 class _HopModeCheckBox(QCheckBox):
@@ -1434,29 +1450,88 @@ class DocumentPropertiesPanel(QWidget):
         outer.addWidget(self._header)
         outer.addWidget(_make_separator())
 
-        outer.addWidget(_make_section_label("CircuiTikZ conventions"))
+        # The body scrolls (like PropertiesPanel) so the word-wrapped hint labels
+        # and the preamble editor never overlap when the content is taller than
+        # the panel. Same transparency/scrollbar handling — see _apply_scroll_style.
+        scroll = QScrollArea()
+        self._scroll = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.viewport().setObjectName("inspViewport")
+        outer.addWidget(scroll)
+
+        content = QWidget()
+        self._content = content
+        content.setObjectName("inspContent")
+        body = QVBoxLayout(content)
+        body.setContentsMargins(0, 0, 10, 0)   # room for the overlay scrollbar
+        body.setSpacing(6)
+
+        body.addWidget(_make_section_label("CircuiTikZ conventions"))
         form = QFormLayout()
         form.setSpacing(8)
         self._voltage = self._style_combo()
         self._current = self._style_combo()
         form.addRow("Voltage labels", self._voltage)
         form.addRow("Current labels", self._current)
-        outer.addLayout(form)
+        body.addLayout(form)
 
-        hint = QLabel(
-            "Arrow convention for voltage (<tt>v=</tt>) and current (<tt>i=</tt>) "
-            "labels in this document — emitted as a picture-scoped "
-            "<tt>\\ctikzset{voltage=…, current=…}</tt>, so it also applies to the "
-            "exported figure. Stored in the .hv file."
+        body.addWidget(self._hint(
+            "Arrow style for <tt>v=</tt> / <tt>i=</tt> labels. Applies to the "
+            "whole figure; saved in the file."
+        ))
+
+        # --- Preamble settings (LaTeX packages / macros) --------------------
+        body.addWidget(_make_separator())
+        body.addWidget(_make_section_label("LaTeX preamble"))
+
+        self._siunitx = QCheckBox("SI units (siunitx)")
+        body.addWidget(self._siunitx)
+        body.addWidget(self._hint(
+            "Unit macros in labels, e.g. <tt>\\qty{10}{\\ohm}</tt>."
+        ))
+
+        body.addWidget(_make_section_label("Custom preamble"))
+        self._preamble = _PreambleEdit()
+        self._preamble.setPlaceholderText(
+            "\\usepackage{...}\n\\ctikzset{...}\n\\newcommand{...}"
         )
-        hint.setObjectName("hintLabel")
-        hint.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
-        hint.setWordWrap(True)
-        outer.addWidget(hint)
-        outer.addStretch(1)
+        self._preamble.setFixedHeight(96)
+        body.addWidget(self._preamble)
+        body.addWidget(self._hint(
+            "Extra LaTeX for packages, macros, or <tt>\\ctikzset</tt>, inserted "
+            "before <tt>\\begin{document}</tt>."
+        ))
+
+        body.addStretch(1)
+        scroll.setWidget(content)
+        self._apply_scroll_style()
 
         self._voltage.currentIndexChanged.connect(self._on_change)
         self._current.currentIndexChanged.connect(self._on_change)
+        self._siunitx.toggled.connect(self._on_change)
+        # Commit free-form preamble edits when focus leaves the editor, like the
+        # other text fields in the inspector (avoids an undo step per keystroke).
+        self._preamble.committed.connect(self._on_change)
+
+    @staticmethod
+    def _hint(text: str) -> QLabel:
+        """A muted, word-wrapped help label (the panel's small-print style)."""
+        label = QLabel(text)
+        label.setObjectName("hintLabel")
+        label.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
+        label.setWordWrap(True)
+        return label
+
+    def _apply_scroll_style(self) -> None:
+        """Transparent body + themed scrollbar, mirroring PropertiesPanel (no
+        stylesheet on the scroll area/content, which would squish the native
+        controls). Re-applied on a theme swap so the scrollbar colours follow."""
+        for w in (self._scroll, self._scroll.viewport(), self._content):
+            w.setAutoFillBackground(False)
+        self._scroll.verticalScrollBar().setStyleSheet(theme.scrollbar_qss())
+        self._scroll.horizontalScrollBar().setStyleSheet(theme.scrollbar_qss())
 
     def _style_combo(self) -> QComboBox:
         combo = QComboBox()
@@ -1479,9 +1554,17 @@ class DocumentPropertiesPanel(QWidget):
             idx = combo.findData(value if value in LABEL_STYLES else "american")
             combo.setCurrentIndex(max(0, idx))
             combo.blockSignals(False)
+        self._siunitx.blockSignals(True)
+        self._siunitx.setChecked(sch.siunitx)
+        self._siunitx.blockSignals(False)
+        # Only reset the editor text when it actually differs, so reloading the
+        # document mid-edit does not move the user's cursor.
+        if self._preamble.toPlainText() != sch.preamble:
+            self._preamble.setPlainText(sch.preamble)
 
     def apply_theme(self) -> None:
         _reink_themed_labels(self)
+        self._apply_scroll_style()
 
     def _on_change(self) -> None:
         if self._scene is None:
@@ -1489,7 +1572,10 @@ class DocumentPropertiesPanel(QWidget):
         sch = self._scene.schematic
         voltage = self._voltage.currentData()
         current = self._current.currentData()
-        if voltage == sch.voltage_style and current == sch.current_style:
+        siunitx = self._siunitx.isChecked()
+        preamble = self._preamble.toPlainText()
+        if (voltage == sch.voltage_style and current == sch.current_style
+                and siunitx == sch.siunitx and preamble == sch.preamble):
             return
         # Undoable, like every other edit: route through the scene's stack (so
         # Ctrl+Z reverts it and the modified-state tracking sees it) instead of
@@ -1499,6 +1585,10 @@ class DocumentPropertiesPanel(QWidget):
             new_current=current,
             old_voltage=sch.voltage_style,
             old_current=sch.current_style,
+            new_siunitx=siunitx,
+            old_siunitx=sch.siunitx,
+            new_preamble=preamble,
+            old_preamble=sch.preamble,
         ))
         self.document_changed.emit()
 
@@ -1539,8 +1629,8 @@ class PropertiesPanel(QWidget):
 
         # Scrollable column of sections. The QScrollArea otherwise paints an
         # opaque `Base` fill (white on the native style) for its viewport, which
-        # reads as a distinct inset box; the Document tab looks "clear" because it
-        # is a plain transparent widget showing the tab pane. We make the viewport
+        # reads as a distinct inset box; we keep it "clear" (the Document tab uses
+        # the same transparent-scroll treatment). We make the viewport
         # and content transparent and theme the scrollbar — but **without a
         # stylesheet on the scroll area or its content**: a stylesheet on any
         # ancestor switches the whole descendant subtree to Qt's stylesheet
