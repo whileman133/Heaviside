@@ -5,6 +5,29 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-20
+
+### Added
+- **SI units (siunitx) and a custom LaTeX preamble**, in the inspector's
+  **Document** tab ([#29](https://github.com/whileman133/Heaviside/issues/29)).
+  **SI units (siunitx)** is **on by default** (most schematics use units at some
+  point and it is cheap to load) and loads siunitx through CircuiTikZ so labels
+  can use unit macros, e.g. `l=\qty{10}{\ohm}` or `\unit{\ampere}`. The **custom
+  preamble** field splices arbitrary LaTeX (packages, macros, colours,
+  `\ctikzset`) into the document preamble — the escape hatch for anything the
+  inspector has no dedicated control for. Both settings travel with the `.hv`
+  file, apply to the live preview and every export, and appear in the exported
+  `.tex` (listed as comments in an `\input` snippet, which cannot add packages
+  itself). With siunitx on, unit-macro labels also typeset live **on the canvas**
+  (the on-canvas label renderer mirrors the document's siunitx setting), so
+  `\qty{10}{\ohm}` is no longer blank on the canvas while rendering in the export.
+
+### Changed
+- **`.hv` file format bumped to `0.5`** to carry the new document preamble
+  settings. Files from 0.1–0.4 load unchanged — an absent `siunitx` key defaults
+  on (the new-document default) and the custom preamble to empty; a 0.4 or older
+  build will refuse a 0.5 file rather than silently strip the new data.
+
 ## [0.1.0] - 2026-06-13
 
 First public release of Heaviside. (Earlier 0.1–0.3 tags were withdrawn and the

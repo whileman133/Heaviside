@@ -164,6 +164,10 @@ class SchematicScene(QGraphicsScene):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
         self._stack = UndoStack(self._schematic)
+        # Keep the canvas label renderer in step with this document's preamble
+        # settings from the outset (covers the startup document, which is never
+        # routed through set_schematic). See sync_label_preamble.
+        self.sync_label_preamble()
         # When non-None, _push() accumulates commands here for one MacroCommand
         # (see batch()); used for multi-component inspector edits.
         self._batch: list | None = None
@@ -313,10 +317,23 @@ class SchematicScene(QGraphicsScene):
         for it in self._comp_items.values():
             it._sync_options_item()
 
+    def sync_label_preamble(self) -> None:
+        """Mirror the document's LaTeX preamble settings (§7.2) into the canvas
+        label renderer, so unit macros (``\\qty``, ``\\unit``) render on canvas
+        when siunitx is enabled — the on-canvas typesetter is isolated from the
+        pdflatex preview and otherwise wouldn't know the macro. Only siunitx is
+        forwarded (the free-form custom preamble may contain circuitikz-only
+        commands that the bare label document can't compile)."""
+        from app.preview import mathrender
+        mathrender.set_label_preamble(
+            r"\usepackage{siunitx}" if self._schematic.siunitx else ""
+        )
+
     def set_schematic(self, schematic: Schematic) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
         self._schematic = schematic
         self._stack = UndoStack(schematic)
+        self.sync_label_preamble()   # before _rebuild_items typesets the labels
         self.set_mode(Mode.SELECT)
         self._rebuild_items()
         self.schematic_changed.emit()

@@ -43,10 +43,14 @@ from app.schematic.validate import validate
 #: component can be sent to front/back. A 0.3 build would silently strip a plain
 #: component's z_order on save, so the bump refuses the newer file; 0.1–0.3 files
 #: load unchanged (absent z_order defaults to 0).
-_FORMAT_VERSION: str = "0.4"
+#: 0.5 adds the document preamble settings to ``config`` (``siunitx`` flag and a
+#: free-form ``preamble`` string). A 0.4 build would silently strip them on save,
+#: so the bump refuses the newer file; 0.1–0.4 files load unchanged (both default
+#: to off / empty).
+_FORMAT_VERSION: str = "0.5"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5"}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -210,6 +214,8 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
         "config": {
             "voltage_style": s.voltage_style,
             "current_style": s.current_style,
+            "siunitx": s.siunitx,
+            "preamble": s.preamble,
         },
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
@@ -370,6 +376,14 @@ def _dict_to_schematic(data: dict) -> Schematic:
         value = config.get(key, "american")
         return value if value in LABEL_STYLES else "american"
 
+    # Preamble settings (added in 0.5). siunitx defaults **on** (matching a new
+    # document, §7.2) so a pre-0.5 file — which predates the option — opens with
+    # unit-macro support; preamble defaults empty. A non-bool/non-string value is
+    # coerced rather than failing the load.
+    siunitx = bool(config.get("siunitx", True))
+    raw_preamble = config.get("preamble", "")
+    preamble = raw_preamble if isinstance(raw_preamble, str) else ""
+
     return Schematic(
         version=version,
         name=name,
@@ -378,6 +392,8 @@ def _dict_to_schematic(data: dict) -> Schematic:
         metadata=metadata,
         voltage_style=_style("voltage_style"),
         current_style=_style("current_style"),
+        siunitx=siunitx,
+        preamble=preamble,
     )
 
 

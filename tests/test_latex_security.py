@@ -223,3 +223,44 @@ def test_build_tex_carries_security_comment() -> None:
 def test_build_snippet_carries_security_comment() -> None:
     snippet = latex.build_snippet(r"\begin{circuitikz}\end{circuitikz}")
     assert "shell-escape" in snippet
+
+
+# ---------------------------------------------------------------------------
+# Document preamble settings (siunitx / custom preamble) — issue #29
+# ---------------------------------------------------------------------------
+
+_SRC = r"\begin{circuitikz}\end{circuitikz}"
+
+
+def test_default_preamble_is_unchanged() -> None:
+    """Defaults (siunitx off, no preamble) leave the output byte-for-byte."""
+    assert latex.build_tex(_SRC) == latex.build_tex(_SRC, siunitx=False, extra_preamble="")
+    assert r"\usepackage[american]{circuitikz}" in latex.build_tex(_SRC)
+    assert "siunitx" not in latex.build_tex(_SRC)
+
+
+def test_siunitx_adds_circuitikz_option() -> None:
+    """The siunitx flag extends CircuiTikZ's option list, not a separate load."""
+    tex = latex.build_tex(_SRC, siunitx=True)
+    assert r"\usepackage[american,siunitx]{circuitikz}" in tex
+    assert r"\usepackage[american]{circuitikz}" not in tex
+    # Dark preview path too.
+    assert "siunitx" in latex.build_tex(_SRC, siunitx=True, dark=True)
+    # And the includable snippet documents the required option.
+    assert r"\usepackage[american,siunitx]{circuitikz}" in latex.build_snippet(_SRC, siunitx=True)
+
+
+def test_custom_preamble_spliced_before_begin_document() -> None:
+    tex = latex.build_tex(_SRC, extra_preamble=r"\usepackage{mathtools}")
+    assert r"\usepackage{mathtools}" in tex
+    assert tex.index(r"\usepackage{mathtools}") < tex.index(r"\begin{document}")
+
+
+def test_blank_custom_preamble_is_noop() -> None:
+    assert latex.build_tex(_SRC, extra_preamble="   \n  ") == latex.build_tex(_SRC)
+
+
+def test_snippet_documents_custom_preamble_as_comments() -> None:
+    snippet = latex.build_snippet(_SRC, extra_preamble=r"\usepackage{mathtools}")
+    # A snippet is \input into a body, so the preamble can only be documented.
+    assert r"%   \usepackage{mathtools}" in snippet

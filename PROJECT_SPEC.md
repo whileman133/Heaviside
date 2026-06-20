@@ -1,6 +1,6 @@
 # Heaviside — Specification
 
-**Version:** 0.4  
+**Version:** 0.5  
 **Status:** Draft (alpha — interfaces, file format, and architecture may change)  
 **Author:** Wes H.
 
@@ -301,6 +301,8 @@ class Schematic:
     metadata: dict[str, Any]         # Arbitrary key-value store for future use
     voltage_style: str = "american"  # document voltage-label style: "american"/"european" (§7.2)
     current_style: str = "american"  # document current-label style: "american"/"european" (§7.2)
+    siunitx: bool = True             # load siunitx via CircuiTikZ for unit macros in labels; default on (§7.2/§8.3)
+    preamble: str = ""               # free-form LaTeX spliced into the document preamble (§7.2/§8.3)
 ```
 
 Document-level `voltage_style` / `current_style` (`LABEL_STYLES = ("american",
@@ -312,6 +314,36 @@ component that carries a `v=` / `i=` annotation — **not** a global `\ctikzset`
 which also restyles some component *symbols*. Because Heaviside provides separate
 american/european *symbols* as distinct components, the convention must only
 affect the annotation arrows (§7.2).
+
+Document-level **preamble settings** travel with the same `config` object.
+`siunitx` (**default on**) adds the option to CircuiTikZ's own option list
+(`\usepackage[american,siunitx]{circuitikz}`) so unit macros — `\qty{10}{\ohm}`,
+`\unit{\ampere}` — work in any label; this is how CircuiTikZ integrates siunitx
+(loading it that way rather than as a separate `\usepackage`). It defaults on
+because siunitx is cheap to load and most schematics use units at some point, so
+a new document supports `\qty` out of the box; a pre-0.5 file (no `siunitx` key)
+also loads with it on. `preamble`
+(default `""`) is free-form LaTeX spliced **verbatim** into the document preamble,
+just before `\begin{document}` and after the fixed packages so it can override
+them — the escape hatch for packages, macros, colours, or `\ctikzset` the
+inspector has no dedicated control for. Both are edited in the **Document** tab
+(§10.3) and applied to the preview and every export (§8.3/§8.5). As raw LaTeX
+from the `.hv` file they carry the same trust as label text and are defended by
+the same `-no-shell-escape` compile (§8.4).
+
+**On-canvas labels.** The canvas typesets labels through a separate, isolated
+renderer (`app/preview/mathrender.py`, §5.8) — not the pdflatex preview — so a
+`\qty{10}{\ohm}` label would render *nothing* unless siunitx is loaded there too.
+The `siunitx` flag is therefore mirrored into that renderer
+(`mathrender.set_label_preamble`, driven by `SchematicScene.sync_label_preamble`
+on document load and on a live toggle, followed by a `retypeset_labels`). The
+result is consistent with export: siunitx **off** → `\qty` renders nothing on
+canvas *and* fails to export; **on** → it renders in both. The free-form
+`preamble` is **not** forwarded to the canvas renderer — it may contain
+circuitikz-only commands (`\ctikzset`, the circuitikz package option form) that
+the bare label document cannot compile, which would blank *every* label — so a
+`\newcommand` defined there shows in the export but not on canvas (only the
+LaTeX label engine is affected; the ziamath fallback cannot load siunitx at all).
 
 ### 4.5 Invariants
 
@@ -861,6 +893,16 @@ verbatim and `$…$` spans typeset as math. Two engines produce a baseline-norma
 **Engine selection.** Auto: `latex` when `latex`+`dvisvgm` are on `PATH`, else
 `ziamath`. A debug preference (§10.8) forces `ziamath`; toggling it re-typesets all
 labels via `SchematicScene.retypeset_labels()`.
+
+**Document label preamble.** The renderer is otherwise document-agnostic, so the
+active document's `siunitx` setting (§7.2) is mirrored into it via
+`set_label_preamble`, which splices `\usepackage{siunitx}` into the label
+template's preamble (the `%PREAMBLE%` slot) and folds the preamble string into
+both the disk and in-memory cache keys (so siunitx and non-siunitx renders of the
+same fragment never collide; a change clears the memo). `SchematicScene` calls it
+on document load (`set_schematic`) and on a live toggle (then `retypeset_labels`).
+Only the `latex` engine honours it — `ziamath` has no preamble and cannot load
+siunitx. See §7.2 for why the free-form custom preamble is *not* forwarded.
 
 **Per-side placement (orientation-aware).** The options string is parsed into the
 side-placed slot families (`l`/`v`/`i`/`a`; the in-body `t=` and styling flags are
@@ -1715,6 +1757,19 @@ The string `% CIRCUITIKZ_SOURCE` is replaced verbatim by the output of
 
 The `border=4pt` option on `standalone` provides a small uniform margin.
 
+**Document preamble settings (§7.2).** `build_tex(siunitx=…, extra_preamble=…)`
+and `build_snippet(…)` accept the schematic's two preamble settings. At their
+defaults (siunitx off, empty preamble) the output is **byte-for-byte unchanged**.
+With `siunitx` on, the CircuiTikZ load becomes
+`\usepackage[american,siunitx]{circuitikz}` (the option list, not a separate
+package). A non-empty `preamble` is spliced verbatim just before
+`\begin{document}`, under a `% --- Custom preamble (from this document's
+settings) ---` marker. The preview worker captures both settings on the UI
+thread before each compile (`PreviewWorker.set_preamble`, alongside `set_dark`),
+and the auto-export job snapshots them with the source. `_apply_preamble_options`
+performs both edits as plain string replacements on the chosen template, so the
+splice is identical for the light and dark templates.
+
 ### 8.5 Export to TeX
 
 **File → Export to TeX…** (`Ctrl+E`) writes the schematic as an includable
@@ -1743,7 +1798,12 @@ security warning the full document template carries (§8.4) — it deliberately 
 `\documentclass` and `\begin{document}` so it can be `\input` into an existing
 document rather than compiled on its own. The source is generated with
 `generate(schematic, y_flip=True)` (Y-up convention, like preview compilation in
-§8.4) so the included figure renders in the same orientation as the canvas.
+§8.4) so the included figure renders in the same orientation as the canvas. When
+the document's preamble settings (§7.2) are non-default, the comment block
+reflects them: `siunitx` changes the listed CircuiTikZ option to
+`[american,siunitx]`, and a custom `preamble` is listed (commented) for the user
+to copy into their own preamble — a snippet is `\input` into a body and cannot
+add packages itself.
 
 ### 8.6 Export to PDF / EPS
 
@@ -1836,11 +1896,13 @@ failure to write the `.bak` never blocks the save itself.
 
 ```json
 {
-  "version": "0.4",
+  "version": "0.5",
   "name": "My Schematic",
   "config": {
     "voltage_style": "american",
-    "current_style": "american"
+    "current_style": "american",
+    "siunitx": true,
+    "preamble": ""
   },
   "components": [
     {
@@ -1920,7 +1982,7 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2", "0.3", "0.4"}`); `save` always writes the **current** format version (`0.4`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2", "0.3", "0.4", "0.5"}`); `save` always writes the **current** format version (`0.5`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
@@ -1928,6 +1990,7 @@ Format versions:
 - **0.2** — added the top-level `config` object (document voltage/current label styles, §9.2). A 0.1 file loads unchanged with american defaults.
 - **0.3** — covers the optional wire/component fields accumulated since 0.2 (`start_marker`/`end_marker`, the endpoint/mid labels and placements, `hop_mode`, `z_order`, `line_width`, `scale`, `params`, `variants`, `span_override`), so an **older build that would silently strip them refuses the file** instead of corrupting it on its next save. 0.1/0.2 files load unchanged; new documents declare 0.3.
 - **0.4** — extends `z_order` from drawing annotations to **every component** (any component can be sent to front/back, §9.4 Z-order). A 0.3 build would silently strip a plain component's `z_order` on save, so the bump makes it refuse the newer file. 0.1–0.3 files load unchanged (an absent `z_order` defaults to 0); new documents declare 0.4.
+- **0.5** — adds the document **preamble settings** to `config` (`siunitx` flag and free-form `preamble` string, §7.2). A 0.4 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.4 files load unchanged — an absent `siunitx` key defaults **on** (the new-document default) and `preamble` to empty; new documents declare 0.5.
 
 ### 9.5 Bundled Examples
 
@@ -2355,9 +2418,13 @@ one finishes — rapid saves coalesce instead of piling up compiles.
 The **Document** tab of the inspector (§10.3, `DocumentPropertiesPanel`) edits the
 *per-document* CircuiTikZ conventions — the **voltage** and **current** label
 styles (american / european, §7.2) — as opposed to the app-wide Preferences
-(§10.8). It **replaced the former modal Edit ▸ Document Settings… dialog**. Edits
-apply **live and are undoable**: changing a combo pushes a
-`SetDocumentPropertiesCommand` (§6.6) onto the scene's undo stack and emits
+(§10.8). It also exposes the **LaTeX preamble settings** (§7.2): an **SI units
+(siunitx)** checkbox and a free-form **custom preamble** editor (committed when
+the editor loses focus). It **replaced the former modal Edit ▸ Document Settings…
+dialog**. Edits apply **live and are undoable**: changing a combo, the checkbox,
+or the preamble text pushes a `SetDocumentPropertiesCommand` (§6.6) — which
+carries the optional `siunitx`/`preamble` old/new values alongside the styles —
+onto the scene's undo stack and emits
 `DocumentPropertiesPanel.document_changed`, which the main window
 (`_on_document_props_changed`) turns into `SchematicScene.relayout_annotations()`
 (re-place the on-canvas ± signs / arrows for the new style) + `schematic_changed`
@@ -2792,7 +2859,9 @@ generation-time degenerate-wire rejection and the dark-preview template colours.
 #### File I/O (`test_io.py`)
 
 Covers `save`/`load` round-trips for every component and wire field, the document
-`config` (voltage/current styles; american default for `0.1`), the omit-defaults
+`config` (voltage/current styles; american default for `0.1`; the `siunitx` flag
+— on by default, so an absent key in a pre-`0.5` file loads on, but an explicit
+`false` is honored — and the free-form `preamble`), the omit-defaults
 rule, and load-time validation: typed fields reject the wrong type, unknown
 versions and malformed/invalid JSON raise descriptive errors, and invariant
 violations are caught on load. The save/load hardening (§9) is pinned: the current
@@ -2855,8 +2924,13 @@ Covers engine selection (LaTeX when present else ziamath, `force_ziamath`
 override), baseline-normalised `QPainterPath` output, math-delimiter handling,
 disk-cache behaviour and hardening (failures not memoised, corrupt entries
 recompiled, per-user private cache dir), the single-dispatcher async-delivery
-invariant (results on the UI thread; no per-request QObject), and packaging
-guards that the bundled fonts + `latex2mathml` data stay in the frozen bundle.
+invariant (results on the UI thread; no per-request QObject), the **document
+label preamble** (§7.2: the preamble folds into the cache key so siunitx/non-
+siunitx renders don't collide, `_label_document` splices it before
+`\begin{document}`, and `set_label_preamble` swaps the global and clears the
+memo), and packaging guards that the bundled fonts + `latex2mathml` data stay in
+the frozen bundle. The scene→renderer wiring (siunitx mirrored on
+`set_schematic`) is covered in `test_scene.py`.
 
 #### Symbol Geometry (`test_svgsym.py`)
 
@@ -2876,7 +2950,12 @@ vector as a list (never `shell=True`); `balance_braces` neutralises stray
 open *and* close braces while leaving balanced and escaped braces untouched;
 `contains_dangerous_latex` flags the high-risk commands and accepts benign
 label text (and `None`); and both `build_tex` and `build_snippet` carry the
-SECURITY header comment in their output.
+SECURITY header comment in their output. The **document preamble settings**
+(§7.2/§8.3, issue #29) are also covered here: at their defaults `build_tex`
+output is byte-for-byte unchanged; `siunitx=True` extends CircuiTikZ's option
+list to `[american,siunitx]` (light, dark, and snippet paths); a non-empty
+`extra_preamble` is spliced before `\begin{document}` (and listed as comments in
+a snippet); and a blank preamble is a no-op.
 
 #### Preferences (`test_preferences.py`)
 

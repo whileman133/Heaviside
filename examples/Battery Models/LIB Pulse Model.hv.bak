@@ -4,7 +4,7 @@
   "config": {
     "voltage_style": "american",
     "current_style": "american",
-    "siunitx": true,
+    "siunitx": false,
     "preamble": ""
   },
   "components": [

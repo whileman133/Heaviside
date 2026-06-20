@@ -42,10 +42,13 @@ _HAS_TEX = shutil.which("latex") is not None and shutil.which("dvisvgm") is not 
 
 @pytest.fixture(autouse=True)
 def _reset_engine():
-    """Keep the module-level force flag from leaking between tests."""
+    """Keep the module-level force flag and label preamble from leaking between
+    tests — constructing a SchematicScene elsewhere sets the preamble global."""
     set_force_ziamath(False)
+    _mr.set_label_preamble("")
     yield
     set_force_ziamath(False)
+    _mr.set_label_preamble("")
 
 
 # ---------------------------------------------------------------------------
@@ -442,6 +445,41 @@ def _clean_memos():
     render_path.cache_clear()   # clears the render memo AND the baseline memo
     yield
     render_path.cache_clear()
+
+
+def test_label_preamble_folds_into_cache_key() -> None:
+    """A different preamble yields a different on-disk cache key, so siunitx and
+    non-siunitx renders of the same fragment never collide. Empty preamble keeps
+    the legacy one-arg key (back-compat)."""
+    assert _mr._cache_key("$x$") == _mr._cache_key("$x$", "")
+    assert _mr._cache_key("$x$") != _mr._cache_key("$x$", r"\usepackage{siunitx}")
+
+
+def test_label_document_splices_preamble_before_begin() -> None:
+    """The preamble is inserted ahead of \\begin{document}; empty is a no-op."""
+    plain = _mr._label_document("$x$", "")
+    assert "siunitx" not in plain
+    assert r"\begin{document}" in plain
+
+    doc = _mr._label_document(r"$\qty{10}{\ohm}$", r"\usepackage{siunitx}")
+    assert doc.index(r"\usepackage{siunitx}") < doc.index(r"\begin{document}")
+    assert r"\qty{10}{\ohm}" in doc
+
+
+def test_set_label_preamble_updates_global_and_clears_memo(_clean_memos) -> None:
+    """Changing the preamble swaps the module global and drops the render memo so
+    existing labels refresh; an unchanged value is a no-op."""
+    from PySide6.QtGui import QPainterPath
+    try:
+        _mr.set_label_preamble("")
+        # Seed the in-memory memo, then flip the preamble.
+        _mr._memo_store(("$x$", "latex"), QPainterPath())
+        assert _mr._render_memo  # non-empty
+        _mr.set_label_preamble(r"\usepackage{siunitx}")
+        assert _mr._label_preamble == r"\usepackage{siunitx}"
+        assert not _mr._render_memo  # cleared on change
+    finally:
+        _mr.set_label_preamble("")   # reset global for other tests
 
 
 def test_baseline_failure_not_memoised(monkeypatch, _clean_memos) -> None:

@@ -178,6 +178,8 @@ class _AutoExportJob:
     want_svg: bool
     want_png: bool
     png_dpi: int
+    siunitx: bool        # document preamble settings (snapshotted with source)
+    preamble: str
 
 
 @dataclass
@@ -216,14 +218,17 @@ def _run_auto_export_job(job: _AutoExportJob) -> _AutoExportResult:
 
     # TeX snippet: written directly, no LaTeX install needed.
     if job.want_tex:
-        _export(".tex", lambda t: t.write_text(build_snippet(job.source),
-                                               encoding="utf-8"))
+        _export(".tex", lambda t: t.write_text(
+            build_snippet(job.source, siunitx=job.siunitx,
+                          extra_preamble=job.preamble),
+            encoding="utf-8"))
 
     png: "tuple[bytes, Path, int] | None" = None
     # Image formats share a single pdflatex compile.
     if job.want_pdf or job.want_eps or job.want_svg or job.want_png:
         try:
-            pdf_bytes = compile_tex(build_tex(job.source))
+            pdf_bytes = compile_tex(build_tex(
+                job.source, siunitx=job.siunitx, extra_preamble=job.preamble))
         except (CompileError, OSError, RuntimeError) as exc:
             return _AutoExportResult(written, failed, compile_error=str(exc))
         if job.want_pdf:
@@ -583,7 +588,13 @@ class MainWindow(QMainWindow):
         on-canvas ± signs / arrows. The edit itself is now an undoable command
         pushed through the scene (which already emitted ``schematic_changed``,
         refreshing source/preview/modified-state), so only the annotation
-        relayout remains here."""
+        relayout remains here.
+
+        The siunitx toggle also changes how labels typeset (it loads the package
+        that defines ``\\qty`` / ``\\unit``), so mirror it into the canvas label
+        renderer and re-render existing labels."""
+        self._scene.sync_label_preamble()
+        self._scene.retypeset_labels()
         self._scene.relayout_annotations()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
@@ -1168,6 +1179,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 — keep the preview alive, but visible
             self._status_compile.setText(f"Preview update failed: {exc}")
             return
+        sch = self._scene.schematic
+        self._preview_worker.set_preamble(sch.siunitx, sch.preamble)
         self._preview_worker.request_compile(source)
 
     def _on_compile_now(self) -> None:
@@ -1182,6 +1195,8 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._status_compile.setText(f"Error: {exc}")
             return
+        sch = self._scene.schematic
+        self._preview_worker.set_preamble(sch.siunitx, sch.preamble)
         self._preview_worker.compile_now(source)
 
     def _on_preview_ready(self, image: QImage) -> None:
@@ -1438,11 +1453,13 @@ class MainWindow(QMainWindow):
             self._status_compile.setText(f"Auto-export failed ({exc})")
             return
 
+        sch = self._scene.schematic
         job = _AutoExportJob(
             path=Path(path), source=source,
             want_tex=want_tex, want_pdf=want_pdf, want_eps=want_eps,
             want_svg=want_svg, want_png=want_png,
             png_dpi=self._prefs.png_dpi,
+            siunitx=sch.siunitx, preamble=sch.preamble,
         )
         if self._auto_export_busy:
             # Single-flight: keep only the newest job; it is dispatched when
@@ -1528,8 +1545,12 @@ class MainWindow(QMainWindow):
             return
         if not path.endswith(".tex"):
             path += ".tex"
+        sch = self._scene.schematic
         try:
-            Path(path).write_text(build_snippet(source), encoding="utf-8")
+            Path(path).write_text(
+                build_snippet(source, siunitx=sch.siunitx,
+                              extra_preamble=sch.preamble),
+                encoding="utf-8")
         except OSError as exc:
             QMessageBox.critical(self, "Export Error", str(exc))
             return
@@ -1552,8 +1573,10 @@ class MainWindow(QMainWindow):
             if not quiet:
                 QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
             return None
+        sch = self._scene.schematic
         try:
-            return compile_tex(build_tex(source))
+            return compile_tex(build_tex(
+                source, siunitx=sch.siunitx, extra_preamble=sch.preamble))
         except CompileError as exc:
             if not quiet:
                 detail = f"{exc}\n\n{exc.log}".strip() if exc.log else str(exc)

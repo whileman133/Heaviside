@@ -56,6 +56,25 @@ def scene() -> SchematicScene:
 
 
 # ---------------------------------------------------------------------------
+# Document label preamble (siunitx on canvas)
+# ---------------------------------------------------------------------------
+
+def test_set_schematic_mirrors_siunitx_into_label_renderer(scene: SchematicScene):
+    """Loading a document forwards its siunitx flag to the canvas label renderer
+    so \\qty/\\unit macros typeset on canvas (issue #29)."""
+    from app.preview import mathrender
+    from app.schematic.model import Schematic
+    try:
+        scene.set_schematic(Schematic(version="0.5", name="on", siunitx=True))
+        assert "siunitx" in mathrender._label_preamble
+
+        scene.set_schematic(Schematic(version="0.5", name="off", siunitx=False))
+        assert mathrender._label_preamble == ""
+    finally:
+        mathrender.set_label_preamble("")
+
+
+# ---------------------------------------------------------------------------
 # Placement → model
 # ---------------------------------------------------------------------------
 
