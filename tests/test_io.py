@@ -127,7 +127,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     assert data["version"] == "0.5"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
-        "siunitx": False, "preamble": "",
+        "siunitx": True, "preamble": "",   # siunitx defaults on (§7.2)
     }
 
 
@@ -142,8 +142,9 @@ def test_preamble_settings_roundtrip(tmp_path: Path) -> None:
     assert loaded.preamble == "\\usepackage{mathtools}\n\\newcommand{\\R}{\\mathbb{R}}"
 
 
-def test_load_pre_0_5_defaults_preamble_off(tmp_path: Path) -> None:
-    """A 0.4 file (no siunitx/preamble) loads with the settings off/empty."""
+def test_load_pre_0_5_defaults(tmp_path: Path) -> None:
+    """A 0.4 file (no siunitx/preamble keys) loads with siunitx on (the new-doc
+    default, §7.2) and an empty custom preamble."""
     p = tmp_path / "old.hv"
     p.write_text(
         '{"version": "0.4", "name": "old", "components": [], "wires": [], '
@@ -151,8 +152,19 @@ def test_load_pre_0_5_defaults_preamble_off(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     loaded = load(p)
-    assert loaded.siunitx is False
+    assert loaded.siunitx is True
     assert loaded.preamble == ""
+
+
+def test_load_explicit_siunitx_false_is_honored(tmp_path: Path) -> None:
+    """An explicit siunitx:false is kept (only an absent key defaults on)."""
+    p = tmp_path / "off.hv"
+    p.write_text(
+        '{"version": "0.5", "name": "off", "components": [], "wires": [], '
+        '"config": {"siunitx": false}}',
+        encoding="utf-8",
+    )
+    assert load(p).siunitx is False
 
 
 def test_load_v01_defaults_config_to_american(tmp_path: Path) -> None:

@@ -301,7 +301,7 @@ class Schematic:
     metadata: dict[str, Any]         # Arbitrary key-value store for future use
     voltage_style: str = "american"  # document voltage-label style: "american"/"european" (§7.2)
     current_style: str = "american"  # document current-label style: "american"/"european" (§7.2)
-    siunitx: bool = False            # load siunitx via CircuiTikZ for unit macros in labels (§7.2/§8.3)
+    siunitx: bool = True             # load siunitx via CircuiTikZ for unit macros in labels; default on (§7.2/§8.3)
     preamble: str = ""               # free-form LaTeX spliced into the document preamble (§7.2/§8.3)
 ```
 
@@ -316,10 +316,13 @@ american/european *symbols* as distinct components, the convention must only
 affect the annotation arrows (§7.2).
 
 Document-level **preamble settings** travel with the same `config` object.
-`siunitx` (default `False`) adds the option to CircuiTikZ's own option list
+`siunitx` (**default on**) adds the option to CircuiTikZ's own option list
 (`\usepackage[american,siunitx]{circuitikz}`) so unit macros — `\qty{10}{\ohm}`,
 `\unit{\ampere}` — work in any label; this is how CircuiTikZ integrates siunitx
-(loading it that way rather than as a separate `\usepackage`). `preamble`
+(loading it that way rather than as a separate `\usepackage`). It defaults on
+because siunitx is cheap to load and most schematics use units at some point, so
+a new document supports `\qty` out of the box; a pre-0.5 file (no `siunitx` key)
+also loads with it on. `preamble`
 (default `""`) is free-form LaTeX spliced **verbatim** into the document preamble,
 just before `\begin{document}` and after the fixed packages so it can override
 them — the escape hatch for packages, macros, colours, or `\ctikzset` the
@@ -1898,7 +1901,7 @@ failure to write the `.bak` never blocks the save itself.
   "config": {
     "voltage_style": "american",
     "current_style": "american",
-    "siunitx": false,
+    "siunitx": true,
     "preamble": ""
   },
   "components": [
@@ -1987,7 +1990,7 @@ Format versions:
 - **0.2** — added the top-level `config` object (document voltage/current label styles, §9.2). A 0.1 file loads unchanged with american defaults.
 - **0.3** — covers the optional wire/component fields accumulated since 0.2 (`start_marker`/`end_marker`, the endpoint/mid labels and placements, `hop_mode`, `z_order`, `line_width`, `scale`, `params`, `variants`, `span_override`), so an **older build that would silently strip them refuses the file** instead of corrupting it on its next save. 0.1/0.2 files load unchanged; new documents declare 0.3.
 - **0.4** — extends `z_order` from drawing annotations to **every component** (any component can be sent to front/back, §9.4 Z-order). A 0.3 build would silently strip a plain component's `z_order` on save, so the bump makes it refuse the newer file. 0.1–0.3 files load unchanged (an absent `z_order` defaults to 0); new documents declare 0.4.
-- **0.5** — adds the document **preamble settings** to `config` (`siunitx` flag and free-form `preamble` string, §7.2). A 0.4 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.4 files load unchanged (both default to off / empty); new documents declare 0.5.
+- **0.5** — adds the document **preamble settings** to `config` (`siunitx` flag and free-form `preamble` string, §7.2). A 0.4 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.4 files load unchanged — an absent `siunitx` key defaults **on** (the new-document default) and `preamble` to empty; new documents declare 0.5.
 
 ### 9.5 Bundled Examples
 
@@ -2857,7 +2860,8 @@ generation-time degenerate-wire rejection and the dark-preview template colours.
 
 Covers `save`/`load` round-trips for every component and wire field, the document
 `config` (voltage/current styles; american default for `0.1`; the `siunitx` flag
-and free-form `preamble`, off/empty for pre-`0.5` files), the omit-defaults
+— on by default, so an absent key in a pre-`0.5` file loads on, but an explicit
+`false` is honored — and the free-form `preamble`), the omit-defaults
 rule, and load-time validation: typed fields reject the wrong type, unknown
 versions and malformed/invalid JSON raise descriptive errors, and invariant
 violations are caught on load. The save/load hardening (§9) is pinned: the current

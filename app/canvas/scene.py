@@ -164,6 +164,10 @@ class SchematicScene(QGraphicsScene):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
         self._stack = UndoStack(self._schematic)
+        # Keep the canvas label renderer in step with this document's preamble
+        # settings from the outset (covers the startup document, which is never
+        # routed through set_schematic). See sync_label_preamble.
+        self.sync_label_preamble()
         # When non-None, _push() accumulates commands here for one MacroCommand
         # (see batch()); used for multi-component inspector edits.
         self._batch: list | None = None

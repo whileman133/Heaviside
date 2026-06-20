@@ -233,11 +233,12 @@ class Schematic:
 
     # Document-level LaTeX preamble settings (§7.2). ``siunitx`` adds the
     # package to CircuiTikZ's option list so unit macros (\qty, \unit) work in
-    # labels (issue #29). ``preamble`` is free-form LaTeX spliced verbatim into
-    # the document preamble — the escape hatch for packages/macros/\ctikzset the
-    # UI does not surface as a dedicated control. Both travel with the .hv file
-    # and default to "off", keeping pre-config documents' output unchanged.
-    siunitx: bool = False
+    # labels (issue #29). It defaults **on**: siunitx is cheap to load and most
+    # schematics use units at some point, so a new document supports \qty out of
+    # the box. ``preamble`` is free-form LaTeX spliced verbatim into the document
+    # preamble — the escape hatch for packages/macros/\ctikzset the UI does not
+    # surface as a dedicated control; default empty. Both travel with the .hv file.
+    siunitx: bool = True
     preamble: str = ""
 
 

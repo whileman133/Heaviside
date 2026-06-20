@@ -526,13 +526,15 @@ def test_document_panel_preamble_settings_undoable(_app):
     panel = DocumentPropertiesPanel()
     panel.set_scene(scene)
 
-    panel._siunitx.setChecked(True)
+    # siunitx defaults on, so toggle it off and confirm undo restores it.
     assert scene.schematic.siunitx is True
+    panel._siunitx.setChecked(False)
+    assert scene.schematic.siunitx is False
     assert scene.undo_stack.can_undo()
     scene.undo()
-    assert scene.schematic.siunitx is False
+    assert scene.schematic.siunitx is True
     panel.refresh()
-    assert panel._siunitx.isChecked() is False
+    assert panel._siunitx.isChecked() is True
 
     # The preamble editor commits on focus-out (committed signal); drive it
     # directly rather than simulating focus.

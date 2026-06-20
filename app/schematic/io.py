@@ -376,9 +376,11 @@ def _dict_to_schematic(data: dict) -> Schematic:
         value = config.get(key, "american")
         return value if value in LABEL_STYLES else "american"
 
-    # Preamble settings (added in 0.5). Absent in older files → off / empty.
-    # A non-bool/non-string value is coerced rather than failing the load.
-    siunitx = bool(config.get("siunitx", False))
+    # Preamble settings (added in 0.5). siunitx defaults **on** (matching a new
+    # document, §7.2) so a pre-0.5 file — which predates the option — opens with
+    # unit-macro support; preamble defaults empty. A non-bool/non-string value is
+    # coerced rather than failing the load.
+    siunitx = bool(config.get("siunitx", True))
     raw_preamble = config.get("preamble", "")
     preamble = raw_preamble if isinstance(raw_preamble, str) else ""
 

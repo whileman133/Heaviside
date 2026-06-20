@@ -42,10 +42,13 @@ _HAS_TEX = shutil.which("latex") is not None and shutil.which("dvisvgm") is not 
 
 @pytest.fixture(autouse=True)
 def _reset_engine():
-    """Keep the module-level force flag from leaking between tests."""
+    """Keep the module-level force flag and label preamble from leaking between
+    tests — constructing a SchematicScene elsewhere sets the preamble global."""
     set_force_ziamath(False)
+    _mr.set_label_preamble("")
     yield
     set_force_ziamath(False)
+    _mr.set_label_preamble("")
 
 
 # ---------------------------------------------------------------------------

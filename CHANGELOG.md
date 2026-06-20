@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **SI units (siunitx) and a custom LaTeX preamble**, in the inspector's
   **Document** tab ([#29](https://github.com/whileman133/Heaviside/issues/29)).
-  Ticking **SI units (siunitx)** loads siunitx through CircuiTikZ so labels can
-  use unit macros, e.g. `l=\qty{10}{\ohm}` or `\unit{\ampere}`. The **custom
+  **SI units (siunitx)** is **on by default** (most schematics use units at some
+  point and it is cheap to load) and loads siunitx through CircuiTikZ so labels
+  can use unit macros, e.g. `l=\qty{10}{\ohm}` or `\unit{\ampere}`. The **custom
   preamble** field splices arbitrary LaTeX (packages, macros, colours,
   `\ctikzset`) into the document preamble — the escape hatch for anything the
   inspector has no dedicated control for. Both settings travel with the `.hv`
@@ -23,9 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **`.hv` file format bumped to `0.5`** to carry the new document preamble
-  settings. Files from 0.1–0.4 load unchanged (both settings default to
-  off / empty); a 0.4 or older build will refuse a 0.5 file rather than silently
-  strip the new data.
+  settings. Files from 0.1–0.4 load unchanged — an absent `siunitx` key defaults
+  on (the new-document default) and the custom preamble to empty; a 0.4 or older
+  build will refuse a 0.5 file rather than silently strip the new data.
 
 ## [0.1.0] - 2026-06-13
 
