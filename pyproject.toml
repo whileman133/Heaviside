@@ -32,10 +32,10 @@ dev-mode-dirs = ["."]
 
 [dependency-groups]
 dev = [
-    "pytest>=7.0",
+    "pytest>=9.1.1",
     "pytest-qt>=4.2",
     "pytest-cov>=4.0",
-    "pyinstaller>=6.20.0",
+    "pyinstaller>=6.21.0",
     "pillow>=12.2.0",
 ]
 
