@@ -928,6 +928,14 @@ def test_node_text_renders_on_canvas_for_node_style(scene: SchematicScene):
     assert not item._node_text_item.isVisible()        # hidden again
 
 
+def test_node_text_label_has_transparent_background(scene: SchematicScene):
+    """The on-canvas node-text label paints no opaque backdrop (transparent, to
+    match CircuiTikZ), unlike axis-centred annotation labels."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    assert item._node_text_item._opaque_bg is False
+
+
 def test_node_text_inline_editor_commits_separately_from_options(scene: SchematicScene):
     """A node element has two in-place editors: the node-text editor commits to
     node_text (verbatim), independent of the options editor."""

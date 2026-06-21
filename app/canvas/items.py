@@ -536,6 +536,15 @@ class _SlotLabel(QGraphicsItem):
         self._step = 0.0                      # stacking offset along _dir
         self._inv = QTransform()              # screen-rel -> parent-local
         self._centered = False                # centre on the axis vs. beside it
+        self._opaque_bg = True                # opaque backdrop behind a centred label
+
+    def set_opaque_background(self, opaque: bool) -> None:
+        """Whether a *centred* label paints an opaque backdrop behind its text.
+
+        On by default (so an axis-centred annotation label is legible over the
+        line it sits on). Turned off for node text, which should be transparent to
+        match CircuiTikZ (which draws no backdrop behind a node's ``{…}`` text)."""
+        self._opaque_bg = opaque
 
     def retypeset(self) -> None:
         """Re-render with the active math engine (see _reissue_vector_render)."""
@@ -634,8 +643,9 @@ class _SlotLabel(QGraphicsItem):
         painter.setRenderHint(QPainter.Antialiasing, True)
         # Axis-centred labels (e.g. the voltage annotation) sit on top of the
         # line, so give them an opaque backdrop with a little padding to keep
-        # the line from appearing to run into the text.
-        if self._centered:
+        # the line from appearing to run into the text. Node text opts out
+        # (transparent, to match CircuiTikZ).
+        if self._centered and self._opaque_bg:
             painter.fillRect(
                 self._scaled_rect().adjusted(
                     -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
@@ -886,8 +896,10 @@ class ComponentItem(QGraphicsItem):
         self._decoration_items: list[_AnnotationDecoration] = []
         # The node-style {…} slot text (node_text), rendered centred on the node
         # anchor. A single reusable label, hidden when there is no node text (the
-        # common case, and always for path-style / ghost components).
+        # common case, and always for path-style / ghost components). Transparent
+        # backdrop, to match CircuiTikZ (no fill behind a node's {…} text).
         self._node_text_item = _SlotLabel(self)
+        self._node_text_item.set_opaque_background(False)
         # A second in-place editor (alongside _options_item) for the node text,
         # opened by double-clicking the node-text label. So a node element has two
         # editable text boxes on the canvas: its options and its node text.
