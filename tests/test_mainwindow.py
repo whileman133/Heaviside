@@ -1310,3 +1310,28 @@ def test_startup_update_check_skipped_when_version_unresolved(tmp_path, monkeypa
         win.close()
         win.deleteLater()
         QApplication.processEvents()
+
+
+def test_paste_action_starts_cursor_follow_placement(tmp_path):
+    """The Edit-menu / Ctrl+V Paste action starts an interactive cursor-follow
+    paste without crashing.
+
+    Regression for #33: the action was wired straight to scene.paste, so Qt's
+    QAction.triggered `checked` bool bound to paste()'s `at` parameter, took the
+    "paste here" branch, and subscripted a bool (TypeError). It now calls
+    begin_paste(), which enters PLACE mode with one ghost per clipboard component
+    and commits nothing until the user clicks."""
+    from app.canvas.scene import Mode
+
+    win = _win(tmp_path)
+    scene = win._scene
+    comp = scene.place_component("R", (5.0, 5.0))
+    scene._comp_items[comp.id].setSelected(True)
+    scene.copy_selection()
+
+    before = len(scene._schematic.components)
+    win._act_paste.trigger()  # must not raise (regression: bool is not subscriptable)
+
+    assert scene._mode == Mode.PLACE
+    assert len(scene._paste_ghosts) == 1               # ghost for the copied component
+    assert len(scene._schematic.components) == before  # nothing committed until a click

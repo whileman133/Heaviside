@@ -216,6 +216,18 @@ class SchematicScene(QGraphicsScene):
         # origin once the first click lands, else None (awaiting the first click).
         self._place_start_gu: tuple[float, float] | None = None
 
+        # Paste placement (§6.7): when the clipboard is pasted via the keyboard /
+        # Edit menu, the group follows the cursor as ghosts (a sub-state of PLACE
+        # mode) until a click commits it — so the user positions the pins instead
+        # of pasting blind. ``_paste_anchor_gu`` is the clipboard group's min
+        # corner (None when not pasting); ``_paste_ghosts`` pairs each ghost item
+        # with its model-space (GU) base position so the group translates rigidly.
+        self._paste_anchor_gu: tuple[float, float] | None = None
+        self._paste_ghosts: list[tuple[QGraphicsItem, tuple[float, float]]] = []
+        # Last cursor position (snapped GU), tracked on every move so a paste can
+        # spawn its ghosts under the cursor immediately rather than at the origin.
+        self._last_cursor_gu: tuple[float, float] | None = None
+
         # Wire-routing state
         self._wire_pts: list[tuple[float, float]] = []
         self._wire_preview: WirePreviewItem | None = None
@@ -657,14 +669,71 @@ class SchematicScene(QGraphicsScene):
             ys.extend(y for _, y in w.points)
         return (min(xs), min(ys))
 
+    def begin_paste(self) -> None:
+        """Start an interactive paste: the clipboard group follows the cursor as
+        ghosts (a sub-state of PLACE mode) until a left-click commits it at the
+        cursor, or Escape / right-click cancels (§6.7).
+
+        This is the keyboard / Edit-menu entry point. Unlike the blind fixed-offset
+        paste, it lets the user position the group before it lands, so pasted pins
+        do not silently split wires or connect to whatever sat under the default
+        offset. No-op when the clipboard is empty (nothing to place)."""
+        if not self._clipboard_components and not self._clipboard_wires:
+            return
+        self._cancel_wire()
+        self._cancel_placement()          # drop any in-progress single-kind ghost
+        self._paste_anchor_gu = self._clipboard_min_corner()
+        self._mode = Mode.PLACE
+        self._apply_item_flags()
+        self._spawn_paste_ghosts()
+        # Show the group under the cursor right away (else at its original anchor,
+        # until the first move) so it reads as "attached to the pointer".
+        self._move_paste_ghosts(self._last_cursor_gu or self._paste_anchor_gu)
+        self.mode_changed.emit(Mode.PLACE)
+
+    def _spawn_paste_ghosts(self) -> None:
+        """Create ghost items for every clipboard component and wire, recording
+        each one's model-space base position so the group can translate rigidly."""
+        self._cancel_paste_ghosts()
+        for comp in self._clipboard_components:
+            cls = ITEM_CLASSES.get(comp.kind, ComponentItem)
+            ghost = cls(copy.deepcopy(comp))   # carries the copy's rotation/mirror/scale
+            ghost.set_ghost(True)
+            ghost.setFlag(ghost.GraphicsItemFlag.ItemIsSelectable, False)
+            ghost.setFlag(ghost.GraphicsItemFlag.ItemIsMovable, False)
+            ghost.setZValue(1000)
+            self.addItem(ghost)
+            self._paste_ghosts.append((ghost, comp.position))
+        for wire in self._clipboard_wires:
+            # WirePreviewItem with no cursor draws a static polyline (ghost dash +
+            # vertex dots) through the wire's points; base (0,0) so setPos shifts it.
+            gw = WirePreviewItem()
+            gw.set_path(wire.points, None)
+            self.addItem(gw)
+            self._paste_ghosts.append((gw, (0.0, 0.0)))
+
+    def _move_paste_ghosts(self, cursor_gu: tuple[float, float]) -> None:
+        """Translate every paste ghost so the group's anchor sits at *cursor_gu*."""
+        if self._paste_anchor_gu is None:
+            return
+        dx = cursor_gu[0] - self._paste_anchor_gu[0]
+        dy = cursor_gu[1] - self._paste_anchor_gu[1]
+        for item, (bx, by) in self._paste_ghosts:
+            item.setPos(self.gu_to_scene(bx + dx, by + dy))
+
+    def _cancel_paste_ghosts(self) -> None:
+        for item, _ in self._paste_ghosts:
+            self._remove_item(item)
+        self._paste_ghosts = []
+
     def paste(self, at: tuple[float, float] | None = None) -> None:
         """Paste clipboard contents with new UUIDs.
 
-        With *at* (snapped GU coordinates, e.g. the right-click point), the
-        group's top-left corner is anchored there — a "paste here". Without it
-        (the Ctrl+V path) the group is offset by a fixed 1 GU so a repeat paste
-        does not land exactly on the original. Either offset is a multiple of the
-        grid, so pasted items stay grid-valid.
+        With *at* (snapped GU coordinates, e.g. the right-click point or the
+        commit point of an interactive :meth:`begin_paste`), the group's top-left
+        corner is anchored there — a "paste here". Without it the group is offset
+        by a fixed 1 GU so a repeat paste does not land exactly on the original.
+        Either offset is a multiple of the grid, so pasted items stay grid-valid.
         """
         if not self._clipboard_components and not self._clipboard_wires:
             return
@@ -1653,6 +1722,8 @@ class SchematicScene(QGraphicsScene):
 
     def _cancel_placement(self) -> None:
         self._cancel_ghost()
+        self._cancel_paste_ghosts()
+        self._paste_anchor_gu = None
         self._place_kind = None
         self._place_rotation = 0
         self._place_mirror = False
@@ -2042,10 +2113,14 @@ class SchematicScene(QGraphicsScene):
 
     def mouseMoveEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         gu = self.snap_point_gu(event.scenePos())
+        self._last_cursor_gu = gu
         self.cursor_moved.emit(gu[0], gu[1])
 
         if self._mode == Mode.PLACE:
-            if self._place_kind in _SPAN_PLACE_KINDS:
+            if self._paste_anchor_gu is not None:
+                # Interactive paste: the whole clipboard group tracks the cursor.
+                self._move_paste_ghosts(gu)
+            elif self._place_kind in _SPAN_PLACE_KINDS:
                 # The ghost only exists (and stretches) once the origin is set.
                 if self._place_start_gu is not None:
                     self._update_span_ghost(
@@ -2235,6 +2310,16 @@ class SchematicScene(QGraphicsScene):
             return
 
         if self._mode == Mode.PLACE:
+            # Interactive paste (begin_paste): a left-click drops the group at the
+            # cursor; a right-click cancels. paste() re-enters SELECT and selects
+            # the pasted items, so the ghosts are torn down via _cancel_placement.
+            if self._paste_anchor_gu is not None:
+                if event.button() == Qt.LeftButton:
+                    self.paste(at=gu)
+                else:
+                    self.set_mode(Mode.SELECT)
+                event.accept()
+                return
             if event.button() == Qt.RightButton:
                 # During a span placement, the first right-click abandons the
                 # in-progress span (back to awaiting the first click); otherwise
