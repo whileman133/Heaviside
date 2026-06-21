@@ -24,7 +24,7 @@ jobs:
       QT_QPA_PLATFORM: offscreen
 
     steps:
-      - uses: actions/checkout@v6.0.3
+      - uses: actions/checkout@v7.0.0
 
       # PySide6/Qt links against system graphics + input libraries that are not
       # present on the GitHub runner by default. Without these, importing QtGui
