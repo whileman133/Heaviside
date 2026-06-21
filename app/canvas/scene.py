@@ -83,6 +83,7 @@ from app.canvas.drag import DragPreviewController
 from app.canvas import style
 from app.canvas.style import GRID_PX
 from app.canvas.wiregeometry import WireGeometry
+from app.codegen.circuitikz import is_node_style
 from app.components.registry import ITEM_CLASSES, REGISTRY
 from app.schematic.model import (
     Component,
@@ -2734,9 +2735,16 @@ class SchematicScene(QGraphicsScene):
                         event.accept()
                         return
                 if isinstance(it, ComponentItem):
-                    # Start in-place options editing and open the Properties Panel.
-                    it.begin_options_edit()
-                    self.component_double_clicked.emit(it.component.id)
+                    # Start in-place editing and open the Properties Panel. For a
+                    # node-style component that has neither options nor node text,
+                    # default to the node-text editor (the most likely first edit —
+                    # a transistor's label); otherwise edit the options.
+                    comp = it.component
+                    if is_node_style(comp.kind) and not comp.options and not comp.node_text:
+                        it.begin_node_text_edit()
+                    else:
+                        it.begin_options_edit()
+                    self.component_double_clicked.emit(comp.id)
                     event.accept()
                     return
 

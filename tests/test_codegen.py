@@ -370,19 +370,21 @@ def test_opamp_node() -> None:
 # node_text — the node-style {…} slot (§5, #32)
 # ---------------------------------------------------------------------------
 
-def test_node_text_multi_terminal_uses_chained_centre_node() -> None:
-    """A multi-terminal node's text is a *chained* node at the shape centre — the
-    component node's own {…} stays empty so the fixed-size symbol does not clip the
-    text under the standalone crop, and the separate node grows the figure bbox."""
+def test_node_text_multi_terminal_uses_separate_node_statement() -> None:
+    """A multi-terminal node's text is a *standalone* `\\node` statement at the
+    placement point (the node's centre), on its own line — the component node's own
+    {…} stays empty so the fixed-size symbol does not clip the text under the
+    standalone crop, the separate node grows the figure bbox, and the text is
+    visible in the source rather than appended to a long path line."""
     src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
-    # component node has empty braces, then a chained (<node>.center) node with the text
-    assert "node[npn" in src
-    assert ".center) node[inner sep=0] {$Q_1$}" in src
-    assert "{$Q_1$}" in src
-    # No node_text → empty braces, no chained node.
+    # component node keeps empty braces; the text is its own \node at the position
+    # (the placement point, after origin normalisation §7.3 — its own line).
+    assert "node[npn" in src and ") {}" in src
+    assert r"\node[inner sep=0] at (" in src and r"{$Q_1$};" in src
+    # No node_text → no node-text statement.
     bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
     assert "(node_" in bare and ") {}" in bare
-    assert ".center) node[inner sep=0]" not in bare
+    assert "inner sep=0] at" not in bare
 
 
 def test_node_text_on_single_terminal_node() -> None:
@@ -404,6 +406,16 @@ def test_node_text_braces_are_balanced() -> None:
     src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="a}b")))
     # The stray } is escaped (balance_braces), keeping the {…} group well-formed.
     assert r"{a\}b}" in src
+
+
+@pytest.mark.parametrize("kind", ["npn", "pnp", "op amp", "nigfete", "vcc", "vdd", "vee", "ground"])
+def test_node_text_always_present_in_source(kind: str) -> None:
+    """Invariant: node text the user set MUST appear in the generated CircuiTikZ
+    source (which is what the GUI displays and what is compiled), for every
+    node-style kind — single- and multi-terminal alike. The source the user sees
+    must match what is actually rendered."""
+    src = generate(_schematic(_comp(kind, position=(2.0, 2.0), node_text="$X_7$")))
+    assert "$X_7$" in src, f"node text missing from source for {kind!r}"
 
 
 # ---------------------------------------------------------------------------

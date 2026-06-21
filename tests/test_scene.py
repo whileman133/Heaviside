@@ -959,6 +959,35 @@ def test_node_text_editor_cancel_keeps_value(scene: SchematicScene):
     assert scene._component_by_id(comp.id).node_text == "$Q_1$"
 
 
+def _dbl(scene: SchematicScene, gu):
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+    e = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseDoubleClick)
+    e.setButton(Qt.LeftButton)
+    e.setScenePos(scene.gu_to_scene(*gu))
+    scene.mouseDoubleClickEvent(e)
+
+
+def test_double_click_blank_node_defaults_to_node_text_editor(scene: SchematicScene):
+    """Double-clicking a node-style component with no options and no node text opens
+    the *node-text* editor (the likely first edit — a label), not the options one."""
+    comp = scene.place_component("npn", (3.0, 3.0))   # no options, no node text
+    item = scene._comp_items[comp.id]
+    _dbl(scene, (3.0, 3.0))                            # on the node body (origin pin)
+    assert item._node_text_editor.is_editing
+    assert not item._options_item.is_editing
+
+
+def test_double_click_node_with_options_edits_options(scene: SchematicScene):
+    """Once a node-style component has options, double-clicking the body edits the
+    options (not the node text)."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_options(comp.id, "l=$Q_1$")
+    item = scene._comp_items[comp.id]
+    _dbl(scene, (3.0, 3.0))
+    assert item._options_item.is_editing
+    assert not item._node_text_editor.is_editing
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))

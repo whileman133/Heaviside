@@ -1128,26 +1128,29 @@ class ComponentItem(QGraphicsItem):
         """Where the node-style ``{…}`` text is centred, screen-relative to the item
         origin — matching where the compiled figure places it.
 
-        - **Multi-terminal** node (transistor, op-amp, …): the symbol's bbox centre,
-          i.e. CircuiTikZ's ``node.center`` (codegen chains the text node there). For
-          an asymmetric symbol whose origin is a pin, this is offset from the origin.
+        - **Multi-terminal** node (transistor, op-amp, …): the **item origin**, which
+          is the node's placement point and hence its ``center`` anchor — exactly
+          where codegen's separate ``\\node`` statement puts the text. (For an
+          asymmetric symbol like a transistor the origin is a pin, off the visual
+          centre, but that is where CircuiTikZ anchors the text too.)
         - **Single-terminal** node (ground, power rail): CircuiTikZ anchors the
           inline ``{…}`` text *clear of the symbol*, on the side away from the
           connection pin (e.g. above a power rail). So the label is placed just
           beyond the far bbox edge along the symbol's dominant axis."""
+        pins = self._defn.pins
+        if len(pins) >= 2:                        # multi-terminal: node centre = origin
+            return self.transform().map(QPointF(0.0, 0.0))
         x0, y0, x1, y1 = self._defn.bbox
         s = self._gate_scale()
         cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-        pins = self._defn.pins
-        if len(pins) <= 1:
-            px, py = pins[0].offset if pins else (0.0, 0.0)
-            gap = _NODE_TEXT_CLEARANCE
-            if abs(cy - py) >= abs(cx - px):     # vertical symbol (rail/ground)
-                cx = px
-                cy = (y0 - gap) if (cy - py) <= 0 else (y1 + gap)
-            else:                                 # horizontal symbol
-                cy = py
-                cx = (x0 - gap) if (cx - px) <= 0 else (x1 + gap)
+        px, py = pins[0].offset if pins else (0.0, 0.0)
+        gap = _NODE_TEXT_CLEARANCE
+        if abs(cy - py) >= abs(cx - px):          # vertical symbol (rail/ground)
+            cx = px
+            cy = (y0 - gap) if (cy - py) <= 0 else (y1 + gap)
+        else:                                     # horizontal symbol
+            cy = py
+            cx = (x0 - gap) if (cx - px) <= 0 else (x1 + gap)
         center_local = QPointF(cx * GRID_PX * s, cy * GRID_PX * s)
         return self.transform().map(center_local)
 
