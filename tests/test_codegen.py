@@ -370,19 +370,15 @@ def test_opamp_node() -> None:
 # node_text — the node-style {…} slot (§5, #32)
 # ---------------------------------------------------------------------------
 
-def test_node_text_multi_terminal_uses_chained_centre_node() -> None:
-    """A multi-terminal node's text is a *chained* node at the shape centre, kept on
-    the component's draw path (the CircuiTikZ-idiomatic way) — the component node's
-    own {…} stays empty so the fixed-size symbol does not clip the text under the
-    standalone crop, and the chained node grows the figure bbox."""
+def test_node_text_multi_terminal_inline_in_node_braces() -> None:
+    """A multi-terminal node's text goes inline in the node's own {…} — the
+    CircuiTikZ-idiomatic ``node[npn] (id) {$Q_1$}`` form."""
     src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
-    # component node keeps empty braces, then a chained (<node>.center) node with the text
-    assert "node[npn" in src
-    assert ".center) node[inner sep=0] {$Q_1$}" in src
-    # No node_text → empty braces, no chained node.
+    assert "node[npn" in src and ") {$Q_1$}" in src
+    assert "inner sep=0" not in src              # no separate/chained label node
+    # No node_text → empty braces.
     bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
     assert "(node_" in bare and ") {}" in bare
-    assert ".center) node[inner sep=0]" not in bare
 
 
 def test_node_text_on_single_terminal_node() -> None:
