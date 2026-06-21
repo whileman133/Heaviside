@@ -913,6 +913,114 @@ def test_begin_paste_empty_clipboard_is_noop(scene: SchematicScene):
     assert scene.schematic.components == []
 
 
+def test_node_text_renders_on_canvas_for_node_style(scene: SchematicScene):
+    """Setting node_text on a node-style component shows its on-canvas {…} label;
+    clearing it hides the label again (the edit is visible without compiling)."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    assert not item._node_text_item.isVisible()       # empty by default
+
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    assert scene._component_by_id(comp.id).node_text == "$Q_1$"
+    assert item._node_text_item.isVisible()           # label now shown
+
+    scene.edit_component_node_text(comp.id, "")
+    assert not item._node_text_item.isVisible()        # hidden again
+
+
+def test_node_text_label_has_transparent_background(scene: SchematicScene):
+    """The on-canvas node-text label paints no opaque backdrop (transparent, to
+    match CircuiTikZ), unlike axis-centred annotation labels."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    assert item._node_text_item._opaque_bg is False
+
+
+def test_node_text_anchor_uses_measured_offset(scene: SchematicScene):
+    """The on-canvas node-text anchor is the item origin + the measured per-kind
+    text_anchor offset (where the label is west-anchored), so it lands where the
+    compiled figure puts it — e.g. a transistor's just east of the origin."""
+    from app.canvas.style import GRID_PX
+
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    ax, ay = item._defn.text_anchor
+    anchor = item._node_text_anchor_rel()                 # screen-rel to origin
+    assert abs(anchor.x() - ax * GRID_PX) < 1e-6
+    assert abs(anchor.y() - ay * GRID_PX) < 1e-6
+    assert ax > 0.0                                        # transistor: east of origin
+
+
+def test_node_text_inline_editor_commits_separately_from_options(scene: SchematicScene):
+    """A node element has two in-place editors: the node-text editor commits to
+    node_text (verbatim), independent of the options editor."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    item = scene._comp_items[comp.id]
+
+    item.begin_node_text_edit()
+    assert item._node_text_editor.is_editing
+    assert not item._node_text_item.isVisible()        # display hidden while editing
+    assert item._node_text_editor.toPlainText() == "$Q_1$"   # pre-filled
+    assert not item._options_item.is_editing           # the options editor is separate
+
+    item._node_text_editor.setPlainText("$Q_2$")
+    item._node_text_editor.end_edit(commit=True)
+    assert scene._component_by_id(comp.id).node_text == "$Q_2$"
+    assert scene._component_by_id(comp.id).options == ""   # options untouched
+    assert not item._node_text_editor.is_editing
+
+
+def test_node_text_editor_cancel_keeps_value(scene: SchematicScene):
+    """Escaping the node-text editor (commit=False) leaves node_text unchanged."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    item = scene._comp_items[comp.id]
+    item.begin_node_text_edit()
+    item._node_text_editor.setPlainText("$Q_9$")
+    item._node_text_editor.end_edit(commit=False)
+    assert scene._component_by_id(comp.id).node_text == "$Q_1$"
+
+
+def _dbl(scene: SchematicScene, gu):
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+    e = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseDoubleClick)
+    e.setButton(Qt.LeftButton)
+    e.setScenePos(scene.gu_to_scene(*gu))
+    scene.mouseDoubleClickEvent(e)
+
+
+def test_double_click_node_edits_node_text_not_options(scene: SchematicScene):
+    """Double-clicking a node-style component on the canvas always edits its node
+    text — its node[…] options are inspector-only, even when already set."""
+    comp = scene.place_component("npn", (3.0, 3.0))   # no options, no node text
+    item = scene._comp_items[comp.id]
+    _dbl(scene, (3.0, 3.0))                            # on the node body (origin pin)
+    assert item._node_text_editor.is_editing
+    assert not item._options_item.is_editing
+    item._node_text_editor.end_edit(commit=False)
+
+    # Even with options set, the canvas edits node text (not options).
+    scene.edit_component_options(comp.id, "color=blue")
+    _dbl(scene, (3.0, 3.0))
+    assert item._node_text_editor.is_editing
+    assert not item._options_item.is_editing
+
+
+def test_node_style_options_show_no_slot_labels(scene: SchematicScene):
+    """A node-style component's options are not rendered as on-canvas slot labels
+    (they are inspector-only); a path-style component still shows them."""
+    npn = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_options(npn.id, "l=$Q_1$")
+    nitem = scene._comp_items[npn.id]
+    assert not any(s.isVisible() for s in nitem._slot_items)
+
+    res = scene.place_component("R", (8.0, 0.0))
+    scene.edit_component_options(res.id, "l=$R_1$")
+    ritem = scene._comp_items[res.id]
+    assert any(s.isVisible() for s in ritem._slot_items)
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))

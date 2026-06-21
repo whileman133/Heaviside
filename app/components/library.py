@@ -401,6 +401,9 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
         # Variants are now generic per-instance state on the base Component, so
         # every library kind uses Component (no DiodeComponent/MosfetComponent).
         component_class=Component,
+        # Measured node-text anchor offset (components/add_text_anchors.py); (0,0)
+        # when absent.
+        text_anchor=tuple(entry.get("text_anchor", (0.0, 0.0))),  # type: ignore[arg-type]
     )
 
 

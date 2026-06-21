@@ -60,7 +60,10 @@ class SourcePanel(QWidget):
         # Read-only source text area (the panel frame provides the border).
         self._text = QPlainTextEdit()
         self._text.setReadOnly(True)
-        self._text.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # Soft-wrap long lines to the panel width so nothing scrolls off the right
+        # edge (e.g. a node line with chained node text) — the displayed source
+        # must always show everything that is rendered.
+        self._text.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self._text.setFrameShape(QPlainTextEdit.NoFrame)
         # The platform's real fixed-width font. Asking for a literal
         # "Monospace" family forces Qt to scan every installed font to build

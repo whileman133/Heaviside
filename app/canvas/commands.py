@@ -1291,6 +1291,36 @@ class EditCommand(Command):
         comp.options = self._old_options or ""
 
 
+class EditNodeTextCommand(Command):
+    """Replace the ``node_text`` (``{…}`` slot) of a single node-style component.
+
+    Inverse: restore the previous node text.
+    """
+
+    label = "Edit Node Text"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_text: str,
+        old_text: str | None = None,
+    ) -> None:
+        self._component_id = component_id
+        self._new_text = new_text
+        # If old_text is not supplied, it is captured on first do().
+        self._old_text: str | None = old_text
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._old_text is None:
+            self._old_text = comp.node_text
+        comp.node_text = self._new_text
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.node_text = self._old_text or ""
+
+
 class MoveOptionsLabelCommand(Command):
     """Set (or clear) the label_offset of a single component's options label.
 

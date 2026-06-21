@@ -32,10 +32,24 @@ class Component:
     """Clockwise rotation in degrees. Must be one of {0, 90, 180, 270}."""
 
     options: str
-    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$"."""
+    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$".
+
+    For a **node-style** kind (single- or multi-terminal node, see
+    ``app.codegen.circuitikz.is_node_style``) this is the ``node[…]`` *bracket*
+    only; the text in the trailing ``{…}`` slot lives in :attr:`node_text`."""
 
     mirror: bool = False
     """Horizontal mirror applied before rotation."""
+
+    node_text: str = ""
+    """Text for the ``{…}`` slot of a **node-style** component's emitted
+    ``(x,y) node[…] {TEXT}`` (e.g. a transistor's ``$Q_1$`` or a power rail's
+    ``$V_{cc}$``). Distinct from :attr:`options`, which carries the ``[…]`` bracket.
+
+    Meaningful only for node-style kinds (``is_node_style``); path-style ``to[…]``
+    components and drawing annotations ignore it. Persisted (``schematic/io.py``)
+    only when non-empty. A legacy power-rail's ``l=`` label is migrated into this
+    field on load (the rail's name now renders from the ``{…}`` slot)."""
 
     label_offset: tuple[float, float] | None = None
     """Position of the options label in component-local pixel coordinates.
@@ -285,3 +299,12 @@ class ComponentDef:
     ``BipoleComponent``, ``TextNodeComponent``, ``RectComponent``,
     ``CircleComponent``.  See the registry entries for the authoritative mapping.
     """
+
+    text_anchor: tuple[float, float] = (0.0, 0.0)
+    """(dx, dy) in GU (canvas y-down) from the node's centre to its CircuiTikZ
+    ``text`` anchor — where the inline ``node[…] {…}`` text is **west-anchored**
+    (its left edge sits here, extending right). Measured per multi-terminal kind
+    (``components/add_text_anchors.py``) so the on-canvas node text lands exactly
+    where the compiled figure places it (a transistor's label just right of the
+    symbol, an op-amp's centred, a transformer's a unit above). ``(0, 0)`` for
+    kinds without a measured anchor (single-terminal nodes keep their own rule)."""

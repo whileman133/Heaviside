@@ -313,6 +313,59 @@ def test_unbind_flushes_pending_debounced_edit(_app):
     assert not sec._timer.isActive()
 
 
+def test_node_text_section_applies_only_to_node_style(_app):
+    """NodeTextSection shows for node-style kinds (npn, vcc) and hides for path-style
+    (R) and drawing annotations (text_node)."""
+    from app.ui.properties import NodeTextSection
+    from app.components.model import Component, TextNodeComponent
+
+    sec = NodeTextSection()
+    npn = Component(id="q", kind="npn", position=(0, 0), rotation=0, options="")
+    vcc = Component(id="v", kind="vcc", position=(0, 0), rotation=0, options="")
+    res = Component(id="r", kind="R", position=(0, 0), rotation=0, options="")
+    txt = TextNodeComponent(id="t", kind="text_node", position=(0, 0), rotation=0,
+                            options="hi")
+    assert sec.applies_to(npn) and sec.applies_to(vcc)
+    assert not sec.applies_to(res)
+    assert not sec.applies_to(txt)
+
+
+def test_node_text_section_edits_node_text_undoably(_app):
+    """Editing the Node text field commits node_text via an undoable command."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import NodeTextSection, PropertiesPanel
+
+    scene = SchematicScene()
+    comp = scene.place_component("npn", (2.0, 2.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(comp.id)
+
+    sec = next(s for s in panel._sections if isinstance(s, NodeTextSection))
+    assert sec._comp_ids == [comp.id]            # bound for a node-style kind
+    sec._field.setText("$Q_1$")
+    panel.flush_pending_edits()
+    assert scene._component_by_id(comp.id).node_text == "$Q_1$"
+
+    scene.undo()
+    assert scene._component_by_id(comp.id).node_text == ""
+
+
+def test_options_section_relabels_for_node_style(_app):
+    """For a node-style kind the options field is the node[…] bracket, so its title
+    reads 'Node options'; a path-style kind keeps 'CircuiTikZ options'."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import OptionsSection
+    from app.components.model import Component
+
+    sec = OptionsSection()
+    scene = SchematicScene()
+    sec.bind(Component(id="q", kind="npn", position=(0, 0), rotation=0, options=""), scene)
+    assert sec._title_label.text() == "Node options"
+    sec.bind(Component(id="r", kind="R", position=(0, 0), rotation=0, options=""), scene)
+    assert sec._title_label.text() == "CircuiTikZ options"
+
+
 def test_panel_flush_pending_edits_commits_every_section(_app):
     """PropertiesPanel.flush_pending_edits commits a pending debounced edit
     immediately (what MainWindow calls before save/export)."""

@@ -60,3 +60,27 @@ def test_source_panel_omits_line_hops_when_pref_off(_app):
     text = panel._text.toPlainText()
     assert "jump crossing" not in text
     assert "(0,1) -- (4,1)" in text
+
+
+def test_source_panel_shows_node_text(_app):
+    """Invariant: node text the user adds appears in the displayed source (so the
+    GUI source always matches what is rendered/compiled), and refreshes when it
+    changes."""
+    from app.canvas.scene import SchematicScene
+
+    panel = _panel(line_hops=True)
+    scene = SchematicScene()
+    panel.set_scene(scene)
+    comp = scene.place_component("npn", (5.0, 5.0))
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    panel.refresh()
+    assert "$Q_1$" in panel._text.toPlainText()
+
+
+def test_source_panel_soft_wraps(_app):
+    """Long lines (e.g. a node line with chained node text) soft-wrap to the panel
+    width so nothing the source contains scrolls off the right edge unseen."""
+    from PySide6.QtWidgets import QPlainTextEdit
+
+    panel = _panel(line_hops=True)
+    assert panel._text.lineWrapMode() == QPlainTextEdit.WidgetWidth

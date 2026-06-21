@@ -532,6 +532,15 @@ class _SlotLabel(QGraphicsItem):
         self._step = 0.0                      # stacking offset along _dir
         self._inv = QTransform()              # screen-rel -> parent-local
         self._centered = False                # centre on the axis vs. beside it
+        self._opaque_bg = True                # opaque backdrop behind a centred label
+
+    def set_opaque_background(self, opaque: bool) -> None:
+        """Whether a *centred* label paints an opaque backdrop behind its text.
+
+        On by default (so an axis-centred annotation label is legible over the
+        line it sits on). Turned off for node text, which should be transparent to
+        match CircuiTikZ (which draws no backdrop behind a node's ``{…}`` text)."""
+        self._opaque_bg = opaque
 
     def retypeset(self) -> None:
         """Re-render with the active math engine (see _reissue_vector_render)."""
@@ -630,8 +639,9 @@ class _SlotLabel(QGraphicsItem):
         painter.setRenderHint(QPainter.Antialiasing, True)
         # Axis-centred labels (e.g. the voltage annotation) sit on top of the
         # line, so give them an opaque backdrop with a little padding to keep
-        # the line from appearing to run into the text.
-        if self._centered:
+        # the line from appearing to run into the text. Node text opts out
+        # (transparent, to match CircuiTikZ).
+        if self._centered and self._opaque_bg:
             painter.fillRect(
                 self._scaled_rect().adjusted(
                     -_LABEL_BG_PAD, -_LABEL_BG_PAD, _LABEL_BG_PAD, _LABEL_BG_PAD
@@ -880,6 +890,19 @@ class ComponentItem(QGraphicsItem):
         self._options_item.set_commit_callback(self._on_options_commit)
         self._slot_items: list[_SlotLabel] = []
         self._decoration_items: list[_AnnotationDecoration] = []
+        # The node-style {…} slot text (node_text), rendered centred on the node
+        # anchor. A single reusable label, hidden when there is no node text (the
+        # common case, and always for path-style / ghost components). Transparent
+        # backdrop, to match CircuiTikZ (no fill behind a node's {…} text).
+        self._node_text_item = _SlotLabel(self)
+        self._node_text_item.set_opaque_background(False)
+        # A second in-place editor (alongside _options_item) for the node text,
+        # opened by double-clicking the node-text label. So a node element has two
+        # editable text boxes on the canvas: its options and its node text.
+        self._node_text_editor = LabelTextItem(self)
+        self._node_text_editor.setFlag(QGraphicsItem.ItemIsMovable, False)
+        self._node_text_editor.set_commit_callback(self._on_node_text_commit)
+        self._node_text_editor.set_end_callback(self._sync_options_item)
         self._sync_options_item()
 
     # ------------------------------------------------------------------
@@ -934,6 +957,13 @@ class ComponentItem(QGraphicsItem):
                 self._component.id, self._options_from_editable(text)
             )
 
+    def _on_node_text_commit(self, text: str) -> None:
+        """Called by the node-text editor when the user commits an in-place edit.
+        The node text is stored verbatim (no per-slot conversion)."""
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "edit_component_node_text"):
+            scene.edit_component_node_text(self._component.id, text)
+
     # Options are edited one slot per line for readability; converted to/from the
     # stored comma-separated form. TextNodeItem overrides these to identity.
     def _options_to_editable(self, options: str) -> str:
@@ -966,10 +996,11 @@ class ComponentItem(QGraphicsItem):
         self._sync_options_item()
 
     def _sync_options_item(self) -> None:
-        """Hide the editor (unless active) and lay out the per-side slot labels."""
-        if self._options_item.is_editing:
+        """Hide the editors (unless active) and lay out the per-side slot labels."""
+        if self._options_item.is_editing or self._node_text_editor.is_editing:
             return
         self._options_item.setVisible(False)
+        self._node_text_editor.setVisible(False)
         self._layout_slots()
 
     def _labels_centered_on_axis(self) -> bool:
@@ -1011,10 +1042,19 @@ class ComponentItem(QGraphicsItem):
         labels land on the correct side regardless of rotation/mirror.  Voltage
         (`v=`) and current (`i=`) slots also get a CircuiTikZ-style decoration —
         ± signs / a voltage arrow / a current arrow (:class:`_AnnotationDecoration`).
+
+        **Node-style** components show **no** option slot labels on the canvas: their
+        ``node[…]`` options are raw CircuiTikZ edited only through the inspector's
+        *Node options* field, so rendering them here (alongside the node text) reads
+        as clutter. Only their node text is drawn on the canvas.
         """
+        from app.codegen.circuitikz import is_node_style
         from app.preview.mathrender import _slot_family, slot_fragments, slot_reversed
 
-        slots = [] if self._ghost else slot_fragments(self._component.options)
+        if self._ghost or is_node_style(self._component.kind):
+            slots = []
+        else:
+            slots = slot_fragments(self._component.options)
         while len(self._slot_items) < len(slots):
             self._slot_items.append(_SlotLabel(self))
         while len(self._decoration_items) < len(slots):
@@ -1098,6 +1138,37 @@ class ComponentItem(QGraphicsItem):
             dec.configure(mode, geom["axis_unit"], geom["half_len"],
                           direction, perp, geom["center_rel"], geom["inv"],
                           reversed=slot_reversed(key))
+
+        self._layout_node_text(geom, counter)
+
+    def _node_text_anchor_rel(self) -> QPointF:
+        """The node's CircuiTikZ ``text`` anchor, screen-relative to the item origin
+        — where the inline ``{…}`` text is **west-anchored** (its left edge sits
+        here, extending right). The per-kind offset from centre is measured into
+        ``ComponentDef.text_anchor`` (``components/add_text_anchors.py``), so the
+        on-canvas label lands exactly where the compiled figure places it (a
+        transistor's just right of the symbol, an op-amp's centred, a transformer's
+        a unit above)."""
+        tx, ty = self._defn.text_anchor
+        return self.transform().map(QPointF(tx * GRID_PX, ty * GRID_PX))
+
+    def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
+        """Render the node-style ``{…}`` text (``node_text``) **west-anchored** at the
+        node's ``text`` anchor (left edge there, extending right, upright via the
+        counter-transform) — matching where the compiled figure places it.
+
+        Hidden when there is no node text, while the node-text editor is open, and
+        for ghosts (placement previews show the bare symbol). Path-style components
+        never set node_text, so their label stays hidden."""
+        editing = self._node_text_editor.is_editing
+        text = "" if (self._ghost or editing) else (self._component.node_text or "")
+        self._node_text_item.setTransform(counter)
+        # centered=False + direction east + base_dist 0 → left edge at the anchor.
+        self._node_text_item.configure(
+            text, QPointF(1.0, 0.0), self._node_text_anchor_rel(),
+            0.0, 0.0, geom["inv"], False,
+        )
+        self._node_text_item.setVisible(bool(text))
 
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
@@ -1211,6 +1282,29 @@ class ComponentItem(QGraphicsItem):
         self._options_item.setVisible(True)
         self._options_item.begin_edit()
 
+    def begin_node_text_edit(self) -> None:
+        """Show and activate in-place editing of the node text (the ``{…}`` slot),
+        west-anchored at the node's text anchor where the label renders. The node
+        text is edited verbatim (unlike options, which are shown one slot per line)."""
+        if self._node_text_editor.is_editing:
+            return
+        self._node_text_item.setVisible(False)
+        self._node_text_editor.setPlainText(self._component.node_text)
+        self._node_text_editor.setTransform(self._label_counter_transform())
+        self._node_text_editor.setPos(self._node_text_editor_pos())
+        self._node_text_editor.setVisible(True)
+        self._node_text_editor.begin_edit()
+
+    def _node_text_editor_pos(self) -> QPointF:
+        """Local pos that west-anchors the node-text editor at the node's text
+        anchor (left-centre there), the same anchor the rendered label uses."""
+        t = self.transform()
+        inv, _ = t.inverted()
+        er = self._node_text_editor.boundingRect()
+        target = self._node_text_anchor_rel()
+        anchor = QPointF(target.x(), target.y() - er.height() / 2.0)
+        return inv.map(anchor)
+
     # ------------------------------------------------------------------
     # State helpers
     # ------------------------------------------------------------------
@@ -1242,6 +1336,7 @@ class ComponentItem(QGraphicsItem):
         self.update()
         for it in self._slot_items:
             it.update()
+        self._node_text_item.update()
 
     # ------------------------------------------------------------------
     # Color selection

@@ -44,6 +44,7 @@ from app.canvas.commands import (
     Command,
     DeleteCommand,
     EditCommand,
+    EditNodeTextCommand,
     GroupRotateCommand,
     MacroCommand,
     MergeWireCommand,
@@ -82,6 +83,7 @@ from app.canvas.drag import DragPreviewController
 from app.canvas import style
 from app.canvas.style import GRID_PX
 from app.canvas.wiregeometry import WireGeometry
+from app.codegen.circuitikz import is_node_style
 from app.components.registry import ITEM_CLASSES, REGISTRY
 from app.schematic.model import (
     Component,
@@ -863,6 +865,14 @@ class SchematicScene(QGraphicsScene):
             self._push(cmds[0])
         else:
             self._push(MacroCommand(cmds, label="Edit"))
+
+    def edit_component_node_text(self, component_id: str, new_text: str) -> None:
+        """Replace the ``node_text`` (the ``{…}`` slot) of a node-style component
+        via an undoable EditNodeTextCommand. No-op when unchanged or unknown."""
+        comp = self._component_by_id(component_id)
+        if comp is None or comp.node_text == new_text:
+            return
+        self._push(EditNodeTextCommand(component_id, new_text))
 
     def move_options_label(
         self, component_id: str, new_offset: tuple[float, float]
@@ -2713,18 +2723,30 @@ class SchematicScene(QGraphicsScene):
                     event.accept()
                     return
                 # A per-side slot label (display only) maps to its component's
-                # in-place editor — double-clicking a rendered label edits it.
+                # in-place editor — double-clicking a rendered label edits it. The
+                # node-text label opens the *node-text* editor; every other slot
+                # label opens the options editor.
                 if isinstance(it, _SlotLabel):
                     parent = it.parentItem()
                     if isinstance(parent, ComponentItem):
-                        parent.begin_options_edit()
+                        if it is getattr(parent, "_node_text_item", None):
+                            parent.begin_node_text_edit()
+                        else:
+                            parent.begin_options_edit()
                         self.component_double_clicked.emit(parent.component.id)
                         event.accept()
                         return
                 if isinstance(it, ComponentItem):
-                    # Start in-place options editing and open the Properties Panel.
-                    it.begin_options_edit()
-                    self.component_double_clicked.emit(it.component.id)
+                    # Start in-place editing and open the Properties Panel. A
+                    # node-style component edits its **node text** on the canvas
+                    # (its node[…] options are inspector-only); every other kind
+                    # edits its options.
+                    comp = it.component
+                    if is_node_style(comp.kind):
+                        it.begin_node_text_edit()
+                    else:
+                        it.begin_options_edit()
+                    self.component_double_clicked.emit(comp.id)
                     event.accept()
                     return
 
