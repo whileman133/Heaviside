@@ -188,10 +188,6 @@ _LABEL_FONT_PT = 10.0
 _LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
 _LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
 _LABEL_GAP = 8       # px gap between bbox top edge and bottom of label block
-# Clearance (GU) from a single-terminal node's symbol edge to its node-text label,
-# placed on the side away from the connection pin (matching CircuiTikZ's inline
-# anchor, e.g. a power rail's name sitting above the rail).
-_NODE_TEXT_CLEARANCE = 0.2
 # Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
 # annotation line does not appear to run into the text.
 _LABEL_BG_PAD = 3.0
@@ -1145,40 +1141,21 @@ class ComponentItem(QGraphicsItem):
 
         self._layout_node_text(geom, counter)
 
-    def _node_text_center_rel(self) -> QPointF:
-        """Where the node-style ``{…}`` text is centred, screen-relative to the item
-        origin — matching where the compiled figure places it.
-
-        - **Multi-terminal** node (transistor, op-amp, …): the **item origin**, which
-          is the node's placement point and hence its ``center`` anchor — exactly
-          where codegen's separate ``\\node`` statement puts the text. (For an
-          asymmetric symbol like a transistor the origin is a pin, off the visual
-          centre, but that is where CircuiTikZ anchors the text too.)
-        - **Single-terminal** node (ground, power rail): CircuiTikZ anchors the
-          inline ``{…}`` text *clear of the symbol*, on the side away from the
-          connection pin (e.g. above a power rail). So the label is placed just
-          beyond the far bbox edge along the symbol's dominant axis."""
-        pins = self._defn.pins
-        if len(pins) >= 2:                        # multi-terminal: node centre = origin
-            return self.transform().map(QPointF(0.0, 0.0))
-        x0, y0, x1, y1 = self._defn.bbox
-        s = self._gate_scale()
-        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-        px, py = pins[0].offset if pins else (0.0, 0.0)
-        gap = _NODE_TEXT_CLEARANCE
-        if abs(cy - py) >= abs(cx - px):          # vertical symbol (rail/ground)
-            cx = px
-            cy = (y0 - gap) if (cy - py) <= 0 else (y1 + gap)
-        else:                                     # horizontal symbol
-            cy = py
-            cx = (x0 - gap) if (cx - px) <= 0 else (x1 + gap)
-        center_local = QPointF(cx * GRID_PX * s, cy * GRID_PX * s)
-        return self.transform().map(center_local)
+    def _node_text_anchor_rel(self) -> QPointF:
+        """The node's CircuiTikZ ``text`` anchor, screen-relative to the item origin
+        — where the inline ``{…}`` text is **west-anchored** (its left edge sits
+        here, extending right). The per-kind offset from centre is measured into
+        ``ComponentDef.text_anchor`` (``components/add_text_anchors.py``), so the
+        on-canvas label lands exactly where the compiled figure places it (a
+        transistor's just right of the symbol, an op-amp's centred, a transformer's
+        a unit above)."""
+        tx, ty = self._defn.text_anchor
+        return self.transform().map(QPointF(tx * GRID_PX, ty * GRID_PX))
 
     def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
-        """Render the node-style ``{…}`` slot text (``node_text``) centred on the
-        symbol's bbox centre (the node's ``center`` anchor), upright via the
-        counter-transform — matching where the compiled figure places it.
+        """Render the node-style ``{…}`` text (``node_text``) **west-anchored** at the
+        node's ``text`` anchor (left edge there, extending right, upright via the
+        counter-transform) — matching where the compiled figure places it.
 
         Hidden when there is no node text, while the node-text editor is open, and
         for ghosts (placement previews show the bare symbol). Path-style components
@@ -1186,9 +1163,10 @@ class ComponentItem(QGraphicsItem):
         editing = self._node_text_editor.is_editing
         text = "" if (self._ghost or editing) else (self._component.node_text or "")
         self._node_text_item.setTransform(counter)
+        # centered=False + direction east + base_dist 0 → left edge at the anchor.
         self._node_text_item.configure(
-            text, QPointF(0.0, -1.0), self._node_text_center_rel(),
-            0.0, 0.0, geom["inv"], True,
+            text, QPointF(1.0, 0.0), self._node_text_anchor_rel(),
+            0.0, 0.0, geom["inv"], False,
         )
         self._node_text_item.setVisible(bool(text))
 
@@ -1306,8 +1284,8 @@ class ComponentItem(QGraphicsItem):
 
     def begin_node_text_edit(self) -> None:
         """Show and activate in-place editing of the node text (the ``{…}`` slot),
-        centred on the symbol's bbox centre where the label renders. The node text
-        is edited verbatim (unlike options, which are shown one slot per line)."""
+        west-anchored at the node's text anchor where the label renders. The node
+        text is edited verbatim (unlike options, which are shown one slot per line)."""
         if self._node_text_editor.is_editing:
             return
         self._node_text_item.setVisible(False)
@@ -1318,13 +1296,13 @@ class ComponentItem(QGraphicsItem):
         self._node_text_editor.begin_edit()
 
     def _node_text_editor_pos(self) -> QPointF:
-        """Local pos that centres the node-text editor on the symbol's bbox centre
-        (the same anchor the rendered node-text label uses)."""
+        """Local pos that west-anchors the node-text editor at the node's text
+        anchor (left-centre there), the same anchor the rendered label uses."""
         t = self.transform()
         inv, _ = t.inverted()
         er = self._node_text_editor.boundingRect()
-        target = self._node_text_center_rel()
-        anchor = QPointF(target.x() - er.width() / 2.0, target.y() - er.height() / 2.0)
+        target = self._node_text_anchor_rel()
+        anchor = QPointF(target.x(), target.y() - er.height() / 2.0)
         return inv.map(anchor)
 
     # ------------------------------------------------------------------

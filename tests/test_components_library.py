@@ -299,3 +299,19 @@ def test_parametric_accessors_for_logic_gate():
     over = Component(id="y", kind="and", position=(0, 0), rotation=0, options="",
                      params={"inputs": 99})
     assert library.param_value(over) == 16
+
+
+def test_node_text_anchor_measured_per_kind():
+    """The measured node-text anchor (components/add_text_anchors.py) loads into
+    ComponentDef.text_anchor: a transistor's just east of centre, a power rail's
+    north of it, an op-amp's at the centre. (Where the inline node text is
+    west-anchored, so the canvas matches the compiled figure — §5.4.)"""
+    from app.components.registry import REGISTRY
+
+    npn = REGISTRY["npn"].text_anchor
+    assert npn[0] > 0.0 and abs(npn[1]) < 1e-6        # a hair east, on the axis
+    vcc = REGISTRY["vcc"].text_anchor
+    assert abs(vcc[0]) < 1e-6 and vcc[1] < 0.0        # north (above the bar, y-down)
+    assert REGISTRY["op amp"].text_anchor == (0.0, 0.0)
+    # path-style kinds carry no node-text anchor.
+    assert REGISTRY["R"].text_anchor == (0.0, 0.0)

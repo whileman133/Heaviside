@@ -2021,7 +2021,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "antenna": {
       "display_name": "Antenna",
@@ -2044,6 +2048,10 @@
           ],
           "anchor": null
         }
+      ],
+      "text_anchor": [
+        0.14,
+        -1.05
       ]
     },
     "bandpass": {
@@ -2820,6 +2828,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "cute transformer core": {
@@ -2916,6 +2928,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "cuteL": {
@@ -10097,6 +10113,10 @@
       "scale": [
         0.8929,
         1.0204
+      ],
+      "text_anchor": [
+        0.625,
+        -0.0
       ]
     },
     "eC": {
@@ -11728,7 +11748,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "ebuffer": {
       "display_name": "Buffer Gate (European)",
@@ -11765,6 +11789,10 @@
       "scale": [
         1.2755,
         1.2755
+      ],
+      "text_anchor": [
+        -1.0,
+        -0.0
       ]
     },
     "ecI": {
@@ -13305,7 +13333,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "enor": {
       "display_name": "NOR Gate (European)",
@@ -14750,7 +14782,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "enot": {
       "display_name": "NOT Gate (European)",
@@ -14787,6 +14823,10 @@
       "scale": [
         1.2755,
         1.2755
+      ],
+      "text_anchor": [
+        -1.0,
+        -0.0
       ]
     },
     "eor": {
@@ -16232,7 +16272,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "epot": {
       "display_name": "Potentiometer (European)",
@@ -16404,6 +16448,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "european transformer core": {
@@ -16500,6 +16548,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "evR": {
@@ -17983,7 +18035,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "exor": {
       "display_name": "XOR Gate (European)",
@@ -19428,7 +19484,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.784,
+        -0.0
+      ]
     },
     "fd op amp": {
       "display_name": "Fully-Differential Op-Amp",
@@ -19570,6 +19630,10 @@
       "scale": [
         0.8929,
         0.8929
+      ],
+      "text_anchor": [
+        -0.1177,
+        0.1072
       ]
     },
     "flipflop JK": {
@@ -19629,6 +19693,10 @@
       "scale": [
         0.8929,
         0.8929
+      ],
+      "text_anchor": [
+        -0.1177,
+        0.1072
       ]
     },
     "flipflop SR": {
@@ -19680,6 +19748,10 @@
       "scale": [
         0.8929,
         0.8929
+      ],
+      "text_anchor": [
+        -0.1177,
+        0.1072
       ]
     },
     "flipflop T": {
@@ -19731,6 +19803,10 @@
       "scale": [
         0.8929,
         0.8929
+      ],
+      "text_anchor": [
+        -0.1177,
+        0.1072
       ]
     },
     "fuse": {
@@ -19890,6 +19966,10 @@
       "scale": [
         0.9524,
         0.9524
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "highpass": {
@@ -20050,6 +20130,10 @@
       "scale": [
         1.0714,
         0.974
+      ],
+      "text_anchor": [
+        0.075,
+        -0.0
       ]
     },
     "isourcesin": {
@@ -28816,7 +28900,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "ncs": {
       "display_name": "Switch (NC)",
@@ -28914,6 +29002,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "nground": {
@@ -28982,6 +29074,10 @@
       "scale": [
         0.8929,
         0.974
+      ],
+      "text_anchor": [
+        0.0625,
+        -0.0
       ]
     },
     "nigfetd": {
@@ -29034,6 +29130,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "nigfete": {
@@ -29086,6 +29186,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "njfet": {
@@ -29131,6 +29235,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "nmos": {
@@ -29176,6 +29284,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "nmosd": {
@@ -29221,6 +29333,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "nor": {
@@ -30715,7 +30831,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "nos": {
       "display_name": "Switch (NO)",
@@ -30835,6 +30955,10 @@
       "scale": [
         0.8929,
         0.974
+      ],
+      "text_anchor": [
+        0.0625,
+        -0.0
       ]
     },
     "ohmmeter": {
@@ -32450,7 +32574,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "oscope": {
       "display_name": "Oscilloscope",
@@ -32625,6 +32753,10 @@
       "scale": [
         1.2755,
         1.2755
+      ],
+      "text_anchor": [
+        0.8928,
+        -0.0
       ]
     },
     "pfet": {
@@ -32685,6 +32817,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pground": {
@@ -32900,6 +33036,10 @@
       "scale": [
         0.8929,
         0.974
+      ],
+      "text_anchor": [
+        0.0625,
+        -0.0
       ]
     },
     "pigfetd": {
@@ -32952,6 +33092,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pigfete": {
@@ -33004,6 +33148,10 @@
           "token": "bodydiode",
           "mode": "option"
         }
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pjfet": {
@@ -33049,6 +33197,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pmos": {
@@ -33094,6 +33246,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pmosd": {
@@ -33139,6 +33295,10 @@
       "scale": [
         1.0204,
         0.974
+      ],
+      "text_anchor": [
+        0.0714,
+        -0.0
       ]
     },
     "pnp": {
@@ -33184,6 +33344,10 @@
       "scale": [
         0.8929,
         0.974
+      ],
+      "text_anchor": [
+        0.0625,
+        -0.0
       ]
     },
     "pushbutton": {
@@ -33766,6 +33930,10 @@
       "scale": [
         1.0714,
         1.0204
+      ],
+      "text_anchor": [
+        0.75,
+        -0.0
       ]
     },
     "thermistor": {
@@ -34095,6 +34263,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "transformer core": {
@@ -34188,6 +34360,10 @@
             0.6667
           ]
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -1.0
       ]
     },
     "triac": {
@@ -34279,6 +34455,10 @@
       "scale": [
         1.0714,
         1.0204
+      ],
+      "text_anchor": [
+        0.75,
+        -0.0
       ]
     },
     "vC": {
@@ -34494,6 +34674,10 @@
           ],
           "anchor": null
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -0.56
       ]
     },
     "vco": {
@@ -34552,6 +34736,10 @@
           ],
           "anchor": null
         }
+      ],
+      "text_anchor": [
+        0.0,
+        -0.56
       ]
     },
     "vee": {
@@ -34577,6 +34765,10 @@
           ],
           "anchor": null
         }
+      ],
+      "text_anchor": [
+        0.0,
+        0.56
       ]
     },
     "voltmeter": {
@@ -34784,6 +34976,10 @@
           ],
           "anchor": null
         }
+      ],
+      "text_anchor": [
+        0.0,
+        0.56
       ]
     },
     "xnor": {
@@ -36278,7 +36474,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "xor": {
       "display_name": "XOR Gate",
@@ -37772,7 +37972,11 @@
             "height": 5.7143
           }
         }
-      }
+      },
+      "text_anchor": [
+        -0.6667,
+        -0.0
+      ]
     },
     "zD": {
       "display_name": "Zener Diode",

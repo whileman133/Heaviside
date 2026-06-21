@@ -18,10 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   double-clicking the node text. A node's options are edited through the inspector
   only — they are not shown on the canvas (which would clutter the node text), so
   double-clicking a node always edits its node text. The text renders live on the
-  canvas at the same spot the compiled figure places it (a transistor's label at
-  the node, a power rail's name above it), with a transparent background to match
-  CircuiTikZ, and always appears in the displayed CircuiTikZ source so the source
-  matches what is rendered.
+  canvas at exactly the spot the compiled figure places it — measured per
+  component shape, so a transistor's label sits just right of the symbol, an
+  op-amp's inside it, a power rail's above it — with a transparent background to
+  match CircuiTikZ, and always appears in the displayed CircuiTikZ source so the
+  source matches what is rendered.
 
 ### Changed
 - **Power-rail labels are now node text.** A power rail's voltage name is set in

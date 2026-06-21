@@ -643,15 +643,17 @@ class OptionsSection(InspectorSection):
             self._field.setText(comp.options)
             self._field.blockSignals(False)
         # For a node-style kind this field is the node[…] *bracket* only (its {…}
-        # text lives in NodeTextSection), so title and hint say "Node options".
+        # text lives in NodeTextSection), so the title says "Node options"; the hint
+        # is dropped (self-explanatory). A path-style kind keeps its slot hint.
         node_style = is_node_style(comp.kind)
         if self._title_label is not None:
             self._title_label.setText("Node options" if node_style else "CircuiTikZ options")
         if node_style:
-            self._hint.setText("node[…] options (the bar/symbol style); the {…} text is set above")
+            self._hint.setText("")
         else:
             slots = REGISTRY[comp.kind].label_slots
             self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
+        self._hint.setVisible(bool(self._hint.text()))
 
     def _commit(self) -> None:
         text = self._field.text().strip()

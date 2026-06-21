@@ -936,6 +936,21 @@ def test_node_text_label_has_transparent_background(scene: SchematicScene):
     assert item._node_text_item._opaque_bg is False
 
 
+def test_node_text_anchor_uses_measured_offset(scene: SchematicScene):
+    """The on-canvas node-text anchor is the item origin + the measured per-kind
+    text_anchor offset (where the label is west-anchored), so it lands where the
+    compiled figure puts it — e.g. a transistor's just east of the origin."""
+    from app.canvas.style import GRID_PX
+
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    ax, ay = item._defn.text_anchor
+    anchor = item._node_text_anchor_rel()                 # screen-rel to origin
+    assert abs(anchor.x() - ax * GRID_PX) < 1e-6
+    assert abs(anchor.y() - ay * GRID_PX) < 1e-6
+    assert ax > 0.0                                        # transistor: east of origin
+
+
 def test_node_text_inline_editor_commits_separately_from_options(scene: SchematicScene):
     """A node element has two in-place editors: the node-text editor commits to
     node_text (verbatim), independent of the options editor."""
