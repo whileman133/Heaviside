@@ -2192,7 +2192,9 @@ class SchematicScene(QGraphicsScene):
 
         act_cut.triggered.connect(self.cut_selection)
         act_copy.triggered.connect(self.copy_selection)
-        act_paste.triggered.connect(lambda: self.paste(at=paste_at))
+        act_paste.triggered.connect(
+            lambda _checked: self.paste(at=paste_at)
+        )
         act_delete.triggered.connect(self.delete_selected)
         act_front.triggered.connect(
             lambda: self._layer_selection(target_ids, to_front=True)
