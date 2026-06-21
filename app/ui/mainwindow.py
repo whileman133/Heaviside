@@ -705,10 +705,10 @@ class MainWindow(QMainWindow):
 
         self._act_paste = QAction("&Paste", self)
         self._act_paste.setShortcut(QKeySequence.Paste)
-        # Wrap in a lambda so QAction.triggered's `checked` bool is not bound to
-        # paste()'s `at` parameter (which would take the "paste here" branch and
-        # subscript a bool). The menu/shortcut path pastes at the default offset.
-        self._act_paste.triggered.connect(lambda: self._scene.paste())
+        # Wrap in a lambda so QAction.triggered's `checked` bool is not forwarded
+        # as a positional arg. begin_paste starts an interactive cursor-follow
+        # paste (the group lands where the user clicks) rather than pasting blind.
+        self._act_paste.triggered.connect(lambda: self._scene.begin_paste())
         edit_menu.addAction(self._act_paste)
 
         edit_menu.addSeparator()
@@ -1872,7 +1872,7 @@ _HELP_SHORTCUT_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Ctrl+Z",            "Undo the last change."),
         ("Ctrl+Shift+Z",      "Redo the last undone change."),
         ("Ctrl+C",            "Copy the selected components and wires."),
-        ("Ctrl+V",            "Paste the copied items."),
+        ("Ctrl+V",            "Paste: the copied items follow the cursor; click to place (Esc cancels)."),
         ("Ctrl+A",            "Select every component and wire."),
         ("Del / Backspace",   "Delete the selection (and wires on its pins)."),
         ("Ctrl+,",            "Open the Preferences dialog."),

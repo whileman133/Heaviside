@@ -832,6 +832,87 @@ def test_normal_component_still_single_click_place(scene: SchematicScene):
     assert scene._mode == Mode.PLACE                  # stays for rapid placement
 
 
+# ---------------------------------------------------------------------------
+# Cursor-follow paste (§6.7): begin_paste previews the clipboard as ghosts that
+# track the cursor; a left-click commits at the cursor, Escape / right-click
+# cancels — so the user positions pasted pins instead of pasting blind.
+# ---------------------------------------------------------------------------
+
+def _copy_one(scene: SchematicScene, kind: str, gu) -> "object":
+    """Place *kind* at *gu*, select it, and copy it to the clipboard. Returns the
+    placed component (the original; the paste makes new-UUID copies)."""
+    comp = scene.place_component(kind, gu)
+    scene.enter_select_mode()
+    scene._comp_items[comp.id].setSelected(True)
+    scene.copy_selection()
+    return comp
+
+
+def test_begin_paste_spawns_ghosts_and_defers_commit(scene: SchematicScene):
+    """begin_paste enters PLACE mode with one ghost per clipboard component and
+    commits nothing until the user clicks."""
+    _copy_one(scene, "R", (3.0, 3.0))
+    n_before = len(scene.schematic.components)
+
+    scene.begin_paste()
+    assert scene._mode == Mode.PLACE
+    assert len(scene._paste_ghosts) == 1
+    assert scene._paste_anchor_gu == (3.0, 3.0)       # single comp → its own position
+    assert len(scene.schematic.components) == n_before  # nothing committed yet
+
+
+def test_begin_paste_left_click_commits_at_cursor(scene: SchematicScene):
+    """The pasted group's min-corner anchors at the click point — matching the
+    ghost preview — and the scene returns to SELECT with the paste selected."""
+    orig = _copy_one(scene, "R", (3.0, 3.0))
+    n_before = len(scene.schematic.components)
+
+    scene.begin_paste()
+    _wire_move(scene, (10.0, 8.0))                     # ghost tracks the cursor
+    assert len(scene.schematic.components) == n_before  # still no commit on move
+
+    _press(scene, (10.0, 8.0))                         # click commits at the cursor
+    assert scene._mode == Mode.SELECT
+    assert not scene._paste_ghosts
+    assert scene._paste_anchor_gu is None
+    assert len(scene.schematic.components) == n_before + 1
+    pasted = next(c for c in scene.schematic.components if c.id != orig.id)
+    assert pasted.position == (10.0, 8.0)             # min corner landed at the click
+
+
+def test_begin_paste_right_click_cancels(scene: SchematicScene):
+    """A right-click during the paste preview cancels it: no components added."""
+    _copy_one(scene, "R", (3.0, 3.0))
+    n_before = len(scene.schematic.components)
+
+    scene.begin_paste()
+    _press(scene, (8.0, 8.0), button=Qt.RightButton)
+    assert scene._mode == Mode.SELECT
+    assert not scene._paste_ghosts
+    assert scene._paste_anchor_gu is None
+    assert len(scene.schematic.components) == n_before
+
+
+def test_begin_paste_escape_cancels(scene: SchematicScene):
+    """Escape (cancel_current) abandons the paste preview, leaving no ghosts."""
+    _copy_one(scene, "R", (3.0, 3.0))
+    n_before = len(scene.schematic.components)
+
+    scene.begin_paste()
+    scene.cancel_current()
+    assert scene._mode == Mode.SELECT
+    assert not scene._paste_ghosts
+    assert len(scene.schematic.components) == n_before
+
+
+def test_begin_paste_empty_clipboard_is_noop(scene: SchematicScene):
+    """With an empty clipboard begin_paste does nothing — no mode change, no ghosts."""
+    scene.begin_paste()
+    assert scene._mode == Mode.SELECT
+    assert not scene._paste_ghosts
+    assert scene.schematic.components == []
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))

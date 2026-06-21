@@ -7,13 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Pasting now previews the clipboard under the cursor.** Ctrl+V / ⌘V (and the
+  Edit-menu Paste) attach the copied components and wires to the pointer as
+  ghosts; a **left-click** drops them where you aim, while **Escape** or a
+  **right-click** cancels. This replaces the old blind fixed-offset paste, so a
+  paste no longer silently splits a wire or connects pins to whatever happened to
+  sit under the offset. Right-click **"Paste here"** still drops the group at the
+  clicked point in one step.
+
 ### Fixed
 - **Paste no longer crashes** from the Edit menu or the Ctrl+V/⌘V shortcut
   ([#33](https://github.com/whileman133/Heaviside/issues/33)). The Paste action
   was connected straight to `scene.paste`, so Qt's `QAction.triggered` `checked`
   boolean was bound to paste's `at` argument and the "paste here" branch tried to
-  subscript a bool (`TypeError: 'bool' object is not subscriptable`). The menu and
-  shortcut now paste at the default offset; right-click "Paste here" is unaffected.
+  subscript a bool (`TypeError: 'bool' object is not subscriptable`).
 
 ## [0.3.0] - 2026-06-20
 
