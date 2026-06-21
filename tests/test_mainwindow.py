@@ -1310,3 +1310,21 @@ def test_startup_update_check_skipped_when_version_unresolved(tmp_path, monkeypa
         win.close()
         win.deleteLater()
         QApplication.processEvents()
+
+
+def test_paste_action_does_not_pass_checked_bool(tmp_path):
+    """Regression for #33: the Edit-menu / Ctrl+V Paste action must not crash.
+
+    QAction.triggered emits a `checked` bool; if the action is connected directly
+    to scene.paste, that bool binds to paste()'s `at` parameter, takes the
+    "paste here" branch, and subscripts a bool (TypeError). The action must call
+    paste() with no positional arg so it pastes at the default offset."""
+    win = _win(tmp_path)
+    scene = win._scene
+    comp = scene.place_component("R", (5.0, 5.0))
+    scene._comp_items[comp.id].setSelected(True)
+    scene.copy_selection()
+
+    before = len(scene._schematic.components)
+    win._act_paste.trigger()  # must not raise (regression: bool is not subscriptable)
+    assert len(scene._schematic.components) == before + 1

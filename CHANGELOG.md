@@ -5,6 +5,16 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Paste no longer crashes** from the Edit menu or the Ctrl+V/⌘V shortcut
+  ([#33](https://github.com/whileman133/Heaviside/issues/33)). The Paste action
+  was connected straight to `scene.paste`, so Qt's `QAction.triggered` `checked`
+  boolean was bound to paste's `at` argument and the "paste here" branch tried to
+  subscript a bool (`TypeError: 'bool' object is not subscriptable`). The menu and
+  shortcut now paste at the default offset; right-click "Paste here" is unaffected.
+
 ## [0.3.0] - 2026-06-20
 
 ### Changed

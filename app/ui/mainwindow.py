@@ -705,7 +705,10 @@ class MainWindow(QMainWindow):
 
         self._act_paste = QAction("&Paste", self)
         self._act_paste.setShortcut(QKeySequence.Paste)
-        self._act_paste.triggered.connect(self._scene.paste)
+        # Wrap in a lambda so QAction.triggered's `checked` bool is not bound to
+        # paste()'s `at` parameter (which would take the "paste here" branch and
+        # subscript a bool). The menu/shortcut path pastes at the default offset.
+        self._act_paste.triggered.connect(lambda: self._scene.paste())
         edit_menu.addAction(self._act_paste)
 
         edit_menu.addSeparator()
