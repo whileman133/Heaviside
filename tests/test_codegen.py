@@ -34,7 +34,8 @@ def _schematic(*components, wires=()) -> Schematic:
     )
 
 
-def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False) -> Component:
+def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False,
+          node_text="") -> Component:
     return Component(
         id=_uid(),
         kind=kind,
@@ -42,6 +43,7 @@ def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False) 
         rotation=rotation,
         options=options,
         mirror=mirror,
+        node_text=node_text,
     )
 
 
@@ -362,6 +364,40 @@ def test_opamp_node() -> None:
     # Centre-placed and per-axis scaled (§4) — xscale only (yscale==1 omitted).
     assert "node[op amp, xscale=1.0504]" in src
     assert "anchor=" not in src
+
+
+# ---------------------------------------------------------------------------
+# node_text — the node-style {…} slot (§5, #32)
+# ---------------------------------------------------------------------------
+
+def test_node_text_fills_multi_terminal_brace_slot() -> None:
+    """A multi-terminal node emits node_text in its trailing {…} (empty otherwise)."""
+    src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
+    assert "node[npn" in src and "{$Q_1$}" in src
+    # No node_text → empty braces after the node id.
+    bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
+    assert "(node_" in bare and ") {}" in bare
+
+
+def test_node_text_on_single_terminal_node() -> None:
+    """A single-terminal node (power rail) renders node_text in {…} and its options
+    in the node[…] bracket (no l=→label hack)."""
+    src = generate(_schematic(_comp("vcc", node_text="$V_{cc}$", options="color=blue")))
+    assert "node[vcc, color=blue] {$V_{cc}$}" in src
+    assert "label=right" not in src                     # legacy hack is gone
+
+
+def test_node_text_ignored_for_path_style() -> None:
+    """A path-style to[…] component has no {…} slot, so node_text never appears."""
+    src = generate(_schematic(_comp("R", options="l=$R_1$", node_text="ignored")))
+    assert "to[" in src and "ignored" not in src
+
+
+def test_node_text_braces_are_balanced() -> None:
+    """An unbalanced brace in node_text is escaped so it can't escape the {…} group."""
+    src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="a}b")))
+    # The stray } is escaped (balance_braces), keeping the {…} group well-formed.
+    assert r"{a\}b}" in src
 
 
 # ---------------------------------------------------------------------------

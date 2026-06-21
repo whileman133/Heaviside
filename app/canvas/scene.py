@@ -44,6 +44,7 @@ from app.canvas.commands import (
     Command,
     DeleteCommand,
     EditCommand,
+    EditNodeTextCommand,
     GroupRotateCommand,
     MacroCommand,
     MergeWireCommand,
@@ -863,6 +864,14 @@ class SchematicScene(QGraphicsScene):
             self._push(cmds[0])
         else:
             self._push(MacroCommand(cmds, label="Edit"))
+
+    def edit_component_node_text(self, component_id: str, new_text: str) -> None:
+        """Replace the ``node_text`` (the ``{…}`` slot) of a node-style component
+        via an undoable EditNodeTextCommand. No-op when unchanged or unknown."""
+        comp = self._component_by_id(component_id)
+        if comp is None or comp.node_text == new_text:
+            return
+        self._push(EditNodeTextCommand(component_id, new_text))
 
     def move_options_label(
         self, component_id: str, new_offset: tuple[float, float]

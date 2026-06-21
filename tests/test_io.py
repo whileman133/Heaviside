@@ -34,12 +34,22 @@ def _one_of_each() -> Schematic:
     """Schematic with one instance of every v1 component kind."""
     from app.components.registry import REGISTRY
 
+    # Power rails carry their voltage name in node_text (the {…} slot), not an l=
+    # option that the loader would migrate; so give them node_text and empty
+    # options for a clean round-trip.
+    power_rails = {"vcc", "vdd", "vee", "vss"}
     components = []
     from app.components.model import RectComponent
     for i, (kind, defn) in enumerate(REGISTRY.items()):
         # Rects carry their style in fields, not the options string, so they
         # round-trip with empty options; everything else carries a label.
-        opts = "" if issubclass(defn.component_class, RectComponent) else f"l=$X_{{{i}}}$"
+        node_text = ""
+        if kind in power_rails:
+            opts, node_text = "", f"$X_{{{i}}}$"
+        elif issubclass(defn.component_class, RectComponent):
+            opts = ""
+        else:
+            opts = f"l=$X_{{{i}}}$"
         components.append(
             defn.component_class(
                 id=_uid(),
@@ -47,6 +57,7 @@ def _one_of_each() -> Schematic:
                 position=(float(i * 3), 0.0),
                 rotation=0,
                 options=opts,
+                node_text=node_text,
                 mirror=False,
             )
         )
@@ -124,7 +135,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.5"
+    assert data["version"] == "0.6"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
         "siunitx": True, "preamble": "",   # siunitx defaults on (§7.2)
@@ -210,6 +221,7 @@ def test_roundtrip_components(tmp_path: Path) -> None:
         assert load_c.rotation == orig_c.rotation
         assert load_c.mirror   == orig_c.mirror
         assert load_c.options  == orig_c.options
+        assert load_c.node_text == orig_c.node_text
 
 
 def test_parametric_params_round_trip(tmp_path: Path) -> None:
@@ -278,6 +290,56 @@ def test_roundtrip_options(tmp_path: Path) -> None:
     loaded = load(p)
 
     assert loaded.components[0].options == original.components[0].options
+
+
+def test_node_text_roundtrips_and_omitted_when_empty(tmp_path: Path) -> None:
+    """node_text (the {…} slot) round-trips for a node-style component, and is
+    omitted from the JSON when empty so plain components stay minimal."""
+    s = Schematic(version="0.1", name="nt", components=[
+        Component(id=_uid(), kind="npn", position=(2.0, 2.0), rotation=0,
+                  options="", node_text="$Q_1$"),
+        Component(id=_uid(), kind="R", position=(6.0, 0.0), rotation=0, options="l=$R_1$"),
+    ])
+    p = tmp_path / "nt.hv"
+    save(s, p)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert raw["components"][0]["node_text"] == "$Q_1$"
+    assert "node_text" not in raw["components"][1]            # empty → omitted
+    loaded = load(p)
+    assert loaded.components[0].node_text == "$Q_1$"
+    assert loaded.components[1].node_text == ""
+
+
+def test_legacy_power_rail_l_slot_migrates_to_node_text(tmp_path: Path) -> None:
+    """A pre-0.6 power rail with its name in an l= slot migrates that value into
+    node_text on load; other options in the bracket are preserved."""
+    p = tmp_path / "rail.hv"
+    p.write_text(json.dumps({
+        "version": "0.5", "name": "rail", "wires": [],
+        "components": [{
+            "id": _uid(), "kind": "vcc", "position": [0.0, 0.0], "rotation": 0,
+            "options": "l=$V_{cc}$, color=red",
+        }],
+    }), encoding="utf-8")
+    comp = load(p).components[0]
+    assert comp.node_text == "$V_{cc}$"
+    assert comp.options == "color=red"
+
+
+def test_power_rail_explicit_node_text_blocks_l_migration(tmp_path: Path) -> None:
+    """When a power rail already has node_text, a stray l= in its options is left
+    alone (the migration only fills an empty node_text)."""
+    p = tmp_path / "rail2.hv"
+    p.write_text(json.dumps({
+        "version": "0.6", "name": "rail2", "wires": [],
+        "components": [{
+            "id": _uid(), "kind": "vcc", "position": [0.0, 0.0], "rotation": 0,
+            "options": "l=$ignored$", "node_text": "$V_{dd}$",
+        }],
+    }), encoding="utf-8")
+    comp = load(p).components[0]
+    assert comp.node_text == "$V_{dd}$"
+    assert comp.options == "l=$ignored$"
 
 
 # ---------------------------------------------------------------------------
@@ -1056,14 +1118,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_05_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.5; files declaring 0.1–0.5 all load."""
+def test_format_version_06_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.6; files declaring 0.1–0.6 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.5"
-    assert load(p).version == "0.5"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.6"
+    assert load(p).version == "0.6"
 
-    for old in ("0.1", "0.2", "0.3", "0.4"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

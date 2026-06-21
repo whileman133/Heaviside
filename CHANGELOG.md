@@ -7,7 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Node text for node-style components**
+  ([#32](https://github.com/whileman133/Heaviside/issues/32)). Node-style
+  components (transistors, op-amps, MOSFETs, logic gates, grounds, power rails)
+  now have a separate **Node text** field in the inspector for the text in their
+  emitted `node[…] {TEXT}` slot — e.g. a transistor's `$Q_1$` or a rail's
+  `$V_{cc}$` — distinct from the **Node options** bracket. The text renders live
+  on the canvas and in the export.
+
 ### Changed
+- **Power-rail labels are now node text.** A power rail's voltage name is set in
+  the new Node text field (the `{…}` slot) instead of an `l=` option. Existing
+  files are migrated automatically on load: a rail's `l=` label moves into its
+  node text, and any other options are preserved.
+- The `.hv` file format is now **version 0.6** (adds the per-component
+  `node_text`). Files from 0.1–0.5 still load unchanged; a 0.5-or-older build
+  will refuse a 0.6 file rather than silently dropping the node text on save.
 - **Pasting now previews the clipboard under the cursor.** Ctrl+V / ⌘V (and the
   Edit-menu Paste) attach the copied components and wires to the pointer as
   ghosts; a **left-click** drops them where you aim, while **Escape** or a

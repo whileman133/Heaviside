@@ -913,6 +913,21 @@ def test_begin_paste_empty_clipboard_is_noop(scene: SchematicScene):
     assert scene.schematic.components == []
 
 
+def test_node_text_renders_on_canvas_for_node_style(scene: SchematicScene):
+    """Setting node_text on a node-style component shows its on-canvas {…} label;
+    clearing it hides the label again (the edit is visible without compiling)."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    item = scene._comp_items[comp.id]
+    assert not item._node_text_item.isVisible()       # empty by default
+
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    assert scene._component_by_id(comp.id).node_text == "$Q_1$"
+    assert item._node_text_item.isVisible()           # label now shown
+
+    scene.edit_component_node_text(comp.id, "")
+    assert not item._node_text_item.isVisible()        # hidden again
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))

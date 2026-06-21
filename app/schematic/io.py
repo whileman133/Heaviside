@@ -25,6 +25,28 @@ from app.components.model import (
     StyledComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.style import split_top_level
+
+# Power-rail kinds whose pre-0.6 ``l=`` label is migrated into ``node_text`` on
+# load (mirrors ``app.codegen.circuitikz._POWER_RAIL_KINDS``; kept local so I/O has
+# no dependency on the code generator).
+_LEGACY_POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
+
+
+def _split_off_l_slot(options: str) -> tuple[str, str]:
+    """Return ``(l_value, remaining_options)`` for a legacy migration: pull the
+    first ``l=`` slot's value out of *options* (comma-aware so a value containing
+    commas inside ``$…$``/``{…}`` is not truncated) and return the rest joined back.
+    ``("", options)`` when there is no ``l=`` slot."""
+    l_value = ""
+    kept: list[str] = []
+    for seg in split_top_level(options):
+        key, eq, val = seg.partition("=")
+        if not l_value and eq and key.strip() == "l" and val.strip():
+            l_value = val.strip()
+        elif seg.strip():
+            kept.append(seg.strip())
+    return l_value, ", ".join(kept)
 from app.schematic.model import LABEL_STYLES, WIRE_HOP_MODES, Schematic, Wire
 from app.schematic.validate import validate
 
@@ -47,10 +69,14 @@ from app.schematic.validate import validate
 #: free-form ``preamble`` string). A 0.4 build would silently strip them on save,
 #: so the bump refuses the newer file; 0.1–0.4 files load unchanged (both default
 #: to off / empty).
-_FORMAT_VERSION: str = "0.5"
+#: 0.6 adds a per-component ``node_text`` (the ``{…}`` slot of a node-style
+#: component). A 0.5 build would silently strip it on save, so the bump refuses the
+#: newer file; 0.1–0.5 files load unchanged (absent node_text defaults to empty,
+#: and a legacy power-rail ``l=`` slot is migrated into it on load).
+_FORMAT_VERSION: str = "0.6"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6"}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -232,6 +258,9 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         "mirror": c.mirror,
         "options": c.options,
     }
+    # Node-style {…} slot text; omitted when empty (the common case).
+    if c.node_text:
+        d["node_text"] = c.node_text
     if c.label_offset is not None:
         d["label_offset"] = list(c.label_offset)
     if c.span_override is not None:
@@ -444,6 +473,17 @@ def _dict_to_component(data: Any, index: int) -> Component:
     else:
         options = ""
 
+    raw_nt = data.get("node_text", "")
+    if not isinstance(raw_nt, str):
+        raise SchematicLoadError(f"{ctx}.node_text must be a string")
+    node_text = raw_nt
+    # Legacy migration: pre-0.6 power rails carried their voltage name in an ``l=``
+    # slot of ``options`` (rendered via ``label=right:…``). That slot now lives in
+    # ``node_text`` (the {…} slot). Move it over when no node_text is set, so old
+    # files keep their rail labels. Other slots in ``options`` are preserved.
+    if not node_text and kind in _LEGACY_POWER_RAIL_KINDS:
+        node_text, options = _split_off_l_slot(options)
+
     label_offset: tuple[float, float] | None = None
     raw_lo = data.get("label_offset")
     if raw_lo is not None:
@@ -516,6 +556,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "rotation": rotation,
         "mirror": mirror,
         "options": options,
+        "node_text": node_text,
         "label_offset": label_offset,
         "span_override": span_override,
         "variants": variants,

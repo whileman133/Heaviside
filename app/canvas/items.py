@@ -880,6 +880,10 @@ class ComponentItem(QGraphicsItem):
         self._options_item.set_commit_callback(self._on_options_commit)
         self._slot_items: list[_SlotLabel] = []
         self._decoration_items: list[_AnnotationDecoration] = []
+        # The node-style {…} slot text (node_text), rendered centred on the node
+        # anchor. A single reusable label, hidden when there is no node text (the
+        # common case, and always for path-style / ghost components).
+        self._node_text_item = _SlotLabel(self)
         self._sync_options_item()
 
     # ------------------------------------------------------------------
@@ -1099,6 +1103,26 @@ class ComponentItem(QGraphicsItem):
                           direction, perp, geom["center_rel"], geom["inv"],
                           reversed=slot_reversed(key))
 
+        self._layout_node_text(geom, counter)
+
+    def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
+        """Render the node-style ``{…}`` slot text (``node_text``) centred on the
+        node anchor (the component origin), upright via the counter-transform.
+
+        Hidden when there is no node text, and for ghosts (placement previews show
+        the bare symbol). Path-style components never set node_text, so their label
+        stays hidden. Origin-centred: an exact match for single-terminal nodes; for
+        a multi-terminal node it sits at the origin pin (the compiled preview places
+        it at the node centre — this is the on-canvas affordance, not the export)."""
+        text = "" if self._ghost else (self._component.node_text or "")
+        self._node_text_item.setTransform(counter)
+        # center_rel = origin (0,0): the transform carries no translation, so the
+        # node anchor maps to the item origin.
+        self._node_text_item.configure(
+            text, QPointF(0.0, -1.0), QPointF(0.0, 0.0), 0.0, 0.0, geom["inv"], True
+        )
+        self._node_text_item.setVisible(bool(text))
+
     def _slot_direction(self, key: str, geom: dict) -> QPointF:
         """Screen-space offset direction for a slot, relative to the lead axis.
 
@@ -1242,6 +1266,7 @@ class ComponentItem(QGraphicsItem):
         self.update()
         for it in self._slot_items:
             it.update()
+        self._node_text_item.update()
 
     # ------------------------------------------------------------------
     # Color selection

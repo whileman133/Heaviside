@@ -186,6 +186,19 @@ _MULTI_TERMINAL_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["multi_termina
 # Single-terminal node components: emitted as \node[kind] at (x,y) {};
 _NODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["node_kinds"])
 
+# Node-style kinds emit ``(x,y) node[<options>] {<node_text>}`` — single- and
+# multi-terminal nodes alike. These (and only these) carry a meaningful
+# ``node_text`` ({…} slot) and a ``node[…]`` options bracket; path-style ``to[…]``
+# components and drawing annotations ignore ``node_text``.
+_NODE_STYLE_KINDS: frozenset[str] = _MULTI_TERMINAL_KINDS | _NODE_KINDS
+
+
+def is_node_style(kind: str) -> bool:
+    """True when *kind* is emitted as ``node[…] {…}`` (single- or multi-terminal
+    node) — i.e. it supports a ``node_text`` ({…} slot) and a node-options bracket.
+    False for path-style ``to[…]`` components and drawing annotations."""
+    return kind in _NODE_STYLE_KINDS
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -736,7 +749,7 @@ def _multi_terminal_line(
     # no lead stubs.
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
+    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{_node_text_arg(comp)}}}"
 
     lines = [node_line]
     # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
@@ -789,28 +802,24 @@ _POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
 
 
 def _node_line(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
-    """Render a single-terminal node as: (x,y) node[kind, options] {}
+    """Render a single-terminal node as: (x,y) node[kind, options] {node_text}
 
-    For power rail kinds, an ``l=`` slot in comp.options is converted to a
-    CircuiTikZ ``label=right:VALUE`` argument.  Using the east anchor places
-    the label at the bar level (right of the symbol tip) which matches the
-    conventional schematic style for power-rail voltage names.
+    The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into
+    the trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a
+    ground's label is set as node text, not via a quick key. (Earlier builds
+    special-cased a power-rail ``l=`` slot into ``label=right:…``; that slot is now
+    migrated to ``node_text`` on load, see ``app.schematic.io``.)
     """
     x, y = comp.position
     args = comp.kind
     if comp.rotation:
         args += f", rotate={comp.rotation}"
-    if comp.kind in _POWER_RAIL_KINDS:
-        # Pull the l= slot value with the comma-aware splitter so a label
-        # containing commas (e.g. inside $...$) is not truncated.
-        for seg in split_top_level(comp.options):
-            key, eq, val = seg.partition("=")
-            if eq and key.strip() == "l" and val.strip():
-                args += f", label=right:{{{balance_braces(val.strip())}}}"
-                break
+    user = _label_args(comp)
+    if user:
+        args += f", {user}"
     for s in style:   # local voltage=european / current=european (per annotation)
         args += f", {s}"
-    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{}}"
+    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{{_node_text_arg(comp)}}}"
 
 
 # ---------------------------------------------------------------------------
@@ -1352,6 +1361,13 @@ def _rotate(span: tuple[float, float], rotation: int) -> tuple[float, float]:
         return (dy, -dx)
     else:
         raise ValueError(f"Invalid rotation {rotation!r}")
+
+
+def _node_text_arg(comp: Component) -> str:
+    """The brace-balanced text for a node-style component's trailing ``{…}`` slot
+    (``comp.node_text``). Brace-balanced so an unmatched ``}`` cannot escape the
+    ``{…}`` group (LaTeX-injection containment, §7.3). Empty string when unset."""
+    return balance_braces(comp.node_text) if comp.node_text else ""
 
 
 def _label_args(comp: Component) -> str:

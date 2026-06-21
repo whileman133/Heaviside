@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.commands import SetDocumentPropertiesCommand
 from app.canvas.scene import SchematicScene
+from app.codegen.circuitikz import is_node_style
 from app.components.style import split_top_level
 from app.ui import theme
 from app.components.model import (
@@ -641,12 +642,55 @@ class OptionsSection(InspectorSection):
             self._field.blockSignals(True)
             self._field.setText(comp.options)
             self._field.blockSignals(False)
-        slots = REGISTRY[comp.kind].label_slots
-        self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
+        # For a node-style kind this field is the node[…] *bracket* only (its {…}
+        # text lives in NodeTextSection), so title and hint say "Node options".
+        node_style = is_node_style(comp.kind)
+        if self._title_label is not None:
+            self._title_label.setText("Node options" if node_style else "CircuiTikZ options")
+        if node_style:
+            self._hint.setText("node[…] options (the bar/symbol style); the {…} text is set above")
+        else:
+            slots = REGISTRY[comp.kind].label_slots
+            self._hint.setText("Slots: " + ", ".join(slots) if slots else "")
 
     def _commit(self) -> None:
         text = self._field.text().strip()
         self._apply("Options", lambda s, cid: s.edit_component_options(cid, text))
+
+
+class NodeTextSection(InspectorSection):
+    """Node text — the ``{…}`` slot of a node-style component (e.g. a transistor's
+    ``$Q_1$`` or a power rail's ``$V_{cc}$``). Distinct from the node[…] options
+    bracket (OptionsSection)."""
+
+    title = "Node text"
+
+    def _build(self) -> None:
+        self._field = QLineEdit()
+        self._field.setPlaceholderText("e.g. $Q_1$")
+        self._field.textChanged.connect(lambda _t: self._timer.start())
+        self.body.addWidget(self._field)
+
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        # Node-style circuit kinds only; drawing annotations carry their text in
+        # ``options`` (TextContentSection) and are excluded by is_node_style.
+        return not isinstance(comp, DrawingComponent) and is_node_style(comp.kind)
+
+    def _load(self, comp: Component) -> None:
+        # Same focus guard as OptionsSection: don't clobber in-progress typing.
+        if not self._field.hasFocus():
+            self._field.blockSignals(True)
+            self._field.setText(comp.node_text)
+            self._field.blockSignals(False)
+
+    def _commit(self) -> None:
+        text = self._field.text().strip()
+        self._apply("Node Text", lambda s, cid: s.edit_component_node_text(cid, text))
 
 
 class TextContentSection(InspectorSection):
@@ -1658,6 +1702,7 @@ class PropertiesPanel(QWidget):
         # Ordered section list — order is the visual order in the panel.
         self._sections: list[InspectorSection] = [
             OptionsSection(),
+            NodeTextSection(),
             TextContentSection(),
             BipoleLabelSection(),
             VariantSection(),

@@ -32,10 +32,24 @@ class Component:
     """Clockwise rotation in degrees. Must be one of {0, 90, 180, 270}."""
 
     options: str
-    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$"."""
+    """Raw CircuiTikZ to[] / node[] option string, e.g. "l=$R_1$, v=$V_s$".
+
+    For a **node-style** kind (single- or multi-terminal node, see
+    ``app.codegen.circuitikz.is_node_style``) this is the ``node[…]`` *bracket*
+    only; the text in the trailing ``{…}`` slot lives in :attr:`node_text`."""
 
     mirror: bool = False
     """Horizontal mirror applied before rotation."""
+
+    node_text: str = ""
+    """Text for the ``{…}`` slot of a **node-style** component's emitted
+    ``(x,y) node[…] {TEXT}`` (e.g. a transistor's ``$Q_1$`` or a power rail's
+    ``$V_{cc}$``). Distinct from :attr:`options`, which carries the ``[…]`` bracket.
+
+    Meaningful only for node-style kinds (``is_node_style``); path-style ``to[…]``
+    components and drawing annotations ignore it. Persisted (``schematic/io.py``)
+    only when non-empty. A legacy power-rail's ``l=`` label is migrated into this
+    field on load (the rail's name now renders from the ``{…}`` slot)."""
 
     label_offset: tuple[float, float] | None = None
     """Position of the options label in component-local pixel coordinates.
