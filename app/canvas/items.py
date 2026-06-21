@@ -188,6 +188,10 @@ _LABEL_FONT_PT = 10.0
 _LABEL_FONT_PX = max(1, round(_LABEL_FONT_PT * GRID_PX / _PT_PER_GU))  # ≈ 21 px
 _LABEL_LINE_H = _LABEL_FONT_PX + 4   # px height per label row (font + leading)
 _LABEL_GAP = 8       # px gap between bbox top edge and bottom of label block
+# Clearance (GU) from a single-terminal node's symbol edge to its node-text label,
+# placed on the side away from the connection pin (matching CircuiTikZ's inline
+# anchor, e.g. a power rail's name sitting above the rail).
+_NODE_TEXT_CLEARANCE = 0.2
 # Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
 # annotation line does not appear to run into the text.
 _LABEL_BG_PAD = 3.0
@@ -884,6 +888,13 @@ class ComponentItem(QGraphicsItem):
         # anchor. A single reusable label, hidden when there is no node text (the
         # common case, and always for path-style / ghost components).
         self._node_text_item = _SlotLabel(self)
+        # A second in-place editor (alongside _options_item) for the node text,
+        # opened by double-clicking the node-text label. So a node element has two
+        # editable text boxes on the canvas: its options and its node text.
+        self._node_text_editor = LabelTextItem(self)
+        self._node_text_editor.setFlag(QGraphicsItem.ItemIsMovable, False)
+        self._node_text_editor.set_commit_callback(self._on_node_text_commit)
+        self._node_text_editor.set_end_callback(self._sync_options_item)
         self._sync_options_item()
 
     # ------------------------------------------------------------------
@@ -938,6 +949,13 @@ class ComponentItem(QGraphicsItem):
                 self._component.id, self._options_from_editable(text)
             )
 
+    def _on_node_text_commit(self, text: str) -> None:
+        """Called by the node-text editor when the user commits an in-place edit.
+        The node text is stored verbatim (no per-slot conversion)."""
+        scene = self.scene()
+        if scene is not None and hasattr(scene, "edit_component_node_text"):
+            scene.edit_component_node_text(self._component.id, text)
+
     # Options are edited one slot per line for readability; converted to/from the
     # stored comma-separated form. TextNodeItem overrides these to identity.
     def _options_to_editable(self, options: str) -> str:
@@ -970,10 +988,11 @@ class ComponentItem(QGraphicsItem):
         self._sync_options_item()
 
     def _sync_options_item(self) -> None:
-        """Hide the editor (unless active) and lay out the per-side slot labels."""
-        if self._options_item.is_editing:
+        """Hide the editors (unless active) and lay out the per-side slot labels."""
+        if self._options_item.is_editing or self._node_text_editor.is_editing:
             return
         self._options_item.setVisible(False)
+        self._node_text_editor.setVisible(False)
         self._layout_slots()
 
     def _labels_centered_on_axis(self) -> bool:
@@ -1105,21 +1124,47 @@ class ComponentItem(QGraphicsItem):
 
         self._layout_node_text(geom, counter)
 
+    def _node_text_center_rel(self) -> QPointF:
+        """Where the node-style ``{…}`` text is centred, screen-relative to the item
+        origin — matching where the compiled figure places it.
+
+        - **Multi-terminal** node (transistor, op-amp, …): the symbol's bbox centre,
+          i.e. CircuiTikZ's ``node.center`` (codegen chains the text node there). For
+          an asymmetric symbol whose origin is a pin, this is offset from the origin.
+        - **Single-terminal** node (ground, power rail): CircuiTikZ anchors the
+          inline ``{…}`` text *clear of the symbol*, on the side away from the
+          connection pin (e.g. above a power rail). So the label is placed just
+          beyond the far bbox edge along the symbol's dominant axis."""
+        x0, y0, x1, y1 = self._defn.bbox
+        s = self._gate_scale()
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        pins = self._defn.pins
+        if len(pins) <= 1:
+            px, py = pins[0].offset if pins else (0.0, 0.0)
+            gap = _NODE_TEXT_CLEARANCE
+            if abs(cy - py) >= abs(cx - px):     # vertical symbol (rail/ground)
+                cx = px
+                cy = (y0 - gap) if (cy - py) <= 0 else (y1 + gap)
+            else:                                 # horizontal symbol
+                cy = py
+                cx = (x0 - gap) if (cx - px) <= 0 else (x1 + gap)
+        center_local = QPointF(cx * GRID_PX * s, cy * GRID_PX * s)
+        return self.transform().map(center_local)
+
     def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
         """Render the node-style ``{…}`` slot text (``node_text``) centred on the
-        node anchor (the component origin), upright via the counter-transform.
+        symbol's bbox centre (the node's ``center`` anchor), upright via the
+        counter-transform — matching where the compiled figure places it.
 
-        Hidden when there is no node text, and for ghosts (placement previews show
-        the bare symbol). Path-style components never set node_text, so their label
-        stays hidden. Origin-centred: an exact match for single-terminal nodes; for
-        a multi-terminal node it sits at the origin pin (the compiled preview places
-        it at the node centre — this is the on-canvas affordance, not the export)."""
-        text = "" if self._ghost else (self._component.node_text or "")
+        Hidden when there is no node text, while the node-text editor is open, and
+        for ghosts (placement previews show the bare symbol). Path-style components
+        never set node_text, so their label stays hidden."""
+        editing = self._node_text_editor.is_editing
+        text = "" if (self._ghost or editing) else (self._component.node_text or "")
         self._node_text_item.setTransform(counter)
-        # center_rel = origin (0,0): the transform carries no translation, so the
-        # node anchor maps to the item origin.
         self._node_text_item.configure(
-            text, QPointF(0.0, -1.0), QPointF(0.0, 0.0), 0.0, 0.0, geom["inv"], True
+            text, QPointF(0.0, -1.0), self._node_text_center_rel(),
+            0.0, 0.0, geom["inv"], True,
         )
         self._node_text_item.setVisible(bool(text))
 
@@ -1234,6 +1279,29 @@ class ComponentItem(QGraphicsItem):
         self._options_item.setPos(self._editor_center_pos())
         self._options_item.setVisible(True)
         self._options_item.begin_edit()
+
+    def begin_node_text_edit(self) -> None:
+        """Show and activate in-place editing of the node text (the ``{…}`` slot),
+        centred on the symbol's bbox centre where the label renders. The node text
+        is edited verbatim (unlike options, which are shown one slot per line)."""
+        if self._node_text_editor.is_editing:
+            return
+        self._node_text_item.setVisible(False)
+        self._node_text_editor.setPlainText(self._component.node_text)
+        self._node_text_editor.setTransform(self._label_counter_transform())
+        self._node_text_editor.setPos(self._node_text_editor_pos())
+        self._node_text_editor.setVisible(True)
+        self._node_text_editor.begin_edit()
+
+    def _node_text_editor_pos(self) -> QPointF:
+        """Local pos that centres the node-text editor on the symbol's bbox centre
+        (the same anchor the rendered node-text label uses)."""
+        t = self.transform()
+        inv, _ = t.inverted()
+        er = self._node_text_editor.boundingRect()
+        target = self._node_text_center_rel()
+        anchor = QPointF(target.x() - er.width() / 2.0, target.y() - er.height() / 2.0)
+        return inv.map(anchor)
 
     # ------------------------------------------------------------------
     # State helpers

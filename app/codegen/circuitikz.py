@@ -749,7 +749,16 @@ def _multi_terminal_line(
     # no lead stubs.
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{_node_text_arg(comp)}}}"
+    # Node text goes on a *chained* node at the shape centre, not in this node's
+    # own ``{…}``: a multi-terminal symbol has a fixed bounding box, so text that
+    # overflows it (e.g. a transistor's centred ``$Q_1$`` spilling sideways) is
+    # clipped by the standalone crop (§8.3). The separate ``(node.center) node``
+    # contributes to the figure bbox and sits upright (no inherited rotation),
+    # matching the on-canvas label placed at the symbol's bbox centre.
+    node_line = (
+        f"{coord} node[{kind_arg}] ({node_id}) {{}}"
+        + _node_text_suffix(comp, f"({node_id}.center)")
+    )
 
     lines = [node_line]
     # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
@@ -1368,6 +1377,19 @@ def _node_text_arg(comp: Component) -> str:
     (``comp.node_text``). Brace-balanced so an unmatched ``}`` cannot escape the
     ``{…}`` group (LaTeX-injection containment, §7.3). Empty string when unset."""
     return balance_braces(comp.node_text) if comp.node_text else ""
+
+
+def _node_text_suffix(comp: Component, anchor: str) -> str:
+    """A chained ``<anchor> node[inner sep=0] {<node_text>}`` placed at *anchor*
+    (the component's ``.center``) so the node text contributes to the figure
+    bounding box and stays upright. Empty string when there is no node text.
+
+    Used for multi-terminal nodes, whose fixed-size symbol would otherwise clip
+    overflowing ``{…}`` text under the standalone crop. Single-terminal nodes keep
+    their text in the node's own ``{…}`` (CircuiTikZ anchors it clear of the
+    symbol, e.g. above a power rail, so it neither clips nor overlaps)."""
+    txt = _node_text_arg(comp)
+    return f" {anchor} node[inner sep=0] {{{txt}}}" if txt else ""
 
 
 def _label_args(comp: Component) -> str:

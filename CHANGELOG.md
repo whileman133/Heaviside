@@ -11,10 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Node text for node-style components**
   ([#32](https://github.com/whileman133/Heaviside/issues/32)). Node-style
   components (transistors, op-amps, MOSFETs, logic gates, grounds, power rails)
-  now have a separate **Node text** field in the inspector for the text in their
-  emitted `node[…] {TEXT}` slot — e.g. a transistor's `$Q_1$` or a rail's
-  `$V_{cc}$` — distinct from the **Node options** bracket. The text renders live
-  on the canvas and in the export.
+  now have a separate **Node text** field for the text in their emitted
+  `node[…] {TEXT}` slot — e.g. a transistor's `$Q_1$` or a rail's `$V_{cc}$` —
+  distinct from the **Node options** bracket. Edit it in the inspector **or in
+  place on the canvas**: a node element now has two editable text boxes, opened by
+  double-clicking the node text or the options label respectively. The text
+  renders live on the canvas at the same spot the compiled figure places it
+  (a transistor's label centred on the symbol, a power rail's name above it).
 
 ### Changed
 - **Power-rail labels are now node text.** A power rail's voltage name is set in

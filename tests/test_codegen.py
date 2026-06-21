@@ -370,13 +370,19 @@ def test_opamp_node() -> None:
 # node_text — the node-style {…} slot (§5, #32)
 # ---------------------------------------------------------------------------
 
-def test_node_text_fills_multi_terminal_brace_slot() -> None:
-    """A multi-terminal node emits node_text in its trailing {…} (empty otherwise)."""
+def test_node_text_multi_terminal_uses_chained_centre_node() -> None:
+    """A multi-terminal node's text is a *chained* node at the shape centre — the
+    component node's own {…} stays empty so the fixed-size symbol does not clip the
+    text under the standalone crop, and the separate node grows the figure bbox."""
     src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
-    assert "node[npn" in src and "{$Q_1$}" in src
-    # No node_text → empty braces after the node id.
+    # component node has empty braces, then a chained (<node>.center) node with the text
+    assert "node[npn" in src
+    assert ".center) node[inner sep=0] {$Q_1$}" in src
+    assert "{$Q_1$}" in src
+    # No node_text → empty braces, no chained node.
     bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
     assert "(node_" in bare and ") {}" in bare
+    assert ".center) node[inner sep=0]" not in bare
 
 
 def test_node_text_on_single_terminal_node() -> None:

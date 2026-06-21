@@ -928,6 +928,37 @@ def test_node_text_renders_on_canvas_for_node_style(scene: SchematicScene):
     assert not item._node_text_item.isVisible()        # hidden again
 
 
+def test_node_text_inline_editor_commits_separately_from_options(scene: SchematicScene):
+    """A node element has two in-place editors: the node-text editor commits to
+    node_text (verbatim), independent of the options editor."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    item = scene._comp_items[comp.id]
+
+    item.begin_node_text_edit()
+    assert item._node_text_editor.is_editing
+    assert not item._node_text_item.isVisible()        # display hidden while editing
+    assert item._node_text_editor.toPlainText() == "$Q_1$"   # pre-filled
+    assert not item._options_item.is_editing           # the options editor is separate
+
+    item._node_text_editor.setPlainText("$Q_2$")
+    item._node_text_editor.end_edit(commit=True)
+    assert scene._component_by_id(comp.id).node_text == "$Q_2$"
+    assert scene._component_by_id(comp.id).options == ""   # options untouched
+    assert not item._node_text_editor.is_editing
+
+
+def test_node_text_editor_cancel_keeps_value(scene: SchematicScene):
+    """Escaping the node-text editor (commit=False) leaves node_text unchanged."""
+    comp = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_node_text(comp.id, "$Q_1$")
+    item = scene._comp_items[comp.id]
+    item.begin_node_text_edit()
+    item._node_text_editor.setPlainText("$Q_9$")
+    item._node_text_editor.end_edit(commit=False)
+    assert scene._component_by_id(comp.id).node_text == "$Q_1$"
+
+
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
     scene.place_component("R", (0.0, 0.0))  # pins (0,0),(2,0)
     pt, is_pin = scene.wire_snap_target((2.05, 0.0))

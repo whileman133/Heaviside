@@ -2720,11 +2720,16 @@ class SchematicScene(QGraphicsScene):
                     event.accept()
                     return
                 # A per-side slot label (display only) maps to its component's
-                # in-place editor — double-clicking a rendered label edits it.
+                # in-place editor — double-clicking a rendered label edits it. The
+                # node-text label opens the *node-text* editor; every other slot
+                # label opens the options editor.
                 if isinstance(it, _SlotLabel):
                     parent = it.parentItem()
                     if isinstance(parent, ComponentItem):
-                        parent.begin_options_edit()
+                        if it is getattr(parent, "_node_text_item", None):
+                            parent.begin_node_text_edit()
+                        else:
+                            parent.begin_options_edit()
                         self.component_double_clicked.emit(parent.component.id)
                         event.accept()
                         return
