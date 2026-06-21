@@ -370,21 +370,19 @@ def test_opamp_node() -> None:
 # node_text — the node-style {…} slot (§5, #32)
 # ---------------------------------------------------------------------------
 
-def test_node_text_multi_terminal_uses_separate_node_statement() -> None:
-    """A multi-terminal node's text is a *standalone* `\\node` statement at the
-    placement point (the node's centre), on its own line — the component node's own
-    {…} stays empty so the fixed-size symbol does not clip the text under the
-    standalone crop, the separate node grows the figure bbox, and the text is
-    visible in the source rather than appended to a long path line."""
+def test_node_text_multi_terminal_uses_chained_centre_node() -> None:
+    """A multi-terminal node's text is a *chained* node at the shape centre, kept on
+    the component's draw path (the CircuiTikZ-idiomatic way) — the component node's
+    own {…} stays empty so the fixed-size symbol does not clip the text under the
+    standalone crop, and the chained node grows the figure bbox."""
     src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
-    # component node keeps empty braces; the text is its own \node at the position
-    # (the placement point, after origin normalisation §7.3 — its own line).
-    assert "node[npn" in src and ") {}" in src
-    assert r"\node[inner sep=0] at (" in src and r"{$Q_1$};" in src
-    # No node_text → no node-text statement.
+    # component node keeps empty braces, then a chained (<node>.center) node with the text
+    assert "node[npn" in src
+    assert ".center) node[inner sep=0] {$Q_1$}" in src
+    # No node_text → empty braces, no chained node.
     bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
     assert "(node_" in bare and ") {}" in bare
-    assert "inner sep=0] at" not in bare
+    assert ".center) node[inner sep=0]" not in bare
 
 
 def test_node_text_on_single_terminal_node() -> None:

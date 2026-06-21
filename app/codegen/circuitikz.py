@@ -388,15 +388,9 @@ def generate(
     lines.append(r"  \draw")
 
     draw_lines: list[str] = []
-    node_text_lines: list[str] = []   # standalone \node{node_text} statements
     for comp in schematic.components:
         if comp.z_order != 0:
             continue  # emitted in a background/foreground layer block
-        # Multi-terminal node text is a separate \node statement (emitted after the
-        # main \draw); collect it whether or not the symbol needs a \ctikzset group.
-        nt = _node_text_statement(comp, _y)
-        if nt:
-            node_text_lines.append(nt)
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
         draw_lines.extend(_component_lines(
@@ -448,12 +442,6 @@ def generate(
             lines.append(f"    {dl}")
 
     lines.append(r"  ;")
-
-    # Node text: a standalone \node per multi-terminal node, after the main draw so
-    # the named nodes exist and the text paints on top (and is visible in the
-    # source on its own line). Single-terminal nodes keep their inline {…}.
-    for ntl in node_text_lines:
-        lines.append(f"  {ntl}")
 
     # Styled wires: each its own \draw[...] statement after the shared path.
     for swl in styled_wire_lines:
@@ -551,18 +539,12 @@ def _component_layer_lines(
     named anchor (see :func:`generate`), and absolute pin coords connect exactly.
     """
     if _node_group_ctikzset(comp):
-        lines = _node_group_lines(comp, y_fn, rot_fn)
-    else:
-        frags = _component_lines(
-            comp, None, y_fn, rot_fn,
-            voltage_european=voltage_european, current_european=current_european,
-        )
-        lines = [rf"  \draw {frag};" for frag in frags]
-    # Multi-terminal node text as its own \node, on top of the layered component.
-    nt = _node_text_statement(comp, y_fn)
-    if nt:
-        lines.append(f"  {nt}")
-    return lines
+        return _node_group_lines(comp, y_fn, rot_fn)
+    frags = _component_lines(
+        comp, None, y_fn, rot_fn,
+        voltage_european=voltage_european, current_european=current_european,
+    )
+    return [rf"  \draw {frag};" for frag in frags]
 
 
 def _two_terminal_line(
@@ -767,13 +749,18 @@ def _multi_terminal_line(
     # no lead stubs.
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    # This node's own ``{…}`` is left empty; the node text (if any) is emitted as a
-    # SEPARATE ``\node`` statement (see _node_text_statement) on its own line — so it
-    # is visible in the source (not appended to an already-long path line), is not
-    # clipped by the fixed-size symbol's bbox under the standalone crop (§8.3), and
-    # sits at the placement point (the node's ``center``), matching the on-canvas
-    # label placed at the item origin.
-    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
+    # Node text is a *chained* node at the shape centre (kept on this component's
+    # draw path, the CircuiTikZ-idiomatic way), not in this node's own ``{…}``: a
+    # multi-terminal symbol has a fixed bounding box, so text that overflows it
+    # (e.g. a transistor's centred ``$Q_1$``) would be clipped by the standalone
+    # crop (§8.3). The chained ``(node.center) node`` contributes to the figure
+    # bbox, sits upright, and is anchored at the placement point (= the item origin
+    # where the on-canvas label is drawn). The displayed source is soft-wrapped so
+    # the appended text is visible (§10.5).
+    node_line = (
+        f"{coord} node[{kind_arg}] ({node_id}) {{}}"
+        + _node_text_suffix(comp, f"({node_id}.center)")
+    )
 
     lines = [node_line]
     # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
@@ -1394,27 +1381,21 @@ def _node_text_arg(comp: Component) -> str:
     return balance_braces(comp.node_text) if comp.node_text else ""
 
 
-def _node_text_statement(comp: Component, y_fn=lambda y: y) -> str:
-    r"""A standalone ``\node[inner sep=0] at (x,y) {node_text};`` for a
-    **multi-terminal** node, emitted on its own line after the component.
+def _node_text_suffix(comp: Component, anchor: str) -> str:
+    """A chained ``<anchor> node[inner sep=0] {<node_text>}`` placed at *anchor*
+    (the component's ``.center``), kept on the component's own draw path — the
+    CircuiTikZ-idiomatic way to attach a label node. Empty when there is no node
+    text.
 
-    The text is placed at the placement point ``(x,y)`` — which is the node's
-    ``center`` anchor (a multi-terminal node is centre-placed) — so it sits where
-    the on-canvas label is drawn (the item origin). Emitting it as a separate node
-    (rather than in the symbol's own ``{…}``) keeps it visible in the source, keeps
-    it out of the symbol's fixed bounding box so the standalone crop (§8.3) does not
-    clip overflowing text, and grows the figure bbox to include it.
-
-    Empty for kinds without node text or for single-terminal nodes, which keep
-    their text in the node's own ``{…}`` (CircuiTikZ anchors it clear of the symbol,
-    e.g. above a power rail)."""
-    if comp.kind not in _MULTI_TERMINAL_KINDS or not comp.node_text:
-        return ""
-    x, y = comp.position
-    return (
-        rf"\node[inner sep=0] at ({_fmt(x)},{_fmt(y_fn(y))}) "
-        rf"{{{_node_text_arg(comp)}}};"
-    )
+    Used for multi-terminal nodes, whose fixed-size symbol would otherwise clip
+    overflowing ``{…}`` text under the standalone crop (§8.3): the separate chained
+    node contributes to the figure bbox and stays upright (no inherited rotation),
+    and its anchor ``(node.center)`` is the placement point — where the on-canvas
+    label is drawn (the item origin). Single-terminal nodes keep their text in the
+    node's own ``{…}`` (CircuiTikZ anchors it clear of the symbol, e.g. above a
+    power rail)."""
+    txt = _node_text_arg(comp)
+    return f" {anchor} node[inner sep=0] {{{txt}}}" if txt else ""
 
 
 def _label_args(comp: Component) -> str:

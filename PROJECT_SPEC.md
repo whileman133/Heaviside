@@ -594,7 +594,7 @@ Two-winding transformers in the **Inductors** category, drawn with CircuiTikZ's 
 
 Single-terminal components are placed as `(x,y) node[kind, <options>] {<node_text>}` in the generated LaTeX (the `options` go in the bracket, the **node text** inline in the `{…}` — CircuiTikZ anchors a single-terminal node's text clear of the symbol, e.g. above a power rail, so it neither clips nor overlaps). They have one pin (`in` at (0,0)) and `default_span=(0,0)`. **Power-rail labels.** A power rail's voltage name (`$V_{cc}$`) is set as **node text** (the `{…}` slot), not a quick key — earlier builds special-cased an `l=` slot into `label=right:…`; that slot is now migrated into `node_text` on load (§9), so the rail's name renders from the `{…}` and any other `options` pass through the bracket unchanged.
 
-**Node text on a multi-terminal node** is *not* placed in the component node's own `{…}` (a fixed-size symbol clips text that overflows it, so a transistor's centred `$Q_1$` would be cropped by the standalone bounding box). Instead the component node's `{…}` is left empty and the text is emitted as a **standalone `\node[inner sep=0] at (x,y) {…};` statement on its own line** (`_node_text_statement`, after the main `\draw`), where `(x,y)` is the placement point — which is the node's `center` anchor (a multi-terminal node is centre-placed). This (a) keeps the text out of the symbol's fixed bbox so the standalone crop (§8.3) cannot clip it and grows the figure bbox to include it, and (b) keeps it **visible in the displayed source** (its own line) rather than appended to an already-long path line. **On-canvas placement** matches the compiled figure exactly: the rendered node-text label (and its in-place editor) is centred on the **item origin** (= the placement point = `node.center`) for a multi-terminal node, and placed just beyond the symbol edge on the side **away from the pin** for a single-terminal node — which keeps its inline `{…}` (`ComponentItem._node_text_center_rel`). **Invariant:** node text the user sets always appears in the generated source (what the GUI shows and what compiles), so the source matches what is rendered.
+**Node text on a multi-terminal node** is *not* placed in the component node's own `{…}` (a fixed-size symbol clips text that overflows it, so a transistor's centred `$Q_1$` would be cropped by the standalone bounding box). Instead the component node's `{…}` is left empty and the text is **chained as `(node.center) node[inner sep=0] {…}` on the component's own draw path** (`_node_text_suffix`, the CircuiTikZ-idiomatic way to attach a label node), which sits upright at the shape centre and grows the figure bbox to include it. The chained text lengthens the path line, so the displayed source is **soft-wrapped** (§10.5) to keep it visible. **On-canvas placement** matches the compiled figure exactly: the rendered node-text label (and its in-place editor) is centred on the **item origin** (= the placement point = `node.center`) for a multi-terminal node, and placed just beyond the symbol edge on the side **away from the pin** for a single-terminal node — which keeps its inline `{…}` (`ComponentItem._node_text_center_rel`). **Invariant:** node text the user sets always appears in the generated source (what the GUI shows and what compiles), so the source matches what is rendered.
 
 | Kind | Display Name | Canvas Symbol | Label Slots |
 |------|-------------|--------------|-------------|
@@ -2879,14 +2879,16 @@ and the `build_tex`/`build_snippet`/EPS/SVG helpers. The **brace-balancing
 containment** security rule (§7.2) is pinned at each emission site, along with
 generation-time degenerate-wire rejection and the dark-preview template colours.
 The **node-style `{…}` text** (`node_text`, §5.4) is pinned: a multi-terminal node
-keeps its own `{…}` empty and emits the text as a standalone `\node[inner sep=0] at
-(x,y) {…};` statement on its own line (so the fixed-size symbol does not clip it under
-the standalone crop, the figure bbox grows to include it, and it stays visible in the
-source), a single-terminal node renders its options in the `node[…]` bracket and
-`node_text` inline in `{…}` (no `label=right:` legacy hack), a path-style `to[…]`
-component ignores `node_text`, and the slot text is brace-balanced. The
-**source-matches-render invariant** is pinned by `test_node_text_always_present_in_source`
-(node text appears in the generated source for every node-style kind).
+keeps its own `{…}` empty and chains a `(node.center) node[inner sep=0] {…}` carrying
+the text on its draw path (so the fixed-size symbol does not clip it under the
+standalone crop and the figure bbox grows to include it), a single-terminal node
+renders its options in the `node[…]` bracket and `node_text` inline in `{…}` (no
+`label=right:` legacy hack), a path-style `to[…]` component ignores `node_text`, and
+the slot text is brace-balanced. The **source-matches-render invariant** is pinned by
+`test_node_text_always_present_in_source` (node text appears in the generated source
+for every node-style kind) and, at the panel level, by `test_source_panel_shows_node_text`
+and `test_source_panel_soft_wraps` in `test_sourcepanel.py` (the source view soft-wraps
+so chained node text is never scrolled off-screen).
 
 #### File I/O (`test_io.py`)
 
