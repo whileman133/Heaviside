@@ -181,11 +181,20 @@ WIRE_LINE_STYLE_CYCLE: tuple[str, ...] = ("", "dashed", "dotted", "dash dot")
 #: ``""`` = off the end (along the terminal segment), ``"above"``, ``"below"``.
 WIRE_LABEL_PLACEMENTS: tuple[str, ...] = ("", "above", "below")
 
-#: Radius (in grid units) of the semicircular bump drawn where one wire hops
-#: over another (see :func:`wire_crossings`). Single source of truth shared by
-#: the canvas (``HOP_RADIUS_GU * GRID_PX`` pixels) and the LaTeX generator (GU
-#: directly), so the rendered arc matches the exported one exactly.
-HOP_RADIUS_GU: float = 0.08
+#: Half-width (in grid units) of a line-hop, where one wire hops over another
+#: (see :func:`wire_crossings`). A hop is rendered as a CircuiTikZ ``jump
+#: crossing`` node, whose ``.west/.east/.north/.south`` anchors sit this far from
+#: the crossing point. The value is **measured** from CircuiTikZ's default
+#: ``bipoles/crossing/size`` (0.2): the anchor offset is ``0.5·0.2·Rlen`` with the
+#: bipole base length ``Rlen = 1.4`` GU, i.e. 0.14 GU. The canvas matches this so
+#: the on-screen hop lines up with the exported one; codegen uses the default
+#: size (no ``\ctikzset`` override) so the offset stays in sync.
+HOP_HALF_GU: float = 0.14
+
+#: Radius (GU) of the semicircular hump the canvas paints for a hop, matching the
+#: CircuiTikZ ``jump crossing`` shape (its arc radius is 0.4·half-width). The
+#: straight arms out to the anchors (±:data:`HOP_HALF_GU`) are the plain wire.
+HOP_ARC_RADIUS_GU: float = 0.4 * HOP_HALF_GU
 
 #: Valid values for :attr:`Wire.hop_mode` — the per-wire line-hop override, also
 #: the tri-state cycle order shown in the inspector (default → never → always).
@@ -208,6 +217,10 @@ class WireHop:
     wire_id: str
     orientation: str
     seg_index: int
+    #: The *other* wire at this crossing — the one hopped over (gets the gap when
+    #: rendered as a CircuiTikZ ``jump crossing`` node). ``None`` only for hops
+    #: constructed without it (older call sites/tests).
+    crossed_wire_id: str | None = None
 
 
 @dataclass
@@ -1148,11 +1161,13 @@ def wire_crossings(
                     # Pick the hopper among the wires allowed to hop here.
                     if a_ok and (not b_ok or _rank(wa, idx_a) >= _rank(wb, idx_b)):
                         hop_id, orient, seg_index = wa.id, oa, ia
+                        crossed_id = wb.id
                     else:
                         hop_id, orient, seg_index = wb.id, ob, ib
+                        crossed_id = wa.id
                     key = (hop_id, pr)
                     if key in seen:
                         continue
                     seen.add(key)
-                    hops.append(WireHop(p, hop_id, orient, seg_index))
+                    hops.append(WireHop(p, hop_id, orient, seg_index, crossed_id))
     return hops

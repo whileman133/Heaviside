@@ -5,6 +5,22 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Line-hops now use CircuiTikZ's native `jump crossing` nodes** instead of a
+  hand-drawn Bézier bump, so the exported figure uses the package the way it is
+  intended (and gains its styling hooks, e.g. `crossing vertical`). Both crossing
+  wires connect to the node's anchors — the hopping wire carries the arc, the
+  crossed wire the gap. The on-canvas hop is redrawn to match. No `.hv` change:
+  hops are derived geometry, never stored.
+
+### Fixed
+- The **CircuiTikZ Source** panel now reflects **line-hops** (and stays in step
+  with the unconnected-pin marker), matching the compiled preview and the
+  exported `.tex`. Previously the source panel omitted the hop bumps even though
+  the figure and exports contained them.
+
 ## [0.2.0] - 2026-06-20
 
 ### Added
