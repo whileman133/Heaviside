@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import math
 import re
+from typing import NamedTuple
 
 from app.components import library as _library
 from app.components.model import (
@@ -84,10 +85,8 @@ from app.components.style import (
 )
 from app.schematic.model import (
     Component,
-    HOP_RADIUS_GU,
     Schematic,
     Wire,
-    WireHop,
     component_pin_positions,
     junction_points,
     open_endpoints,
@@ -259,12 +258,25 @@ def generate(
     voltage_european = getattr(schematic, "voltage_style", "american") == "european"
     current_european = getattr(schematic, "current_style", "american") == "european"
 
-    # Line-hops (decoration where wires cross without connecting, §6.4), grouped
-    # per hopping wire. Default-mode wires hop only when mark_line_hops is on;
-    # per-wire hop_mode overrides ("always"/"never") apply either way.
-    hops_by_wire: dict[str, list[WireHop]] = {}
-    for hop in wire_crossings(schematic, default_on=mark_line_hops):
-        hops_by_wire.setdefault(hop.wire_id, []).append(hop)
+    # Line-hops (decoration where wires cross without connecting, §6.4).
+    # PROTOTYPE (Option B): each crossing becomes a CircuiTikZ `jump crossing`
+    # node placed at the crossing point, and **both** wires are broken to connect
+    # to its anchors — the node draws the hop arc on the hopper and the gap on the
+    # crossed wire. We build, per crossing: one node record, and a "break" on each
+    # of the two wires recording which node + role (hopper/crossed) so the wire
+    # emitter can route its arms to the right anchors.
+    crossing_nodes: list[tuple[str, tuple[float, float], str]] = []
+    breaks_by_wire: dict[str, list[_Break]] = {}
+    for k, hop in enumerate(wire_crossings(schematic, default_on=mark_line_hops)):
+        node_id = f"xing{k}"
+        crossing_nodes.append((node_id, hop.point, hop.orientation))
+        breaks_by_wire.setdefault(hop.wire_id, []).append(
+            _Break(hop.point, node_id, "hopper", hop.orientation)
+        )
+        if hop.crossed_wire_id is not None:
+            breaks_by_wire.setdefault(hop.crossed_wire_id, []).append(
+                _Break(hop.point, node_id, "crossed", hop.orientation)
+            )
 
     # Coordinate → node-terminal reference for multi-terminal component pins,
     # e.g. (78.5, 79.5) → "(node_abc123.+)", plus all pin refs per coordinate.
@@ -311,7 +323,7 @@ def generate(
         # connect exactly via the scaled anchor (see module docstring), so there
         # is no geometric loss. Foreground wires come after and keep named refs.
         refs = pin_coord_to_ref if use_refs else None
-        return _wire_draw_statement(wire, hops_by_wire.get(wire.id, []), refs, _y)
+        return _wire_draw_statement(wire, breaks_by_wire.get(wire.id, []), refs, _y)
 
     def _emit_layer_component(comp: Component) -> list[str]:
         """Layer-block lines for one component: a drawing annotation via its
@@ -321,6 +333,15 @@ def generate(
         return _component_layer_lines(
             comp, _y, _rot,
             voltage_european=voltage_european, current_european=current_european,
+        )
+
+    # Crossing nodes (jump crossings) are emitted up front, before any \draw that
+    # references their anchors (TikZ has no forward node references). A vertical
+    # hopper needs the node rotated 90° so its arc lands on the vertical arm.
+    for node_id, (cx, cy), orientation in crossing_nodes:
+        opts = "jump crossing" + (", rotate=90" if orientation == "v" else "")
+        lines.append(
+            rf"  \node[{opts}] ({node_id}) at ({_fmt(cx)},{_fmt(_y(cy))}) {{}};"
         )
 
     # Background layer (z_order < 0): components (drawing annotations *and* plain
@@ -372,7 +393,7 @@ def generate(
         # draw and would emit a stray lone coordinate in the \draw path.
         if len(wire.points) < 2 or wire.z_order != 0:
             continue
-        hops = hops_by_wire.get(wire.id, [])
+        breaks = breaks_by_wire.get(wire.id, [])
         style = compose_style_options(
             line_style=wire.line_style, line_width=wire.line_width
         )
@@ -385,10 +406,10 @@ def generate(
             # \draw[...] statement so the options apply only to that wire, not
             # the whole shared path.
             styled_wire_lines.append(
-                rf"\draw[{opts}] {_wire_path(wire, hops, pin_coord_to_ref, _y)};"
+                rf"\draw[{opts}] {_wire_path(wire, breaks, pin_coord_to_ref, _y)};"
             )
         else:
-            draw_lines.append(_wire_path(wire, hops, pin_coord_to_ref, _y))
+            draw_lines.append(_wire_path(wire, breaks, pin_coord_to_ref, _y))
 
     wired_coords: set[tuple[float, float]] = set()
     for wire in schematic.wires:
@@ -819,9 +840,19 @@ def _wire_line(
     return " -- ".join(refs)
 
 
-#: Cubic-Bezier control offset that makes one cubic a 180° bump (matches the
-#: canvas ``_HOP_KAPPA`` so the exported arc and the on-screen arc agree).
-_HOP_KAPPA: float = 4.0 / 3.0
+class _Break(NamedTuple):
+    """One place a wire is split to meet a CircuiTikZ ``jump crossing`` node.
+
+    ``point`` is the crossing coordinate (GU, canvas convention); ``node_id`` the
+    emitted node's name; ``role`` is ``"hopper"`` (the arm carrying the arc) or
+    ``"crossed"`` (the gapped arm); ``orientation`` is the *hopper's* direction
+    (``"h"``/``"v"``), which fixes the node rotation and hence the anchor scheme.
+    """
+
+    point: tuple[float, float]
+    node_id: str
+    role: str
+    orientation: str
 
 
 def _hop_on_segment(
@@ -835,21 +866,37 @@ def _hop_on_segment(
     return False
 
 
-def _wire_line_with_hops(
+def _crossing_anchor(
+    role: str, orientation: str,
+    side: tuple[float, float], center: tuple[float, float],
+) -> str:
+    """The ``jump crossing`` anchor a wire arm on the *side* of *center* connects
+    to. Both points are in **output** coordinates (post Y-flip). The mapping was
+    validated against CircuiTikZ's shape: the horizontal arm carries the arc and
+    the vertical arm the gap, with the node rotated 90° for a vertical hopper."""
+    sx, sy = side
+    cx, cy = center
+    if role == "hopper":
+        if orientation == "h":                         # arc on horizontal arm
+            return ".west" if sx < cx else ".east"
+        return ".west" if sy < cy else ".east"         # vertical hopper (rotate=90)
+    # Crossed (gapped) arm — perpendicular to the hopper.
+    if orientation == "h":                             # crossed is vertical
+        return ".south" if sy < cy else ".north"
+    return ".north" if sx < cx else ".south"           # crossed horizontal (rotate=90)
+
+
+def _wire_line_with_crossings(
     wire: Wire,
-    hops: list[WireHop],
+    breaks: list[_Break],
     pin_coord_to_ref: dict[tuple[float, float], str] | None,
     y_fn=lambda y: y,
 ) -> str:
-    r"""Like :func:`_wire_line`, but a semicircular bump arcs over each hop.
-
-    Each bump is emitted as a single cubic Bézier (``.. controls (c1) and (c2)
-    ..``) with the same geometry the canvas paints (:data:`HOP_RADIUS_GU`,
-    :data:`_HOP_KAPPA`). All coordinates pass through *y_fn*, so the bump flips
-    together with the whole figure — no arc-angle/Y-flip sign juggling. The bump
-    bulges off the wire: upward for a horizontal segment, rightward for a
-    vertical one (matching the canvas convention).
-    """
+    r"""Like :func:`_wire_line`, but the path is broken at each crossing so its
+    arms meet the ``jump crossing`` node's anchors (the node, emitted separately,
+    draws the arc/gap). At a break the incoming sub-path ends at one anchor and a
+    new sub-path resumes at the opposite one — e.g. ``-- (xing0.west) (xing0.east)
+    --`` — leaving the crossing itself for the node to draw."""
     pts = simplify_points(wire.points)
 
     def ref_for(i: int, x: float, y: float) -> str:
@@ -863,52 +910,42 @@ def _wire_line_with_hops(
     for i in range(len(pts) - 1):
         ax, ay = pts[i]
         bx, by = pts[i + 1]
-        horizontal = ay == by
-        seg = [h for h in hops if _hop_on_segment(h.point, (ax, ay), (bx, by))]
-        if horizontal:
-            seg.sort(key=lambda h: (h.point[0] - ax) * (1 if bx >= ax else -1))
-            ux, uy, bxr, byr = (1.0 if bx >= ax else -1.0), 0.0, 0.0, -1.0
-        else:
-            seg.sort(key=lambda h: (h.point[1] - ay) * (1 if by >= ay else -1))
-            ux, uy, bxr, byr = 0.0, (1.0 if by >= ay else -1.0), 1.0, 0.0
-        stops = [(ax, ay)] + [h.point for h in seg] + [(bx, by)]
-        for k, h in enumerate(seg):
-            cx, cy = h.point
+        seg = [b for b in breaks if _hop_on_segment(b.point, (ax, ay), (bx, by))]
+        if ay == by:                                   # horizontal segment
+            seg.sort(key=lambda b: (b.point[0] - ax) * (1 if bx >= ax else -1))
+        else:                                          # vertical segment
+            seg.sort(key=lambda b: (b.point[1] - ay) * (1 if by >= ay else -1))
+        stops = [(ax, ay)] + [b.point for b in seg] + [(bx, by)]
+        for k, brk in enumerate(seg):
+            cx, cy = brk.point
+            center = (cx, y_fn(cy))
             prev, nxt = stops[k], stops[k + 2]
-            gap = min(
-                abs(cx - prev[0]) + abs(cy - prev[1]),
-                abs(cx - nxt[0]) + abs(cy - nxt[1]),
-            )
-            r = min(HOP_RADIUS_GU, 0.45 * gap)
-            p0 = (cx - r * ux, cy - r * uy)
-            p3 = (cx + r * ux, cy + r * uy)
-            c1 = (p0[0] + _HOP_KAPPA * r * bxr, p0[1] + _HOP_KAPPA * r * byr)
-            c2 = (p3[0] + _HOP_KAPPA * r * bxr, p3[1] + _HOP_KAPPA * r * byr)
-            out += f" -- ({_fmt(p0[0])},{_fmt(y_fn(p0[1]))})"
-            out += (
-                f" .. controls ({_fmt(c1[0])},{_fmt(y_fn(c1[1]))})"
-                f" and ({_fmt(c2[0])},{_fmt(y_fn(c2[1]))})"
-                f" .. ({_fmt(p3[0])},{_fmt(y_fn(p3[1]))})"
-            )
+            a_in = _crossing_anchor(
+                brk.role, brk.orientation, (prev[0], y_fn(prev[1])), center)
+            a_out = _crossing_anchor(
+                brk.role, brk.orientation, (nxt[0], y_fn(nxt[1])), center)
+            # End the incoming sub-path at the node, resume on the far side (the
+            # space before the second coordinate starts a fresh sub-path).
+            out += f" -- ({brk.node_id}{a_in}) ({brk.node_id}{a_out})"
         out += " -- " + ref_for(i + 1, bx, by)
     return out
 
 
 def _wire_path(
     wire: Wire,
-    hops: list[WireHop],
+    breaks: list[_Break],
     pin_coord_to_ref: dict[tuple[float, float], str] | None,
     y_fn=lambda y: y,
 ) -> str:
-    """Wire path string, with hop bumps when *hops* is non-empty."""
-    if hops:
-        return _wire_line_with_hops(wire, hops, pin_coord_to_ref, y_fn)
+    """Wire path string, broken at jump-crossing nodes when *breaks* is non-empty."""
+    if breaks:
+        return _wire_line_with_crossings(wire, breaks, pin_coord_to_ref, y_fn)
     return _wire_line(wire, pin_coord_to_ref, y_fn)
 
 
 def _wire_draw_statement(
     wire: Wire,
-    hops: list[WireHop],
+    breaks: list[_Break],
     pin_coord_to_ref: dict[tuple[float, float], str] | None,
     y_fn=lambda y: y,
 ) -> str:
@@ -916,7 +953,7 @@ def _wire_draw_statement(
     style = compose_style_options(line_style=wire.line_style, line_width=wire.line_width)
     arrow = _wire_arrow_spec(wire)
     opts = ", ".join(p for p in (arrow, style) if p)
-    path = _wire_path(wire, hops, pin_coord_to_ref, y_fn)
+    path = _wire_path(wire, breaks, pin_coord_to_ref, y_fn)
     return rf"\draw[{opts}] {path};" if opts else rf"\draw {path};"
 
 

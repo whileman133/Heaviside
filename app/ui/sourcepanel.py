@@ -99,9 +99,20 @@ class SourcePanel(QWidget):
     def _refresh(self) -> None:
         if self._scene is None:
             return
+        # Mirror the preview/export codegen flags (mark_unconnected_pins,
+        # mark_line_hops) so the displayed source matches what is actually
+        # compiled and exported — only the Y convention differs (display uses the
+        # canvas Y-down, the compile path negates Y). The line-hops preference
+        # defaults on, so omitting it previously dropped hop bumps from the
+        # preview that the .tex output (and the figure) do contain.
         mark_pins = bool(self._prefs and self._prefs.mark_unconnected_pins)
+        mark_hops = bool(self._prefs and self._prefs.line_hops)
         try:
-            source = generate(self._scene.schematic, mark_unconnected_pins=mark_pins)
+            source = generate(
+                self._scene.schematic,
+                mark_unconnected_pins=mark_pins,
+                mark_line_hops=mark_hops,
+            )
         except Exception as exc:
             source = f"% Error generating source: {exc}"
         self._text.setPlainText(source)

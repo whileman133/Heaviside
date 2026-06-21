@@ -1854,39 +1854,44 @@ def _crossing() -> Schematic:
 
 
 def test_line_hops_disabled_by_default() -> None:
-    """generate() emits no bump unless mark_line_hops is requested."""
+    """generate() emits no crossing unless mark_line_hops is requested."""
     src = generate(_crossing())
-    assert "controls" not in src
-    assert "(0,1) -- (4,1)" in src   # plain straight wire
+    assert "jump crossing" not in src
+    assert "(0,1) -- (4,1)" in src   # plain straight wire, uninterrupted
 
 
 def test_always_hop_mode_emits_even_when_disabled() -> None:
-    """A wire with hop_mode='always' emits a bump even with mark_line_hops off."""
+    """A wire with hop_mode='always' emits a crossing even with mark_line_hops off."""
     h = Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], hop_mode="always")
     v = Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)])
     src = generate(_schematic(wires=(h, v)))     # mark_line_hops defaults False
-    assert "controls" in src
+    assert "jump crossing" in src
 
 
-def test_line_hops_emits_bezier_bump() -> None:
-    """With mark_line_hops, the hopping wire gets a cubic-Bezier bump at (2,1)."""
+def test_line_hops_emit_jump_crossing_node() -> None:
+    """With mark_line_hops, a `jump crossing` node is placed at the crossing and
+    both wires break to its anchors (the horizontal hopper to .west/.east, the
+    vertical crossed wire to .north/.south)."""
     src = generate(_crossing(), mark_line_hops=True)
-    assert "controls" in src
-    # The bump approaches (2-r,1) and resumes at (2+r,1) on the y=1 wire.
-    assert "(1.92,1)" in src and "(2.08,1)" in src
+    assert r"\node[jump crossing] (xing0) at (2,1) {};" in src
+    assert "(xing0.west)" in src and "(xing0.east) -- (4,1)" in src   # hopper arms
+    assert "(xing0.north)" in src and "(xing0.south)" in src          # crossed arms
 
 
-def test_line_hop_bump_bulges_up_without_yflip() -> None:
-    """A horizontal hopper bulges to smaller y (canvas up): control y = 1-(4/3)*0.08."""
-    src = generate(_crossing(), mark_line_hops=True)
-    # _fmt rounds to 2 dp: 0.8933… → 0.89.
-    assert "controls (1.92,0.89) and (2.08,0.89)" in src
+def test_vertical_hopper_rotates_node() -> None:
+    """A vertical hopper rotates the node 90° so its arc lands on the vertical arm."""
+    h = Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], z_order=0)
+    v = Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)], z_order=1)   # higher z → hops
+    src = generate(_schematic(wires=(h, v)), mark_line_hops=True)
+    assert r"\node[jump crossing, rotate=90] (xing0) at (2,1) {};" in src
+    # Vertical hopper connects to .west/.east; horizontal crossed to .north/.south.
+    assert "(xing0.west)" in src and "(xing0.east)" in src
 
 
-def test_line_hop_bump_flips_with_yflip() -> None:
-    """Under y_flip the whole bump negates, so the control y becomes -0.89."""
+def test_line_hop_node_position_flips_with_yflip() -> None:
+    """Under y_flip the node position negates like every other coordinate."""
     src = generate(_crossing(), mark_line_hops=True, y_flip=True)
-    assert "controls (1.92,-0.89) and (2.08,-0.89)" in src
+    assert r"(xing0) at (2,-1) {};" in src
 
 
 def test_zero_z_wire_keeps_shared_draw_path() -> None:

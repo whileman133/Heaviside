@@ -66,3 +66,25 @@ def test_pdf_to_qimage_bad_pdf_raises() -> None:
     """Garbage input does not crash — it raises a clean error."""
     with pytest.raises((CompileError, RuntimeError)):
         pdf_to_qimage(b"not a pdf at all")
+
+
+def test_line_hop_jump_crossings_compile() -> None:
+    """The `jump crossing` node output (both orientations, and two crossings on
+    one wire) compiles under real pdflatex — guards the anchor/rotate wiring."""
+    from app.schematic.model import Wire
+
+    wires = [
+        # horizontal hopper over a vertical wire
+        Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], z_order=1),
+        Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)], z_order=0),
+        # vertical hopper over a horizontal wire (rotated node)
+        Wire(id="vh", points=[(6.0, 0.0), (6.0, 3.0)], z_order=1),
+        Wire(id="hh", points=[(5.0, 1.0), (8.0, 1.0)], z_order=0),
+        # a second vertical crossing the first hopper -> two crossings on "h"
+        Wire(id="v2", points=[(3.0, 0.0), (3.0, 3.0)], z_order=0),
+    ]
+    src = generate(Schematic(version="0.5", name="x", wires=wires),
+                   y_flip=True, mark_line_hops=True)
+    assert "jump crossing" in src
+    pdf = compile_tex(build_tex(src))           # raises CompileError on failure
+    assert pdf[:4] == b"%PDF"

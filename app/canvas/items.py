@@ -57,7 +57,7 @@ from app.canvas.style import (
 )
 from app.canvas.svgsym import is_thick, symbol_paths
 from app.components.registry import REGISTRY
-from app.schematic.model import HOP_RADIUS_GU
+from app.schematic.model import HOP_ARC_RADIUS_GU, HOP_HALF_GU
 
 if TYPE_CHECKING:
     from app.components.model import BipoleComponent, Component, DrawingComponent, TextNodeComponent
@@ -76,8 +76,11 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
     return p
 
 
-#: Line-hop bump radius in pixels (shared GU source with the LaTeX generator).
-HOP_R: float = HOP_RADIUS_GU * GRID_PX
+#: Line-hop geometry in pixels (shared GU source with the LaTeX generator). The
+#: hump radius matches the CircuiTikZ ``jump crossing`` arc; ``HOP_HALF_PX`` is
+#: the half-width out to its anchors (used only for bounding-box margins).
+HOP_R: float = HOP_ARC_RADIUS_GU * GRID_PX
+HOP_HALF_PX: float = HOP_HALF_GU * GRID_PX
 #: Cubic-Bezier control-point offset that makes one cubic approximate a 180°
 #: bump whose apex reaches exactly the radius (3/4 · 4/3 = 1).
 _HOP_KAPPA: float = 4.0 / 3.0
@@ -117,7 +120,8 @@ def _polyline_with_hops(pts: list[QPointF], hops: list) -> QPainterPath:
     the segment it lies on by coordinate (orientation derived from the segment),
     so hops that don't fall on the polyline are ignored — letting callers feed
     committed *or* live-preview geometry with the same hop list. Bumps bulge up
-    over a horizontal segment and right over a vertical one. Shared by
+    over a horizontal segment and left over a vertical one, matching the
+    CircuiTikZ ``jump crossing`` (rotated 90° for a vertical hopper). Shared by
     :class:`WireItem` and :class:`WirePreviewItem`.
     """
     path = QPainterPath()
@@ -145,7 +149,8 @@ def _polyline_with_hops(pts: list[QPointF], hops: list) -> QPainterPath:
             seg.sort(key=lambda p: p.x() * along.x())
         else:
             along = QPointF(0.0, 1.0 if b.y() >= a.y() else -1.0)
-            bulge = QPointF(1.0, 0.0)                      # bump to the right
+            bulge = QPointF(-1.0, 0.0)                     # bump left (matches
+            #                          a CircuiTikZ jump crossing rotated 90°)
             seg.sort(key=lambda p: p.y() * along.y())
         # Clamp each bump's radius so it never overruns a neighbour/endpoint.
         stops = [a] + seg + [b]

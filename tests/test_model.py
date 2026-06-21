@@ -13,7 +13,8 @@ import pytest
 
 from app.schematic.model import (
     Component,
-    HOP_RADIUS_GU,
+    HOP_ARC_RADIUS_GU,
+    HOP_HALF_GU,
     Schematic,
     Wire,
     WireHop,
@@ -934,6 +935,7 @@ def test_crossing_emits_single_hop_on_higher_z_order_wire() -> None:
     assert hop.wire_id == "h"          # higher z_order hops
     assert hop.orientation == "h"      # the hopper's crossed segment is horizontal
     assert hop.seg_index == 0
+    assert hop.crossed_wire_id == "v"  # the other (hopped-over) wire
 
 
 def test_crossing_tie_breaks_on_later_wire() -> None:
@@ -1045,8 +1047,10 @@ def test_self_crossing_ignored() -> None:
     assert wire_crossings(_make_schematic(wires=(w,))) == []
 
 
-def test_hop_radius_constant_positive() -> None:
-    assert HOP_RADIUS_GU > 0
+def test_hop_geometry_constants_positive() -> None:
+    # The jump-crossing half-width (anchor offset) and the canvas hump radius.
+    assert HOP_HALF_GU > 0
+    assert 0 < HOP_ARC_RADIUS_GU < HOP_HALF_GU
 
 
 # ---------------------------------------------------------------------------
