@@ -2735,12 +2735,12 @@ class SchematicScene(QGraphicsScene):
                         event.accept()
                         return
                 if isinstance(it, ComponentItem):
-                    # Start in-place editing and open the Properties Panel. For a
-                    # node-style component that has neither options nor node text,
-                    # default to the node-text editor (the most likely first edit —
-                    # a transistor's label); otherwise edit the options.
+                    # Start in-place editing and open the Properties Panel. A
+                    # node-style component edits its **node text** on the canvas
+                    # (its node[…] options are inspector-only); every other kind
+                    # edits its options.
                     comp = it.component
-                    if is_node_style(comp.kind) and not comp.options and not comp.node_text:
+                    if is_node_style(comp.kind):
                         it.begin_node_text_edit()
                     else:
                         it.begin_options_edit()

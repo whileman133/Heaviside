@@ -1046,10 +1046,19 @@ class ComponentItem(QGraphicsItem):
         labels land on the correct side regardless of rotation/mirror.  Voltage
         (`v=`) and current (`i=`) slots also get a CircuiTikZ-style decoration —
         ± signs / a voltage arrow / a current arrow (:class:`_AnnotationDecoration`).
+
+        **Node-style** components show **no** option slot labels on the canvas: their
+        ``node[…]`` options are raw CircuiTikZ edited only through the inspector's
+        *Node options* field, so rendering them here (alongside the node text) reads
+        as clutter. Only their node text is drawn on the canvas.
         """
+        from app.codegen.circuitikz import is_node_style
         from app.preview.mathrender import _slot_family, slot_fragments, slot_reversed
 
-        slots = [] if self._ghost else slot_fragments(self._component.options)
+        if self._ghost or is_node_style(self._component.kind):
+            slots = []
+        else:
+            slots = slot_fragments(self._component.options)
         while len(self._slot_items) < len(slots):
             self._slot_items.append(_SlotLabel(self))
         while len(self._decoration_items) < len(slots):

@@ -15,11 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `node[…] {TEXT}` slot — e.g. a transistor's `$Q_1$` or a rail's `$V_{cc}$` —
   distinct from the **Node options** bracket. Edit it in the inspector **or in
   place on the canvas**: a node element now has two editable text boxes, opened by
-  double-clicking the node text or the options label respectively; double-clicking
-  a blank node defaults to editing the node text. The text renders live on the
+  double-clicking the node text. A node's options are edited through the inspector
+  only — they are not shown on the canvas (which would clutter the node text), so
+  double-clicking a node always edits its node text. The text renders live on the
   canvas at the same spot the compiled figure places it (a transistor's label at
-  the node, a power rail's name above it), and always appears in the displayed
-  CircuiTikZ source so the source matches what is rendered.
+  the node, a power rail's name above it), with a transparent background to match
+  CircuiTikZ, and always appears in the displayed CircuiTikZ source so the source
+  matches what is rendered.
 
 ### Changed
 - **Power-rail labels are now node text.** A power rail's voltage name is set in

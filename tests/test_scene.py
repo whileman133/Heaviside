@@ -975,25 +975,35 @@ def _dbl(scene: SchematicScene, gu):
     scene.mouseDoubleClickEvent(e)
 
 
-def test_double_click_blank_node_defaults_to_node_text_editor(scene: SchematicScene):
-    """Double-clicking a node-style component with no options and no node text opens
-    the *node-text* editor (the likely first edit — a label), not the options one."""
+def test_double_click_node_edits_node_text_not_options(scene: SchematicScene):
+    """Double-clicking a node-style component on the canvas always edits its node
+    text — its node[…] options are inspector-only, even when already set."""
     comp = scene.place_component("npn", (3.0, 3.0))   # no options, no node text
     item = scene._comp_items[comp.id]
     _dbl(scene, (3.0, 3.0))                            # on the node body (origin pin)
     assert item._node_text_editor.is_editing
     assert not item._options_item.is_editing
+    item._node_text_editor.end_edit(commit=False)
 
-
-def test_double_click_node_with_options_edits_options(scene: SchematicScene):
-    """Once a node-style component has options, double-clicking the body edits the
-    options (not the node text)."""
-    comp = scene.place_component("npn", (3.0, 3.0))
-    scene.edit_component_options(comp.id, "l=$Q_1$")
-    item = scene._comp_items[comp.id]
+    # Even with options set, the canvas edits node text (not options).
+    scene.edit_component_options(comp.id, "color=blue")
     _dbl(scene, (3.0, 3.0))
-    assert item._options_item.is_editing
-    assert not item._node_text_editor.is_editing
+    assert item._node_text_editor.is_editing
+    assert not item._options_item.is_editing
+
+
+def test_node_style_options_show_no_slot_labels(scene: SchematicScene):
+    """A node-style component's options are not rendered as on-canvas slot labels
+    (they are inspector-only); a path-style component still shows them."""
+    npn = scene.place_component("npn", (3.0, 3.0))
+    scene.edit_component_options(npn.id, "l=$Q_1$")
+    nitem = scene._comp_items[npn.id]
+    assert not any(s.isVisible() for s in nitem._slot_items)
+
+    res = scene.place_component("R", (8.0, 0.0))
+    scene.edit_component_options(res.id, "l=$R_1$")
+    ritem = scene._comp_items[res.id]
+    assert any(s.isVisible() for s in ritem._slot_items)
 
 
 def test_snap_target_pin_vs_grid_node(scene: SchematicScene):
