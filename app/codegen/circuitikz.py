@@ -321,7 +321,16 @@ def generate(
             px, py = pin_positions[i]
             coord = (round(px, 6), round(py, 6))
             if anchor_map and pin.name in anchor_map:
-                ref = f"({node_id}.{anchor_map[pin.name]})"
+                a = anchor_map[pin.name]
+                # A `-<sub>.<anchor>` anchor is a *sub-node* anchor (CircuiTikZ
+                # composite shapes expose internal nodes, e.g. a transformer's coils
+                # `T-L1`/`T-L2`): emit `(node_id-L1.midtap)` rather than the usual
+                # `(node_id.anchor)`. The "-" is part of the sub-node name, so no "."
+                # separator is inserted before it. (Guarded by the embedded "." so a
+                # plain anchor literally named "-" — the op-amp inverting input — is
+                # still emitted as `(node_id.-)`.)
+                ref = (f"({node_id}{a})" if a.startswith("-") and "." in a
+                       else f"({node_id}.{a})")
                 pin_coord_to_ref[coord] = ref
             else:
                 ref = f"({_fmt(px)},{_fmt(_y(py))})"

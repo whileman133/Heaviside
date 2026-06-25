@@ -72,6 +72,16 @@ _OFFGRID_PIN_KINDS = frozenset({
     # Thyristor/triac: the two axial terminals are on-grid, but the off-axis gate
     # pin sits at the native CircuiTikZ gate anchor (off-grid, magnet-connected).
     "thyristor", "triac",
+    # Potentiometers: the two axial terminals are on-grid, but the third wiper
+    # terminal sits at the native CircuiTikZ `wiper` anchor (off-axis, mid-body,
+    # off-grid, magnet-connected — like the thyristor gate).
+    "pR", "epot",
+    # Transformers: the four winding terminals are grid-aligned, but the two
+    # winding centre taps sit at the internal coils' `midtap` anchors (on the coil
+    # axis between the terminals, off-grid, magnet-connected).
+    "transformer", "transformer core",
+    "cute transformer", "cute transformer core",
+    "european transformer", "european transformer core",
     # Centre-placed SPDT/rotary switches: the anisotropy cap forces a uniform
     # scale (a non-uniform one would shear the blade, §4), so their asymmetric
     # native throw anchors don't all land on the grid (magnet-connected).

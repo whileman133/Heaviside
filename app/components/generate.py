@@ -241,7 +241,11 @@ def best_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
     pins = entry["pins"]
     anchors = [p["anchor"] for p in pins if p.get("anchor")]
     measured = render.measure_anchors(entry["tikz"], anchors, ctikzset=ctikzset(entry))
-    sx, sy = _scale_for(measured, anchors)
+    # The grid-alignment scale is derived from the node's own terminal anchors only.
+    # Sub-node anchors (``-L1.midtap`` taps) are interior connection points carried
+    # along by the same scale — they must not pull on the alignment optimisation.
+    grid_anchors = [a for a in anchors if not a.startswith("-")]
+    sx, sy = _scale_for(measured, grid_anchors)
     out_pins = _scaled_pins(pins, measured, sx, sy)
     scale = None if (sx == 1.0 and sy == 1.0) else [sx, sy]
     return scale, out_pins

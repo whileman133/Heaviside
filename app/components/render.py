@@ -79,12 +79,51 @@ def _anchor_dump(node_id: str, anchors: list[str]) -> str:
         return ""
     lines = [r"\makeatletter"]
     for name in anchors:
+        # A ``-<sub>.<anchor>`` name is a *sub-node* anchor: ``-L1.midtap`` measures
+        # the ``midtap`` anchor of the internal node ``<node_id>-L1`` (CircuiTikZ
+        # composite shapes such as transformers expose their coils as sub-nodes).
+        # The measurement targets the sub-node, but the HVANCHOR key keeps the full
+        # ``-L1.midtap`` string so the caller's dict matches the pin's ``anchor``.
+        # The embedded "." guards a plain anchor literally named "-" (the op-amp
+        # inverting input), which must measure on the node itself.
+        if name.startswith("-") and "." in name:
+            sub, _, anch = name[1:].partition(".")
+            target, coord_anchor = f"{node_id}-{sub}", anch
+        else:
+            target, coord_anchor = node_id, name
         lines.append(
-            rf"\pgfpointanchor{{{node_id}}}{{{name}}}"
+            rf"\pgfpointanchor{{{target}}}{{{coord_anchor}}}"
             rf"\typeout{{HVANCHOR {name} = \the\pgf@x , \the\pgf@y}}"
         )
     lines.append(r"\makeatother")
     return "\n".join(lines)
+
+
+def compile_log(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
+                node_id: str = "X", anchors: list[str] | None = None) -> str:
+    """Compile a circuitikz ``body`` with ``latex`` only (no ``dvisvgm``) and return
+    the latex log. For querying the symbol table — e.g. an ``\\ifcsname`` anchor
+    enumeration or a ``\\pgfpointanchor`` dump — where the geometry (SVG) is not
+    needed; faster and immune to dvisvgm/Ghostscript failures a shape might hit at
+    the rasterisation stage. Raises :class:`RenderError` if latex produces no DVI."""
+    doc = _DOC % {
+        "border": border_pt,
+        "ctikzset": "\n".join(rf"\ctikzset{{{s}}}" for s in (ctikzset or [])),
+        "body": body,
+        "dump": _anchor_dump(node_id, anchors or []),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        (work / "sym.tex").write_text(doc, encoding="utf-8")
+        r = subprocess.run(
+            ["latex", "-no-shell-escape", "-interaction=nonstopmode",
+             "-output-directory", str(work), "sym.tex"],
+            capture_output=True, text=True, cwd=work, timeout=60,
+            **_tools.run_kwargs(),
+        )
+        if not (work / "sym.dvi").exists():
+            raise RenderError("latex failed to produce a DVI", r.stdout)
+        return r.stdout
 
 
 def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,

@@ -2778,6 +2778,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.2,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.2,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [
@@ -2878,6 +2894,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.2,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.2,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [
@@ -16313,6 +16345,14 @@
             0
           ],
           "anchor": null
+        },
+        {
+          "name": "wiper",
+          "offset": [
+            1.0,
+            -0.56
+          ],
+          "anchor": null
         }
       ]
     },
@@ -16398,6 +16438,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.2,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.2,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [
@@ -16498,6 +16554,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.2,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.2,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [
@@ -32691,6 +32763,14 @@
             0
           ],
           "anchor": null
+        },
+        {
+          "name": "wiper",
+          "offset": [
+            1.0,
+            -0.56
+          ],
+          "anchor": null
         }
       ]
     },
@@ -34216,6 +34296,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.4,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.4,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [
@@ -34313,6 +34409,22 @@
             1.0
           ],
           "anchor": "B2"
+        },
+        {
+          "name": "tap_p",
+          "offset": [
+            -0.4,
+            0.0
+          ],
+          "anchor": "-L1.midtap"
+        },
+        {
+          "name": "tap_s",
+          "offset": [
+            0.4,
+            0.0
+          ],
+          "anchor": "-L2.midtap"
         }
       ],
       "scale": [

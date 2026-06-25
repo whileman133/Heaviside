@@ -5,6 +5,46 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Potentiometer wiper terminal.** Potentiometers (`pR` american, `epot`
+  european) are now modelled as the three-terminal devices they are: in addition
+  to the two end terminals they expose a **wiper** connection point at the
+  CircuiTikZ `wiper` anchor, so you can wire the slider
+  ([circuitikz#945](https://github.com/circuitikz/circuitikz/discussions/945)).
+- **Transformer centre taps.** Every transformer (all three coil styles, air- and
+  iron-core) now exposes a **primary** and a **secondary** winding centre-tap
+  connection point (the coils' `midtap` anchors), for centre-tapped transformer
+  circuits.
+- **Doc-anchor discovery tool** (`components/extract_doc_anchors.py`). Parses the
+  CircuiTikZ manual source to list every documented component anchor and flags the
+  ones Heaviside does not yet expose — a discovery aid for finding missing anchors,
+  per the maintainer's suggestion in the discussion above. It can also emit a
+  **complete component-and-anchor catalog table** for *all* ~440 documented
+  components (`--format md` or `--format latex`, the latter a `longtable` ready to
+  drop into the CircuiTikZ manual). Two opt-in probes recover what the manual omits:
+  `--probe` reads each shape's *complete* anchor set straight from the engine's
+  symbol table (a latex-only compile, no geometry rendering — filling gaps the prose
+  under-documents, e.g. the gyrator), and `--options` lists the options each
+  component actually responds to (e.g. `bodydiode` for MOSFETs) by rendering it with
+  each candidate option and keeping those that change the symbol. (Geometric anchors
+  are filtered case-sensitively, so real upper-case single-letter terminals like `E`
+  emitter and `S` source are no longer mistaken for the `e`/`s` compass points.)
+- **Manual scraper prototype** (`components/scrape_manual.py`). Treats the CircuiTikZ
+  manual as the authoritative source and scrapes it (parse only, no rendering) into a
+  structured per-component JSON database: keyword, type, category (the manual
+  subsection), description, documented anchors + sub-node anchors, demonstrated
+  options and parameters — from the reference macros **and** from `node[…]`/`to[…]`
+  draw examples (catching keys the macros omit, e.g. logic gates' `number inputs`) —
+  plus per-category prose option candidates. ~403 components across 27 categories.
+  Its `--format md` table flags anchors the manual didn't enumerate as *not listed*
+  (vs a genuine empty set). An optional source-probe step then compiles each component
+  to recover what the manual under-documents: `--probe` reads the complete anchor set
+  from the engine (latex only, ~20s — fills the *not listed* gaps), and
+  `--probe-options`/`--probe-params` render-diff which options/parameters actually
+  apply (e.g. confirming `number inputs` on every gate).
+
 ## [0.4.0] - 2026-06-21
 
 ### Added

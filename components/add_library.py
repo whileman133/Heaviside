@@ -171,22 +171,25 @@ def _tripole(kind: str, display: str, category: str, anchor_pin: str,
 def _block(kind: str, display: str, category: str,
            pin_anchors: list[tuple], labels=("l",)) -> dict:
     """A centre-placed multi-terminal node (anchor_pin null, like the op amp /
-    flip-flops): measure the named anchors and bake a best-effort uniform
-    grid-alignment scale; pins sit at the scaled anchors (off-grid ones connect via
-    the magnet). Used for tubes, the differential amps, the Schmitt triggers, and
-    the gyrator."""
+    flip-flops): measure the named anchors and bake the per-axis grid-alignment
+    scale (`generate._scale_for`); pins sit at the scaled, grid-snapped anchors via
+    `_scaled_pins` (off-grid ones connect via the magnet). Used for tubes, the
+    differential amps, the Schmitt triggers, and the gyrator. Mirrors the batch
+    pipeline's `best_alignment` so a re-run reproduces the committed data files."""
     from app.components import render
     measured = render.measure_anchors(kind, [a for _, a in pin_anchors])
     pairs = [(n, a) for n, a in pin_anchors if a in measured]
-    sc = renderer.best_alignment_scale(measured)
-    return {
+    sx, sy = renderer._scale_for(measured, [a for _, a in pairs])
+    pins = renderer._scaled_pins([{"name": n, "anchor": a} for n, a in pairs],
+                                 measured, sx, sy)
+    entry = {
         "display_name": display, "category": category, "emission": "node",
         "tikz": kind, "labels": list(labels), "anchor_pin": None, "leads": [],
-        "scale": [round(sc, 6), round(sc, 6)],
-        "pins": [{"name": n, "anchor": a,
-                  "offset": [round(measured[a][0] * sc, 4), round(measured[a][1] * sc, 4)]}
-                 for n, a in pairs],
+        "pins": pins,
     }
+    if not (sx == 1.0 and sy == 1.0):   # like best_alignment: no scale key when unit
+        entry["scale"] = [sx, sy]
+    return entry
 
 
 def _mono(kind: str, display: str, category: str) -> dict:

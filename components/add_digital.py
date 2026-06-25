@@ -49,14 +49,18 @@ CATEGORY = "Logic"
 def _block(display: str, tikz: str, pin_anchors: list[tuple[str, str]]) -> dict:
     """A centre-placed multi-terminal entry (anchor_pin null) for a fixed digital
     block.  Pins are given as ``(name, ctikz_anchor)`` only — the anchors are
-    **measured** and a best-effort uniform grid-alignment scale (`best_alignment
-    _scale`) is baked in, so the pins land on the 0.25-GU grid where a rescale can
-    manage it (the rest stay off-grid and connect via the magnet, like a gate)."""
+    **measured** and the per-axis grid-alignment scale (`generate._scale_for`) is
+    baked in via `_scaled_pins`, so the pins land on the 0.25-GU grid where a rescale
+    can manage it (the rest stay off-grid and connect via the magnet, like a gate).
+    This mirrors the batch pipeline's `best_alignment`, so a re-run reproduces the
+    committed data files."""
     from app.components import render
     measured = render.measure_anchors(tikz, [a for _, a in pin_anchors])
     pairs = [(n, a) for n, a in pin_anchors if a in measured]
-    sc = renderer.best_alignment_scale(measured)
-    return {
+    sx, sy = renderer._scale_for(measured, [a for _, a in pairs])
+    pins = renderer._scaled_pins([{"name": n, "anchor": a} for n, a in pairs],
+                                 measured, sx, sy)
+    entry = {
         "display_name": display,
         "category": CATEGORY,
         "emission": "node",
@@ -64,11 +68,11 @@ def _block(display: str, tikz: str, pin_anchors: list[tuple[str, str]]) -> dict:
         "labels": [],          # raw pgf shapes: self-labelled by their pin glyphs
         "anchor_pin": None,    # centre-placed; scaled to land pins on the grid
         "leads": [],           # no bridge stubs — pins sit at the scaled anchors
-        "scale": [round(sc, 6), round(sc, 6)],
-        "pins": [{"name": n, "anchor": a,
-                  "offset": [round(measured[a][0] * sc, 4), round(measured[a][1] * sc, 4)]}
-                 for n, a in pairs],
+        "pins": pins,
     }
+    if not (sx == 1.0 and sy == 1.0):   # like best_alignment: no scale key when unit
+        entry["scale"] = [sx, sy]
+    return entry
 
 
 # Flip-flops (flipflop shape): pins 1=top-left, 2=mid-left, 3=bottom-left,
@@ -145,7 +149,7 @@ def main() -> int:
     entries = _entries()
     for kind, entry in entries.items():
         renderer.save_component(kind, entry)
-        print(f"  + {kind:14s} {entry['display_name']}  (scale {entry['scale'][0]})")
+        print(f"  + {kind:14s} {entry['display_name']}  (scale {entry.get('scale', [1.0])[0]})")
     for kind, entry in MUXDEMUX.items():
         renderer.save_muxdemux(kind, entry)
         n = len(json.loads(renderer.DEFINITIONS_PATH.read_text())["components"][kind]["n_data"])

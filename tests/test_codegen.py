@@ -476,14 +476,16 @@ def test_digital_block_scale_multiplies_alignment() -> None:
 
 def test_transformer_emits_scaled_quadpole_node() -> None:
     """A transformer is a centre-placed quadpole node with its baked grid-alignment
-    scale and four grid-aligned winding terminals (p1/p2 primary, s1/s2 secondary)."""
+    scale, four grid-aligned winding terminals (p1/p2 primary, s1/s2 secondary), and
+    the two off-grid winding centre taps (tap_p/tap_s)."""
     from app.components.library import resolved_pins
     for kind in ("transformer", "transformer core"):
         src = generate(_schematic(_comp(kind, position=(4.0, 4.0))))
         assert f"node[{kind}, xscale=" in src and "yscale=" in src
         pins = {p.name: p.offset for p in resolved_pins(_comp(kind))}
-        assert set(pins) == {"p1", "p2", "s1", "s2"}
-        for off in pins.values():                       # all four terminals on grid
+        assert set(pins) == {"p1", "p2", "s1", "s2", "tap_p", "tap_s"}
+        for name in ("p1", "p2", "s1", "s2"):           # the four terminals on grid
+            off = pins[name]
             assert (off[0] * 4) == int(off[0] * 4)
             assert (off[1] * 4) == int(off[1] * 4)
 
@@ -529,7 +531,53 @@ def test_rotated_or_mirrored_transformer_uses_transform_shape() -> None:
     assert "rotate=" in opamp and "transform shape" not in opamp
 
 
-def test_dot_variants_do_not_change_keyword_or_geometry() -> None:
+def test_transformer_centre_taps_emit_subnode_anchor_refs() -> None:
+    """A wire to a transformer's primary/secondary centre tap connects via the
+    internal coil **sub-node** anchor — ``(node-L1.midtap)`` / ``(node-L2.midtap)``
+    — not the usual ``(node.anchor)``. Covers every coil style and confirms the
+    emitted source compiles under rotation/mirror (the named anchor is reoriented by
+    ``transform shape``, like the four winding terminals)."""
+    import uuid
+    from app.components import render
+    from app.schematic.model import Component, Wire, component_pin_positions
+
+    def _stub(pt):                       # extend along whichever axis is on-grid
+        x, y = pt
+        return (x, y - 1.0) if (x * 4) != int(x * 4) else (x - 1.0, y)
+
+    kinds = ("transformer", "transformer core", "cute transformer",
+             "european transformer core")
+    for kind in kinds:
+        for rot, mir in ((0, False), (90, False), (270, False), (0, True)):
+            c = Component(id=str(uuid.uuid4()), kind=kind, position=(6.0, 6.0),
+                          rotation=rot, options="", mirror=mir)
+            tap_p, tap_s = component_pin_positions(c)[4], component_pin_positions(c)[5]
+            wires = [Wire(id=str(uuid.uuid4()), points=[tap_p, _stub(tap_p)]),
+                     Wire(id=str(uuid.uuid4()), points=[tap_s, _stub(tap_s)])]
+            src = generate(_schematic(c, wires=wires))
+            assert "-L1.midtap)" in src and "-L2.midtap)" in src, (kind, rot, mir)
+            # the emitted picture body must compile (the sub-node anchors resolve).
+            body = "\n".join(l for l in src.splitlines()
+                             if not l.startswith(r"\begin") and not l.startswith(r"\end"))
+            render.render_svg(body, border_pt=6)   # raises RenderError on failure
+
+
+def test_opamp_inverting_input_anchor_is_node_relative_not_subnode() -> None:
+    """The op-amp's inverting input anchor is literally named ``-``. A wire to it
+    must emit the node-relative ``(node.-)`` — *not* the sub-node form ``(node-)``
+    that the transformer centre taps use. Guards the `-`+`.` sub-node discriminator
+    (`pin_coord_to_ref`), so a bare ``-`` anchor is never mistaken for a sub-node."""
+    import uuid
+    from app.schematic.model import Component, Wire, component_pin_positions
+
+    c = Component(id=str(uuid.uuid4()), kind="op amp", position=(6.0, 6.0),
+                  rotation=0, options="")
+    minus = component_pin_positions(c)[1]              # the "-" input pin
+    w = Wire(id=str(uuid.uuid4()), points=[minus, (minus[0] - 1.0, minus[1])])
+    src = generate(_schematic(c, wires=[w]))
+    import re
+    assert re.search(r"\(node_[0-9a-f]+\.-\)", src)        # node-relative (node….-)
+    assert not re.search(r"\(node_[0-9a-f]+-\)", src)      # never the sub-node form
     """A ``dot`` variant draws a separate mark — it must not alter the node keyword
     or the geometry key (the base symbol is rendered, dots overlaid)."""
     from app.components import library
@@ -2182,4 +2230,38 @@ def test_thyristor_gate_pin_coincides_with_circuitikz_anchor() -> None:
                 cgy = -float(m.group(2)) / render.TEXPT_PER_GU   # tex y-up -> model
                 assert abs(cgx - gx) < 0.02 and abs(cgy - gy) < 0.02, (
                     kind, rot, mir, (gx, gy), (cgx, cgy)
+                )
+
+
+def test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor() -> None:
+    """The potentiometer's third (wiper) pin world position equals where CircuiTikZ
+    draws the ``wiper`` anchor, at all 8 rotation×mirror cases — so a wire to the
+    wiper (which connects by *coordinate*, the device being an anonymous ``to[…]``)
+    lands on it in the rendered output. The exact analogue of the thyristor-gate
+    invariant for the off-axis third terminal."""
+    import re
+    from app.components import render
+    from app.components.registry import REGISTRY
+    from app.codegen.circuitikz import _rotate
+    from app.schematic.model import Component, component_pin_positions
+
+    for kind in ("pR", "epot"):
+        for rot in (0, 90, 180, 270):
+            for mir in (False, True):
+                c = Component(id="p", kind=kind, position=(0.0, 0.0),
+                              rotation=rot, options="", mirror=mir)
+                wx, wy = component_pin_positions(c)[2]          # wiper is pins[2]
+                dx, dy = _rotate((2.0, 0.0), rot)
+                if mir:
+                    dx = -dx
+                mk = ", mirror" if mir else ""
+                tikz = REGISTRY[kind].tikz_keyword
+                body = rf"\draw (0,0) to[{tikz}, name=X{mk}] ({dx:g},{-dy:g});"
+                _svg, log = render.render_svg(body, border_pt=12, node_id="X",
+                                              anchors=["wiper"])
+                m = re.search(r"HVANCHOR wiper = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt", log)
+                cwx = float(m.group(1)) / render.TEXPT_PER_GU
+                cwy = -float(m.group(2)) / render.TEXPT_PER_GU   # tex y-up -> model
+                assert abs(cwx - wx) < 0.02 and abs(cwy - wy) < 0.02, (
+                    kind, rot, mir, (wx, wy), (cwx, cwy)
                 )
