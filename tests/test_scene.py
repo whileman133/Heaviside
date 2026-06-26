@@ -591,6 +591,42 @@ def test_wire_mode_press_does_not_move_component(scene: SchematicScene):
     assert item.pos() == scene.gu_to_scene(5.0, 5.0)
 
 
+def test_terminal_marker_press_selects_instead_of_wiring(scene: SchematicScene, monkeypatch):
+    """A press on a single-point terminal marker selects/drags it rather than
+    auto-starting a wire (regression: a Terminals-category dot *is* its pin, so it
+    was un-grabbable — it could never be moved or deleted). The curated test
+    library has no such markers, so a single-pin ground stands in for one."""
+    import app.canvas.items as items_mod
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    monkeypatch.setattr(items_mod, "_NO_PIN_MARKER_CATEGORIES", frozenset({"Grounds"}))
+    g = scene.place_component("ground", (5.0, 5.0))   # single pin at (5,5)
+
+    press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    press.setButton(Qt.LeftButton)
+    press.setScenePos(scene.gu_to_scene(5.0, 5.0))    # press the marker's pin
+    scene.mousePressEvent(press)
+
+    assert scene.mode == Mode.SELECT                  # did NOT auto-enter WIRE mode
+    assert scene._comp_items[g.id].isSelected()       # the marker got selected
+
+
+def test_normal_pin_press_still_auto_starts_wire(scene: SchematicScene):
+    """A press on an ordinary component's unconnected pin still auto-starts a wire
+    (the terminal-marker exception must not regress quick wiring)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    scene.place_component("R", (5.0, 5.0))            # pins (5,5),(7,5)
+    press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    press.setButton(Qt.LeftButton)
+    press.setScenePos(scene.gu_to_scene(5.0, 5.0))    # the resistor's origin pin
+    scene.mousePressEvent(press)
+
+    assert scene.mode == Mode.WIRE
+
+
 def test_multi_select_group_drag_moves_each_component(scene: SchematicScene):
     """Group drag must move every selected component, not just the last one."""
     from PySide6.QtCore import Qt

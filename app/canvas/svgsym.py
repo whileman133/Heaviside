@@ -211,6 +211,11 @@ class SymbolPath:
     path: QPainterPath          # already in local pixel coordinates
     stroke_width: float         # raw SVG stroke width (pt); thin ~0.4, thick ~0.8
     filled: bool                # True if the path should be filled (closed body)
+    fill_bg: bool = False       # fill with the canvas paper colour, not ink — a white
+    #                             SVG fill (e.g. ocirc's open interior) reads as hollow
+    clip: QPainterPath | None = None  # clip region (local px) — dvisvgm clips e.g. the
+    #                             RF antenna's full-circle wavefronts to a wedge so only
+    #                             the arcs show; the painter must clip to reproduce it
 
 
 # SVG stroke widths cluster around 0.3985 pt (thin) and 0.797 pt (thick).
@@ -250,9 +255,14 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
     for p in entry["paths"]:
         local = xform.map(parse_path(p["d"]))
         # A bare path (default/solid fill) is a filled body; only an explicit
-        # ``fill='none'`` is stroked-only.
-        filled = p.get("fill", "none").lower() != "none"
-        out.append(SymbolPath(path=local, stroke_width=float(p["stroke_width"]), filled=filled))
+        # ``fill='none'`` is stroked-only. A *white* fill (e.g. ocirc's open interior)
+        # is filled with the paper colour so it reads as hollow, not an ink disc.
+        fill = p.get("fill", "none").lower()
+        filled = fill != "none"
+        fill_bg = fill in ("#fff", "#ffffff", "white")
+        clip = xform.map(parse_path(p["clip"])) if p.get("clip") else None
+        out.append(SymbolPath(path=local, stroke_width=float(p["stroke_width"]),
+                              filled=filled, fill_bg=fill_bg, clip=clip))
 
     for g in entry.get("glyphs", ()):
         placed = xform.map(QTransform(*g["matrix"]).map(parse_path(g["d"])))

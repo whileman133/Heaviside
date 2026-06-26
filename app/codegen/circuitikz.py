@@ -262,6 +262,20 @@ def generate(
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
         lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
 
+    # Document symbol style (§5.4): switch a whole family at once (european resistors,
+    # cute/european inductors). Emitted as a picture-scoped `\ctikzset` per axis, but
+    # only when a component of that family is actually placed and the chosen style is
+    # non-default — so a curated document (whose kinds carry no style axis) is never
+    # restyled and an unused family is never emitted.
+    _style = getattr(schematic, "symbol_style", {}) or {}
+    _placed_axes = {_library.style_axis(c.kind) for c in schematic.components}
+    for _axis, _opts_by_value in _library.STYLE_AXES.items():
+        if _axis not in _placed_axes:
+            continue
+        _opts = _opts_by_value.get(_library.style_value(_axis, _style), [])
+        if _opts:
+            lines.append(rf"  \ctikzset{{{', '.join(_opts)}}}")
+
     # Document voltage/current label conventions (§4 / §7.2). Applied **per
     # annotated component** as a local `voltage=european` / `current=european`
     # option (see _annotation_style_opts), NOT as a global `\ctikzset`: the global
@@ -673,45 +687,54 @@ def _multi_terminal_line(
     _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
     for _opt in _variant_opts:
         kind_arg = f"{kind_arg}, {_opt}"
+    # Per-instance **anisotropic** resize factors (span_override) for the kinds that
+    # support independent width/height (manual-library gates, digital blocks, the
+    # muxdemux — §6.4); ``None`` for uniform (height) gates and non-resizable kinds.
+    from app.schematic.model import node_resize_factors
+    _nf = node_resize_factors(comp)
+
     # Parametric kinds (logic gates): append the param option (e.g. "number
     # inputs=4") and use that value's scale; fixed kinds use the static table.
     _param = _library.param_spec(comp.kind)
     if _param is not None:
         kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
         _nd = _library.param_n_data(comp)
-        extra_opts = _library._scale_opts(_nd["scale"]) if _nd else ""
-        # A gate's body height (so inputs land on the grid without a node yscale
-        # that would oval the bubble) is set in a local group around the node by
-        # the caller — see _gate_height_setting / generate.
+        _scale = list(_nd["scale"]) if (_nd and _nd.get("scale")) else [1.0, 1.0]
+        if _nf is not None:                  # anisotropic drag-resize
+            _scale = [_scale[0] * _nf[0], _scale[1] * _nf[1]]
+        extra_opts = _library._scale_opts(_scale)
+        # A *uniform* (height) gate sets its body height in a local group around the
+        # node (see _gate_height_setting / generate) so the inversion bubble stays
+        # round; the per-instance size for those is folded in below.
     elif _library.is_parametric(comp.kind):
         # Multi-parameter measured-pins kinds (mux/demux): the concrete shape
-        # option for this value-combo (e.g. "muxdemux def={Lh=8, …, NB=2}") is
-        # baked into the instance's n_data record at generation time, alongside
-        # the baked grid-alignment scale.
+        # option (e.g. "muxdemux def={Lh=8, …, NB=2}") and baked grid-alignment
+        # scale are in n_data; fold the resize factors into the scale.
         _nd = _library.param_n_data(comp)
         if _nd and _nd.get("option"):
             kind_arg = f"{kind_arg}, {_nd['option']}"
-        extra_opts = _library._scale_opts(_nd["scale"]) if (_nd and _nd.get("scale")) else ""
+        _scale = list(_nd["scale"]) if (_nd and _nd.get("scale")) else [1.0, 1.0]
+        if _nf is not None:
+            _scale = [_scale[0] * _nf[0], _scale[1] * _nf[1]]
+        extra_opts = _library._scale_opts(_scale)
+    elif _library.is_scalable(comp.kind):
+        # Non-parametric scalable blocks (flip-flops, ALU, adder): the baked
+        # alignment scale, with the resize factors folded in.
+        base = _library.block_scale(comp)
+        if _nf is not None:
+            base = [base[0] * _nf[0], base[1] * _nf[1]]
+        extra_opts = _library._scale_opts(base)
     else:
         extra_opts = _MULTI_TERMINAL_EXTRA_OPTS.get(comp.kind, "")
-    # Scalable kinds (logic gates + digital blocks) carry a per-instance size
-    # multiplier (Component.scale, the inspector Size): fold it into the emitted
-    # xscale/yscale on top of the symbol's baked alignment scale so the LaTeX body
-    # matches the canvas.
-    if _library.is_scalable(comp.kind):
+    # Uniform (height) gates carry a per-instance size via Component.scale (no
+    # anisotropic factors): scale x via the node and y via the height (set scaled in
+    # the surrounding group), keeping the bubble round. Skipped for the anisotropic
+    # kinds (handled by the fold above; their Component.scale is 1).
+    if _nf is None and _gate_height_setting(comp) is not None:
         s_user = float(getattr(comp, "scale", 1.0))
         if abs(s_user - 1.0) > 1e-9:
-            base = _library.block_scale(comp)   # baked [sx, sy] (gate or block)
-            if defn.tikz_keyword.endswith(" port") and _param is not None:
-                # A multi-input gate sizes its input pitch via the body *height*
-                # (set in the surrounding \ctikzset group — scaled by s_user in
-                # _gate_height_setting), NOT via yscale. So scale only x (width)
-                # here; the height carries the uniform y-scale (xscale would
-                # mis-size the pitch — CircuiTikZ derives it from height).
-                extra_opts = _library._scale_opts([base[0] * s_user, base[1]])
-            else:
-                # Single-input gates and digital blocks scale uniformly.
-                extra_opts = _library._scale_opts([base[0] * s_user, base[1] * s_user])
+            base = _library.block_scale(comp)
+            extra_opts = _library._scale_opts([base[0] * s_user, base[1]])
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)

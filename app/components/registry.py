@@ -30,6 +30,7 @@ also needs a ``ComponentItem`` subclass + an ``ITEM_CLASSES`` row in
 from __future__ import annotations
 
 from app.components.library import library_component_defs
+from app.resources import component_lib
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
@@ -201,7 +202,8 @@ _DISPLAY_ORDER: list[str] = [
     "text_node", "rect", "circle",
 ]
 
-_ALL: dict[str, ComponentDef] = {**_BESPOKE, **library_component_defs()}
+_LIB: dict[str, ComponentDef] = library_component_defs()
+_ALL: dict[str, ComponentDef] = {**_BESPOKE, **_LIB}
 
 # ``_DISPLAY_ORDER`` is a *preference*, not an exhaustive list.  Kinds named in
 # it are ordered as listed; any kind present in the data but not named falls in
@@ -221,9 +223,20 @@ def display_rank(kind: str) -> int | None:
     return _DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else None
 
 
-REGISTRY: dict[str, ComponentDef] = {
-    kind: _ALL[kind] for kind in sorted(_ALL, key=_order_key)
-}
+# Curated: the hand-tuned ``_DISPLAY_ORDER`` preference. Manual library: the manual's
+# own order — its ``definitions.json`` is written in scrape order and is the
+# authoritative source, so we preserve it (curated's _DISPLAY_ORDER doesn't apply to
+# manual kinds). Bespoke annotations/drawing primitives follow the library kinds.
+if component_lib() == "curated":
+    REGISTRY: dict[str, ComponentDef] = {
+        kind: _ALL[kind] for kind in sorted(_ALL, key=_order_key)
+    }
+else:
+    # Bespoke (resizable annotations + drawing primitives) win over any same-named
+    # manual kind AND sit after the manual kinds — drop the colliding keys from their
+    # manual position so the bespoke Annotations/Drawing categories land at the end.
+    _manual_only = {k: v for k, v in _LIB.items() if k not in _BESPOKE}
+    REGISTRY = {**_manual_only, **_BESPOKE}
 
 # ---------------------------------------------------------------------------
 # ITEM_CLASSES — populated by app/canvas/items.py at import time.

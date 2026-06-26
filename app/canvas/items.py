@@ -54,6 +54,7 @@ from app.canvas.style import (
     LINE_W_THICK,
     OPEN_ANNOTATION_OPACITY,
     PIN_R,
+    SVG_PT_PER_GU,
 )
 from app.canvas.svgsym import is_thick, symbol_paths
 from app.components.registry import REGISTRY
@@ -81,6 +82,31 @@ def _pen(color: str, width: float, style: Qt.PenStyle = Qt.SolidLine) -> QPen:
 #: the half-width out to its anchors (used only for bounding-box margins).
 HOP_R: float = HOP_ARC_RADIUS_GU * GRID_PX
 HOP_HALF_PX: float = HOP_HALF_GU * GRID_PX
+
+#: Pixels per SVG point — the symbol geometry's coordinate scale.  ``LINE_W`` and
+#: ``LINE_W_THICK`` equal 0.3985·_PX_PER_PT and 0.797·_PX_PER_PT, so the binary
+#: thin/thick model already matches a *proportional* stroke at the two common
+#: CircuiTikZ widths.  Paths thicker than ``_TRUE_WIDTH_MIN_PT`` (well above the
+#: 0.797 pt "thick" body stroke — e.g. the seven-segment spines, cute-switch
+#: contacts, battery/source bars) are drawn at their *true* proportional width so
+#: they read like the compiled figure instead of being thinned to the body weight.
+_PX_PER_PT: float = GRID_PX / SVG_PT_PER_GU
+_TRUE_WIDTH_MIN_PT: float = 1.0
+
+
+def _stroke_px(stroke_width_pt: float, lw_scale: float = 1.0) -> float:
+    """Canvas pen width (px) for an SVG stroke of *stroke_width_pt*.
+
+    The two common CircuiTikZ widths (~0.3985 / ~0.797 pt) map to
+    ``LINE_W`` / ``LINE_W_THICK`` — which equal those widths scaled by
+    ``_PX_PER_PT``, so this is already proportional there.  Art genuinely thicker
+    than ``_TRUE_WIDTH_MIN_PT`` (seven-segment spines, cute-switch contacts,
+    battery/source bars) keeps its *true* proportional width instead of being
+    thinned to the body weight.  ``lw_scale`` is the per-component line-width
+    multiplier (relative to the 0.4 pt default)."""
+    if stroke_width_pt > _TRUE_WIDTH_MIN_PT:
+        return stroke_width_pt * _PX_PER_PT * lw_scale
+    return (LINE_W_THICK if is_thick(stroke_width_pt) else LINE_W) * lw_scale
 #: Cubic-Bezier control-point offset that makes one cubic approximate a 180°
 #: bump whose apex reaches exactly the radius (3/4 · 4/3 = 1).
 _HOP_KAPPA: float = 4.0 / 3.0
@@ -201,6 +227,13 @@ _VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
 # (like CircuiTikZ) rather than ridden out on the exit lead, since there is no
 # body in the middle to clear. ``open`` also centres its label; ``short`` does not.
 _CURRENT_CENTERED_KINDS = frozenset({"short", "open"})
+
+# Terminal-marker components (the "Terminals" category: circ/ocirc, diamond/square
+# poles) ARE the connection point, so a pin marker over them is redundant and just
+# hides the symbol. We suppress the marker for that whole category (the pin still
+# exists for wiring/snapping — only its red indicator is omitted). Single source is
+# the Qt-free model set (also drives grab-not-wire and move-follow behaviour).
+from app.schematic.model import TERMINAL_MARKER_CATEGORIES as _NO_PIN_MARKER_CATEGORIES  # noqa: E402
 
 # Annotation decoration geometry (canvas px) — the CircuiTikZ-style ± signs and
 # direction arrows drawn alongside the v=/i= text labels (§5.8). Sizes are in
@@ -925,12 +958,32 @@ class ComponentItem(QGraphicsItem):
         nd = library.param_n_data(self._component)
         return tuple(nd["bbox"]) if nd else self._defn.bbox
 
+    def _document_symbol_style(self) -> dict:
+        """The document's symbol-style map (family → value). An explicit
+        ``_style_override`` wins (set by the palette so its thumbnails follow the
+        document style, since a thumbnail item has no scene); otherwise read from the
+        scene's schematic. Empty → all-american."""
+        override = getattr(self, "_style_override", None)
+        if override is not None:
+            return override
+        sc = self.scene()
+        sch = getattr(sc, "schematic", None) if sc is not None else None
+        return getattr(sch, "symbol_style", None) or {}
+
     def _geometry_kind(self) -> str:
-        """Geometry key for this instance: kind + parametric suffix + variant suffix."""
+        """Geometry key for this instance: kind + parametric suffix + variant suffix,
+        plus the document symbol-style suffix for a style-sensitive family (§5.4)."""
         from app.components import library
+        from app.canvas.svgsym import symbol_paths
         c = self._component
-        return c.kind + library.param_geometry_suffix(c) + library.variant_geometry_suffix(
+        base = c.kind + library.param_geometry_suffix(c) + library.variant_geometry_suffix(
             c.kind, c.variants)
+        axis = library.style_axis(c.kind)
+        if axis:
+            value = library.style_value(axis, self._document_symbol_style())
+            if value != library.STYLE_DEFAULT.get(axis) and symbol_paths(f"{base}:{value}"):
+                return f"{base}:{value}"
+        return base
 
     def _gate_scale(self) -> float:
         """The body size multiplier (``Component.scale``) for a scalable kind — a
@@ -1367,7 +1420,11 @@ class ComponentItem(QGraphicsItem):
     def _pin_brush(self) -> QBrush:
         if self._ghost:
             return QBrush(QColor(style.COLOR_GHOST))
-        return QBrush(QColor(style.COLOR_PIN))
+        # Translucent fill (the solid ring comes from _pin_pen) so a one-pin symbol
+        # under the marker — a junction dot, a ground — isn't hidden by a red blob.
+        c = QColor(style.COLOR_PIN)
+        c.setAlphaF(style.PIN_FILL_ALPHA)
+        return QBrush(c)
 
     # ------------------------------------------------------------------
     # Vector-math label preview (shared by inline-label items)
@@ -1463,15 +1520,24 @@ class ComponentItem(QGraphicsItem):
         if s != 1.0:
             painter.scale(s, s)
         for sym in symbol_paths(self._geometry_kind()):
-            lw = (LINE_W_THICK if is_thick(sym.stroke_width) else LINE_W) * lw_scale
+            lw = _stroke_px(sym.stroke_width, lw_scale)
             # Counter the body scale so the stroke keeps its on-screen weight.
             pen = _pen(color, lw / s)
             painter.setPen(pen)
             if sym.filled:
-                painter.setBrush(QBrush(QColor(color)))
+                fill = style.COLOR_BACKGROUND if sym.fill_bg else color
+                painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)
-            painter.drawPath(sym.path)
+            if sym.clip is not None:
+                # Clip to the wedge dvisvgm used so full-circle wavefronts (RF
+                # antennas) paint only as the visible arcs.
+                painter.save()
+                painter.setClipPath(sym.clip)
+                painter.drawPath(sym.path)
+                painter.restore()
+            else:
+                painter.drawPath(sym.path)
         painter.restore()
 
         # --- transformer polarity dots -----------------------------------
@@ -1488,7 +1554,7 @@ class ComponentItem(QGraphicsItem):
             painter.setPen(Qt.NoPen)
 
         # --- pin indicator dots ------------------------------------------
-        if not self._ghost:
+        if not self._ghost and self._defn.category not in _NO_PIN_MARKER_CATEGORIES:
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
             # Use the snapped grid pins for a scaled gate, else the base offsets.
@@ -3105,6 +3171,259 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
 # resolves to the base ``ComponentItem`` via ``ITEM_CLASSES.get(kind, ComponentItem)``
 # at the lookup sites (scene.py, palette.py).  Adding a plain CircuiTikZ symbol
 # therefore needs no entry here — just a ``definitions.json`` record.
+class _ResizableNodeItem(ComponentItem):
+    """A multi-terminal node resizable by an independent-axis **2D scale** (§6.4).
+
+    Covers every scalable symbol — logic gates, the digital blocks (flip-flops,
+    ALU, adder) and the muxdemux. The per-instance ``span_override = (wf, hf)``
+    factors scale the symbol geometry and every pin offset (independently in x/y)
+    about the origin; the pen weight and the pin-dot radius stay constant (so a
+    stretch never ovalises the *dots* or distorts strokes — a gate's inversion
+    *bubble* does follow the x/y stretch, as expected for independent scaling). A
+    square handle at the body corner farthest from the origin drives the drag (the
+    scene routes it like an endpoint resize). Membership = ``library.is_scalable``.
+    """
+
+    def _resize_factors(self) -> tuple[float, float]:
+        from app.schematic.model import node_resize_factors
+        return node_resize_factors(self._component) or (1.0, 1.0)
+
+    #: The corner grabbed in the current drag (unscaled GU coords), set by
+    #: ``resize_handle_at`` and read by ``resize_from_local`` so the grabbed corner
+    #: tracks the cursor. ``None`` → fall back to the farthest corner.
+    _active_corner: tuple[float, float] | None = None
+
+    def _corners_gu(self) -> list[tuple[float, float]]:
+        """The four unscaled body corners (the drag handles)."""
+        x0, y0, x1, y1 = self._instance_bbox()
+        return [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+
+    def _corner_gu(self) -> tuple[float, float]:
+        """The unscaled body corner farthest from the origin — the default resize
+        reference when no specific corner is grabbed (e.g. tests). For a centre-placed
+        block a true corner; for a gate (origin at the output pin) the input-side
+        extreme."""
+        x0, y0, x1, y1 = self._instance_bbox()
+        return (x0 if abs(x0) >= abs(x1) else x1,
+                y0 if abs(y0) >= abs(y1) else y1)
+
+    def boundingRect(self) -> QRectF:
+        wf, hf = self._resize_factors()
+        x0, y0, x1, y1 = self._instance_bbox()
+        xs = sorted((x0 * wf, x1 * wf))
+        ys = sorted((y0 * hf, y1 * hf))
+        m = LINE_W_THICK + _HANDLE_HALF + 2
+        return QRectF(xs[0] * GRID_PX - m, ys[0] * GRID_PX - m,
+                      (xs[1] - xs[0]) * GRID_PX + 2 * m,
+                      (ys[1] - ys[0]) * GRID_PX + 2 * m)
+
+    def _handle_positions(self) -> list[QPointF]:
+        """The four drag handles, at the scaled body corners (item-local px)."""
+        wf, hf = self._resize_factors()
+        return [QPointF(cx * wf * GRID_PX, cy * hf * GRID_PX)
+                for cx, cy in self._corners_gu()]
+
+    def _opposite_corner(self, corner: tuple[float, float]) -> tuple[float, float]:
+        """The body corner diagonally opposite *corner* (the fixed resize anchor)."""
+        x0, y0, x1, y1 = self._instance_bbox()
+        gx, gy = corner
+        return (x0 if gx == x1 else x1, y0 if gy == y1 else y1)
+
+    def resize_handle_at(self, local_pt: QPointF) -> bool:
+        """Hit-test the four corner handles; records the grabbed corner and the
+        drag-start state so the resize holds the *opposite* corner fixed."""
+        for (cx, cy), hp in zip(self._corners_gu(), self._handle_positions()):
+            if (abs(local_pt.x() - hp.x()) <= _HANDLE_HALF + 2 and
+                    abs(local_pt.y() - hp.y()) <= _HANDLE_HALF + 2):
+                self._active_corner = (cx, cy)
+                self._resize_start_factors = self._resize_factors()
+                self._resize_start_pos = self._component.position
+                return True
+        return False
+
+    # --- resize protocol (driven by the scene drag controller) -----------
+    def resize_value(self):
+        # (factors, position) — position too, since an anchored resize shifts the
+        # origin to keep the opposite corner fixed.
+        return (self._component.span_override, self._component.position)
+
+    def resize_from_local(self, ldx: float, ldy: float):
+        """New ``((wf, hf), position)`` from the local-frame cursor offset (GU,
+        relative to the *original* origin). The grabbed corner tracks the cursor while
+        the diagonally-opposite corner stays fixed (so the rate is the same from any
+        corner). Factors get the continuous pin-grid magnet (per axis); the position
+        shifts to hold the anchor, and is grid-snapped at commit (by the command)."""
+        from app.schematic.model import snap_resize_factor
+        from app.canvas.geometry import anchored_resize_factors, local_span_to_world
+        grabbed = self._active_corner or self._corner_gu()
+        opp = self._opposite_corner(grabbed)
+        f0 = getattr(self, "_resize_start_factors", None) or self._resize_factors()
+        p0 = getattr(self, "_resize_start_pos", None) or self._component.position
+        wf, hf = anchored_resize_factors((ldx, ldy), grabbed, opp, f0)
+        pins = self._resolved_pins()
+        wf = snap_resize_factor(wf, [p.offset[0] for p in pins])
+        hf = snap_resize_factor(hf, [p.offset[1] for p in pins])
+        # Shift the origin so the anchor (opposite corner) holds with these factors.
+        dloc = ((f0[0] - wf) * opp[0], (f0[1] - hf) * opp[1])
+        wdx, wdy = local_span_to_world(dloc, self._component.rotation,
+                                       self._component.mirror)
+        return ((wf, hf), (p0[0] + wdx, p0[1] + wdy))
+
+    def apply_resize_preview(self, value) -> None:
+        import dataclasses
+        factors, pos = value
+        self._component = dataclasses.replace(self._component, span_override=factors,
+                                              position=pos)
+        # Move the item too, not just the model: the anchored resize shifts the
+        # origin to hold the opposite corner, so the preview must translate the item
+        # there (else the anchor only snaps into place on the commit rebuild — a jump).
+        self.setPos(pos[0] * GRID_PX, pos[1] * GRID_PX)
+        self.prepareGeometryChange()
+        self.update()
+
+    def resize_command(self, new_value, old_value):
+        from app.canvas.commands import ResizeNodeCommand
+        (new_f, new_p), (old_f, old_p) = new_value, old_value
+        return ResizeNodeCommand(self._component.id, new_f, old_f,
+                                 new_position=new_p, old_position=old_p)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = self._body_color()
+        lw_scale = self._component.line_width / 0.4
+        wf, hf = self._resize_factors()
+        t = QTransform()
+        t.scale(wf, hf)
+        # Symbol body — scale the path *coordinates* (not the painter) so the pen
+        # weight stays uniform under an anisotropic resize.
+        for sym in symbol_paths(self._geometry_kind()):
+            painter.setPen(_pen(color, _stroke_px(sym.stroke_width, lw_scale)))
+            if sym.filled:
+                fill = style.COLOR_BACKGROUND if sym.fill_bg else color
+                painter.setBrush(QBrush(QColor(fill)))
+            else:
+                painter.setBrush(Qt.NoBrush)
+            path = t.map(sym.path)
+            if sym.clip is not None:
+                painter.save()
+                painter.setClipPath(t.map(sym.clip))
+                painter.drawPath(path)
+                painter.restore()
+            else:
+                painter.drawPath(path)
+        # Pin markers at the scaled offsets, constant radius.
+        if not self._ghost and self._defn.category not in _NO_PIN_MARKER_CATEGORIES:
+            painter.setPen(self._pin_pen())
+            painter.setBrush(self._pin_brush())
+            for pdef in self._resolved_pins():
+                dx, dy = pdef.offset
+                painter.drawEllipse(QPointF(dx * GRID_PX * wf, dy * GRID_PX * hf),
+                                    PIN_R, PIN_R)
+        # Resize handles at all four corners (when selected).
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
+            for hp in self._handle_positions():
+                painter.drawRect(hp.x() - _HANDLE_HALF, hp.y() - _HANDLE_HALF,
+                                 _HANDLE_HALF * 2, _HANDLE_HALF * 2)
+
+
+class _ResizableGateItem(ComponentItem):
+    """A **uniformly** drag-resizable gate — the curated logic gates, which size
+    their body via a CircuiTikZ ``height`` key (§6.4). Anisotropic scaling would
+    oval their inversion bubble in the export (the height keeps it round), so these
+    lock aspect: the corner drag drives one ``Component.scale``, committed via
+    ``SetComponentScaleCommand`` (which follows wires). The base :class:`ComponentItem`
+    already paints/bounds the body at ``Component.scale``; this adds the handle."""
+
+    _MIN = 0.25   # mirrors library.MIN_GATE_SCALE
+
+    #: The corner grabbed in the current drag (unscaled GU); see ``_ResizableNodeItem``.
+    _active_corner: tuple[float, float] | None = None
+
+    def _corners_gu(self) -> list[tuple[float, float]]:
+        x0, y0, x1, y1 = self._instance_bbox()
+        return [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+
+    def _corner_gu(self) -> tuple[float, float]:
+        x0, y0, x1, y1 = self._instance_bbox()
+        return (x0 if abs(x0) >= abs(x1) else x1,
+                y0 if abs(y0) >= abs(y1) else y1)
+
+    def _handle_positions(self) -> list[QPointF]:
+        s = self._gate_scale()
+        return [QPointF(cx * GRID_PX * s, cy * GRID_PX * s)
+                for cx, cy in self._corners_gu()]
+
+    def boundingRect(self) -> QRectF:
+        m = _HANDLE_HALF + 2
+        return super().boundingRect().adjusted(-m, -m, m, m)
+
+    def _opposite_corner(self, corner: tuple[float, float]) -> tuple[float, float]:
+        x0, y0, x1, y1 = self._instance_bbox()
+        gx, gy = corner
+        return (x0 if gx == x1 else x1, y0 if gy == y1 else y1)
+
+    def resize_handle_at(self, local_pt: QPointF) -> bool:
+        for (cx, cy), hp in zip(self._corners_gu(), self._handle_positions()):
+            if (abs(local_pt.x() - hp.x()) <= _HANDLE_HALF + 2 and
+                    abs(local_pt.y() - hp.y()) <= _HANDLE_HALF + 2):
+                self._active_corner = (cx, cy)
+                self._resize_start_scale = self._gate_scale()
+                self._resize_start_pos = self._component.position
+                return True
+        return False
+
+    def resize_value(self):
+        return (float(getattr(self._component, "scale", 1.0)),
+                self._component.position)
+
+    def resize_from_local(self, ldx: float, ldy: float):
+        """Uniform ``(scale, position)`` from the local-frame cursor offset (GU): the
+        larger axis ratio drives the single scale while the diagonally-opposite corner
+        holds fixed (so the rate is the same from any corner). Continuous, with the
+        pin-grid magnet; floored at the minimum size; position shifts to hold the
+        anchor (grid-snapped at commit)."""
+        from app.schematic.model import snap_resize_factor
+        from app.canvas.geometry import anchored_resize_factors, local_span_to_world
+        grabbed = self._active_corner or self._corner_gu()
+        opp = self._opposite_corner(grabbed)
+        s0 = getattr(self, "_resize_start_scale", None) or self._gate_scale()
+        p0 = getattr(self, "_resize_start_pos", None) or self._component.position
+        wf, hf = anchored_resize_factors((ldx, ldy), grabbed, opp, (s0, s0))
+        offsets = [c for p in self._resolved_pins() for c in p.offset]
+        s = snap_resize_factor(max(wf, hf), offsets, minimum=self._MIN)
+        dloc = ((s0 - s) * opp[0], (s0 - s) * opp[1])
+        wdx, wdy = local_span_to_world(dloc, self._component.rotation,
+                                       self._component.mirror)
+        return (s, (p0[0] + wdx, p0[1] + wdy))
+
+    def apply_resize_preview(self, value) -> None:
+        import dataclasses
+        scale, pos = value
+        self._component = dataclasses.replace(self._component, scale=scale,
+                                              position=pos)
+        # Translate the item to the anchored origin too (see _ResizableNodeItem).
+        self.setPos(pos[0] * GRID_PX, pos[1] * GRID_PX)
+        self.prepareGeometryChange()
+        self.update()
+
+    def resize_command(self, new_value, old_value):
+        from app.canvas.commands import SetComponentScaleCommand
+        (new_s, new_p), (old_s, old_p) = new_value, old_value
+        return SetComponentScaleCommand(self._component.id, new_s, old_s,
+                                        new_position=new_p, old_position=old_p)
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        super().paint(painter, option, widget)
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
+            for hp in self._handle_positions():
+                painter.drawRect(hp.x() - _HANDLE_HALF, hp.y() - _HANDLE_HALF,
+                                 _HANDLE_HALF * 2, _HANDLE_HALF * 2)
+
+
 ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "nigfete":   _MosfetItem,   # extends boundingRect for the body_diode variant
     "nigfetd":   _MosfetItem,
@@ -3118,7 +3437,20 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "rect":      RectItem,
     "circle":    CircleItem,
     "bipole":    BipoleItem,
+    "muxdemux":  _ResizableNodeItem,   # 2D (anisotropic) drag-resize (§6.4)
 }
+
+# Every scalable multi-terminal symbol gets a corner drag-resize. Resolved against
+# the active library, so this covers all the gate/flip-flop/ALU/adder variants
+# without listing each: gates sized by a CircuiTikZ height key scale **uniformly**
+# (_ResizableGateItem, to keep the inversion bubble round); the rest — manual-library
+# gates, digital blocks, the muxdemux — scale **anisotropically** (_ResizableNodeItem).
+from app.components import library as _library  # noqa: E402
+for _kind in REGISTRY:
+    if _kind in ITEM_CLASSES or not _library.is_scalable(_kind):
+        continue
+    ITEM_CLASSES[_kind] = (_ResizableGateItem if _library.gate_uses_height(_kind)
+                           else _ResizableNodeItem)
 
 # Push into the registry so other modules can look up item classes without
 # importing Qt (they import ITEM_CLASSES from app.components.registry).

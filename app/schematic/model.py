@@ -244,6 +244,12 @@ class Schematic:
     voltage_style: str = "american"
     current_style: str = "american"
 
+    # Document-level symbol style (§5.4), manual library. Maps a CircuiTikZ style
+    # *family* ("resistors"/"inductors") to its value ("american"/"european"/"cute"),
+    # switching every symbol of that family at once. Empty = all defaults (american),
+    # so pre-0.7 files are unchanged. See app.components.library.STYLE_AXES.
+    symbol_style: dict[str, str] = field(default_factory=dict)
+
     # Document-level LaTeX preamble settings (§7.2). ``siunitx`` adds the
     # package to CircuiTikZ's option list so unit macros (\qty, \unit) work in
     # labels (issue #29). It defaults **on**: siunitx is cheap to load and most
@@ -325,6 +331,94 @@ def is_box_kind(obj: "Component | str") -> bool:
     (``rect``/``circle``) — the single predicate for box-kind dispatch."""
     kind = obj if isinstance(obj, str) else obj.kind
     return kind in BOX_KINDS
+
+
+#: Categories whose components are single-point **connection markers** (junction
+#: dots, the terminal poles). Their symbol coincides with their pin, so they: draw
+#: no pin-dot marker; are selected/dragged on click rather than auto-starting a
+#: wire; and **follow** a component they sit on when it moves (so a dot placed on a
+#: transformer/op-amp anchor tracks the symbol). Single source for the predicate.
+TERMINAL_MARKER_CATEGORIES: frozenset[str] = frozenset({"Terminals"})
+
+
+def is_terminal_marker(obj: "Component | str") -> bool:
+    """True when *obj* (a Component or kind string) is a single-point connection
+    marker (a Terminals-category dot/pole)."""
+    kind = obj if isinstance(obj, str) else obj.kind
+    from app.components.registry import REGISTRY
+    defn = REGISTRY.get(kind)
+    return defn is not None and defn.category in TERMINAL_MARKER_CATEGORIES
+
+
+def is_resizable_node(obj: "Component | str") -> bool:
+    """True when *obj* (a Component or a kind string) is an **anisotropic** 2D
+    drag-resizable node (§6.4): a scalable multi-terminal symbol that is *not* sized
+    by a CircuiTikZ body-height key. Covers the manual-library logic gates, the
+    digital blocks (flip-flops, ALU, adder) and the muxdemux. The curated gates use
+    a height key and resize **uniformly** instead (via ``Component.scale``)."""
+    kind = obj if isinstance(obj, str) else obj.kind
+    from app.components import library
+    return library.is_scalable(kind) and not library.gate_uses_height(kind)
+
+
+#: Half-width of the magnetic snap zone for a continuous resize, expressed as a
+#: *pin displacement* in GU: a resize factor snaps to a pin-grid-aligning value
+#: only when the nearest pin it would realign sits within this distance of the
+#: grid. Well below ``GRID_GU / 2`` so a genuine continuous band remains between
+#: snaps (≈3 px on screen at the default zoom).
+RESIZE_SNAP_GU: float = 0.05
+
+
+def snap_resize_factor(
+    f_raw: float,
+    offsets: "list[float]",
+    *,
+    grid: float = GRID_GU,
+    tol: float = RESIZE_SNAP_GU,
+    minimum: float = GRID_GU,
+) -> float:
+    """Snap a continuous resize *factor* to a value that lands a pin on the grid.
+
+    A resizable node sits on the grid and scales each pin offset ``o`` (GU, along
+    one axis) to ``o * f``; that pin is grid-aligned when ``o * f`` is a multiple
+    of *grid*. Given the raw factor *f_raw* from a drag and the unscaled pin
+    *offsets* along that axis, this returns the nearest factor that grid-aligns a
+    pin **iff** doing so moves that pin by less than *tol* (so resizing stays
+    continuous everywhere except a gentle magnet around each aligning size); the
+    raw factor (rounded) is returned otherwise. The strongest pull wins: among the
+    pins within tolerance, the one realigned by the least displacement is chosen.
+    The result is floored at *minimum* so the body can't collapse or invert."""
+    best_f: float | None = None
+    best_err = tol
+    for o in offsets:
+        a = abs(o)
+        if a < 1e-9:
+            continue
+        n = round(o * f_raw / grid)
+        f_c = n * grid / o
+        if f_c < minimum - 1e-9:
+            continue
+        err = abs(f_c - f_raw) * a          # how far this pin moves to align (GU)
+        if err < best_err:
+            best_err, best_f = err, f_c
+    if best_f is not None:
+        return max(minimum, round(best_f, 6))
+    return max(minimum, round(f_raw, 6))
+
+
+def node_resize_factors(component: "Component") -> tuple[float, float] | None:
+    """The per-instance ``(wf, hf)`` width/height scale factors for an anisotropic
+    resizable node, or ``None`` when it is not such a node or is at its natural size.
+    The factors live in ``span_override`` (the corner drag-resize); a legacy uniform
+    ``Component.scale`` (from the old Size dropdown) is honoured as ``(s, s)`` so
+    older documents still render scaled."""
+    if not is_resizable_node(component):
+        return None
+    so = component.span_override
+    if so is not None:
+        return (so[0], so[1])
+    s = float(getattr(component, "scale", 1.0))
+    return (s, s) if abs(s - 1.0) > 1e-9 else None
 
 
 def _segment_lengths(points: list[tuple[float, float]]) -> list[float]:
@@ -636,6 +730,10 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     # bridge the off-grid scaled body anchor to it); None for unscaled gates and
     # all other kinds, which use their base offsets unchanged.
     gate = library.gate_layout(component)
+    # 2D-resizable nodes (e.g. muxdemux) scale every pin offset by the instance's
+    # (wf, hf) factors before rotation/mirror, so connectivity, the magnet and the
+    # codegen anchors all track the resized body (§6.4).
+    nf = node_resize_factors(component)
 
     ox, oy = component.position
     out: list[tuple[float, float]] = []
@@ -651,6 +749,8 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             dx, dy = component.span_override
         elif gate is not None:
             dx, dy = gate[i]["pin_offset"]
+        if nf is not None:
+            dx, dy = dx * nf[0], dy * nf[1]
         r = component.rotation % 360
         if r == 90:
             rx, ry = (-dy, dx)

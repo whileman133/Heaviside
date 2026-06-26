@@ -23,7 +23,8 @@ Section → applicability map:
   FillBorderSection   – StyledComponent (rect, circle, bipole) — fill + line style
   StrokeWidthSection  – the unified stroke/outline width, every kind but text_node
                         (symbols and blocks share one line_width)
-  ScaleSection        – logic-gate size multiplier (scale), grid-safe dropdown
+  (Scalable gates/blocks have no Size dropdown — they resize by a corner drag
+   handle on the canvas, §6.4.)
   TransformSection    – rotation (all but rect, whose rotation is a codegen no-op)
                         + mirror (circuit + bipole only)
   LayerSection        – DrawingComponent (z-order + move front/back)
@@ -861,6 +862,7 @@ class ParamSection(InspectorSection):
             row.addWidget(QLabel(name.capitalize()))
             spin = QSpinBox()
             spin.setRange(int(spec["min"]), int(spec["max"]))
+            spin.setSingleStep(int(spec.get("step", 1)))   # even-only DIP, ×4 QFP, …
             spin.setValue(values[name])
             spin.valueChanged.connect(lambda v, nm=name: self._on_changed(nm, v))
             row.addWidget(spin)
@@ -877,7 +879,14 @@ class ParamSection(InspectorSection):
         self._kind = None
 
     def _on_changed(self, name: str, value: int) -> None:
-        n = int(value)
+        from app.components import library
+        spec = next(s for s in library.param_specs(self._kind) if s["name"] == name)
+        n = library._clamp_param(spec, value)   # snap typed values to the step grid
+        if n != value and name in self._spins:
+            spin = self._spins[name]
+            spin.blockSignals(True)
+            spin.setValue(n)
+            spin.blockSignals(False)
         self._apply(name.capitalize(),
                     lambda s, cid: s.set_component_param(cid, name, n))
 
@@ -1003,47 +1012,6 @@ class StrokeWidthSection(InspectorSection):
         self._apply(
             "Stroke width", lambda s, cid: s.set_component_line_width(cid, width)
         )
-
-
-class ScaleSection(InspectorSection):
-    """Size multiplier (``Component.scale``) as a dropdown, for scalable kinds —
-    logic gates and the digital blocks (flip-flops, mux/demux, ALU, adder).
-
-    A scalable symbol's pins are grid-aligned (best-effort) at 100 %; other
-    multipliers may push them off-grid, where a wire still connects via the pin
-    magnet (so any choice stays wire-connectable).
-    """
-
-    title = "Size"
-    multi_kind_safe = True
-
-    def _build(self) -> None:
-        self._row, self._combo = _make_combo_row("Scale", [], lambda _i: self._commit())
-        self.body.addLayout(self._row)
-        self._values: list[float] = []
-
-    def applies_to(self, comp: Component) -> bool:
-        from app.components import library
-        return library.is_scalable(comp.kind)
-
-    def _load(self, comp: Component) -> None:
-        from app.components import library
-        self._values = library.gate_scale_options(comp.kind)
-        self._combo.blockSignals(True)
-        self._combo.clear()
-        for v in self._values:
-            self._combo.addItem(f"{int(round(v * 100))}%")
-        if self._values:
-            idx = min(range(len(self._values)),
-                      key=lambda i: abs(self._values[i] - comp.scale))
-            self._combo.setCurrentIndex(idx)
-        self._combo.blockSignals(False)
-
-    def _commit(self) -> None:
-        i = self._combo.currentIndex()
-        if 0 <= i < len(self._values):
-            value = self._values[i]
-            self._apply("Scale", lambda s, cid: s.set_component_scale(cid, value))
 
 
 class WireStyleSection(InspectorSection):
@@ -1528,6 +1496,30 @@ class DocumentPropertiesPanel(QWidget):
             "whole figure; saved in the file."
         ))
 
+        # --- Symbol style (manual library) ----------------------------------
+        # Switches a whole CircuiTikZ family at once (american/european resistors,
+        # cute/american/european inductors). Only shown for the manual library, which
+        # carries the per-style geometry; the curated library uses distinct kinds.
+        from app.components import library as _lib
+        from app.resources import component_lib
+        self._style_combos: dict[str, QComboBox] = {}
+        if component_lib() == "manual" and _lib.STYLE_AXES:
+            body.addWidget(_make_separator())
+            body.addWidget(_make_section_label("Symbol style"))
+            sform = QFormLayout()
+            sform.setSpacing(8)
+            for axis, values in _lib.STYLE_AXES.items():
+                combo = QComboBox()
+                for value in values:
+                    combo.addItem(value.capitalize(), value)
+                self._style_combos[axis] = combo
+                sform.addRow(axis.capitalize(), combo)
+            body.addLayout(sform)
+            body.addWidget(self._hint(
+                "Symbol convention for a whole family (resistors, inductors). "
+                "Applies to the figure; saved in the file."
+            ))
+
         # --- Preamble settings (LaTeX packages / macros) --------------------
         body.addWidget(_make_separator())
         body.addWidget(_make_section_label("LaTeX preamble"))
@@ -1556,6 +1548,8 @@ class DocumentPropertiesPanel(QWidget):
 
         self._voltage.currentIndexChanged.connect(self._on_change)
         self._current.currentIndexChanged.connect(self._on_change)
+        for combo in self._style_combos.values():
+            combo.currentIndexChanged.connect(self._on_change)
         self._siunitx.toggled.connect(self._on_change)
         # Commit free-form preamble edits when focus leaves the editor, like the
         # other text fields in the inspector (avoids an undo step per keystroke).
@@ -1603,6 +1597,13 @@ class DocumentPropertiesPanel(QWidget):
         self._siunitx.blockSignals(True)
         self._siunitx.setChecked(sch.siunitx)
         self._siunitx.blockSignals(False)
+        if self._style_combos:
+            from app.components import library as _lib
+            for axis, combo in self._style_combos.items():
+                combo.blockSignals(True)
+                combo.setCurrentIndex(max(0, combo.findData(
+                    _lib.style_value(axis, sch.symbol_style))))
+                combo.blockSignals(False)
         # Only reset the editor text when it actually differs, so reloading the
         # document mid-edit does not move the user's cursor.
         if self._preamble.toPlainText() != sch.preamble:
@@ -1615,13 +1616,19 @@ class DocumentPropertiesPanel(QWidget):
     def _on_change(self) -> None:
         if self._scene is None:
             return
+        from app.components import library as _lib
         sch = self._scene.schematic
         voltage = self._voltage.currentData()
         current = self._current.currentData()
         siunitx = self._siunitx.isChecked()
         preamble = self._preamble.toPlainText()
+        # Non-default values only (a value == its axis default is dropped), so an
+        # all-american document keeps an empty map — matching the stored convention.
+        symbol_style = {axis: v for axis, combo in self._style_combos.items()
+                        if (v := combo.currentData()) != _lib.STYLE_DEFAULT.get(axis)}
         if (voltage == sch.voltage_style and current == sch.current_style
-                and siunitx == sch.siunitx and preamble == sch.preamble):
+                and siunitx == sch.siunitx and preamble == sch.preamble
+                and symbol_style == sch.symbol_style):
             return
         # Undoable, like every other edit: route through the scene's stack (so
         # Ctrl+Z reverts it and the modified-state tracking sees it) instead of
@@ -1635,6 +1642,8 @@ class DocumentPropertiesPanel(QWidget):
             old_siunitx=sch.siunitx,
             new_preamble=preamble,
             old_preamble=sch.preamble,
+            new_symbol_style=symbol_style,
+            old_symbol_style=dict(sch.symbol_style),
         ))
         self.document_changed.emit()
 
@@ -1712,7 +1721,6 @@ class PropertiesPanel(QWidget):
             FontSection(),
             FillBorderSection(),
             StrokeWidthSection(),
-            ScaleSection(),
             TransformSection(),
             LayerSection(),
         ]

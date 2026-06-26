@@ -2179,6 +2179,12 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
+        if self._drag.resize_drag is not None:
+            self._drag.preview_resize(gu)
+            self._refresh_preview_hops()
+            event.accept()
+            return
+
         if self._mode == Mode.SELECT and self._drag.wire_drag_ids:
             start = self._drag.wire_drag_start_gu
             if start is not None:
@@ -2218,6 +2224,25 @@ class SchematicScene(QGraphicsScene):
                     and it.flags() & QGraphicsItem.ItemIsSelectable):
                 return it
         return None
+
+    def _pin_belongs_to_terminal_marker(self, pin: tuple[float, float]) -> bool:
+        """True when *pin* is a pin of a single-point **terminal marker** (a
+        Terminals-category connection dot whose symbol coincides with its pin).
+        Such a marker would otherwise be un-grabbable: a press on it always lands on
+        its pin, so the wire-auto-start would fire and it could never be selected,
+        moved or deleted. Checked by coordinate (not exact shape hit) so the small
+        dot is reliably grabbable within the pin snap radius."""
+        from app.canvas.items import _NO_PIN_MARKER_CATEGORIES
+        from app.schematic.model import component_pin_positions, point_key
+
+        key = point_key(pin)
+        for comp in self._schematic.components:
+            defn = REGISTRY.get(comp.kind)
+            if defn is None or defn.category not in _NO_PIN_MARKER_CATEGORIES:
+                continue
+            if any(point_key(p) == key for p in component_pin_positions(comp)):
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Right-click context menu (components & wires)
@@ -2421,6 +2446,19 @@ class SchematicScene(QGraphicsScene):
                     event.accept()
                     return
 
+        # SELECT mode: a press on a resizable item's corner handle starts a
+        # drag-resize (muxdemux anisotropic; scalable gates/blocks uniform).
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            nid = self._drag.resize_handle_at(event.scenePos())
+            if nid is not None:
+                item = self._comp_items.get(nid)
+                if item is not None:
+                    self._drag.resize_drag = (nid, item.resize_value())
+                    self.clearSelection()
+                    item.setSelected(True)
+                    event.accept()
+                    return
+
         # SELECT mode: a press on a wire's mid-label starts dragging it along the
         # wire (takes priority over vertex drag / selection).
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
@@ -2460,9 +2498,14 @@ class SchematicScene(QGraphicsScene):
 
         # SELECT mode: clicking an UNCONNECTED pin auto-enters WIRE mode and
         # begins a wire there. Connected pins fall through to normal selection.
+        # Exception: a single-point **terminal marker** (a Terminals-category
+        # connection dot — circ/ocirc/…) *is* its own pin, so a press would always
+        # auto-start a wire and the dot could never be selected, moved or deleted.
+        # Such a press falls through to normal selection/drag; wire from it in WIRE
+        # mode instead.
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
             pin = self.unconnected_pin_at(event.scenePos())
-            if pin is not None:
+            if pin is not None and not self._pin_belongs_to_terminal_marker(pin):
                 self.clearSelection()
                 self._mode = Mode.WIRE
                 self._apply_item_flags()
@@ -2541,6 +2584,16 @@ class SchematicScene(QGraphicsScene):
                     wire_item.clear_preview_points()
                 self._drag.restore_endpoint_preview(comp_id)
             # On plain click (no movement) the item is already selected from press.
+            event.accept()
+            return
+
+        # Commit a drag-resize if one is active.
+        if self._drag.resize_drag is not None and event.button() == Qt.LeftButton:
+            gu = self.snap_point_gu(event.scenePos())
+            for wire_item in self._wire_items.values():
+                wire_item.clear_preview_points()
+            self._drag.commit_resize(gu)
+            self._refresh_preview_hops()
             event.accept()
             return
 

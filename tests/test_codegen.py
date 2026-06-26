@@ -78,6 +78,20 @@ def test_european_logic_gates_emit_keywords() -> None:
     assert r"\ctikzset{tripoles/european and port/height" in src
 
 
+def test_scalable_without_height_scales_both_axes() -> None:
+    """A scalable kind with no body-height mechanism (digital blocks, and the
+    manual-library gates) folds the user scale into BOTH xscale and yscale so it
+    grows uniformly, matching the canvas. A gate that *does* size via its height key
+    scales only x (the height carries y — see the european-gate test above)."""
+    import dataclasses
+    from app.codegen.circuitikz import _gate_height_setting
+
+    ff = dataclasses.replace(_comp("flipflop D"), scale=2.0)
+    assert _gate_height_setting(ff) is None        # no height mechanism
+    src = generate(_schematic(ff))
+    assert "xscale=" in src and "yscale=" in src   # both axes scaled
+
+
 def test_battery_and_inst_amp_emit_keywords() -> None:
     assert "to[battery]" in generate(_schematic(_comp("battery")))
     assert "node[inst amp" in generate(_schematic(_comp("instamp")))

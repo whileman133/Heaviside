@@ -202,30 +202,14 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
     assert all(abs(c.line_width - 0.4) < 1e-9 for c in scene.schematic.components)
 
 
-def test_scale_section_applies_to_gates_only_and_is_undoable(_app):
-    """The Size (scale) section shows for logic gates only; changing it sets the
-    gate's scale across the selection as one undo step."""
-    from app.canvas.scene import SchematicScene
-    from app.ui.properties import ScaleSection, PropertiesPanel
-    from app.components.model import Component
+def test_no_size_dropdown_section(_app):
+    """The discrete Size (scale) dropdown is gone — scalable gates/blocks resize by
+    the canvas corner-drag handle (§6.4), so no inspector section provides it."""
+    import app.ui.properties as props
 
-    sec = ScaleSection()
-    gate = Component(id="g", kind="and", position=(0.0, 0.0), rotation=0, options="")
-    res = Component(id="r", kind="R", position=(0.0, 0.0), rotation=0, options="")
-    assert sec.applies_to(gate) is True
-    assert sec.applies_to(res) is False
-
-    scene = SchematicScene()
-    a = scene.place_component("and", (10.0, 10.0))   # default scale 1.0
-    panel = PropertiesPanel()
-    panel.set_scene(scene)
-    panel.show_component(a.id)
-    s = next(x for x in panel._sections if isinstance(x, ScaleSection))
-    assert s._comp_ids == [a.id]
-    s._combo.setCurrentIndex(s._values.index(0.5))   # pick 50 %
-    assert abs(scene.schematic.components[0].scale - 0.5) < 1e-9
-    scene.undo()
-    assert abs(scene.schematic.components[0].scale - 1.0) < 1e-9
+    assert not hasattr(props, "ScaleSection")
+    panel = props.PropertiesPanel()
+    assert not any(type(s).__name__ == "ScaleSection" for s in panel._sections)
 
 
 def test_multi_wire_select_edits_all_as_one_undo_step(_app):

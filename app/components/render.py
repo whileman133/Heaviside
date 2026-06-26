@@ -251,30 +251,54 @@ def _parse_matrix(transform: str | None):
     return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
 
+_CLIP_URL_RE = re.compile(r"url\(#([^)]+)\)")
+
+
 def parse_geometry(svg_text: str) -> dict:
     """Parse a dvisvgm SVG into ``{viewBox, width_pt, height_pt, paths, glyphs}``."""
     root = ET.fromstring(svg_text)
     glyph_defs = {el.get("id"): el.get("d", "")
                   for el in root.iter() if _tag(el) == "path" and el.get("id")}
+    # clipPath id -> its (first) path ``d``. dvisvgm clips e.g. the RF antenna's
+    # wavefronts (full circles) to a wedge so only the arcs show; without honouring
+    # the clip the canvas would draw whole circles. Captured per clipped path below.
+    clip_defs: dict[str, str] = {}
+    for cp in root.iter():
+        if _tag(cp) == "clipPath" and cp.get("id"):
+            d = next((g.get("d", "") for g in cp.iter() if _tag(g) == "path"), "")
+            if d:
+                clip_defs[cp.get("id")] = d
     paths: list[dict] = []
     glyphs: list[dict] = []
 
-    def walk(el: ET.Element, inherited: str | None) -> None:
+    def _clip_d(el: ET.Element, inherited_clip: str | None) -> str | None:
+        ref = el.get("clip-path") or inherited_clip
+        if not ref:
+            return None
+        m = _CLIP_URL_RE.search(ref)
+        return clip_defs.get(m.group(1)) if m else None
+
+    def walk(el: ET.Element, inherited: str | None, inherited_clip: str | None) -> None:
         for child in el:
             tag = _tag(child)
             if tag == "g":
-                walk(child, child.get("transform", inherited))
+                walk(child, child.get("transform", inherited),
+                     child.get("clip-path") or inherited_clip)
             elif tag == "path":
                 d = child.get("d", "")
                 if child.get("id") or not re.match(r"^\s*[Mm]", d):
                     continue
                 sw = child.get("stroke-width")
-                paths.append({
+                entry = {
                     "d": d,
                     "stroke_width": float(sw) if sw is not None else 0.3985,
                     "fill": child.get("fill") if child.get("fill") is not None else "#000",
                     "stroke": child.get("stroke", "#000"),
-                })
+                }
+                clip = _clip_d(child, inherited_clip)
+                if clip:
+                    entry["clip"] = clip
+                paths.append(entry)
             elif tag == "use":
                 ref = (child.get(_HREF) or child.get("href") or "").lstrip("#")
                 d = glyph_defs.get(ref)
@@ -296,7 +320,7 @@ def parse_geometry(svg_text: str) -> dict:
                 glyphs.append({"d": rect_d, "matrix": [a, b, c, dd, e, f],
                                "stroke_width": 0.3985})
 
-    walk(root, None)
+    walk(root, None, None)
     return {
         "viewBox": root.get("viewBox", ""),
         "width_pt": root.get("width", ""),

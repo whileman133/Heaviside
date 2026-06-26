@@ -1,6 +1,6 @@
 # Heaviside — Specification
 
-**Version:** 0.6  
+**Version:** 0.7  
 **Status:** Draft (alpha — interfaces, file format, and architecture may change)  
 **Author:** Wes H.
 
@@ -302,9 +302,22 @@ class Schematic:
     metadata: dict[str, Any]         # Arbitrary key-value store for future use
     voltage_style: str = "american"  # document voltage-label style: "american"/"european" (§7.2)
     current_style: str = "american"  # document current-label style: "american"/"european" (§7.2)
+    symbol_style: dict[str, str] = {}  # document symbol style per family (§5.4): {"resistors":…,"inductors":…}; empty = american
     siunitx: bool = True             # load siunitx via CircuiTikZ for unit macros in labels; default on (§7.2/§8.3)
     preamble: str = ""               # free-form LaTeX spliced into the document preamble (§7.2/§8.3)
 ```
+
+Document-level **symbol style** (`symbol_style`, manual library) switches whole
+CircuiTikZ *families* at once — `library.STYLE_AXES` defines the axes: **resistors**
+(american/european) and **inductors** (american/cute/european, also driving
+transformers). Unlike the curated library's separate per-style kinds, the generator
+auto-detects which components respond to each axis (rendering under the axis's
+`\ctikzset` and keeping the geometry where it changes), stores the per-style geometry
+under `geometry_key(kind):<value>`, and tags the component `style_axis`. The canvas
+appends the document style for a tagged component (`items._geometry_kind`), codegen
+emits the matching global `\ctikzset` (only when a component of that family is placed),
+and the map is saved in the `.hv` `config` (absent → all-american). Edited in the
+Document tab, shown only for the manual library.
 
 Document-level `voltage_style` / `current_style` (`LABEL_STYLES = ("american",
 "european")`) select the CircuiTikZ arrow convention for `v=`/`i=` labels for the
@@ -438,7 +451,9 @@ To implement a new `ComponentItem`, look up the component in `geometry.json`, re
 
 Coordinates are scaled from SVG pt units to `GRID_PX` by dividing by the SVG `viewBox` height and multiplying by the component's height in pixels. The SVG y-axis matches Qt's (y-down), so no axis flip is required.
 
-**Fill rule.** dvisvgm emits a solid body (the filled diode triangle, transistor/LED arrowheads, …) as a **bare** `<path>` — no `stroke` and no `fill` attribute — which in SVG is the default **black fill**; the body's outline is a separate `fill='none'` stroke path. The export pipeline records a bare path's fill as `#000` (the SVG default), so `svgsym.symbol_paths` treats a path as **filled** unless its fill is the explicit `none`. (An earlier version recorded the absent attribute as `none`, which made `D` and `D*` — and every other solid body — render identically; the regression test is `test_filled_diode_body_is_filled`.) `stroke_width` values in the geometry are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`. The `glyphs` list is always filled.
+**Fill rule.** dvisvgm emits a solid body (the filled diode triangle, transistor/LED arrowheads, …) as a **bare** `<path>` — no `stroke` and no `fill` attribute — which in SVG is the default **black fill**; the body's outline is a separate `fill='none'` stroke path. The export pipeline records a bare path's fill as `#000` (the SVG default), so `svgsym.symbol_paths` treats a path as **filled** unless its fill is the explicit `none`. (An earlier version recorded the absent attribute as `none`, which made `D` and `D*` — and every other solid body — render identically; the regression test is `test_filled_diode_body_is_filled`.) `stroke_width` values in the geometry are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`. Those two mappings equal the stroke scaled by `_PX_PER_PT` (`GRID_PX / SVG_PT_PER_GU`), so the binary weights are already *proportional* at the two common widths; art **genuinely thicker** than `_TRUE_WIDTH_MIN_PT` (≈1 pt — the seven-segment segment spines, cute-switch contacts, battery/source bars) keeps its **true proportional width** (`stroke_width × _PX_PER_PT`) instead of being thinned to the body weight, so it matches the compiled figure (`items._stroke_px`; `test_items_stroke.py`). The `glyphs` list is always filled.
+
+**Clipping.** dvisvgm clips some art with a `<clipPath>` — e.g. an RF antenna's wavefronts are drawn as **full circles** clipped to a wedge so only the arcs show. `render.parse_geometry` captures a clipped path's `clip-path='url(#id)'` reference, resolves it to the clip region's `d`, and stores it on the path (`"clip"`); `svgsym.SymbolPath` parses it into a clip `QPainterPath`, and `ComponentItem.paint` clips to it before drawing, so the canvas shows the arcs rather than whole circles (`test_parse_geometry_captures_clip_path`, `test_symbol_path_carries_clip`).
 
 The mapping from `kind` to item class is:
 
@@ -626,6 +641,13 @@ The `open` component renders a **translucent** (mostly-opaque) solid line betwee
 **Placed by a two-click span gesture** (click the origin, then the terminal) rather than the single-click ghost-follow used by other components — see §6.2.
 
 **Both endpoints are draggable.** When selected, square drag handles appear at both endpoints, and a press on **either** handle starts an endpoint drag (`SchematicScene` press-handler precedence, ahead of vertex drag and SELECT-mode wire auto-start, so clicking-and-holding an endpoint that coincides with a connectable pin — e.g. a current annotation's — drags the endpoint instead of starting a wire). The two endpoints are symmetric: whichever is grabbed follows the cursor while the **other stays fixed**. Dragging the **terminal** handle holds the origin fixed and changes `span_override` only (undoable via `ResizeCommand`); dragging the **origin** handle holds the terminal fixed, shifting `Component.position` to the new origin and adjusting `span_override` so the terminal does not move (undoable via `MoveEndpointCommand`, the mirror image of `ResizeCommand`). Either way the dragged endpoint follows the cursor on the **0.25 GU grid** — the same node grid as placement and wire vertices, with **no dead-zone** (the handle is not sticky on pickup and does not freeze near the other endpoint) — and connected wires follow the moved endpoint (the terminal's wires stay put during an origin drag, and vice-versa). The origin handle is offered only by **line** annotations (`open`/`short`/`bipole`); boxes (`rect`/`circle`) resize as an anchored scale about their fixed first corner and expose only the terminal handle (`_ResizableTwoTerminalItem._origin_draggable`).
+
+**Drag-resize (corner handle).** Resizable multi-terminal symbols expose a square **corner handle** when selected and are resized by dragging it — there is **no discrete Size dropdown**. The drag is **item-driven**: the resizable item supplies a small protocol (`resize_handle_at` / `resize_value` / `resize_from_local` / `apply_resize_preview` / `resize_command`) and the scene's drag controller is kind-agnostic (`drag.resize_handle_at` / `preview_resize` / `commit_resize`, routed like an endpoint resize). The cursor is mapped into the component's local frame (undoing rotation/mirror), the item computes the new size from the local-frame corner offset, the preview is shown live, and **connected wires follow each relocated pin**. Two flavours:
+
+The split is by whether the kind is sized via a CircuiTikZ body-**height** key (`library.gate_uses_height` — true for the curated gates), assigned automatically by a load-time loop over the active library (no per-kind listing):
+
+- **Anisotropic** (`items._ResizableNodeItem`, `model.is_resizable_node` = `is_scalable` ∧ not height-keyed — the manual-library gates, the digital blocks, and the muxdemux): independent width/height factors `(wf, hf)` stored in `span_override` (reusing the field — **no `.hv` format change**; default unset = no scaling; a legacy uniform `Component.scale` is read as `(s, s)` for old documents), multiplying the symbol geometry and every pin offset about the origin (`model.node_resize_factors`, applied in `component_pin_positions`). The item scales the path *coordinates* (pen weight and pin-dot radius stay constant, so a stretch never ovalises the *dots*; a gate's inversion *bubble* does follow the x/y stretch, as expected for independent scaling). The corner drag is **continuous** (each axis independently), with a gentle magnet at the factors that land a pin on the grid (`model.snap_resize_factor`: a factor `f` grid-aligns a pin at offset `o` when `o·f` is a 0.25-GU multiple; among the pins within `RESIZE_SNAP_GU` = 0.05 GU of alignment the nearest pull wins, else the raw factor stands), floored at 0.25. Commits via `ResizeNodeCommand` (reshaping connected wires through one **simultaneous** old→new pin map, so densely-spaced pins never cross-assign); codegen folds the factors into the baked alignment scale (`xscale`/`yscale`). A handle sits at **each of the four body corners**; the hit-test records the grabbed corner (`_active_corner`) and the drag-start factors/position. The resize holds the diagonally-**opposite** corner fixed (`geometry.anchored_resize_factors`): because the model only scales about the origin, anchoring the opposite corner means the origin **shifts**, so `ResizeNodeCommand` also carries a new `position`. The shift is stored **exactly** (not grid-snapped) so the body stays precisely where the live preview showed it — the anchor corner does not move on release. The origin may therefore land off-grid; that is fine, as its pins become off-grid pins that wires connect to via the magnet, exactly like a scaled gate's (the off-grid-pin invariant exemption). Anchoring makes the grabbed corner track the cursor at the **same rate from any corner**, regardless of where the origin sits inside the body (e.g. a gate's output-pin origin no longer makes the near corners scale faster). The scene drag controller measures the cursor against the *original* origin captured at grab time (the previewed origin moves), so the anchor can't drift. The live preview translates the **item** (`setPos`) to the anchored origin, not just the model, so the body sits where it will commit — without it the origin shift would appear only on the commit rebuild (a jump on release).
+- **Uniform** (`items._ResizableGateItem`, the curated **height-keyed gates**): one factor driving the per-instance `Component.scale`, continuous with the same pin-grid magnet (`snap_resize_factor` over every pin coordinate, since the single scale moves both axes) and floored at `MIN_GATE_SCALE`. Four corner handles with the same opposite-corner anchoring as above (the larger axis ratio drives the single scale); `SetComponentScaleCommand` likewise carries the exact (non-snapped) position shift. These must lock aspect — the height key carries the y-size and keeps the inversion bubble a **circle** in the export; an `xscale`≠`yscale` node transform would oval it (the baked geometry is not pre-stretched, so the export would also diverge from the canvas). Codegen scales x via the node and y via the scaled `\ctikzset{…/height=…}` group. Commits via `SetComponentScaleCommand` (which already follows wires).
 
 #### Drawing Annotations
 
@@ -1150,7 +1172,7 @@ off-grid pin whose nearest grid node equals the press node still reads as a drag
 
 #### Finalizing and mode transitions
 
-- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component. **A resizable line-annotation endpoint handle takes priority over this auto-start:** because the endpoint-drag check runs first in the press handler, pressing-and-holding an `open`/`short`/`bipole` endpoint drags that endpoint (§11 Annotations) even when it coincides with a connectable pin (a `short`'s endpoints connect), rather than starting a wire.
+- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component. **A resizable line-annotation endpoint handle takes priority over this auto-start:** because the endpoint-drag check runs first in the press handler, pressing-and-holding an `open`/`short`/`bipole` endpoint drags that endpoint (§11 Annotations) even when it coincides with a connectable pin (a `short`'s endpoints connect), rather than starting a wire. **A single-point terminal marker is also excepted:** a Terminals-category connection dot (`circ`/`ocirc`/`diamondpole`/… — the pin-marker-suppressed kinds, `_NO_PIN_MARKER_CATEGORIES`) *is* its own pin, so an auto-start would make it impossible to select; a press whose matched pin belongs to such a marker (`SchematicScene._pin_belongs_to_terminal_marker`) falls through to normal selection/drag so the dot can be moved or deleted (wire from it by entering Wire mode first). Such a marker also **follows the component it sits on**: when a component moves, any terminal marker whose pin coincides with one of the moving component's pins rides along by the same delta (computed pre-move in `MoveCommand`, previewed live in `drag.py`, undone together), so a junction dot placed on a transformer/op-amp anchor (the on-grid dot anchors) tracks the symbol. The shared predicate is `model.is_terminal_marker` / `TERMINAL_MARKER_CATEGORIES` (the single source the pin-marker suppression, grab-not-wire, and move-follow all use).
 - In **Select** mode, a **double-click on blank canvas** (no wire or component hit) enters **Wire** mode, starting a free wire from the snapped 0.25 GU grid point.
 - In **Select** mode, **double-clicking a wire's rendered label** — an endpoint label (`_WireEndLabel`) or the mid-wire label (`_WireMidLabel`) — opens its in-place text editor (§4.3) instead of routing. These checks run **before** the wire-body check so a rendered label isn't shadowed by the "double-click wire → edit mid-label" gesture. The **mid-wire label is also draggable**: a left-press on it (handled in the scene's `mousePressEvent`, ahead of vertex-drag/selection) starts a drag that slides it along the wire; `mouseMoveEvent` previews and `mouseReleaseEvent` commits the new fractional position. A no-movement press falls through to the double-click edit.
 - In **Select** mode, **double-clicking a wire endpoint** (any first/last vertex, via `wire_vertex_at` — endpoints are draggable, including connected ones) opens that endpoint's label editor (§4.3) — so a label can be started even when none is set yet and there is no rendered label to click. This applies to free endpoints **and endpoints connected to a component pin or a drawing element**. Interior vertices and the segment body fall through to the wire-body (split-and-start) gesture below. This check runs after the rendered-label check and before the wire-body check.
@@ -1906,11 +1928,12 @@ failure to write the `.bak` never blocks the save itself.
 
 ```json
 {
-  "version": "0.6",
+  "version": "0.7",
   "name": "My Schematic",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
+    "symbol_style": {},
     "siunitx": true,
     "preamble": ""
   },
@@ -2004,6 +2027,7 @@ Format versions:
 - **0.4** — extends `z_order` from drawing annotations to **every component** (any component can be sent to front/back, §9.4 Z-order). A 0.3 build would silently strip a plain component's `z_order` on save, so the bump makes it refuse the newer file. 0.1–0.3 files load unchanged (an absent `z_order` defaults to 0); new documents declare 0.4.
 - **0.5** — adds the document **preamble settings** to `config` (`siunitx` flag and free-form `preamble` string, §7.2). A 0.4 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.4 files load unchanged — an absent `siunitx` key defaults **on** (the new-document default) and `preamble` to empty; new documents declare 0.5.
 - **0.6** — adds a per-component **`node_text`** (the `{…}` slot of a node-style component, §5.4). A 0.5 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.5 files load unchanged — an absent `node_text` defaults to empty, and a **legacy power-rail `l=` slot is migrated into `node_text` on load** (the rail's voltage name now renders from the `{…}` slot; other options in the bracket are preserved). New documents declare 0.6.
+- **0.7** — adds the document **`symbol_style`** map to `config` (per-family symbol style: american/european resistors, cute/american/european inductors — §5.4, manual library). A 0.6 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.6 files load unchanged — an absent `symbol_style` defaults to empty (all american). New documents declare 0.7.
 
 ### 9.5 Bundled Examples
 
@@ -2056,7 +2080,14 @@ enforces this — it loads every bundled example and asserts each declares
 
 The **palette spans the full window height** on the left; the canvas + properties
 and, beneath them, the source/preview strip occupy the region to its right (so the
-source and preview no longer run underneath the palette).
+source and preview no longer run underneath the palette). A slim **wiring quick-bar**
+(`palette.WiringQuickBar`) is docked to the **right edge of the canvas** — a vertical
+strip of icon tiles for the **Terminals** connection markers (filled/open dots
+`circ`/`ocirc`, diamond and square poles) that start placement on click, like palette
+tiles. It is sourced by category (`WIRING_CATEGORY = "Terminals"`), so it tracks the
+active library and is hidden where there are none (e.g. curated). These markers *are*
+the connection point, so the canvas suppresses their red pin indicator
+(`items._NO_PIN_MARKER_CATEGORIES`); the pin still exists for wiring/snapping.
 
 **Visual language.** A single flat theme unifies the chrome with the component
 palette, defined as colour tokens + stylesheet fragments in `app/ui/theme.py`
@@ -2161,21 +2192,52 @@ matter how far the categories are scrolled. The sections are
   above it; height capped at `_IN_USE_MAX_H` ≈ three tile rows, scrolling within
   itself past that). Rebuilt on `schematic_changed`; the whole bottom panel is
   hidden when the document is empty (or while a search is active).
-- **Categories** — a **3-column grid** of cards (the split gate groups use the
-  compact names "Gates (Am)" / "Gates (Eu)" so they fit). `_CATEGORY_ORDER` is
-  written row-by-row to match the grid (`_build_categories` fills it
-  left-to-right), so the cards read: Resistors | Inductors | Capacitors, then
-  Diodes | Transistors | Switches, and so on. Each card shows the
+- **CircuiTikZ** / **TikZ** — the category cards, split into **two** collapsible
+  sections: **CircuiTikZ** (header "CIRCUITIKZ") holds every CircuiTikZ component
+  category, **TikZ** holds our own vanilla-TikZ drawing-primitive categories (the
+  **Drawing** group — rectangle, circle, text — `_VANILLA_CATEGORIES`; future custom
+  drawing categories are added there). Both sections share one selection model: a
+  card in either makes its category the single **active** one. The TikZ section is
+  hidden when it has no categories. Each is a **3-column grid** of cards (the split
+  gate groups use the compact names "Gates (Am)" / "Gates (Eu)" so they fit).
+  `_CATEGORY_ORDER` is written row-by-row to match the grid (`_build_category_grid`
+  fills it left-to-right), so the CircuiTikZ cards read: Resistors | Inductors |
+  Capacitors, then Diodes | Transistors | Switches, and so on. Each card shows the
   **actual symbol of a representative component** for that category (`_CATEGORY_REP` → rendered by
   `_category_pixmap`, so the icons always match the components rather than using a
   decorative stand-in) and the category name. Clicking a card makes
-  it the **active** category (highlighted); category order follows §5.4. The
+  it the **active** category (highlighted). For the **curated** library the card
+  order follows the §5.4 engineer-facing `_CATEGORY_ORDER`; for the **manual**
+  library it follows the **manual's own section sequence** (`list(_CATEGORY_DOC)`,
+  authored in manual order — the registry/`definitions.json` order is not the
+  manual order), with bespoke categories that have no manual section (Annotations,
+  Drawing) falling after; the default-open category is the first **CircuiTikZ** one.
+  The
   palette refines the raw registry `category` via `_palette_category`: the raw
   **Logic** category splits into the boolean **Gates (Am)** / **Gates (Eu)** (by
   symbol style) and a **Logic** blocks group (flip-flops, mux/demux, ALU, adder),
   and the supply rails + batteries (`_SUPPLY_KINDS`) split out of **Sources** into
   a **Supplies** group (a palette-only grouping; the model `category` is unchanged).
-- **&lt;active category&gt;** — the components in the active category.
+- **&lt;active category&gt;** — the components in the active category. Its header
+  shows the category's **full manual section name** (e.g. "RESISTIVE BIPOLES" for
+  the **Resistors** card — the cards keep the short tag to fit the grid, the open
+  category has room for the long name), falling back to the short name where there
+  is no manual section. Section titles are **word-wrapping labels**
+  (`_CollapsibleSection` uses an arrow toggle beside a wrapping `_ClickableLabel`,
+  the arrow and link top-aligned), so a long name wraps to multiple lines within
+  the palette pane instead of clipping; clicking the title still collapses the
+  section. When the category maps to a CircuiTikZ manual section, a
+  small **documentation-link** button (an "external link" glyph,
+  `palette._doc_link_icon`) appears next to the section title; clicking it opens
+  that section of the online manual
+  (`palette._MANUAL_BASE_URL` — the "The components: list" page — plus the
+  section's `#sec:…` fragment anchor) in the browser via `QDesktopServices`. The
+  button's tooltip is the **full manual section name** (e.g. "Resistive bipoles"
+  for the short **Resistors** card). The mapping (`palette._CATEGORY_DOC`, keyed by
+  palette category) covers the manual-library categories and the curated-library
+  aliases that share a section; bespoke categories with no manual section (Drawing,
+  Annotations) show no link. The `#sec:…` anchors are the manual's own LaTeX labels
+  (stable across builds), kept in one place for easy refresh.
 
 Components are **icon-only tiles**: a thumbnail rendered from the component's own
 `ComponentItem` (`_THUMB_SIZE`=48 in a `_TILE_SIZE`=64 tile, `_ITEM_COLS`=4 columns —
@@ -2461,7 +2523,8 @@ New / Open / Open-Example. The settings persist in the `.hv` `config` object
 
 ```
 heaviside/
-├── main.py                        # Entry point; constructs QApplication and MainWindow
+├── main.py                        # Entry point; constructs QApplication and MainWindow (--manual selects the manual library)
+├── run-manual.sh                  # Convenience launcher: main.py on the manual-scraped library
 ├── heaviside.spec                 # PyInstaller build spec (see §11.1)
 ├── scripts/
 │   ├── build.py                   # Cross-platform PyInstaller build helper (+ .dmg on macOS)
@@ -2588,6 +2651,18 @@ has it, so the no-LaTeX experience — the preview's "LaTeX not found" notice
 (§8.7) and the ziamath canvas-label fallback (§8.4) — can be exercised. It is a
 developer aid, not part of the file-association path; `_schematic_arg` ignores it
 (it is not a `.hv` path).
+
+**`--manual` launch flag (component library).** The curated, hand-tuned library
+(`components/`) is the default for the app, the tests, and the bundled examples.
+Passing `--manual` selects the expanded, manual-scraped library
+(`components/generated/`, §5.4) by setting `HEAVISIDE_COMPONENT_LIB=manual` **before**
+any `app.*` import — the component registry is built from the active library at
+import time, so `main.py` resolves the flag at the top of the module (importing only
+the stdlib-only `app.resources` first). An explicit flag wins over an inherited env
+value. The convenience launcher `run-manual.sh` just runs `main.py --manual` (using
+`.venv/bin/python` when present). The manual library does not yet cover every curated
+kind (some devices, e.g. `sD`), so the bundled examples do not load under it — which
+is why curated stays the default rather than being switched wholesale.
 
 **Release artifacts.** Each platform ships its conventional installer in addition
 to a portable archive, all assembled by `scripts/` helpers and the release

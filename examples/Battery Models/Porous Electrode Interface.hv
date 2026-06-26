@@ -1,9 +1,10 @@
 {
-  "version": "0.6",
+  "version": "0.7",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
+    "symbol_style": {},
     "siunitx": true,
     "preamble": ""
   },

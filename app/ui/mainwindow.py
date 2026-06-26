@@ -85,7 +85,7 @@ from app.preview.worker import PreviewWorker
 from app.schematic import io as schematic_io
 from app.schematic.io import SchematicLoadError, SchematicSaveError, load, save
 from app.schematic.model import Schematic
-from app.ui.palette import ComponentPalette
+from app.ui.palette import ComponentPalette, WiringQuickBar
 from app.ui import theme
 from app.ui.preferences import Preferences, PreferencesDialog
 from app.ui.properties import DocumentPropertiesPanel, PropertiesPanel
@@ -561,7 +561,7 @@ class MainWindow(QMainWindow):
         self._sync_theme_action()  # state-dependent icon (monitor/sun/moon), re-tinted
         self._view.setStyleSheet(theme.scrollbar_qss())  # canvas scrollbars
         # Side panels rebuild their own theme-token stylesheets.
-        for panel in (self._palette, self._props, self._doc_props,
+        for panel in (self._palette, self._wiring_bar, self._props, self._doc_props,
                       self._source_panel, self._preview_panel):
             if hasattr(panel, "apply_theme"):
                 panel.apply_theme()
@@ -596,6 +596,10 @@ class MainWindow(QMainWindow):
         self._scene.sync_label_preamble()
         self._scene.retypeset_labels()
         self._scene.relayout_annotations()
+        # A symbol-style change (§5.4) re-keys each styled component's geometry, so
+        # repaint the canvas and re-render the palette tiles to the new style.
+        self._scene.update()
+        self._palette.set_symbol_style(self._scene.schematic.symbol_style)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
         """Window-level component-placement shortcuts (§10.2). A key that no focused
@@ -985,7 +989,19 @@ class MainWindow(QMainWindow):
         # stay the native light look when the toolbar toggle forces dark mode).
         self._view.setStyleSheet(theme.scrollbar_qss())
         self._canvas_stack.setCurrentIndex(0)
-        top_split.addWidget(self._canvas_stack)
+
+        # Canvas + a slim wiring quick-bar glued to its right edge (junction dots,
+        # jumpers) — wrapped together so the bar tracks the canvas/inspector boundary
+        # rather than being an independently draggable splitter pane.
+        canvas_row = QWidget()
+        canvas_row_layout = QHBoxLayout(canvas_row)
+        canvas_row_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_row_layout.setSpacing(0)
+        canvas_row_layout.addWidget(self._canvas_stack, 1)
+        self._wiring_bar = WiringQuickBar()
+        self._wiring_bar.set_scene(self._scene)
+        canvas_row_layout.addWidget(self._wiring_bar)
+        top_split.addWidget(canvas_row)
 
         # Inspector tabs: the per-object Properties inspector and the per-document
         # Document inspector (the latter replaces the old Document Settings dialog).

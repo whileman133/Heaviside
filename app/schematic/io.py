@@ -73,10 +73,14 @@ from app.schematic.validate import validate
 #: component). A 0.5 build would silently strip it on save, so the bump refuses the
 #: newer file; 0.1–0.5 files load unchanged (absent node_text defaults to empty,
 #: and a legacy power-rail ``l=`` slot is migrated into it on load).
-_FORMAT_VERSION: str = "0.6"
+#: 0.7 adds the document ``symbol_style`` map to ``config`` (per-family symbol style:
+#: american/european resistors, cute/american/european inductors — manual library). A
+#: 0.6 build would silently strip it on save, so the bump refuses the newer file;
+#: 0.1–0.6 files load unchanged (absent symbol_style defaults to all-american).
+_FORMAT_VERSION: str = "0.7"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7"}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -240,6 +244,7 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
         "config": {
             "voltage_style": s.voltage_style,
             "current_style": s.current_style,
+            "symbol_style": dict(s.symbol_style),
             "siunitx": s.siunitx,
             "preamble": s.preamble,
         },
@@ -413,6 +418,14 @@ def _dict_to_schematic(data: dict) -> Schematic:
     raw_preamble = config.get("preamble", "")
     preamble = raw_preamble if isinstance(raw_preamble, str) else ""
 
+    # Symbol style (added in 0.7). A string→string map (family → style value); unknown
+    # axes/values are clamped to the default at render time (library.style_value), so we
+    # keep it permissive here. Absent → empty (all american), so pre-0.7 files are
+    # unchanged.
+    raw_symbol = config.get("symbol_style", {})
+    symbol_style = ({str(k): str(v) for k, v in raw_symbol.items()}
+                    if isinstance(raw_symbol, dict) else {})
+
     return Schematic(
         version=version,
         name=name,
@@ -421,6 +434,7 @@ def _dict_to_schematic(data: dict) -> Schematic:
         metadata=metadata,
         voltage_style=_style("voltage_style"),
         current_style=_style("current_style"),
+        symbol_style=symbol_style,
         siunitx=siunitx,
         preamble=preamble,
     )

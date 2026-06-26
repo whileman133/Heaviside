@@ -45,6 +45,26 @@ def test_builds_with_a_card_per_category():
     assert {"Gates (Am)", "Gates (Eu)", "Logic", "Supplies"} <= cats
 
 
+def test_categories_split_into_circuitikz_and_vanilla_sections():
+    """The palette has two top-level category sections: CircuiTikZ (all the symbol
+    categories) and Vanilla TikZ (our drawing primitives — Drawing). Every category
+    lands in exactly one, with the drawing category in the vanilla section."""
+    from app.ui.palette import _VANILLA_CATEGORIES
+
+    p = _palette()
+    assert "Drawing" in p._vanilla_cats
+    assert "Drawing" not in p._circuitikz_cats
+    # Partition: disjoint and together cover every category; no symbol category leaks
+    # into the vanilla section.
+    assert set(p._circuitikz_cats).isdisjoint(p._vanilla_cats)
+    assert set(p._circuitikz_cats) | set(p._vanilla_cats) == set(p._ordered_cats)
+    assert all(c in _VANILLA_CATEGORIES for c in p._vanilla_cats)
+    # The default-open category is a CircuiTikZ one, not a drawing category.
+    assert p._active_cat in p._circuitikz_cats
+    # Both sections are shown (the manual/curated libraries both have drawing kinds).
+    assert not p._circuitikz.isHidden() and not p._vanilla.isHidden()
+
+
 def test_american_components_sorted_before_european():
     """For kinds *not* in the explicit display order, the palette groups
     american-style first then european within a category (an explicit order wins
@@ -125,12 +145,17 @@ def test_library_buildout_categories_present():
 
 
 def test_selecting_a_category_makes_it_active():
+    from app.ui.palette import _category_doc
+
     p = _palette()
     target = "Sources" if "Sources" in p._cards else next(iter(p._cards))
     p._select_category(target)
     assert p._active_cat == target
     assert p._cards[target]._select  # card wired
-    assert p._active._toggle.text() == target.upper()
+    # The active header shows the manual's full section name (the card kept the
+    # short tag); falls back to the short name where there is no manual section.
+    doc = _category_doc(target)
+    assert p._active.title() == (doc[0] if doc else target).upper()
 
 
 def test_in_use_section_tracks_document():
@@ -147,12 +172,12 @@ def test_search_switches_to_results():
     p = _palette()
     p._search.setText("euro")  # widget path → textChanged → _on_search
     assert not p._results.isHidden()
-    assert p._categories.isHidden() and p._active.isHidden()
+    assert p._circuitikz.isHidden() and p._vanilla.isHidden() and p._active.isHidden()
     # european kinds (eR, eL, eand, …) match.
-    assert "(" in p._results._toggle.text()  # "SEARCH RESULTS (N)"
+    assert "(" in p._results.title()  # "SEARCH RESULTS (N)"
     p._search.clear()
     assert p._results.isHidden()
-    assert not p._categories.isHidden()
+    assert not p._circuitikz.isHidden()
 
 
 def test_clicking_a_tile_starts_placement(monkeypatch):
@@ -179,13 +204,29 @@ def test_category_order_is_row_major_three_columns():
 def test_category_icons_render_from_representative_kind():
     """Each category's card icon renders from a real component symbol (no empty
     pixmaps), so the icons match the components."""
-    from app.ui.palette import _CATEGORY_REP, _category_pixmap
+    from app.ui.palette import _CATEGORY_REP, _category_pixmap, _category_rep
     from app.components.registry import REGISTRY
 
+    # The curated representative kinds are real and render.
     for cat, kind in _CATEGORY_REP.items():
         assert kind in REGISTRY, f"{cat}: representative {kind!r} not in registry"
-        pm = _category_pixmap(cat, 20)
-        assert not pm.isNull(), f"{cat}: icon failed to render"
+        assert not _category_pixmap(kind, 20).isNull(), f"{cat}: icon failed to render"
+
+    # Every actual palette category resolves to a renderable icon.
+    p = _palette()
+    for cat, kinds in p._by_cat.items():
+        assert not _category_pixmap(_category_rep(cat, kinds), 20).isNull(), \
+            f"{cat}: blank icon"
+
+
+def test_unknown_category_icon_falls_back_to_first_member():
+    """A category the curated map doesn't list (e.g. one the manual-generated library
+    adds) takes its first member's symbol, so it never shows a blank card."""
+    from app.ui.palette import _CATEGORY_REP, _category_rep
+
+    assert "Brand New Category" not in _CATEGORY_REP
+    assert _category_rep("Brand New Category", ["R", "C"]) == "R"
+    assert _category_rep("Brand New Category", []) is None
 
 
 def test_search_box_does_not_grab_initial_focus():
@@ -205,6 +246,114 @@ def test_split_categories_are_selectable():
         assert cat in p._cards
         p._select_category(cat)
         assert p._active_cat == cat
+
+
+def test_wiring_quickbar_lists_terminals_category():
+    """The canvas-side wiring bar is sourced by category (the Terminals connection
+    markers), so it tracks the active library and is empty where there is none."""
+    from app.ui.palette import WiringQuickBar, WIRING_CATEGORY
+
+    bar = WiringQuickBar()
+    expected = [k for k, d in REGISTRY.items() if d.category == WIRING_CATEGORY]
+    assert bar._kinds == expected
+    assert all(k in REGISTRY for k in bar._kinds)
+
+
+def test_wiring_quickbar_place_starts_placement(monkeypatch):
+    """The bar's placement hook starts placement of a kind, like a palette tile."""
+    from app.ui.palette import WiringQuickBar
+
+    bar = WiringQuickBar()
+    scene = SchematicScene()
+    bar.set_scene(scene)
+    started: list[str] = []
+    monkeypatch.setattr(scene, "start_placement", started.append)
+    bar._place("R")
+    assert started == ["R"]
+
+
+def test_thumbnail_cache_keyed_by_symbol_style():
+    """Thumbnails are cached per (kind, style value), so a styled kind re-renders when
+    the document style changes while unstyled kinds share one entry."""
+    import app.ui.palette as P
+
+    P._thumb_cache.clear()
+    P._thumb_style = {}
+    # An unstyled kind's cache key carries no style value (shared across styles).
+    assert P._thumb_style_value("text_node") == ""
+    P._thumbnail("text_node")
+    assert ("text_node", "") in P._thumb_cache
+
+
+def test_active_category_shows_manual_doc_link():
+    """The open (active) category's header carries a documentation-link button to
+    the matching CircuiTikZ manual section; its tooltip is the full manual section
+    name and it points at the manual URL with a fragment anchor (spec §10.2)."""
+    from app.ui.palette import _MANUAL_BASE_URL
+
+    p = _palette()
+    p._select_category("Resistors")
+    btn = p._active._doc_btn
+    assert not btn.isHidden()                       # link shown for a manual category
+    assert p._active._doc_url == f"{_MANUAL_BASE_URL}#sec:resistive-bipoles"
+    assert "Resistive bipoles" in btn.toolTip()     # full manual name is the title
+    # The header itself shows the full manual name (not the short "Resistors" card tag).
+    assert p._active.title() == "RESISTIVE BIPOLES"
+
+
+def test_active_category_doc_link_hidden_for_bespoke_categories():
+    """Categories with no manual section (the bespoke Drawing/Annotations groups)
+    hide the doc-link button rather than linking somewhere wrong."""
+    p = _palette()
+    for cat in ("Drawing", "Annotations"):
+        if cat in p._cards:
+            p._select_category(cat)
+            assert p._active._doc_btn.isHidden()
+            assert p._active._doc_url is None
+
+
+def test_doc_link_opens_manual_url(monkeypatch):
+    """Clicking the doc-link button opens the section URL in the browser."""
+    import app.ui.palette as P
+
+    opened: list[str] = []
+    monkeypatch.setattr(P.QDesktopServices, "openUrl",
+                        lambda url: opened.append(url.toString()))
+    p = _palette()
+    p._select_category("Transistors")
+    p._active._doc_btn.click()
+    assert opened == [f"{P._MANUAL_BASE_URL}#sec:transistors"]
+
+
+def test_category_doc_titles_are_full_manual_names():
+    """Every documented category resolves to (full manual title, manual URL); the
+    title is the manual's own long section heading and the URL is a fragment of the
+    single-page manual."""
+    from app.ui.palette import _CATEGORY_DOC, _category_doc, _MANUAL_BASE_URL
+
+    assert _category_doc("Brand New Category") is None
+    for cat in _CATEGORY_DOC:
+        title, url = _category_doc(cat)
+        assert title and not title.isupper()        # the long heading, not the short tag
+        assert url.startswith(f"{_MANUAL_BASE_URL}#sec:")
+
+
+def test_category_doc_is_in_manual_section_order():
+    """`_CATEGORY_DOC` is authored in the manual's own section order, and the
+    manual-library palette orders its category cards by it (`list(_CATEGORY_DOC)`).
+    Locks that order so a reordering of the doc map can't silently scramble the
+    manual palette (which can't be exercised in the default-library test run)."""
+    from app.ui.palette import _CATEGORY_DOC
+
+    manual_order = [
+        "Grounds", "Resistors", "Cap/Ind", "Diodes", "Sources", "Instruments",
+        "Mechanical", "Misc", "Buses", "Crossings", "Arrows", "Terminals",
+        "Connectors", "Blocks", "Transistors", "Tubes", "RF", "Electromech",
+        "Transformers", "Amplifiers", "Switches", "Logic", "Flip-flops",
+        "Mux/Demux", "Chips", "Displays",
+    ]
+    # The manual categories lead the map (curated-only aliases follow), in order.
+    assert list(_CATEGORY_DOC)[:len(manual_order)] == manual_order
 
 
 def test_category_names_follow_dark_theme():

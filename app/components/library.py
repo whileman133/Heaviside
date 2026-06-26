@@ -28,7 +28,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from app.components.model import Component, ComponentDef, PinDef
-from app.resources import resource_path
+from app.resources import component_data_path, resource_path
 
 # Kinds NOT in the library (no CircuiTikZ-command symbol) — keep hand-coded defs.
 NON_LIBRARY_KINDS: frozenset[str] = frozenset(
@@ -55,7 +55,7 @@ def geometry_key(kind: str) -> str:
 
 
 def library_path() -> Path:
-    return Path(resource_path("components", "definitions.json"))
+    return Path(component_data_path("definitions.json"))
 
 
 @lru_cache(maxsize=1)
@@ -177,8 +177,49 @@ def is_parametric(kind: str) -> bool:
     return bool(param_specs(kind))
 
 
+# ---------------------------------------------------------------------------
+# Document symbol style (manual library) — §5.4
+# ---------------------------------------------------------------------------
+#
+# CircuiTikZ styles whole *families* document-wide (american/european resistors,
+# cute/american/european inductors, …) rather than per symbol. Each axis maps a style
+# value to the ``\ctikzset`` options that select it; the **first** value is the default
+# and matches the ``[american]`` base render, so it carries no options and no extra
+# geometry. A style-sensitive component is tagged ``style_axis`` by the generator and
+# has extra geometry under ``geometry_key(kind):<value>`` for each non-default value.
+STYLE_AXES: dict[str, dict[str, list[str]]] = {
+    "resistors": {"american": [], "european": ["resistor=european"]},
+    "inductors": {"american": [], "cute": ["inductor=cute"],
+                  "european": ["inductor=european"]},
+}
+STYLE_DEFAULT: dict[str, str] = {axis: next(iter(v)) for axis, v in STYLE_AXES.items()}
+
+
+def style_axis(kind: str) -> str | None:
+    """The style family a *kind* belongs to (``"resistors"``/``"inductors"``/
+    ``"sources"``), or ``None`` if its symbol doesn't vary with the document style."""
+    return load_library().get(kind, {}).get("style_axis")
+
+
+def style_value(axis: str, doc_style: dict | None) -> str:
+    """The chosen value for *axis* in a document's style map, clamped to a known value
+    (defaulting to the axis default — i.e. ``american``)."""
+    val = (doc_style or {}).get(axis)
+    return val if val in STYLE_AXES.get(axis, {}) else STYLE_DEFAULT.get(axis, "")
+
+
 def _clamp_param(spec: dict, raw: object) -> int:
-    return max(int(spec["min"]), min(int(spec["max"]), int(raw)))
+    """Clamp *raw* to ``[min, max]`` and snap to the parameter's ``step`` grid (e.g. a
+    DIP chip only has even pin counts, a QFP only multiples of four). ``step`` defaults
+    to 1, so unstepped kinds (gates, mux/demux) are unaffected. Snapping guarantees the
+    value always names a generated ``n_data`` combo, even if a stale/typed value sneaks
+    in."""
+    lo, hi = int(spec["min"]), int(spec["max"])
+    v = max(lo, min(hi, int(raw)))
+    step = int(spec.get("step", 1))
+    if step > 1:
+        v = max(lo, min(hi, lo + round((v - lo) / step) * step))
+    return v
 
 
 def param_value(comp: "Component") -> int | None:
@@ -292,6 +333,16 @@ def is_scalable(kind: str) -> bool:
         return True
     tk = str(load_library().get(kind, {}).get("tikz", ""))
     return any(tk == t or tk.startswith(t + " ") for t in _SCALABLE_BLOCK_TIKZ)
+
+
+def gate_uses_height(kind: str) -> bool:
+    """True for a gate sized via a CircuiTikZ body-``height`` key (the curated
+    library's gates). Such a gate must scale **uniformly** (the height carries y and
+    keeps the inversion bubble round, the export matching the canvas); every other
+    scalable kind (the manual-library gates with a uniform baked scale, the digital
+    blocks, the muxdemux) can scale **anisotropically**. See §6.4."""
+    spec = param_spec(kind)
+    return bool(spec and spec.get("height_key"))
 
 
 def block_scale(comp: "Component") -> list[float]:

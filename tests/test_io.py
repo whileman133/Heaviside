@@ -135,11 +135,27 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.6"
+    assert data["version"] == "0.7"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
+        "symbol_style": {},                # all-american default (§5.4)
         "siunitx": True, "preamble": "",   # siunitx defaults on (§7.2)
     }
+
+
+def test_symbol_style_roundtrip(tmp_path: Path) -> None:
+    """The document symbol-style map round-trips; absent → empty (all american)."""
+    s = Schematic(version="0.1", name="sty",
+                  symbol_style={"inductors": "european", "resistors": "european"})
+    p = tmp_path / "sty.hv"
+    save(s, p)
+    assert load(p).symbol_style == {"inductors": "european", "resistors": "european"}
+
+    # A pre-0.7 file (no symbol_style) loads with an empty map.
+    q = tmp_path / "old.hv"
+    q.write_text('{"version": "0.6", "name": "old", "components": [], "wires": []}',
+                 encoding="utf-8")
+    assert load(q).symbol_style == {}
 
 
 def test_preamble_settings_roundtrip(tmp_path: Path) -> None:
@@ -1118,14 +1134,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_06_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.6; files declaring 0.1–0.6 all load."""
+def test_format_version_07_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.7; files declaring 0.1–0.7 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.6"
-    assert load(p).version == "0.6"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.7"
+    assert load(p).version == "0.7"
 
-    for old in ("0.1", "0.2", "0.3", "0.4", "0.5"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

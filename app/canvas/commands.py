@@ -47,6 +47,7 @@ from app.schematic.model import (
     component_pin_positions as _component_pin_positions,
     coord_on_grid,
     is_box_kind,
+    is_terminal_marker,
     point_key,
     route_pin_aware,
     simplify_points,
@@ -455,11 +456,30 @@ class MoveCommand(Command):
         # junction (keeps the component connected — see _reshape_wires). Computed
         # once at the first do() (stable ids), re-added on redo, removed on undo.
         self._created_leads: list[Wire] | None = None
+        # Terminal markers (junction dots/poles) sitting on a moving component's pin
+        # follow it by the same delta — computed once (pre-move) so undo reverses it.
+        self._followed_marker_ids: list[str] | None = None
 
     # -- component motion -------------------------------------------------
 
+    def _compute_followed_markers(self, schematic: Schematic) -> list[str]:
+        """Ids of terminal-marker components (not themselves moving) whose pin
+        coincides with a moving component's pin — they ride along with the move so a
+        dot placed on a transformer/op-amp anchor tracks the symbol."""
+        moving = set(self._component_ids)
+        pins = self._connected_pin_set(schematic)
+        if not pins:
+            return []
+        out: list[str] = []
+        for comp in schematic.components:
+            if comp.id in moving or not is_terminal_marker(comp):
+                continue
+            if any(point_key(p) in pins for p in _component_connection_points(comp)):
+                out.append(comp.id)
+        return out
+
     def _shift_components(self, schematic: Schematic, sign: float) -> None:
-        ids = set(self._component_ids)
+        ids = set(self._component_ids) | set(self._followed_marker_ids or [])
         for comp in schematic.components:
             if comp.id in ids:
                 x, y = comp.position
@@ -541,6 +561,9 @@ class MoveCommand(Command):
     # -- Command API ------------------------------------------------------
 
     def do(self, schematic: Schematic) -> None:
+        # Compute the followed markers from the pre-move state (once; reused on redo).
+        if self._followed_marker_ids is None:
+            self._followed_marker_ids = self._compute_followed_markers(schematic)
         # Reshape wires using pin positions BEFORE moving the components.
         self._reshape_wires(schematic)
         self._shift_components(schematic, +1.0)
@@ -728,6 +751,64 @@ class ResizeCommand(Command):
         dx = new_pin[0] - old_pin[0]
         dy = new_pin[1] - old_pin[1]
         self._reshape_wires(schematic, old_pin, dx, dy)
+
+
+class ResizeNodeCommand(Command):
+    """2D-resize a multi-terminal node (gates, blocks, muxdemux): set
+    ``Component.span_override`` to the ``(wf, hf)`` factors and re-route every wire
+    connected to a relocated pin. Like :class:`SetComponentScaleCommand`, the moves
+    are applied as **one simultaneous** ``old→new`` map (`_follow_pins`), not pin by
+    pin — densely-spaced pins (a many-input gate) can have one pin's new position
+    coincide with another's old position, so a sequential pass would mis-assign
+    wires. ``old_factors`` may be ``None`` (an unresized node); undo then clears the
+    override back to the natural size."""
+
+    label = "Resize"
+
+    def __init__(self, component_id: str, new_factors, old_factors,  # noqa: ANN001
+                 new_position=None, old_position=None) -> None:
+        self._component_id = component_id
+        self._new = new_factors
+        self._old = old_factors
+        # An anchored corner resize also shifts the origin to hold the opposite
+        # corner fixed. The shift is stored **exactly** (not grid-snapped) so the
+        # body stays exactly where the live preview showed it — a snap here would jolt
+        # the component on release. The origin may land off-grid, which is fine: its
+        # pins become off-grid pins that wires connect to via the magnet, like a
+        # scaled gate's. ``None`` → the legacy size-only resize that leaves position
+        # untouched.
+        self._new_pos = new_position
+        self._old_pos = old_position
+        self._orig_wires: dict[str, Wire] = {}
+
+    def _pins(self, schematic: Schematic, span, pos):  # noqa: ANN001
+        """World positions of every pin given a chosen ``span_override`` (and, when
+        provided, origin ``pos``)."""
+        comp = _find_component(schematic, self._component_id)
+        orig_span, orig_pos = comp.span_override, comp.position
+        comp.span_override = span
+        if pos is not None:
+            comp.position = pos
+        pins = _component_pin_positions(comp)
+        comp.span_override, comp.position = orig_span, orig_pos
+        return pins
+
+    def do(self, schematic: Schematic) -> None:
+        old_pins = self._pins(schematic, self._old, self._old_pos)
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._new
+        if self._new_pos is not None:
+            comp.position = self._new_pos
+        new_pins = self._pins(schematic, self._new, self._new_pos)
+        old_to_new = {point_key(o): n for o, n in zip(old_pins, new_pins)}
+        _follow_pins(schematic, old_to_new, self._orig_wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._old
+        if self._old_pos is not None:
+            comp.position = self._old_pos
+        _restore_followed_wires(schematic, self._orig_wires)
 
 
 class MoveEndpointCommand(ResizeCommand):
@@ -1603,30 +1684,44 @@ class SetComponentScaleCommand(Command):
 
     label = "Set Scale"
 
-    def __init__(self, component_id: str, new_scale: float, old_scale: float) -> None:
+    def __init__(self, component_id: str, new_scale: float, old_scale: float,
+                 new_position=None, old_position=None) -> None:
         self._component_id = component_id
         self._new_scale = new_scale
         self._old_scale = old_scale
+        # An anchored corner resize also shifts the origin to hold the opposite corner
+        # fixed; stored exactly (not grid-snapped) so the body stays where the preview
+        # showed it. ``None`` → a size-only change leaving the position alone.
+        self._new_pos = new_position
+        self._old_pos = old_position
         self._orig_wires: dict[str, Wire] = {}
 
-    def _pin_positions(self, schematic: Schematic, scale: float) -> list[tuple[float, float]]:
+    def _pin_positions(self, schematic: Schematic, scale: float,
+                       pos=None) -> list[tuple[float, float]]:
         comp = _typed_component(schematic, self._component_id, Component)
-        orig = comp.scale
+        orig_scale, orig_pos = comp.scale, comp.position
         comp.scale = scale
+        if pos is not None:
+            comp.position = pos
         pins = _component_pin_positions(comp)
-        comp.scale = orig
+        comp.scale, comp.position = orig_scale, orig_pos
         return pins
 
     def do(self, schematic: Schematic) -> None:
-        old_pins = self._pin_positions(schematic, self._old_scale)
+        old_pins = self._pin_positions(schematic, self._old_scale, self._old_pos)
         comp = _typed_component(schematic, self._component_id, Component)
         comp.scale = self._new_scale
-        new_pins = self._pin_positions(schematic, self._new_scale)
+        if self._new_pos is not None:
+            comp.position = self._new_pos
+        new_pins = self._pin_positions(schematic, self._new_scale, self._new_pos)
         old_to_new = {point_key(o): n for o, n in zip(old_pins, new_pins)}
         _follow_pins(schematic, old_to_new, self._orig_wires)
 
     def undo(self, schematic: Schematic) -> None:
-        _typed_component(schematic, self._component_id, Component).scale = self._old_scale
+        comp = _typed_component(schematic, self._component_id, Component)
+        comp.scale = self._old_scale
+        if self._old_pos is not None:
+            comp.position = self._old_pos
         _restore_followed_wires(schematic, self._orig_wires)
 
 
@@ -2104,6 +2199,8 @@ class SetDocumentPropertiesCommand(Command):
         old_siunitx: bool | None = None,
         new_preamble: str | None = None,
         old_preamble: str | None = None,
+        new_symbol_style: dict | None = None,
+        old_symbol_style: dict | None = None,
     ) -> None:
         self._new_voltage = new_voltage
         self._new_current = new_current
@@ -2113,6 +2210,8 @@ class SetDocumentPropertiesCommand(Command):
         self._old_siunitx = old_siunitx
         self._new_preamble = new_preamble
         self._old_preamble = old_preamble
+        self._new_symbol_style = new_symbol_style
+        self._old_symbol_style = old_symbol_style
 
     def do(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2123,6 +2222,8 @@ class SetDocumentPropertiesCommand(Command):
             schematic.siunitx = self._new_siunitx
         if self._new_preamble is not None and self._new_preamble != self._old_preamble:
             schematic.preamble = self._new_preamble
+        if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
+            schematic.symbol_style = dict(self._new_symbol_style)
 
     def undo(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2133,6 +2234,8 @@ class SetDocumentPropertiesCommand(Command):
             schematic.siunitx = self._old_siunitx
         if self._new_preamble is not None and self._new_preamble != self._old_preamble:
             schematic.preamble = self._old_preamble
+        if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
+            schematic.symbol_style = dict(self._old_symbol_style)
 
 
 class MacroCommand(Command):

@@ -7,7 +7,7 @@ current zoom transform automatically, so these constants stay fixed at all zoom
 levels — they define the *schematic-space* geometry of each symbol.
 """
 
-from app.resources import resource_path
+from app.resources import component_data_path, resource_path
 
 # ---------------------------------------------------------------------------
 # Core spatial constants
@@ -37,6 +37,12 @@ LINE_W_THICK: float = LINE_W * 2.0
 
 PIN_R: float = 3.0
 """Radius of pin indicator dots, in pixels."""
+
+PIN_FILL_ALPHA: float = 0.3
+"""Opacity of the pin-dot *fill*. Pins are drawn as a solid ``COLOR_PIN`` ring with
+only a translucent fill, so a small one-pin symbol underneath (e.g. a junction dot
+``circ``/``ocirc``) shows through instead of being hidden by an opaque red blob. The
+ring keeps the pin clearly marked as a connection point."""
 
 # ---------------------------------------------------------------------------
 # Colors (ARGB hex strings — compatible with the QColor(str) constructor)
@@ -108,8 +114,9 @@ OPEN_ANNOTATION_OPACITY: float = 0.3
 # SVG symbol reference (see app/canvas/svgsym.py)
 # ---------------------------------------------------------------------------
 
-GEOMETRY_PATH: str = str(resource_path("components", "geometry.json"))
-"""Absolute path to the generated CircuiTikZ symbol geometry file."""
+GEOMETRY_PATH: str = str(component_data_path("geometry.json"))
+"""Absolute path to the active CircuiTikZ symbol geometry file (curated by default;
+the manual-generated library when HEAVISIDE_COMPONENT_LIB=manual)."""
 
 SVG_PT_PER_GU: float = 28.34765
 """SVG point units per grid unit.

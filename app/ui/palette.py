@@ -1,13 +1,16 @@
 """
 Component palette panel (spec §10.2).
 
-A left panel for picking components, organised as three collapsible sections:
+A left panel for picking components, organised as collapsible sections:
 
   * **In use in document** — quick access to the distinct kinds already placed
     (updates as the schematic changes); hidden when the document is empty.
-  * **Categories** — a 3-column grid of category cards; clicking one makes it the
-    *active* category.
-  * **<active category>** — the components in the active category.
+  * **CircuiTikZ** — a 3-column grid of cards for the CircuiTikZ component
+    categories; clicking one makes it the *active* category.
+  * **TikZ** — the same, for our own (vanilla-TikZ) drawing primitives (rectangle,
+    circle, text — see ``_VANILLA_CATEGORIES``).
+  * **<active category>** — the components in the active category (from either
+    section above).
 
 Components are shown as icon-only tiles (a thumbnail rendered from the component's
 own ``ComponentItem``); the display name + kind appear as a hover tooltip rather
@@ -21,9 +24,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
 )
 from PySide6.QtWidgets import (
     QFrame,
@@ -41,6 +44,7 @@ from PySide6.QtWidgets import (
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
 from app.components.registry import REGISTRY, display_rank
+from app.resources import component_lib
 from app.ui import theme
 
 # Preview glyph + tile sizes — enlarged so the symbols read clearly. The tile
@@ -73,6 +77,13 @@ _CATEGORY_ORDER = [
     "Transducers", "Misc", "Drawing",
 ]
 
+# Palette categories that are NOT CircuiTikZ symbols but our own **vanilla-TikZ**
+# drawing primitives (plain ``\draw`` rectangles/circles and ``\node`` text). They
+# get their own top-level palette section, separate from the CircuiTikZ component
+# categories; everything not listed here is treated as CircuiTikZ. Add any future
+# custom drawing category here.
+_VANILLA_CATEGORIES: frozenset[str] = frozenset({"Drawing"})
+
 # Raw-"Logic" kinds that are *blocks* rather than gates (flip-flops, mux/demux,
 # ALU, adder). These split into their own palette "Logic" category; the boolean
 # gates split into the style-grouped "Gates (Am)" / "Gates (Eu)" (see
@@ -96,7 +107,13 @@ def _palette_category(kind: str, raw: str) -> str:
     Logic category into the boolean **Gates** (by american/european style) and the
     **Logic** blocks (flip-flops, mux/demux, ALU, adder), and move the supply
     rails/batteries into Supplies. (Category is a palette-grouping concern, §5.4,
-    so this stays UI-side.)"""
+    so this stays UI-side.)
+
+    These refinements are tuned to the *curated* library's kinds. The manual-generated
+    library carries the manual's own categories verbatim (only shortened for display),
+    so we use them as-is there and don't introduce extra palette-only groups."""
+    if component_lib() != "curated":
+        return raw
     if raw == "Logic":
         if _is_logic_block(kind):
             return "Logic"
@@ -106,9 +123,12 @@ def _palette_category(kind: str, raw: str) -> str:
     return raw
 
 
-# A representative component **kind** per category. Its actual symbol is rendered
-# as the category-card icon (see _category_pixmap), so the icons always match the
-# components — no decorative stand-ins that don't fit.
+# A curated representative component **kind** per category. Its actual symbol is
+# rendered as the category-card icon (see _category_pixmap), so the icons match the
+# components — no decorative stand-ins that don't fit. This is only a *preference*:
+# any category not listed (e.g. one introduced by the manual-generated library) falls
+# back to its first member automatically (see _category_rep), so new categories never
+# show a blank icon.
 _CATEGORY_REP = {
     "Resistors": "R",
     "Capacitors": "C",
@@ -135,20 +155,127 @@ _CATEGORY_REP = {
 
 
 # ---------------------------------------------------------------------------
+# Online-manual documentation links (spec §10.2)
+# ---------------------------------------------------------------------------
+
+# The CircuiTikZ component reference is the "The components: list" page of the
+# multi-page online manual; each category subsection carries a stable semantic
+# ``#sec:<label>`` anchor (the LaTeX ``\label``), which we link to directly.
+_MANUAL_BASE_URL = "https://rmano.github.io/circuitikz/node-The-components-list.html"
+
+# Palette category -> (full manual subsection title, ``sec:`` fragment anchor).
+# Keyed by the *palette* category name; the title is the manual's own (long)
+# subsection heading, used as the link tooltip.  Most keys are the short manual
+# categories (see components/generate_library.py ``_CATEGORY_MAP``); a few
+# curated-library names (Capacitors/Inductors, the gate groups, Supplies,
+# Antennas) alias the same section so the curated palette links too.
+#
+# The ``sec:`` anchors are the manual's own LaTeX labels (stable across builds),
+# read from the category-level (``4.x``) subsection headings of the components
+# page.  Refresh from ``_MANUAL_BASE_URL`` (grep ``id="sec:`` on the page) if the
+# manual ever renames a label.
+_CATEGORY_DOC: dict[str, tuple[str, str]] = {
+    # short manual categories
+    "Grounds":      ("Grounds and supply voltages", "sec:grounds-and-supply"),
+    "Resistors":    ("Resistive bipoles", "sec:resistive-bipoles"),
+    "Cap/Ind":      ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Diodes":       ("Diodes and such", "sec:diodes-and-such"),
+    "Sources":      ("Sources and generators", "sec:sources-and-generators"),
+    "Instruments":  ("Instruments", "sec:instruments"),
+    "Mechanical":   ("Mechanical Analogy", "sec:mechanical-analogy"),
+    "Misc":         ("Miscellaneous bipoles and symbols", "sec:miscellaneous-bipoles-and"),
+    "Buses":        ("Multiple wires (buses)", "sec:multiple-wires-buses"),
+    "Crossings":    ("Crossings", "sec:crossings"),
+    "Arrows":       ("Arrows (fake and real)", "sec:arrows"),
+    "Terminals":    ("Terminal shapes", "sec:terminals"),
+    "Connectors":   ("Connectors", "sec:connectors"),
+    "Blocks":       ("Block diagram components", "sec:block-diagram-components"),
+    "Transistors":  ("Transistors", "sec:transistors"),
+    "Tubes":        ("Electronic Tubes", "sec:electronic-tubes"),
+    "RF":           ("RF components", "sec:RF"),
+    "Electromech":  ("Electro-Mechanical Devices", "sec:electro-mechanical-devices"),
+    "Transformers": ("Double bipoles (transformers)", "sec:transformers"),
+    "Amplifiers":   ("Amplifiers", "sec:amplifiers"),
+    "Switches":     ("Switches, buttons and jumpers", "sec:switches-buttons-and"),
+    "Logic":        ("Logic gates", "sec:logic-gates"),
+    "Flip-flops":   ("Flip-flops", "sec:flipflops"),
+    "Mux/Demux":    ("Multiplexer and de-multiplexer", "sec:muxdemuxes"),
+    "Chips":        ("Chips (integrated circuits)", "sec:chips"),
+    "Displays":     ("Seven segment displays", "sec:seven-segment-displays"),
+    # curated-library category aliases (same manual sections)
+    "Capacitors":   ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Inductors":    ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Gates (Am)":   ("Logic gates", "sec:logic-gates"),
+    "Gates (Eu)":   ("Logic gates", "sec:logic-gates"),
+    "Supplies":     ("Grounds and supply voltages", "sec:grounds-and-supply"),
+    "Antennas":     ("RF components", "sec:RF"),
+}
+
+
+def _category_doc(category: str) -> tuple[str, str] | None:
+    """Return ``(full_title, url)`` for *category*'s manual section, or ``None``
+    if the category has no documented section."""
+    entry = _CATEGORY_DOC.get(category)
+    if entry is None:
+        return None
+    title, anchor = entry
+    return title, f"{_MANUAL_BASE_URL}#{anchor}"
+
+
+def _doc_link_icon(size: int = 14) -> QPixmap:
+    """A small themed 'external link' glyph (a page with an arrow leaving its
+    top-right corner) signalling a link out to the online manual."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.2, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # page (lower-left rounded box)
+    p.drawRoundedRect(QRectF(s * 0.10, s * 0.34, s * 0.52, s * 0.52),
+                      s * 0.10, s * 0.10)
+    # arrow leaving the top-right
+    p.drawLine(QPointF(s * 0.46, s * 0.54), QPointF(s * 0.86, s * 0.14))
+    p.drawLine(QPointF(s * 0.86, s * 0.14), QPointF(s * 0.60, s * 0.14))
+    p.drawLine(QPointF(s * 0.86, s * 0.14), QPointF(s * 0.86, s * 0.40))
+    p.end()
+    return pix
+
+
+# ---------------------------------------------------------------------------
 # Thumbnail rendering (cached)
 # ---------------------------------------------------------------------------
 
-_thumb_cache: dict[str, QPixmap] = {}
+_thumb_cache: dict[tuple, QPixmap] = {}
+
+# Active document symbol style for thumbnails (§5.4). The palette updates this so its
+# tiles/category icons render in the document's american/european/cute style; cached
+# per (kind, value) so styles coexist without re-rendering.
+_thumb_style: dict[str, str] = {}
+
+
+def _thumb_style_value(kind: str) -> str:
+    """The thumbnail style value for *kind* (the value on its style axis, or ``""`` if
+    the kind doesn't vary with style — so unstyled tiles share one cache entry)."""
+    from app.components import library
+    axis = library.style_axis(kind)
+    return library.style_value(axis, _thumb_style) if axis else ""
 
 
 def _render_thumbnail(kind: str, size: int = _THUMB_SIZE) -> QPixmap:
-    """Render a *size*×*size* thumbnail for *kind* from its ``ComponentItem``."""
+    """Render a *size*×*size* thumbnail for *kind* from its ``ComponentItem``, in the
+    active document symbol style (``_thumb_style``)."""
     defn = REGISTRY[kind]
     comp = defn.component_class(
         id="__thumb__", kind=kind, position=(0.0, 0.0),
         rotation=0, mirror=False, options="",
     )
     item = ITEM_CLASSES.get(kind, ComponentItem)(comp)
+    item._style_override = _thumb_style   # thumbnail has no scene → carry the style
     brect = item.boundingRect()
     w = max(brect.width(), 1.0)
     h = max(brect.height(), 1.0)
@@ -170,19 +297,33 @@ def _render_thumbnail(kind: str, size: int = _THUMB_SIZE) -> QPixmap:
 
 
 def _thumbnail(kind: str) -> QPixmap:
-    if kind not in _thumb_cache:
+    key = (kind, _thumb_style_value(kind))
+    if key not in _thumb_cache:
         try:
-            _thumb_cache[kind] = _render_thumbnail(kind)
+            _thumb_cache[key] = _render_thumbnail(kind)
         except Exception:  # noqa: BLE001 - never let a bad symbol break the panel
-            _thumb_cache[kind] = QPixmap(_THUMB_SIZE, _THUMB_SIZE)
-            _thumb_cache[kind].fill(QColor(0, 0, 0, 0))
-    return _thumb_cache[kind]
+            _thumb_cache[key] = QPixmap(_THUMB_SIZE, _THUMB_SIZE)
+            _thumb_cache[key].fill(QColor(0, 0, 0, 0))
+    return _thumb_cache[key]
 
 
-def _category_pixmap(category: str, size: int) -> QPixmap:
-    """Render the category's representative component symbol as a *size*×*size*
-    icon (Retina-crisp). Falls back to an empty pixmap if the kind is unknown."""
-    kind = _CATEGORY_REP.get(category)
+def _category_rep(category: str, kinds: list[str]) -> str | None:
+    """The component kind whose symbol illustrates *category*: the curated pick from
+    ``_CATEGORY_REP`` when it's set and present in the active registry, otherwise the
+    first (most canonical, since *kinds* is pre-sorted) member of the category.
+
+    Auto-deriving the fallback means a category the curated map doesn't know about —
+    e.g. one added by the manual-generated library, or after the curated map drifts —
+    always gets an icon instead of a blank card."""
+    rep = _CATEGORY_REP.get(category)
+    if rep and rep in REGISTRY:
+        return rep
+    return kinds[0] if kinds else None
+
+
+def _category_pixmap(kind: str | None, size: int) -> QPixmap:
+    """Render *kind*'s symbol as a *size*×*size* category icon (Retina-crisp), or an
+    empty pixmap if there's no usable kind."""
     if not (kind and kind in REGISTRY):
         return QPixmap()
     try:
@@ -214,8 +355,25 @@ def _within_category_key(kind: str):
 # Widgets
 # ---------------------------------------------------------------------------
 
+class _ClickableLabel(QLabel):
+    """A QLabel that emits ``clicked`` on a left press (so a wrapping section title
+    can collapse its section like the arrow toggle does)."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class _CollapsibleSection(QWidget):
-    """A titled section whose body can be collapsed by clicking the header."""
+    """A titled section whose body can be collapsed by clicking the header. The
+    title is a **word-wrapping** label so long manual section names (the active
+    category shows the full name) wrap within the palette pane instead of clipping."""
+
+    _TITLE_QSS = ("QLabel { font-weight: bold; color: %s; font-size: 11px; "
+                  "padding: 4px 2px; }")
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -223,20 +381,48 @@ class _CollapsibleSection(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(2)
 
+        # Arrow toggle (collapse control) kept beside a separate title label so the
+        # title can wrap; the arrow stays a single line, top-aligned with the text.
         self._toggle = QToolButton()
         self._toggle.setCheckable(True)
         self._toggle.setChecked(True)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._toggle.setArrowType(Qt.DownArrow)
-        self._toggle.setText(title)
         self._toggle.setAutoRaise(True)
-        self._toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; color: %s; "
-            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
-        )
+        self._toggle.setCursor(Qt.PointingHandCursor)
+        self._toggle.setFocusPolicy(Qt.NoFocus)
+        self._toggle.setStyleSheet("QToolButton { border: none; padding: 4px 0; }")
         self._toggle.toggled.connect(self._on_toggled)
-        self._layout.addWidget(self._toggle)
+
+        self._title = _ClickableLabel(title)
+        self._title.setWordWrap(True)
+        self._title.setCursor(Qt.PointingHandCursor)
+        self._title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._title.setStyleSheet(self._TITLE_QSS % theme.ICON)
+        self._title.clicked.connect(self._toggle.toggle)
+
+        # Header row: arrow + wrapping title + an optional trailing documentation-
+        # link button (shown for sections that map to a CircuiTikZ manual section;
+        # see ``set_doc_link``). The arrow and link stay top-aligned as the title wraps.
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(0)
+        header.addWidget(self._toggle, 0, Qt.AlignTop)
+        header.addWidget(self._title, 1)
+        self._doc_url: str | None = None
+        self._doc_btn = QToolButton()
+        self._doc_btn.setAutoRaise(True)
+        self._doc_btn.setCursor(Qt.PointingHandCursor)
+        self._doc_btn.setFocusPolicy(Qt.NoFocus)
+        self._doc_btn.setIconSize(QSize(14, 14))
+        self._doc_btn.setIcon(QIcon(_doc_link_icon(14)))
+        self._doc_btn.setStyleSheet(
+            "QToolButton { border: none; padding: 4px 4px; }"
+            "QToolButton:hover { background: %s; border-radius: 4px; }" % theme.HOVER
+        )
+        self._doc_btn.setVisible(False)
+        self._doc_btn.clicked.connect(self._open_doc_link)
+        header.addWidget(self._doc_btn, 0, Qt.AlignTop)
+        self._layout.addLayout(header)
 
         self._body = QWidget()
         self._body_layout = QVBoxLayout(self._body)
@@ -245,7 +431,25 @@ class _CollapsibleSection(QWidget):
         self._layout.addWidget(self._body)
 
     def set_title(self, title: str) -> None:
-        self._toggle.setText(title)
+        self._title.setText(title)
+
+    def title(self) -> str:
+        return self._title.text()
+
+    def set_doc_link(self, title: str | None, url: str | None) -> None:
+        """Show (or hide, when *url* is falsy) the documentation-link button next
+        to the title. *title* becomes the button's tooltip (the full manual
+        section name)."""
+        self._doc_url = url or None
+        if self._doc_url is None:
+            self._doc_btn.setVisible(False)
+            return
+        self._doc_btn.setToolTip(f"Open “{title}” in the CircuiTikZ manual")
+        self._doc_btn.setVisible(True)
+
+    def _open_doc_link(self) -> None:
+        if self._doc_url:
+            QDesktopServices.openUrl(QUrl(self._doc_url))
 
     def body_layout(self) -> QVBoxLayout:
         return self._body_layout
@@ -255,9 +459,11 @@ class _CollapsibleSection(QWidget):
         self._body.setVisible(expanded)
 
     def apply_theme(self) -> None:
-        self._toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; color: %s; "
-            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
+        self._title.setStyleSheet(self._TITLE_QSS % theme.ICON)
+        self._doc_btn.setIcon(QIcon(_doc_link_icon(14)))
+        self._doc_btn.setStyleSheet(
+            "QToolButton { border: none; padding: 4px 4px; }"
+            "QToolButton:hover { background: %s; border-radius: 4px; }" % theme.HOVER
         )
 
 
@@ -265,12 +471,13 @@ class _ComponentTile(QToolButton):
     """Icon-only, clickable component tile; the name is a hover tooltip."""
 
     def __init__(self, kind: str, place,  # noqa: ANN001
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 tile_size: int = _TILE_SIZE, thumb_size: int = _THUMB_SIZE) -> None:
         super().__init__(parent)
         defn = REGISTRY[kind]
         self.setIcon(QIcon(_thumbnail(kind)))
-        self.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
-        self.setFixedSize(_TILE_SIZE, _TILE_SIZE)
+        self.setIconSize(QSize(thumb_size, thumb_size))
+        self.setFixedSize(tile_size, tile_size)
         self.setAutoRaise(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(f"{defn.display_name} ({kind})")
@@ -282,10 +489,63 @@ class _ComponentTile(QToolButton):
         self.clicked.connect(lambda: place(kind))
 
 
+# The canvas-side quick bar holds the **Terminals** category — the junction-dot /
+# pole connection markers (circ/ocirc, diamondpole/…, squarepole/…). Sourced by
+# category so it tracks the library: empty (and hidden) where there is none.
+WIRING_CATEGORY = "Terminals"
+# Compact tiles for the quick bar (the markers are tiny — no need for full palette
+# tile size): a snug icon with minimal padding.
+_WIRING_TILE = 30
+_WIRING_THUMB = 26
+
+
+class WiringQuickBar(QWidget):
+    """A slim vertical strip of the **Terminals** connection markers docked at the
+    right edge of the canvas, so they're a single click away without a trip to the
+    category palette. Sourced from the active library by category."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._scene: SchematicScene | None = None
+        self._kinds = [k for k, d in REGISTRY.items() if d.category == WIRING_CATEGORY]
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(2, 4, 2, 4)
+        self._layout.setSpacing(2)
+        self.setFixedWidth(_WIRING_TILE + 4)
+        self.setVisible(bool(self._kinds))
+        self._rebuild()
+
+    def set_scene(self, scene: SchematicScene) -> None:
+        self._scene = scene
+
+    def _place(self, kind: str) -> None:
+        if self._scene is not None:
+            self._scene.start_placement(kind)
+
+    def _rebuild(self) -> None:
+        while self._layout.count():
+            w = self._layout.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        for kind in self._kinds:
+            self._layout.addWidget(
+                _ComponentTile(kind, self._place,
+                               tile_size=_WIRING_TILE, thumb_size=_WIRING_THUMB))
+        self._layout.addStretch(1)
+        self.setStyleSheet(
+            "WiringQuickBar { background: %s; border-left: 1px solid %s; }"
+            % (theme.SURFACE, theme.BORDER_SOFT)
+        )
+
+    def apply_theme(self) -> None:
+        self._rebuild()
+
+
 class _CategoryCard(QFrame):
     """A clickable category card: icon + name + component count."""
 
-    def __init__(self, category: str, count: int, select, parent=None) -> None:  # noqa: ANN001
+    def __init__(self, category: str, count: int, select,  # noqa: ANN001
+                 rep_kind: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._category = category
         self._select = select
@@ -300,7 +560,7 @@ class _CategoryCard(QFrame):
         icon = QLabel()
         icon.setFixedSize(20, 20)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setPixmap(_category_pixmap(category, 20))
+        icon.setPixmap(_category_pixmap(rep_kind, 20))
         # Transparent so the card's own fill shows through (a stylesheet'd QLabel
         # would otherwise paint an opaque palette box behind the glyph/text).
         icon.setStyleSheet("background: transparent; border: none;")
@@ -370,10 +630,26 @@ class ComponentPalette(QWidget):
         # fall after, american-style first then european, instead of jumbled.
         for kinds in self._by_cat.values():
             kinds.sort(key=_within_category_key)
-        self._ordered_cats = [c for c in _CATEGORY_ORDER if c in self._by_cat] + [
-            c for c in self._by_cat if c not in _CATEGORY_ORDER
+        # Curated: the spec §5.4 engineer-facing order. Manual: the manual's own
+        # section sequence — registry/definitions.json order is not the manual order,
+        # so we sort by ``_CATEGORY_DOC`` (authored in manual order); bespoke
+        # categories with no manual section (Annotations, Drawing) fall after.
+        if component_lib() == "curated":
+            order = _CATEGORY_ORDER
+        else:
+            order = list(_CATEGORY_DOC)
+        self._ordered_cats = [c for c in order if c in self._by_cat] + [
+            c for c in self._by_cat if c not in order
         ]
-        self._active_cat = self._ordered_cats[0] if self._ordered_cats else ""
+        # Split into the two top-level palette sections (each preserves the order
+        # above): CircuiTikZ symbols vs our vanilla-TikZ drawing primitives.
+        self._circuitikz_cats = [c for c in self._ordered_cats
+                                 if c not in _VANILLA_CATEGORIES]
+        self._vanilla_cats = [c for c in self._ordered_cats
+                              if c in _VANILLA_CATEGORIES]
+        # Open a CircuiTikZ category first (the common case), not a drawing one.
+        first = self._circuitikz_cats or self._ordered_cats
+        self._active_cat = first[0] if first else ""
         self._cards: dict[str, _CategoryCard] = {}
 
         outer = QVBoxLayout(self)
@@ -416,10 +692,11 @@ class ComponentPalette(QWidget):
         self._content.setSpacing(4)
         scroll.setWidget(content)
 
-        self._categories = _CollapsibleSection("CATEGORIES")
+        self._circuitikz = _CollapsibleSection("CIRCUITIKZ")
+        self._vanilla = _CollapsibleSection("TIKZ")
         self._active = _CollapsibleSection(self._active_cat.upper())
         self._results = _CollapsibleSection("SEARCH RESULTS")
-        for sec in (self._categories, self._active, self._results):
+        for sec in (self._circuitikz, self._vanilla, self._active, self._results):
             self._content.addWidget(sec)
         self._content.addStretch(1)
 
@@ -471,7 +748,23 @@ class ComponentPalette(QWidget):
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
         scene.schematic_changed.connect(self._refresh_in_use)
+        # Track the document symbol style across load/new/undo (no-op when unchanged).
+        scene.schematic_changed.connect(
+            lambda: self.set_symbol_style(
+                getattr(self._scene.schematic, "symbol_style", {}) or {}))
+        self.set_symbol_style(getattr(scene.schematic, "symbol_style", {}) or {})
         self._refresh_in_use()
+
+    def set_symbol_style(self, style: dict) -> None:
+        """Render the palette tiles/icons in the document's symbol style (§5.4). Sets
+        the thumbnail style and rebuilds the visible grids; a no-op if unchanged."""
+        global _thumb_style
+        if dict(style) == _thumb_style:
+            return
+        _thumb_style = dict(style)
+        self._build_categories()      # category icons may be styled
+        self._rebuild_active()
+        self._on_search(self._search.text())   # active/results/in-use grids
 
     # -- placement -------------------------------------------------------
 
@@ -489,15 +782,24 @@ class ComponentPalette(QWidget):
                 w.deleteLater()
 
     def _build_categories(self) -> None:
-        body = self._categories.body_layout()
-        self._clear(body)
         self._cards = {}
+        self._build_category_grid(self._circuitikz, self._circuitikz_cats)
+        self._build_category_grid(self._vanilla, self._vanilla_cats)
+        # A section with no categories (e.g. no drawing primitives) stays hidden.
+        self._vanilla.setVisible(bool(self._vanilla_cats))
+
+    def _build_category_grid(self, section: "_CollapsibleSection",
+                             cats: list[str]) -> None:
+        """Fill *section* with a 3-column grid of *cats*' cards (left-to-right)."""
+        body = section.body_layout()
+        self._clear(body)
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(3)
-        for i, cat in enumerate(self._ordered_cats):
-            card = _CategoryCard(cat, len(self._by_cat[cat]), self._select_category)
+        for i, cat in enumerate(cats):
+            card = _CategoryCard(cat, len(self._by_cat[cat]), self._select_category,
+                                 _category_rep(cat, self._by_cat[cat]))
             card.set_active(cat == self._active_cat)
             self._cards[cat] = card
             grid.addWidget(card, i // 3, i % 3)
@@ -514,7 +816,11 @@ class ComponentPalette(QWidget):
         self._rebuild_active()
 
     def _rebuild_active(self) -> None:
-        self._active.set_title(self._active_cat.upper())
+        # Title with the manual's full section name where one exists (the cards use
+        # short names to fit the grid; the open category has room for the full one).
+        doc = _category_doc(self._active_cat)
+        self._active.set_title((doc[0] if doc else self._active_cat).upper())
+        self._active.set_doc_link(*(doc if doc else (None, None)))
         body = self._active.body_layout()
         self._clear(body)
         body.addWidget(_grid(self._by_cat.get(self._active_cat, []), self._place))
@@ -557,7 +863,8 @@ class ComponentPalette(QWidget):
         q = text.strip().lower()
         searching = bool(q)
         # Category/active/in-use views give way to a flat results grid on search.
-        self._categories.setVisible(not searching)
+        self._circuitikz.setVisible(not searching)
+        self._vanilla.setVisible(not searching and bool(self._vanilla_cats))
         self._active.setVisible(not searching)
         self._refresh_in_use()  # also re-evaluates its own visibility
         self._results.setVisible(searching)
@@ -594,7 +901,8 @@ class ComponentPalette(QWidget):
             "QWidget#in_use_content { background-color: %s; }" % theme.SURFACE
         )
         self._in_use_divider.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
-        for sec in (self._in_use, self._categories, self._active, self._results):
+        for sec in (self._in_use, self._circuitikz, self._vanilla,
+                    self._active, self._results):
             sec.apply_theme()
         self._build_categories()
         self._rebuild_active()

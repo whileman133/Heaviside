@@ -121,6 +121,31 @@ def local_span_to_world(
     return (rx, ry)
 
 
+def anchored_resize_factors(
+    cursor_local: tuple[float, float],
+    grabbed_corner: tuple[float, float],
+    opposite_corner: tuple[float, float],
+    start_factors: tuple[float, float],
+) -> tuple[float, float]:
+    """New ``(wf, hf)`` resize factors that move the **grabbed** body corner to the
+    cursor while holding the diagonally-**opposite** corner fixed (spec §6.4).
+
+    All coordinates are in the component's local frame relative to its *original*
+    origin. ``grabbed_corner``/``opposite_corner`` are the *unscaled* body-corner
+    offsets (GU); ``start_factors`` are the factors at drag start. Because the model
+    scales every offset about the origin, holding the opposite corner fixed makes the
+    factor the ratio of the new corner-to-anchor span over the old — so the grabbed
+    corner tracks the cursor at the *same* rate from whichever corner you grab (the
+    origin's position within the body no longer matters)."""
+    cx, cy = cursor_local
+    gx, gy = grabbed_corner
+    ax, ay = opposite_corner
+    wf0, hf0 = start_factors
+    wf = (cx - wf0 * ax) / (gx - ax) if abs(gx - ax) > 1e-9 else wf0
+    hf = (cy - hf0 * ay) / (gy - ay) if abs(gy - ay) > 1e-9 else hf0
+    return wf, hf
+
+
 def world_span_to_local(
     offset: tuple[float, float], rotation: int, mirror: bool
 ) -> tuple[float, float]:

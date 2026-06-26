@@ -8,6 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Expanded component library generated from the manual (experimental, opt-in).**
+  `components/generate_library.py` builds a component library covering the CircuiTikZ
+  manual's components by combining the manual scrape with the existing render/geometry
+  pipeline, writing it side by side with the curated set at
+  `components/generated/{definitions,geometry}.json`. Switch the app onto it with the
+  `HEAVISIDE_COMPONENT_LIB=manual` environment variable (default `curated` — the
+  curated library remains the fallback). Terminals are discovered by probing each
+  shape (the manual under-documents anchors), with CircuiTikZ anchor names used
+  verbatim: ~399 components covering path bipoles (axial in/out + off-axis gates/
+  wipers), single-point nodes, and centre-placed multi-terminal nodes (transistors,
+  op-amps, gates, transformers) — plus measured `text_anchor`s and auto-detected
+  option variants (e.g. `bodydiode`). Components render at their **true CircuiTikZ
+  size** with their natural (mostly off-grid) pin positions — the manual library bakes
+  **no** grid-alignment scale; wires reach pins via the canvas magnet / off-grid snap
+  lines rather than the symbol being stretched onto the grid. Logic gates are **parametric** (`number inputs`
+  2–8, pins/geometry measured per value), and transformer **polarity-dot anchors**
+  are exposed as connection points (the user places dots themselves). Multi-terminal
+  **BJTs** (`bjtnpn`/`bjtpnp`) are parametric in **collectors** and **emitters** (1–4
+  each); they expose the primary base/collector/emitter terminals `B`/`C`/`E` (like
+  the curated npn/pnp) and add the numbered branch terminals `C1…`/`E1…` only when
+  more than one collector/emitter is configured. The **mux/demux** is parametric in
+  data **inputs** (2–8) and **select** lines (1–4). IC **chips** (`dipchip`/`qfpchip`)
+  are parametric in **num pins** (`pin 1…pin N`). Multi-pin shapes (chips, flip-flops,
+  mux-family) now surface *all* their numbered pins, and their inner ``b``-prefixed
+  *border* anchors are no longer mistaken for separate pins. Not yet handled: `.hv`
+  cross-library compatibility.
+- **One-step launch on the manual library.** `main.py` accepts a `--manual` flag (and
+  a `run-manual.sh` launcher wraps it) that selects the manual-scraped library without
+  setting the environment variable by hand. The curated library stays the default for
+  plain launches, the tests, and the bundled examples (which don't yet load under the
+  manual set).
+- **Document symbol style (experimental, manual library).** A document-level **symbol
+  style** switches whole CircuiTikZ families at once — **american/european resistors**
+  and **cute/american/european inductors** (including transformers) — from the Document
+  inspector, instead of separate per-style components. The generator auto-detects which
+  components respond to each style axis and bakes the per-style geometry; the canvas
+  renders the chosen style and codegen emits the matching global `\ctikzset`. Stored in
+  the `.hv` file (format **0.7**; absent → all-american, so older files are unchanged).
+- **Terminal markers follow the component they sit on.** A junction dot (or other
+  Terminals-category marker) placed on a component's anchor now moves with that
+  component when it's dragged — e.g. polarity dots on a transformer's dot anchors
+  track the transformer. The follow is previewed live, commits with the move, and
+  undoes together.
+- **Manual library: documented body anchors exposed.** Components now expose the
+  body/edge anchors the manual explicitly documents — a logic gate's `bin`/`bout`
+  (so you can place an inversion bubble on the gate body) and a flip-flop's border
+  anchors — in addition to the lead-tip wiring terminals. Chips' redundant probed
+  `bpin N` border anchors stay stripped (the manual documents none for them).
+- **Manual library: one mux/demux element, fixed body size, drag-to-resize.** The
+  redundant `demux` kind is gone — a demultiplexer is just a **mirrored**
+  multiplexer, so the single parametric `muxdemux` covers both. Its body is now a
+  **fixed** size that no longer grows as you change the input/select counts (the
+  pins repack inside it), and the placed instance is **resizable by dragging a 2D
+  corner handle** (independent width/height) — connected wires follow, it's
+  undoable, and the export scales to match. This 2D node-resize is reusable
+  infrastructure (`RESIZABLE_NODE_KINDS` + `_ResizableNodeItem`) for future
+  multi-pin blocks.
+- **Manual links in the palette.** The open palette category now shows its **full
+  manual section name** in the header (e.g. "RESISTIVE BIPOLES" for the short
+  **Resistors** card — long names wrap within the palette pane rather than
+  clipping) plus a small documentation-link button next to it that opens
+  the matching section of the online
+  [CircuiTikZ manual](https://rmano.github.io/circuitikz/node-The-components-list.html)
+  in the browser. Covers every manual-library category with a documented section
+  (and the curated-library categories that share one); bespoke groups with no
+  manual section keep the short name and show no link.
 - **Potentiometer wiper terminal.** Potentiometers (`pR` american, `epot`
   european) are now modelled as the three-terminal devices they are: in addition
   to the two end terminals they expose a **wiper** connection point at the
@@ -44,6 +110,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the engine (latex only, ~20s — fills the *not listed* gaps), and
   `--probe-options`/`--probe-params` render-diff which options/parameters actually
   apply (e.g. confirming `number inputs` on every gate).
+
+- **Wiring quick-bar beside the canvas.** A slim vertical strip docked at the right
+  edge of the canvas gives one-click access to the most common wiring parts — filled
+  and open junction dots (`circ`/`ocirc`) and jumpers — without a trip to the category
+  palette. It lists only the kinds the active library defines, so it adapts to the
+  curated/manual switch.
+
+### Changed
+- **Palette categories are split into "CircuiTikZ" and "TikZ" sections.**
+  The component categories are now grouped under two headers: CircuiTikZ (all the
+  circuit symbol categories) and TikZ (our own vanilla-TikZ drawing primitives —
+  rectangle, circle, text, and anything added later). Clicking a card in either
+  still opens that category below.
+- **Logic gates (and flip-flops/ALU/adder) resize by dragging, not a dropdown.**
+  The discrete Size dropdown (25%–200%) is gone; select a gate and drag its corner
+  handle to resize it continuously, **independently in width and height** (like the
+  muxdemux). Connected wires follow and it's undoable. The exception is the curated
+  library's height-keyed gates, which lock aspect (a uniform scale) so their
+  inversion bubble stays a circle in the export. The corner-drag resize is shared,
+  item-driven infrastructure across all scalable symbols.
+- **Resize snaps to grid-aligned sizes, not fixed steps.** Dragging a resize handle
+  is now fully continuous, with a gentle magnet at the sizes that land a pin on the
+  grid (instead of snapping the corner to fixed 0.25 GU steps), so it's easy to pick
+  a size where wires connect cleanly while still being able to set any size in
+  between.
+- **All four corners of a resizable element are now drag handles.** Previously only
+  one corner could be grabbed; you can now resize from whichever corner is handiest.
+  Each corner resizes with the diagonally-opposite corner held fixed, so the grabbed
+  corner follows the cursor at the **same rate from any corner** (previously corners
+  near the symbol's anchor changed the scale much faster than far ones).
+- **Pin markers no longer hide small symbols.** Pin indicator dots are now drawn as a
+  solid red ring with a translucent fill instead of an opaque red disc, so a symbol
+  under the marker stays visible on the canvas and in the palette thumbnail while the
+  pin is still clearly marked. Junction-dot kinds (`circ`/`ocirc`), whose symbol *is*
+  the connection point, omit the marker entirely (the pin still exists for wiring).
+
+### Fixed
+- **Wires stay on their own pins when a node is resized.** Resizing a densely-pinned
+  node (e.g. a many-input gate, whose input pins sit close together) could re-route a
+  connected wire onto the wrong pin — the per-pin wire-follow ran sequentially, so one
+  pin's new position colliding with another's old position mis-assigned wires. The
+  resize now applies one simultaneous old→new pin map, so every wire follows its own
+  pin.
+- **Terminal markers can be selected, moved and deleted.** A single-point terminal
+  marker (junction dot, open dot, the diamond/square poles — the Terminals category)
+  *is* its own pin, so clicking it always auto-started a wire and the marker could
+  never be grabbed. A press on such a marker now selects/drags it (move or delete as
+  usual); start a wire from it by entering wire mode first.
+- **RF antenna wavefronts render as arcs on canvas.** dvisvgm draws the antenna
+  wavefronts as full circles clipped to a wedge; the SVG-geometry extractor ignored
+  the clip, so the canvas showed whole concentric circles. The extractor now captures
+  the clip region and the canvas clips to it, matching the compiled figure
+  (`bareRXantenna`/`rxantenna`/etc.).
+- **Seven-segment display and other thick-stroke art render at true weight.** The
+  canvas mapped every stroke to a binary thin/thick weight, so the seven-segment's
+  thick segment spines (and cute-switch contacts, battery/source bars) rendered too
+  thin and looked wrong. Strokes well above the body weight now keep their true
+  proportional width, matching LaTeX.
+- **Palette category cards always show an icon.** The card icon was looked up from a
+  hard-coded category→component map, so any category that map didn't know about (every
+  category the manual-generated library adds, e.g. RF, Tubes, Transformers) rendered a
+  blank card. Categories not in the curated map now fall back automatically to their
+  first (most canonical) member's symbol, so new categories never break the icons.
+- **Palette category order (manual library).** The manual-library palette now lists
+  its category cards in the **manual's own section order** (Grounds, Resistive
+  bipoles, Capacitors and inductors, …) instead of the arbitrary `definitions.json`
+  order, matching the online manual.
 
 ## [0.4.0] - 2026-06-21
 

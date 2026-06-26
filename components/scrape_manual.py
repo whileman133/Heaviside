@@ -412,6 +412,11 @@ def scrape(manual: str) -> dict:
                 "section": sect, "category": cat,
                 "description": "", "aliases": "", "shape": "",
                 "anchors": [], "subnode_anchors": [],
+                # anchors documented on the *undecorated* base entry only — anchors
+                # that exist regardless of any option. (The full ``anchors`` also
+                # includes option-conditional ones like a transistor's body-diode
+                # anchors, documented only on ``\circuitdesc{npn, bodydiode}``.)
+                "base_anchors": [], "base_subnode_anchors": [],
                 "options": [], "parameters": [],
                 "_cat_authoritative": in_list,
             }
@@ -440,8 +445,13 @@ def scrape(manual: str) -> dict:
             r["description"] = eda._clean_tex(a.get(3))
         if a.get(1):
             r["shape"] = r["shape"] or base
-        merge(r["anchors"], eda._anchor_names(a.get(5)))
-        merge(r["subnode_anchors"], eda._anchor_names(a.get(6)))
+        node_anchors = eda._anchor_names(a.get(5))
+        sub_anchors = eda._anchor_names(a.get(6))
+        merge(r["anchors"], node_anchors)
+        merge(r["subnode_anchors"], sub_anchors)
+        if not opts and not params:        # undecorated entry → option-independent
+            merge(r["base_anchors"], node_anchors)
+            merge(r["base_subnode_anchors"], sub_anchors)
         merge(r["options"], opts)
         merge(r["parameters"], params)
 
@@ -461,12 +471,19 @@ def scrape(manual: str) -> dict:
             r["aliases"] = eda._clean_tex(a.get(4))
         if a.get(0):
             r["shape"] = r["shape"] or a.get(0).strip()
-        merge(r["anchors"], eda._anchor_names(a.get(5)))
-        merge(r["subnode_anchors"], eda._anchor_names(a.get(6)))
+        node_anchors = eda._anchor_names(a.get(5))
+        sub_anchors = eda._anchor_names(a.get(6))
+        merge(r["anchors"], node_anchors)
+        merge(r["subnode_anchors"], sub_anchors)
+        if not opts and not params:        # undecorated entry → option-independent
+            merge(r["base_anchors"], node_anchors)
+            merge(r["base_subnode_anchors"], sub_anchors)
         merge(r["options"], opts)
         merge(r["parameters"], params)
 
     # --- \showanchors demos enrich a matching component's anchors --------------
+    # (showanchors demos illustrate *all* anchors, incl. option-conditional ones, so
+    # they enrich ``anchors`` but never ``base_anchors``.)
     for m in re.finditer(r"\\showanchors(?![a-zA-Z])", manual):
         parsed = eda._parse_args(manual, m.end(), ["o", "m", "m", "p"])
         if not parsed:

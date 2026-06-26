@@ -193,3 +193,24 @@ def test_stroke_only_symbols_not_filled() -> None:
     — a guard that the 'bare path = fill' rule does not over-fill stroked bodies."""
     for kind in ("L", "C", "R"):
         assert not any(sp.filled for sp in symbol_paths(kind)), kind
+
+
+def test_symbol_path_carries_clip(monkeypatch) -> None:
+    """A geometry path with a ``clip`` ``d`` (the RF antenna wedge that turns full
+    wavefront circles into arcs) is parsed into a clip ``QPainterPath`` on its
+    ``SymbolPath`` so the canvas can clip when painting."""
+    import app.canvas.svgsym as S
+
+    fake = {"R": {"paths": [
+        {"d": "M0 0L1 0L1 1Z", "stroke_width": 0.4, "fill": "none",
+         "clip": "M0 0L2 0L2 2Z"},
+        {"d": "M0 0L1 1", "stroke_width": 0.4, "fill": "none"},
+    ], "glyphs": []}}
+    monkeypatch.setattr(S, "_geometry", lambda: fake)
+    S.symbol_paths.cache_clear()
+    try:
+        paths = S.symbol_paths("R")
+        assert paths[0].clip is not None and paths[0].clip.elementCount() > 0
+        assert paths[1].clip is None
+    finally:
+        S.symbol_paths.cache_clear()

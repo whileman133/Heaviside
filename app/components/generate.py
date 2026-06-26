@@ -582,21 +582,31 @@ def save_component(kind: str, entry: dict) -> None:
 # magnet. The body size follows the [muxdemux] config knobs.
 # ---------------------------------------------------------------------------
 
+# Fixed nominal body size (GU) for every (data, select) combo — the box no longer
+# grows with the pin count (the pins simply redistribute inside it); the user
+# resizes the placed instance freely via the 2D drag handles (a per-instance scale,
+# §6.4). Chosen to reproduce the original default (2 data lines, 1 select) so a
+# default placement is unchanged.
+MUX_FIXED_LH: float = 4.0   # left edge height (data side of a mux)
+MUX_FIXED_RH: float = 2.0   # right edge height (output side of a mux)
+MUX_FIXED_W: float = 2.0    # body width
+
+
 def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tuple[str, str]]]:
     """The concrete ``muxdemux def`` option, the measured (unscaled) anchors, and
     the (pin-name, anchor) pairs for one (data, select) combo of a *mux*/*demux*.
-    ``Lh``/``Rh`` track the data count (scaled by ``MUX_DATA_PITCH_GU``); ``w``
-    tracks the select count (scaled by ``MUX_SELECT_SPACING_GU``) so the bottom
-    pins don't crowd. The defaults (1.0/1.0) reproduce the original body."""
-    dh = round(2 * data * MUX_DATA_PITCH_GU, 4)
-    w = round(sel * MUX_SELECT_SPACING_GU + 1, 4)
+    The body is a **fixed** size (``MUX_FIXED_LH``/``RH``/``W``) independent of the
+    pin counts — more pins simply pack closer; the user resizes the placed instance
+    via the drag handles (§6.4). (A demux is a mirrored mux, so only the ``mux``
+    role is generated; the ``demux`` branch is kept for completeness.)"""
+    lh, rh, w = MUX_FIXED_LH, MUX_FIXED_RH, MUX_FIXED_W
     if role == "mux":      # data inputs on the left, one output right, selects below
-        defstr = (f"muxdemux def={{Lh={dh}, Rh=2, NL={data}, "
+        defstr = (f"muxdemux def={{Lh={lh}, Rh={rh}, NL={data}, "
                   f"NR=1, NB={sel}, NT=0, w={w}}}")
         pairs = ([(f"in{i}", f"lpin {i + 1}") for i in range(data)]
                  + [("out", "rpin 1")])
     else:                  # demux: one input left, data outputs right, selects below
-        defstr = (f"muxdemux def={{Lh=2, Rh={dh}, NL=1, "
+        defstr = (f"muxdemux def={{Lh={rh}, Rh={lh}, NL=1, "
                   f"NR={data}, NB={sel}, NT=0, w={w}}}")
         pairs = ([("in", "lpin 1")]
                  + [(f"out{i}", f"rpin {i + 1}") for i in range(data)])
@@ -605,7 +615,7 @@ def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tup
     return defstr, measured, [p for p in pairs if p[1] in measured]
 
 
-def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
+def render_muxdemux(kind: str, entry: dict, origin, *, align: bool = True) -> tuple[dict, dict]:
     """Render every (data, select) combo of a mux/demux. Returns
     ``(geometry_by_key, data_entry)`` — geometry keyed ``kind:data:select`` (the
     default aliased under the plain key), and a multi-parameter data entry whose
@@ -618,21 +628,34 @@ def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     dspec, sspec = specs[dname], specs[sname]
     base = {k: v for k, v in entry.items() if k not in ("params", "muxdemux")}
 
+    # The body is a *fixed* size (``_muxdemux_combo``). To keep the *display* size
+    # constant too, bake the **default combo's** alignment scale for every combo —
+    # a per-combo scale would re-grow the body as the pin count changes. A default
+    # placement is unchanged; other counts pack their pins closer (connected via the
+    # magnet) and the user resizes the instance with the 2D drag handles.
+    # ``align=False`` (Option A) bakes no grid scale: the trapezoid renders at true
+    # size with natural (off-grid) pins reached by the magnet.
+    _dd, _sd = int(dspec["default"]), int(sspec["default"])
+    _opt0, _m0, _pairs0 = _muxdemux_combo(role, _dd, _sd)
+    sx, sy = _scale_for(_m0, [a for _, a in _pairs0]) if align else (1.0, 1.0)
+
     geoms: dict[str, dict] = {}
     n_data: dict[str, dict] = {}
     for d in range(int(dspec["min"]), int(dspec["max"]) + 1):
         for s in range(int(sspec["min"]), int(sspec["max"]) + 1):
             opt, measured, pairs = _muxdemux_combo(role, d, s)
-            sx, sy = _scale_for(measured, [a for _, a in pairs])
             pins = _scaled_pins([{"name": nm, "anchor": a} for nm, a in pairs],
                                 measured, sx, sy)
-            scale = [sx, sy]
-            ce = {**base, "tikz": "muxdemux", "emission": "node",
-                  "pins": pins, "scale": scale}
+            scale = [sx, sy] if align else None
+            ce = {**base, "tikz": "muxdemux", "emission": "node", "pins": pins}
+            nd = {"option": opt, "pins": pins}
+            if scale:
+                ce["scale"] = scale
+                nd["scale"] = scale
             g = geometry(ce, option=", " + opt)
             geoms[f"{geometry_key(kind)}:{d}:{s}"] = g
-            n_data[f"{d},{s}"] = {"option": opt, "scale": scale,
-                                  "pins": pins, "bbox": compute_bbox(g, origin, pins)}
+            nd["bbox"] = compute_bbox(g, origin, pins)
+            n_data[f"{d},{s}"] = nd
     dd, sd = int(dspec["default"]), int(sspec["default"])
     geoms[geometry_key(kind)] = geoms[f"{geometry_key(kind)}:{dd}:{sd}"]   # static alias
     default = n_data[f"{dd},{sd}"]
