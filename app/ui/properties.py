@@ -58,7 +58,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.commands import SetDocumentPropertiesCommand
 from app.canvas.scene import SchematicScene
-from app.codegen.circuitikz import is_node_style
+from app.codegen.circuitikz import is_node_style, is_single_terminal_node
 from app.components.style import split_top_level
 from app.ui import theme
 from app.components.model import (
@@ -694,6 +694,40 @@ class NodeTextSection(InspectorSection):
     def _commit(self) -> None:
         text = self._field.text().strip()
         self._apply("Node Text", lambda s, cid: s.edit_component_node_text(cid, text))
+
+
+class NodePlacementSection(InspectorSection):
+    """Placement for a **single-terminal** node — which side of its coordinate the
+    symbol sits on (a TikZ placement key emitted in the ``node[…]`` bracket). This is
+    how an inversion bubble (``ocirc``/``notcirc``) is made tangent to a gate's input/
+    output: the user picks ``Left``/``Right``/``Above``/``Below`` (or ``Center``), it is
+    not inferred from gate context."""
+
+    title = "Placement"
+
+    # Display label → stored node_side value.
+    _LABELS = ["Center", "Left", "Right", "Above", "Below"]
+    _VALUES = ["", "left", "right", "above", "below"]
+
+    def _build(self) -> None:
+        row, self._combo = _make_combo_row("Side", self._LABELS, self._on_change)
+        self.body.addLayout(row)
+
+    def applies_to(self, comp: Component) -> bool:
+        # Single-terminal node kinds only (grounds, supplies, terminal dots, bubbles).
+        return (not isinstance(comp, DrawingComponent)
+                and is_single_terminal_node(comp.kind))
+
+    def _load(self, comp: Component) -> None:
+        side = getattr(comp, "node_side", "")
+        idx = self._VALUES.index(side) if side in self._VALUES else 0
+        self._combo.blockSignals(True)
+        self._combo.setCurrentIndex(idx)
+        self._combo.blockSignals(False)
+
+    def _on_change(self, idx: int) -> None:
+        side = self._VALUES[idx] if 0 <= idx < len(self._VALUES) else ""
+        self._apply("Placement", lambda s, cid: s.edit_component_node_side(cid, side))
 
 
 class TextContentSection(InspectorSection):
@@ -1714,6 +1748,7 @@ class PropertiesPanel(QWidget):
         self._sections: list[InspectorSection] = [
             OptionsSection(),
             NodeTextSection(),
+            NodePlacementSection(),
             TextContentSection(),
             BipoleLabelSection(),
             VariantSection(),

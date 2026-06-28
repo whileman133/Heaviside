@@ -229,11 +229,12 @@ _VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
 _CURRENT_CENTERED_KINDS = frozenset({"short", "open"})
 
 # Terminal-marker components (the "Terminals" category: circ/ocirc, diamond/square
-# poles) ARE the connection point, so a pin marker over them is redundant and just
-# hides the symbol. We suppress the marker for that whole category (the pin still
-# exists for wiring/snapping — only its red indicator is omitted). Single source is
-# the Qt-free model set (also drives grab-not-wire and move-follow behaviour).
-from app.schematic.model import TERMINAL_MARKER_CATEGORIES as _NO_PIN_MARKER_CATEGORIES  # noqa: E402
+# poles, the inversion dot) ARE the connection point, so a pin marker over them is
+# redundant and just hides the symbol. We suppress the marker for every such kind
+# (the pin still exists for wiring/snapping — only its red indicator is omitted).
+# Single source is the Qt-free model predicate (also drives grab-not-wire, the
+# placement magnet, and move-follow behaviour).
+from app.schematic.model import is_terminal_marker as _is_terminal_marker  # noqa: E402
 
 # Annotation decoration geometry (canvas px) — the CircuiTikZ-style ± signs and
 # direction arrows drawn alongside the v=/i= text labels (§5.8). Sizes are in
@@ -958,6 +959,39 @@ class ComponentItem(QGraphicsItem):
         nd = library.param_n_data(self._component)
         return tuple(nd["bbox"]) if nd else self._defn.bbox
 
+    def _node_side_offset_px(self) -> tuple[float, float]:
+        """Canvas render shift (scene px) for a single-terminal node's placement
+        ``node_side`` (left/right/above/below): the symbol is drawn on that side of its
+        coordinate, mirroring CircuiTikZ's placement key (``left`` ⇒ ``anchor=east`` ⇒
+        the body sits left, its near edge touching the point). ``(0, 0)`` when no side
+        is set. Only the drawing shifts; the model position (the pin, where wires
+        connect) stays on the coordinate.
+
+        The shift is measured from the **actual drawn symbol extent** (the union of its
+        paths), not the registry ``bbox`` — the bbox is a loose snap bound (an ``ocirc``
+        is ±0.1 GU but the visible circle is ≈0.056 GU), so using it would leave a gap
+        between the symbol edge and the point. The path extent puts the near edge exactly
+        on the point, matching CircuiTikZ's anchor (which lies on the shape boundary)."""
+        side = getattr(self._component, "node_side", "")
+        if not side:
+            return (0.0, 0.0)
+        rect = None
+        for sym in symbol_paths(self._geometry_kind()):
+            br = sym.path.boundingRect()
+            rect = br if rect is None else rect.united(br)
+        if rect is None or rect.isEmpty():
+            return (0.0, 0.0)
+        # Place the near edge of the symbol on the point (the opposite of the side).
+        if side == "left":            # node sits left → its right (east) edge at point
+            return (-rect.right(), 0.0)
+        if side == "right":           # node sits right → its left (west) edge at point
+            return (-rect.left(), 0.0)
+        if side == "above":           # node sits above → its bottom (south) edge at point
+            return (0.0, -rect.bottom())
+        if side == "below":           # node sits below → its top (north) edge at point
+            return (0.0, -rect.top())
+        return (0.0, 0.0)
+
     def _document_symbol_style(self) -> dict:
         """The document's symbol-style map (family → value). An explicit
         ``_style_override`` wins (set by the palette so its thumbnails follow the
@@ -1494,12 +1528,14 @@ class ComponentItem(QGraphicsItem):
                 x0, x1 = min(xs), max(xs)
                 y0, y1 = min(ys), max(ys)
         margin = LINE_W_THICK * max(1.0, self._component.line_width / 0.4)
-        return QRectF(
+        rect = QRectF(
             x0 * GRID_PX - margin,
             y0 * GRID_PX - margin,
             (x1 - x0) * GRID_PX + 2 * margin,
             (y1 - y0) * GRID_PX + 2 * margin,
         )
+        bdx, bdy = self._node_side_offset_px()           # cover the placement shift, if any
+        return rect.united(rect.translated(bdx, bdy)) if (bdx or bdy) else rect
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -1517,6 +1553,9 @@ class ComponentItem(QGraphicsItem):
         # its pins sit at the true scaled anchor (no lead stubs — a wire connects
         # there directly via the magnet).
         painter.save()
+        _bdx, _bdy = self._node_side_offset_px()
+        if _bdx or _bdy:
+            painter.translate(_bdx, _bdy)   # node_side → symbol drawn on the chosen side
         if s != 1.0:
             painter.scale(s, s)
         for sym in symbol_paths(self._geometry_kind()):
@@ -1554,7 +1593,7 @@ class ComponentItem(QGraphicsItem):
             painter.setPen(Qt.NoPen)
 
         # --- pin indicator dots ------------------------------------------
-        if not self._ghost and self._defn.category not in _NO_PIN_MARKER_CATEGORIES:
+        if not self._ghost and not _is_terminal_marker(self._component.kind):
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
             # Use the snapped grid pins for a scaled gate, else the base offsets.
@@ -3312,7 +3351,7 @@ class _ResizableNodeItem(ComponentItem):
             else:
                 painter.drawPath(path)
         # Pin markers at the scaled offsets, constant radius.
-        if not self._ghost and self._defn.category not in _NO_PIN_MARKER_CATEGORIES:
+        if not self._ghost and not _is_terminal_marker(self._component.kind):
             painter.setPen(self._pin_pen())
             painter.setBrush(self._pin_brush())
             for pdef in self._resolved_pins():

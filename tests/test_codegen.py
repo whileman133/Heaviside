@@ -35,7 +35,7 @@ def _schematic(*components, wires=()) -> Schematic:
 
 
 def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False,
-          node_text="") -> Component:
+          node_text="", node_side="") -> Component:
     return Component(
         id=_uid(),
         kind=kind,
@@ -44,6 +44,7 @@ def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False,
         options=options,
         mirror=mirror,
         node_text=node_text,
+        node_side=node_side,
     )
 
 
@@ -395,11 +396,23 @@ def test_node_text_multi_terminal_inline_in_node_braces() -> None:
     assert "(node_" in bare and ") {}" in bare
 
 
+def test_single_terminal_node_uses_standalone_node_at_syntax() -> None:
+    """A single-terminal node (ground/supply/terminal dot) is emitted as a standalone
+    ``\\node[kind] at (x,y) {};`` command, never as an inline ``(x,y) node[kind]{}``
+    path operation inside the shared ``\\draw``. The command sits after the path's
+    terminating ';' (like the junction/open-circle dots)."""
+    src = generate(_schematic(_comp("ground")))
+    assert r"\node[ground] at (0,0) {};" in src
+    assert ") node[ground]" not in src                    # not the inline path op
+    assert src.index("\n  ;") < src.index(r"\node[ground]")
+
+
 def test_node_text_on_single_terminal_node() -> None:
-    """A single-terminal node (power rail) renders node_text in {…} and its options
-    in the node[…] bracket (no l=→label hack)."""
+    """A single-terminal node (power rail) is emitted as a standalone ``\\node at``
+    command with node_text in {…} and its options in the node[…] bracket (no l=→label
+    hack)."""
     src = generate(_schematic(_comp("vcc", node_text="$V_{cc}$", options="color=blue")))
-    assert "node[vcc, color=blue] {$V_{cc}$}" in src
+    assert r"\node[vcc, color=blue] at (0,0) {$V_{cc}$};" in src
     assert "label=right" not in src                     # legacy hack is gone
 
 
@@ -2279,3 +2292,20 @@ def test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor() -> None:
                 assert abs(cwx - wx) < 0.02 and abs(cwy - wy) < 0.02, (
                     kind, rot, mir, (wx, wy), (cwx, cwy)
                 )
+
+
+def test_node_side_emits_placement_keyword():
+    r"""A single-terminal node's user-set ``node_side`` is emitted as a TikZ placement
+    key right after the kind, so the symbol sits on that side — e.g. an inversion bubble
+    \node[ocirc, left] at (x,y){} is tangent. The side is the user's explicit choice
+    (node_side), not inferred from gate context."""
+    src = generate(_schematic(_comp("ground", node_side="left")))
+    assert r"\node[ground, left] at (0,0) {};" in src
+
+
+def test_node_side_default_emits_no_keyword():
+    """With no ``node_side`` set, the node is centred — no placement keyword appears."""
+    src = generate(_schematic(_comp("ground")))
+    assert r"\node[ground] at (0,0) {};" in src
+    for side in ("left", "right", "above", "below"):
+        assert f"ground, {side}" not in src

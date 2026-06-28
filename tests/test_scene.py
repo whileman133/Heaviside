@@ -593,14 +593,15 @@ def test_wire_mode_press_does_not_move_component(scene: SchematicScene):
 
 def test_terminal_marker_press_selects_instead_of_wiring(scene: SchematicScene, monkeypatch):
     """A press on a single-point terminal marker selects/drags it rather than
-    auto-starting a wire (regression: a Terminals-category dot *is* its pin, so it
+    auto-starting a wire (regression: a single-point marker *is* its pin, so it
     was un-grabbable — it could never be moved or deleted). The curated test
     library has no such markers, so a single-pin ground stands in for one."""
-    import app.canvas.items as items_mod
+    import app.canvas.scene as scene_mod
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 
-    monkeypatch.setattr(items_mod, "_NO_PIN_MARKER_CATEGORIES", frozenset({"Grounds"}))
+    monkeypatch.setattr(scene_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
     g = scene.place_component("ground", (5.0, 5.0))   # single pin at (5,5)
 
     press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
@@ -625,6 +626,206 @@ def test_normal_pin_press_still_auto_starts_wire(scene: SchematicScene):
     scene.mousePressEvent(press)
 
     assert scene.mode == Mode.WIRE
+
+
+def test_terminal_marker_placement_snaps_to_offgrid_pin(scene: SchematicScene, monkeypatch):
+    """Placing a terminal marker (a junction dot) snaps it onto a nearby component pin
+    even when that pin is off the 0.25 GU grid — so a dot can sit exactly on a scaled
+    gate's / manual-library symbol's terminal. The marker snaps to the union of the grid
+    and the connection points (nearest wins), so a cursor closest to the off-grid pin
+    lands on it. An ordinary kind always snaps to the grid. (The curated test library has
+    no Terminals kinds, so we treat 'ground' as one.)"""
+    import app.canvas.scene as scene_mod
+    import app.components.library as lib
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+    from PySide6.QtCore import QPointF
+
+    g = scene.place_component("and", (4.0, 4.0))     # curated 'and' has an off-grid 'out' pin
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not (coord_on_grid(out[0]) and coord_on_grid(out[1])), out  # sanity: off-grid
+
+    # Cursor essentially on the pin — closer to it than to any grid node.
+    sp = QPointF((out[0] + 0.02) * GRID_PX, out[1] * GRID_PX)
+
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda k: k == "ground")
+    scene._place_kind = "ground"                     # stands in for a junction dot
+    assert scene._place_target(sp) == pytest.approx(out)   # snapped onto the off-grid pin
+
+    scene._place_kind = "R"                           # ordinary kind → grid only
+    tx, ty = scene._place_target(sp)
+    assert coord_on_grid(tx) and coord_on_grid(ty), (tx, ty)
+
+    # Commit must KEEP the off-grid pin position — place_component grid-snaps every
+    # other kind, but a terminal marker stays exactly where it was placed.
+    dot = scene.place_component("ground", out)
+    assert dot.position == pytest.approx(out)
+    res = scene.place_component("R", out)
+    assert coord_on_grid(res.position[0]) and coord_on_grid(res.position[1])
+
+
+def test_terminal_marker_off_pin_snaps_to_grid(scene: SchematicScene, monkeypatch):
+    """A terminal marker snaps to the **union of the grid and the connection points**:
+    with no pin/wire near the cursor, the nearest target is a grid node, so it snaps to
+    the 0.25 GU grid (the snapping the marker keeps everywhere it isn't near a pin).
+    (Curated 'ground' stands in for a Terminals kind.)"""
+    import app.canvas.scene as scene_mod
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import coord_on_grid
+    from PySide6.QtCore import QPointF
+
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda k: k == "ground")
+    scene._place_kind = "ground"
+    free = (6.137, 7.231)                              # off-grid cursor, no pins near
+    sp = QPointF(free[0] * GRID_PX, free[1] * GRID_PX)
+    tgt = scene._place_target(sp)
+    assert coord_on_grid(tgt[0]) and coord_on_grid(tgt[1])    # snapped to the grid
+    assert tgt == pytest.approx((6.25, 7.25))                 # the nearest grid node
+
+
+def test_dragging_terminal_marker_does_not_magnet_to_own_pin(scene: SchematicScene, monkeypatch):
+    """A dragged terminal marker must not magnet onto its **own** pin. The schematic
+    still holds the marker at its pre-drag position during the gesture, so without the
+    self-exclusion a small move snaps straight back to where it started (the dot feels
+    glued in place / jitters near other pins). With it, a small move snaps to the grid
+    instead. (Curated 'ground' stands in for a Terminals kind.)"""
+    import app.canvas.scene as scene_mod
+    from app.schematic.model import coord_on_grid
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda o: (o if isinstance(o, str) else o.kind) == "ground")
+
+    own = (4.187, 4.231)
+    dot = scene.place_component("ground", own)         # off-grid, no other pins near
+    # A small drag, within the magnet radius of its own (off-grid) start position.
+    nudged = (4.237, 4.281)
+    res = scene._marker_drag_snap(dot, scene.gu_to_scene(*nudged))
+    assert res != pytest.approx(own)                   # did NOT snap back to its own pin
+    assert coord_on_grid(res[0]) and coord_on_grid(res[1])   # snapped to the grid instead
+
+
+def test_dragging_terminal_marker_off_pin_snaps_to_grid(scene: SchematicScene, monkeypatch):
+    """Dragging a lone terminal marker to empty canvas snaps it to the grid on commit
+    (the union's nearest target there is a grid node) — not to its own start position."""
+    import app.canvas.drag as drag_mod
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import coord_on_grid
+
+    monkeypatch.setattr(drag_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}
+    free = (6.137, 7.231)                              # off-grid, away from any pin
+    item.setPos(free[0] * GRID_PX, free[1] * GRID_PX)
+    scene._drag.commit_component_drag()
+    moved = next(c for c in scene.schematic.components if c.id == dot.id)
+    assert coord_on_grid(moved.position[0]) and coord_on_grid(moved.position[1])
+    assert moved.position == pytest.approx((6.25, 7.25))
+
+
+def test_inversion_bubble_placement_gets_default_side_on_body_anchor(scene: SchematicScene, monkeypatch):
+    """Placing an inversion bubble on a gate body anchor seeds a default ``node_side``
+    pointing away from the body (so it lands tangent); off a body anchor it stays
+    centred (""). It is only a default — the user can change it. (Curated 'ground'
+    stands in for a bubble kind.)"""
+    import app.canvas.scene as scene_mod
+
+    monkeypatch.setattr(scene_mod, "INVERSION_BUBBLE_KINDS", frozenset({"ground"}))
+    monkeypatch.setattr(scene_mod, "gate_body_anchor_side", lambda sch, pos: "left")
+    dot = scene.place_component("ground", (2.0, 2.0))
+    assert dot.node_side == "left"
+
+    monkeypatch.setattr(scene_mod, "gate_body_anchor_side", lambda sch, pos: "")
+    dot2 = scene.place_component("ground", (4.0, 0.0))
+    assert dot2.node_side == ""
+
+
+def test_node_side_offsets_canvas_symbol(scene: SchematicScene):
+    """A single-terminal node with a ``node_side`` draws its symbol shifted to that side
+    on the canvas (so an inversion bubble shows tangent), and its boundingRect grows to
+    cover the shift. No side → no offset."""
+    dot = scene.place_component("ground", (2.0, 2.0))
+    item = scene._comp_items[dot.id]
+    assert item._node_side_offset_px() == (0.0, 0.0)     # centred by default
+    base = item.boundingRect()
+
+    item._component.node_side = "left"
+    ox, oy = item._node_side_offset_px()
+    assert ox < 0 and oy == 0                             # symbol shifts left
+    item._component.node_side = "right"
+    ox2, _ = item._node_side_offset_px()
+    assert ox2 > 0                                        # …and right the other way
+    assert item.boundingRect().width() > base.width()    # rect covers the shift
+
+
+def test_dragging_terminal_marker_snaps_pin_to_offgrid_anchor(scene: SchematicScene, monkeypatch):
+    """Dragging a single terminal marker re-snaps its pin onto the nearest connection
+    point (off-grid OK) on release — not the grid — so a dot dragged to a manual-
+    library / scaled-gate terminal lands on it. (Curated 'ground' stands in.)"""
+    import app.canvas.drag as drag_mod
+    import app.components.library as lib
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+
+    g = scene.place_component("and", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not coord_on_grid(out[0])                  # off-grid anchor
+    monkeypatch.setattr(drag_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}     # simulate a begun drag
+    item.setPos((out[0] + 0.04) * GRID_PX, (out[1] + 0.02) * GRID_PX)  # dragged near the pin
+    scene._drag.commit_component_drag()
+    moved = next(c for c in scene.schematic.components if c.id == dot.id)
+    assert moved.position == pytest.approx(out)
+
+
+def test_live_drag_marker_snaps_to_offgrid_pin(scene: SchematicScene, monkeypatch):
+    """During a drag (not just on release) a lone terminal marker magnet-snaps onto a
+    nearby off-grid pin — the move handler used to grid-snap every dragged item, so a
+    marker could never reach an off-grid terminal mid-drag. (Ground stands in.)"""
+    import app.canvas.scene as scene_mod
+    import app.components.library as lib
+    from app.canvas.scene import Mode
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    g = scene.place_component("and", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not coord_on_grid(out[0])
+    monkeypatch.setattr(scene_mod, "is_terminal_marker",
+                        lambda o: (o if isinstance(o, str) else o.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._mode = Mode.SELECT
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}
+    item.setPos((out[0] + 0.04) * GRID_PX, (out[1] + 0.02) * GRID_PX)  # dragged near the pin
+    ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseMove)
+    ev.setButton(Qt.NoButton)
+    ev.setScenePos(QPointF(0, 0))
+    scene.mouseMoveEvent(ev)
+    assert (item.pos().x() / GRID_PX, item.pos().y() / GRID_PX) == pytest.approx(out)
+
+
+def test_marker_drop_backs_out_pin_offset_for_tangency(scene: SchematicScene, monkeypatch):
+    """`_marker_drop_position` places the node CENTRE so the marker's *pin* (not its
+    centre) lands on the target — backing out the pin offset, so an edge-pinned marker
+    (the inversion dot) sits tangent rather than centred on the body edge."""
+    import app.components.library as lib
+    from app.schematic.model import component_pin_positions
+
+    g = scene.place_component("and", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    monkeypatch.setattr(scene, "_marker_pin_offset", lambda *a: (-0.0862, 0.0))
+    pin_gu = (scene.snap_gu(out[0]), scene.snap_gu(out[1]))
+    pos = scene._marker_drop_position("x", 0, False, pin_gu, out)
+    assert pos == pytest.approx((out[0] + 0.0862, out[1]))   # centre east → pin on `out`
 
 
 def test_multi_select_group_drag_moves_each_component(scene: SchematicScene):

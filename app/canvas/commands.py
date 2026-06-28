@@ -1402,6 +1402,37 @@ class EditNodeTextCommand(Command):
         comp.node_text = self._old_text or ""
 
 
+class EditNodeSideCommand(Command):
+    """Set the ``node_side`` (placement keyword: left/right/above/below, or "" for
+    centred) of a single single-terminal node component.
+
+    Inverse: restore the previous side.
+    """
+
+    label = "Edit Placement"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_side: str,
+        old_side: str | None = None,
+    ) -> None:
+        self._component_id = component_id
+        self._new_side = new_side
+        # If old_side is not supplied, it is captured on first do().
+        self._old_side: str | None = old_side
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._old_side is None:
+            self._old_side = comp.node_side
+        comp.node_side = self._new_side
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.node_side = self._old_side or ""
+
+
 class MoveOptionsLabelCommand(Command):
     """Set (or clear) the label_offset of a single component's options label.
 

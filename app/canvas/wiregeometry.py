@@ -67,18 +67,26 @@ class WireGeometry:
         return best
 
     def nearest_connection_point(
-        self, gu: tuple[float, float]
+        self, gu: tuple[float, float],
+        exclude_component_ids: frozenset[str] | set[str] | tuple[str, ...] = (),
     ) -> tuple[float, float] | None:
         """Nearest wire-connection point within PIN_SNAP_GU of *gu*, else None.
 
         Includes named pins *and* rect-perimeter connection points, so a wire
         being drawn snaps to (and reports connectable at) any grid point on a
         block-diagram rectangle's edge.
+
+        *exclude_component_ids* omits those components' pins — used while dragging a
+        terminal marker so it does not magnet onto its **own** pin (the model still
+        holds it at its pre-drag position during the gesture, which would otherwise
+        pin the marker to where it started and make small moves snap back).
         """
         gx, gy = gu
         best: tuple[float, float] | None = None
         best_d2 = PIN_SNAP_GU * PIN_SNAP_GU
         for comp in self._schematic.components:
+            if comp.id in exclude_component_ids:
+                continue
             for px, py in component_connection_points(comp):
                 d2 = (px - gx) ** 2 + (py - gy) ** 2
                 if d2 <= best_d2:
@@ -141,6 +149,7 @@ class WireGeometry:
         gu: tuple[float, float],
         exclude_wire_id: str | None = None,
         raw_gu: tuple[float, float] | None = None,
+        exclude_component_ids: frozenset[str] | set[str] | tuple[str, ...] = (),
     ) -> tuple[tuple[float, float], bool]:
         """Resolve a wire endpoint for cursor position *gu* (already snapped).
 
@@ -159,7 +168,8 @@ class WireGeometry:
         nearest grid node can be more than ``PIN_SNAP_GU`` away. Defaults to
         *gu* (the grid-snapped cursor) for callers without the raw position.
         """
-        pin = self.nearest_connection_point(raw_gu if raw_gu is not None else gu)
+        pin = self.nearest_connection_point(
+            raw_gu if raw_gu is not None else gu, exclude_component_ids)
         if pin is not None:
             return pin, True
         vtx = self.nearest_wire_vertex(gu, exclude_wire_id)

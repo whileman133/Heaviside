@@ -1229,3 +1229,34 @@ def test_unconnected_pins_override_hooks():
     assert unconnected_pins(
         s, pin_positions=[(2.0, 0.0), (4.0, 0.0)]
     ) == set()                                  # both supplied pins touch the wire
+
+
+def test_notcirc_is_a_terminal_marker_kind():
+    """The Logic-category inversion dot ``notcirc`` is treated as a single-point
+    terminal marker via the kind set (so it gets the no-red-dot / grab-to-select /
+    placement-magnet / move-follow behaviour), independent of the active library —
+    the kind check short-circuits before any registry lookup."""
+    from app.schematic.model import is_terminal_marker, TERMINAL_MARKER_KINDS
+
+    assert "notcirc" in TERMINAL_MARKER_KINDS
+    assert is_terminal_marker("notcirc")
+    assert not is_terminal_marker("R")
+
+
+def test_gate_body_anchor_side_returns_outward_side(monkeypatch):
+    """gate_body_anchor_side returns the placement keyword pointing away from a gate
+    body anchor at a given pin position (so a bubble there is tangent), else "". (The
+    curated test library has no bin/bout anchors, so the op-amp '+' pin stands in as a
+    body anchor; its non-'bin' name maps to outward = +x ⇒ 'right' at rotation 0.)"""
+    from app.schematic import model
+
+    monkeypatch.setattr(model, "_is_gate_body_anchor", lambda n: n == "+")
+    oa = Component(id=_uid(), kind="op amp", position=(5.0, 5.0), rotation=0, options="")
+    plus = dict(zip([p.name for p in __import__("app.components.library",
+                                                fromlist=["resolved_pins"]).resolved_pins(oa)],
+                    component_pin_positions(oa)))["+"]
+    assert model.gate_body_anchor_side(_make_schematic(oa), plus) == "right"
+    # A position on no body anchor yields no default side.
+    assert model.gate_body_anchor_side(_make_schematic(oa), (99.0, 99.0)) == ""
+
+

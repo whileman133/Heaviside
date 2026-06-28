@@ -118,6 +118,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   curated/manual switch.
 
 ### Changed
+- **Inversion-bubble side is a user-set property, no longer inferred.** A single-
+  terminal node now carries a **Placement** property (`node_side`: Center/Left/Right/
+  Above/Below), set in the inspector and emitted as a TikZ placement key —
+  `\node[ocirc, left] at (x,y) {};` — so the symbol sits tangent on the chosen side.
+  This replaces the previous gate-context inference (which guessed the side from where
+  the bubble sat and was fragile under rotation/mirror). The bubble is now just an
+  ordinary single-terminal node: no gate-anchor reference, no special post-`\draw`
+  pass. Adds `.hv` format **0.8** (`node_side`, written only when set); older files
+  load unchanged.
+- **Inversion bubbles get a smart default side and show it on the canvas.** Dropping an
+  `ocirc`/`notcirc` on a logic-gate body anchor now seeds the **Placement** side
+  automatically (pointing away from the body, so it lands tangent) — still editable in
+  the inspector. The canvas draws the bubble shifted to its chosen side (tangent
+  preview) while its pin stays on the anchor.
+- **Single-terminal nodes are emitted as standalone `\node at` commands.** Grounds,
+  supplies, and terminal dots (and any single-point node kind) now generate
+  `\node[kind, opts] at (x,y) {text};` instead of an inline `(x,y) node[kind]{}` path
+  operation inside the shared `\draw`. They connect to wires purely by coordinate (no
+  named anchor), so this changes nothing electrically; it matches the junction,
+  open-circle, and inversion-bubble dots (all already standalone `\node` commands) and
+  reads more clearly.
 - **Palette categories are split into "CircuiTikZ" and "TikZ" sections.**
   The component categories are now grouped under two headers: CircuiTikZ (all the
   circuit symbol categories) and TikZ (our own vanilla-TikZ drawing primitives —
@@ -147,6 +168,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connection point, omit the marker entirely (the pin still exists for wiring).
 
 ### Fixed
+- **Inversion bubbles (`ocirc`/`notcirc`) on gate body anchors, matching the manual.**
+  An open circle (or `notcirc`) dropped on a logic gate's `bin N`/`bout` body anchor
+  now forms a NAND/NOR/inverted-input bubble: it shows no red pin marker, is
+  selectable/movable with a click (instead of starting a wire), magnet-snaps onto the
+  anchor, and follows the gate when it moves. On the canvas the bubble is drawn
+  **centred on the anchor** (a preview); on **export** it is **tangent** — the circle
+  outside the body on the correct side — via the CircuiTikZ manual's idiom,
+  `\node at (gate.bin N) [ocirc, left]{}` (the side chosen automatically: left for
+  inputs, right for the output, rotated with the gate).
+  (Single-point marker behaviour is keyed by kind as well as by the Terminals category.)
+- **Terminal markers snap to the union of the grid and the connection points.** A
+  single-point connection dot (a junction/inversion marker such as `circ`/`ocirc`/
+  `notcirc`) now snaps to whichever is nearest the cursor: a 0.25 GU grid node or a
+  component pin / wire point (off-grid included). So it keeps grid snapping everywhere
+  it isn't near a pin, yet lands exactly on an **off-grid** pin (a scaled gate's /
+  manual-library symbol's terminal) when the cursor is closest to one. Previously a
+  pure grid snap let the dense grid pull dominate the small pin magnet, so such a dot
+  could never reach the off-grid pin.
+- **Dragging a terminal marker no longer magnets onto its own pin.** While a marker is
+  dragged the schematic still holds it at its start position, so the magnet was pulling
+  it straight back there — small moves snapped back and the dot jittered near other
+  pins. The dragged marker's own pins are now excluded from the magnet.
+- **Terminal markers re-snap to anchors when dragged.** Dragging a junction/inversion
+  dot now magnet-snaps onto the nearest connection point — **throughout** the drag, not
+  just on release — so it lands on off-grid pins instead of the grid, matching
+  placement. (The drag move handler had grid-snapped every dragged item, so a marker
+  could never reach an off-grid terminal mid-drag.)
+- **Terminal markers (junction dots) snap onto off-grid pins when placed.** Placing a
+  Terminals-category dot now magnet-snaps onto a nearby component pin or wire (the same
+  magnet wire drawing uses), so it lands exactly on a pin even when that pin sits off
+  the grid — previously the dot snapped to the grid and could never coincide with an
+  off-grid terminal (the common case in the manual library).
 - **Wires stay on their own pins when a node is resized.** Resizing a densely-pinned
   node (e.g. a many-input gate, whose input pins sit close together) could re-route a
   connected wire onto the wrong pin — the per-pin wire-follow ran sequentially, so one

@@ -335,6 +335,46 @@ def test_node_text_section_edits_node_text_undoably(_app):
     assert scene._component_by_id(comp.id).node_text == ""
 
 
+def test_node_placement_section_applies_only_to_single_terminal_nodes(_app):
+    """NodePlacementSection shows for single-terminal node kinds (ground, vcc) and
+    hides for multi-terminal nodes (npn), path-style (R), and drawing annotations."""
+    from app.ui.properties import NodePlacementSection
+    from app.components.model import Component, TextNodeComponent
+
+    sec = NodePlacementSection()
+    gnd = Component(id="g", kind="ground", position=(0, 0), rotation=0, options="")
+    vcc = Component(id="v", kind="vcc", position=(0, 0), rotation=0, options="")
+    npn = Component(id="q", kind="npn", position=(0, 0), rotation=0, options="")
+    res = Component(id="r", kind="R", position=(0, 0), rotation=0, options="")
+    txt = TextNodeComponent(id="t", kind="text_node", position=(0, 0), rotation=0,
+                            options="hi")
+    assert sec.applies_to(gnd) and sec.applies_to(vcc)
+    assert not sec.applies_to(npn)               # multi-terminal node
+    assert not sec.applies_to(res)
+    assert not sec.applies_to(txt)
+
+
+def test_node_placement_section_edits_node_side_undoably(_app):
+    """Choosing a side in the Placement dropdown commits node_side via an undoable
+    command, and the combo loads the component's current side."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import NodePlacementSection, PropertiesPanel
+
+    scene = SchematicScene()
+    comp = scene.place_component("ground", (2.0, 2.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(comp.id)
+
+    sec = next(s for s in panel._sections if isinstance(s, NodePlacementSection))
+    assert sec._comp_ids == [comp.id]            # bound for a single-terminal node
+    sec._combo.setCurrentIndex(sec._VALUES.index("left"))
+    assert scene._component_by_id(comp.id).node_side == "left"
+
+    scene.undo()
+    assert scene._component_by_id(comp.id).node_side == ""
+
+
 def test_options_section_relabels_for_node_style(_app):
     """For a node-style kind the options field is the node[…] bracket, so its title
     reads 'Node options'; a path-style kind keeps 'CircuiTikZ options'."""

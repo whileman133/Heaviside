@@ -135,7 +135,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.7"
+    assert data["version"] == "0.8"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
         "symbol_style": {},                # all-american default (§5.4)
@@ -324,6 +324,24 @@ def test_node_text_roundtrips_and_omitted_when_empty(tmp_path: Path) -> None:
     loaded = load(p)
     assert loaded.components[0].node_text == "$Q_1$"
     assert loaded.components[1].node_text == ""
+
+
+def test_node_side_roundtrips_and_omitted_when_empty(tmp_path: Path) -> None:
+    """node_side (the single-terminal placement keyword) round-trips and is omitted
+    from the JSON when empty (centred, the common case)."""
+    s = Schematic(version="0.1", name="ns", components=[
+        Component(id=_uid(), kind="ground", position=(2.0, 2.0), rotation=0,
+                  options="", node_side="left"),
+        Component(id=_uid(), kind="vcc", position=(6.0, 0.0), rotation=0, options=""),
+    ])
+    p = tmp_path / "ns.hv"
+    save(s, p)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert raw["components"][0]["node_side"] == "left"
+    assert "node_side" not in raw["components"][1]            # empty → omitted
+    loaded = load(p)
+    assert loaded.components[0].node_side == "left"
+    assert loaded.components[1].node_side == ""
 
 
 def test_legacy_power_rail_l_slot_migrates_to_node_text(tmp_path: Path) -> None:
@@ -1134,14 +1152,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_07_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.7; files declaring 0.1–0.7 all load."""
+def test_format_version_08_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.8; files declaring 0.1–0.8 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.7"
-    assert load(p).version == "0.7"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.8"
+    assert load(p).version == "0.8"
 
-    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

@@ -277,7 +277,7 @@ def _node_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
             "category": _category(c), "emission": "node", "tikz": c["keyword"],
             "labels": []}
     terminals = _node_terminals(c, pool, conditional)
-    if not terminals:                                   # single-point (ground / rail)
+    if not terminals:                                   # single-point (ground / rail / marker)
         m = render.measure_anchors(c["keyword"], ["text", "center"])
         entry = {**base, "pins": [{"name": "in", "offset": [0.0, 0.0], "anchor": None}]}
         ta = _text_anchor(m, (1.0, 1.0))

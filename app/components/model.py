@@ -51,6 +51,19 @@ class Component:
     only when non-empty. A legacy power-rail's ``l=`` label is migrated into this
     field on load (the rail's name now renders from the ``{…}`` slot)."""
 
+    node_side: str = ""
+    """Placement keyword for a **single-terminal node**'s emitted
+    ``\\node[kind, <side>] at (x,y) {…}`` — one of ``""`` (centred on the
+    coordinate, the default), ``"left"``, ``"right"``, ``"above"``, ``"below"``.
+
+    A TikZ placement key sets the node's *anchor* to the opposite side, so the symbol
+    sits on the named side of its coordinate: ``left`` ⇒ ``anchor=east`` ⇒ the body
+    sits to the left, touching the point. This is how an inversion bubble (``ocirc``/
+    ``notcirc``) is made **tangent** to a gate's input/output — the user picks the side
+    explicitly (it is **not** inferred from gate context). Meaningful only for
+    single-terminal node kinds (the inspector exposes it for those); other kinds ignore
+    it. Persisted (``schematic/io.py``) only when non-empty."""
+
     label_offset: tuple[float, float] | None = None
     """Position of the options label in component-local pixel coordinates.
 

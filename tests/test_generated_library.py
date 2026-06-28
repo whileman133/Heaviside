@@ -92,6 +92,18 @@ def test_multiterminal_bjts_expose_primary_collector_emitter():
         assert {"B", "C", "E", "C1", "C2", "E1", "E2", "E3"} <= multi, f"{kw}: {multi}"
 
 
+def test_inversion_dot_is_a_centered_bubble_kind():
+    """``notcirc`` is a single-point marker with a **centre** pin and an inversion-bubble
+    kind. The bubble sits on the gate body anchor; the canvas draws it centred there (a
+    preview), and codegen exports it tangent via the ``[ocirc, left]`` idiom — tangency
+    is never baked into the pin."""
+    from app.schematic.model import is_terminal_marker, INVERSION_BUBBLE_KINDS
+
+    assert "notcirc" in INVERSION_BUBBLE_KINDS and is_terminal_marker("notcirc")
+    pins = _COMPONENTS["notcirc"]["pins"]
+    assert len(pins) == 1 and pins[0]["offset"] == [0.0, 0.0]
+
+
 def test_flipflop_keeps_documented_border_anchors():
     """The flip-flop's documented border/edge anchors survive (they were being
     stripped as if they were chips' redundant probe anchors)."""

@@ -44,6 +44,7 @@ from app.canvas.commands import (
     Command,
     DeleteCommand,
     EditCommand,
+    EditNodeSideCommand,
     EditNodeTextCommand,
     GroupRotateCommand,
     MacroCommand,
@@ -94,7 +95,10 @@ from app.schematic.model import (
     WIRE_MARKER_CYCLE,
     component_pin_positions as _component_pin_positions,
     coord_on_grid as _model_coord_on_grid,
+    INVERSION_BUBBLE_KINDS,
+    gate_body_anchor_side,
     is_box_kind,
+    is_terminal_marker,
     junction_points,
     open_endpoints,
     point_key,
@@ -514,10 +518,26 @@ class SchematicScene(QGraphicsScene):
         default_scale = library.default_scale(kind)
         if abs(default_scale - 1.0) > 1e-9:
             extra["scale"] = default_scale
+        # A terminal marker (junction dot) keeps the exact *position* it was placed
+        # at — snapped by ``_place_target`` to the union of the grid and the connection
+        # points, which may be off the grid (a manual-library / scaled-gate terminal).
+        # Every other kind is grid-snapped defensively so a caller can't drop it off-grid.
+        if is_terminal_marker(kind):
+            pos = (position[0], position[1])
+        else:
+            pos = (self.snap_gu(position[0]), self.snap_gu(position[1]))
+        # Smart default: an inversion bubble dropped on a logic-gate body anchor gets a
+        # default placement side pointing away from the body (so it lands tangent). It's
+        # only a default — the user can change it in the inspector. (ocirc/notcirc have a
+        # centred pin, so the pin position is the placement position.)
+        if kind in INVERSION_BUBBLE_KINDS:
+            side = gate_body_anchor_side(self._schematic, pos)
+            if side:
+                extra["node_side"] = side
         comp = cls(
             id=str(uuid.uuid4()),
             kind=kind,
-            position=(self.snap_gu(position[0]), self.snap_gu(position[1])),
+            position=pos,
             rotation=rotation,
             options=options,
             mirror=mirror,
@@ -873,6 +893,14 @@ class SchematicScene(QGraphicsScene):
         if comp is None or comp.node_text == new_text:
             return
         self._push(EditNodeTextCommand(component_id, new_text))
+
+    def edit_component_node_side(self, component_id: str, new_side: str) -> None:
+        """Set the ``node_side`` (placement keyword) of a single-terminal node via an
+        undoable EditNodeSideCommand. No-op when unchanged or unknown."""
+        comp = self._component_by_id(component_id)
+        if comp is None or getattr(comp, "node_side", "") == new_side:
+            return
+        self._push(EditNodeSideCommand(component_id, new_side))
 
     def move_options_label(
         self, component_id: str, new_offset: tuple[float, float]
@@ -1678,6 +1706,89 @@ class SchematicScene(QGraphicsScene):
         if self._ghost is not None:
             self._ghost.setPos(self.gu_to_scene(*gu))
 
+    def _marker_pin_offset(self, kind: str, rotation: int,
+                           mirror: bool) -> tuple[float, float]:
+        """A single-point marker's pin offset in **world** frame (rotation+mirror
+        applied), backed out when magneting so the marker's *pin* (not its centre)
+        lands on the target. Zero for a dot whose pin is at its centre — the junction
+        dot and the inversion dot (``ocirc``/``notcirc``), which therefore sit centred
+        on the anchor on the canvas (the export still draws the bubble tangent via the
+        ``[ocirc, left]`` idiom — the canvas is a preview, not the exact rendering)."""
+        defn = REGISTRY.get(kind)
+        if defn is None or not defn.pins:
+            return (0.0, 0.0)
+        from app.canvas.geometry import local_span_to_world
+        return local_span_to_world(tuple(defn.pins[0].offset), rotation, mirror)
+
+    def _marker_drag_snap(self, comp: Component,
+                          item_scene_pos: QPointF) -> tuple[float, float]:
+        """New ``position`` for a dragged single-point marker whose item sits at
+        *item_scene_pos*: snap its pin to the nearest point in the union of the grid and
+        the connection points (off-grid pins OK). Used by both the live drag move and
+        the commit, so the marker snaps onto off-grid pins *during* the drag (like
+        placement), not just on release.
+
+        The marker's **own** pin is excluded from the magnet: the schematic still holds
+        it at its pre-drag position throughout the gesture, so without this it would
+        magnet back onto where it started (pinning small moves and making it jump
+        between its origin and an adjacent pin)."""
+        off = self._marker_pin_offset(comp.kind, comp.rotation, comp.mirror)
+        cx, cy = self.scene_to_gu(item_scene_pos)
+        pin_raw = (cx + off[0], cy + off[1])
+        pin_gu = (self.snap_gu(pin_raw[0]), self.snap_gu(pin_raw[1]))
+        return self._marker_drop_position(comp.kind, comp.rotation, comp.mirror,
+                                          pin_gu, pin_raw,
+                                          exclude_component_id=comp.id)
+
+    def _marker_drop_position(self, kind: str, rotation: int, mirror: bool,
+                              pin_gu: tuple[float, float],
+                              pin_raw: tuple[float, float],
+                              exclude_component_id: str | None = None,
+                              ) -> tuple[float, float]:
+        """Component ``position`` (node centre) that lands a single-point marker's
+        **pin** on the nearest point in the **union of the 0.25 GU grid and the
+        connection points** (component pins + wire vertices/segments, off-grid OK).
+        *pin_gu* is the grid-snapped intended pin location, *pin_raw* the unsnapped one
+        (so the magnet measures from where the cursor actually is). Backs the centre out
+        by the marker's pin offset.
+
+        The marker still snaps — both to grid nodes and to pins — but to whichever is
+        **nearer** the cursor, so it can land exactly on an **off-grid** pin (a scaled
+        gate / manual-library terminal) without the dense grid pull making that
+        impossible, while still snapping to the grid everywhere else. A pure grid snap
+        (off-grid pins unreachable) and a pure free-float (no grid help) were both
+        wrong; the union is the behaviour we want."""
+        exclude = (exclude_component_id,) if exclude_component_id else ()
+        target, connectable = self.wire_snap_target(
+            pin_gu, raw_gu=pin_raw, exclude_component_ids=exclude)
+        if connectable:
+            # Pin/wire candidate found (within the magnet radius). Snap to it unless the
+            # nearest grid node is strictly closer to the cursor — union, nearest wins
+            # (ties go to the pin, so an inversion bubble lands cleanly on its anchor).
+            d_pin = (target[0] - pin_raw[0]) ** 2 + (target[1] - pin_raw[1]) ** 2
+            d_grid = (pin_gu[0] - pin_raw[0]) ** 2 + (pin_gu[1] - pin_raw[1]) ** 2
+            if d_grid < d_pin:
+                target = pin_gu
+        else:
+            target = pin_gu          # no connection point in range → nearest grid node
+        off = self._marker_pin_offset(kind, rotation, mirror)
+        return (target[0] - off[0], target[1] - off[1])
+
+    def _place_target(self, scene_pos) -> tuple[float, float]:  # noqa: ANN001
+        """Where the single-kind ghost would drop. A **terminal marker** (a junction
+        dot / inversion dot — a single-point node meant to sit *on* a connection point)
+        snaps its **pin** to the nearest point in the union of the 0.25 GU grid and the
+        connection points (component pins + wires, off-grid OK), so it lands on a nearby
+        pin when the cursor is closer to one and on the grid otherwise; every other kind
+        snaps to the grid only (its origin is not a connection point, so a pin-magnet
+        would be wrong)."""
+        gu = self.snap_point_gu(scene_pos)
+        if self._place_kind and is_terminal_marker(self._place_kind):
+            return self._marker_drop_position(
+                self._place_kind, self._place_rotation, self._place_mirror,
+                gu, self.scene_to_gu(scene_pos))
+        return gu
+
     def _span_snap_target(self, scene_pos) -> tuple[float, float]:  # noqa: ANN001
         """Magnet-snap a span-placement endpoint onto a nearby component pin or
         wire (the same magnet wire drawing uses), else the 0.25 GU grid node — so
@@ -1757,8 +1868,10 @@ class SchematicScene(QGraphicsScene):
         gu: tuple[float, float],
         exclude_wire_id: str | None = None,
         raw_gu: tuple[float, float] | None = None,
+        exclude_component_ids: frozenset[str] | set[str] | tuple[str, ...] = (),
     ) -> tuple[tuple[float, float], bool]:
-        return self._wire_geom.wire_snap_target(gu, exclude_wire_id, raw_gu)
+        return self._wire_geom.wire_snap_target(
+            gu, exclude_wire_id, raw_gu, exclude_component_ids)
 
     def _wire_snap_point(self, scene_pt: QPointF) -> tuple[float, float] | None:
         return self._wire_geom.wire_snap_point(scene_pt)
@@ -2137,7 +2250,7 @@ class SchematicScene(QGraphicsScene):
                         self._place_start_gu, self._span_snap_target(event.scenePos())
                     )
             else:
-                self._move_ghost(gu)
+                self._move_ghost(self._place_target(event.scenePos()))
             event.accept()
             return
 
@@ -2193,15 +2306,22 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
-        # Let Qt move any dragged component items, then snap them to the grid
-        # and ghost their connected wires.
+        # Let Qt move any dragged component items, then snap them and ghost their
+        # connected wires. A lone terminal marker magnet-snaps onto a nearby pin
+        # (off-grid OK, like placement); everything else snaps to the 0.25 GU grid.
         super().mouseMoveEvent(event)
         if self._mode == Mode.SELECT and self._drag.drag_start:
+            solo = len(self._drag.drag_start) == 1
             for cid in self._drag.drag_start:
                 item = self._comp_items.get(cid)
-                if item is not None:
-                    snapped = self.snap_point_gu(item.pos())
-                    item.setPos(self.gu_to_scene(*snapped))
+                if item is None:
+                    continue
+                comp = self._component_by_id(cid)
+                if solo and comp is not None and is_terminal_marker(comp):
+                    new = self._marker_drag_snap(comp, item.pos())
+                else:
+                    new = self.snap_point_gu(item.pos())
+                item.setPos(self.gu_to_scene(*new))
             self._drag.preview_component_drag()
             self._refresh_preview_hops()
 
@@ -2226,19 +2346,18 @@ class SchematicScene(QGraphicsScene):
         return None
 
     def _pin_belongs_to_terminal_marker(self, pin: tuple[float, float]) -> bool:
-        """True when *pin* is a pin of a single-point **terminal marker** (a
-        Terminals-category connection dot whose symbol coincides with its pin).
+        """True when *pin* is a pin of a single-point **terminal marker** (a Terminals
+        dot/pole or a marker kind like the inversion dot — ``is_terminal_marker``,
+        whose symbol coincides with its pin).
         Such a marker would otherwise be un-grabbable: a press on it always lands on
         its pin, so the wire-auto-start would fire and it could never be selected,
         moved or deleted. Checked by coordinate (not exact shape hit) so the small
         dot is reliably grabbable within the pin snap radius."""
-        from app.canvas.items import _NO_PIN_MARKER_CATEGORIES
         from app.schematic.model import component_pin_positions, point_key
 
         key = point_key(pin)
         for comp in self._schematic.components:
-            defn = REGISTRY.get(comp.kind)
-            if defn is None or defn.category not in _NO_PIN_MARKER_CATEGORIES:
+            if not is_terminal_marker(comp):
                 continue
             if any(point_key(p) == key for p in component_pin_positions(comp)):
                 return True
@@ -2373,7 +2492,7 @@ class SchematicScene(QGraphicsScene):
                     self._place_span_click(self._span_snap_target(event.scenePos()))
                 else:
                     self.place_component(
-                        self._place_kind, gu,
+                        self._place_kind, self._place_target(event.scenePos()),
                         rotation=self._place_rotation,
                         mirror=self._place_mirror,
                     )

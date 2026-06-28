@@ -77,10 +77,15 @@ from app.schematic.validate import validate
 #: american/european resistors, cute/american/european inductors — manual library). A
 #: 0.6 build would silently strip it on save, so the bump refuses the newer file;
 #: 0.1–0.6 files load unchanged (absent symbol_style defaults to all-american).
-_FORMAT_VERSION: str = "0.7"
+#: 0.8 adds a per-component ``node_side`` (a single-terminal node's placement keyword:
+#: left/right/above/below — the user-set inversion-bubble side, replacing the former
+#: gate-context inference). A 0.7 build would silently strip it on save, so the bump
+#: refuses the newer file; 0.1–0.7 files load unchanged (absent node_side defaults to
+#: empty = centred).
+_FORMAT_VERSION: str = "0.8"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7"}
+_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8"}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -266,6 +271,10 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # Node-style {…} slot text; omitted when empty (the common case).
     if c.node_text:
         d["node_text"] = c.node_text
+    # Single-terminal node placement keyword (left/right/above/below); omitted when
+    # empty (centred, the common case).
+    if getattr(c, "node_side", ""):
+        d["node_side"] = c.node_side
     if c.label_offset is not None:
         d["label_offset"] = list(c.label_offset)
     if c.span_override is not None:
@@ -498,6 +507,11 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if not node_text and kind in _LEGACY_POWER_RAIL_KINDS:
         node_text, options = _split_off_l_slot(options)
 
+    raw_side = data.get("node_side", "")
+    if not isinstance(raw_side, str):
+        raise SchematicLoadError(f"{ctx}.node_side must be a string")
+    node_side = raw_side
+
     label_offset: tuple[float, float] | None = None
     raw_lo = data.get("label_offset")
     if raw_lo is not None:
@@ -571,6 +585,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "mirror": mirror,
         "options": options,
         "node_text": node_text,
+        "node_side": node_side,
         "label_offset": label_offset,
         "span_override": span_override,
         "variants": variants,

@@ -18,6 +18,7 @@ Output format (spec §7.1):
 Mapping rules (spec §7.2):
   - Two-terminal components  → (x0,y0) to[KIND, LABELS] (x1,y1)
   - Multi-terminal components → (x,y) node[KIND, anchor=A] (NODEID) {LABEL}
+  - Single-terminal nodes    → \node[KIND, OPTS] at (x,y) {NODE_TEXT};
   - Wires                    → (x0,y0) -- (x1,y1) -- ...
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -198,6 +199,14 @@ def is_node_style(kind: str) -> bool:
     node) — i.e. it supports a ``node_text`` ({…} slot) and a node-options bracket.
     False for path-style ``to[…]`` components and drawing annotations."""
     return kind in _NODE_STYLE_KINDS
+
+
+def is_single_terminal_node(kind: str) -> bool:
+    """True when *kind* is a **single-terminal** node (ground, supply, terminal dot,
+    inversion bubble — emitted as a standalone ``\\node[kind, <side>] at (x,y) {…};``).
+    These are the kinds for which the placement ``node_side`` (left/right/above/below)
+    is meaningful. False for multi-terminal nodes, path-style and drawing kinds."""
+    return kind in _NODE_KINDS
 
 
 # ---------------------------------------------------------------------------
@@ -408,14 +417,21 @@ def generate(
         if comp.z_order == 0 and _node_group_ctikzset(comp):
             lines.extend(_node_group_lines(comp, _y, _rot))
 
-    lines.append(r"  \draw")
-
     draw_lines: list[str] = []
+    # Single-terminal nodes (grounds, supplies, terminal dots — `_NODE_KINDS`) are
+    # emitted as standalone `\node at (...)` commands after the shared \draw, not as
+    # path fragments inside it (they connect by coordinate and carry no named anchor).
+    # An inversion bubble (ocirc/notcirc) is just such a node; its tangent side comes
+    # from the user's `node_side` (a placement key in the bracket), not gate context.
+    node_command_lines: list[str] = []
     for comp in schematic.components:
         if comp.z_order != 0:
             continue  # emitted in a background/foreground layer block
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
+        if comp.kind in _NODE_KINDS:
+            node_command_lines.append(rf"  {_node_command(comp, _y, _annotation_style_opts(comp, voltage_european, current_european))}")
+            continue
         draw_lines.extend(_component_lines(
             comp, pin_coord_to_ref, _y, _rot,
             voltage_european=voltage_european, current_european=current_european,
@@ -460,15 +476,18 @@ def generate(
             if len(named_refs) >= 2:
                 draw_lines.append(f"{named_refs[0]} -- {named_refs[1]}")
 
+    lines.append(r"  \draw")
     if draw_lines:
         for dl in draw_lines:
             lines.append(f"    {dl}")
-
     lines.append(r"  ;")
 
     # Styled wires: each its own \draw[...] statement after the shared path.
     for swl in styled_wire_lines:
         lines.append(f"  {swl}")
+
+    # Single-terminal nodes (grounds, supplies, terminal dots) as standalone commands.
+    lines.extend(node_command_lines)
 
     # Connection dots at junctions.
     for x, y in sorted(junction_points(schematic)):
@@ -534,7 +553,12 @@ def _component_lines(
     elif kind in _MULTI_TERMINAL_KINDS:
         return [_multi_terminal_line(comp, y_fn, rot_fn, style)]
     elif kind in _NODE_KINDS:
-        return [_node_line(comp, y_fn, style)]
+        # Single-terminal nodes are emitted as standalone ``\node at`` commands, not
+        # as path fragments inside the shared ``\draw`` — callers handle them via
+        # ``_node_command`` directly (see ``generate`` and ``_component_layer_lines``).
+        raise AssertionError(
+            f"node kind '{kind}' must be emitted via _node_command, not _component_lines"
+        )
     elif isinstance(comp, DrawingComponent):
         # Emitted as standalone commands outside the \draw block; nothing here.
         return []
@@ -563,6 +587,11 @@ def _component_layer_lines(
     """
     if _node_group_ctikzset(comp):
         return _node_group_lines(comp, y_fn, rot_fn)
+    if comp.kind in _NODE_KINDS:
+        # A single-terminal node is its own standalone `\node at` command, even in a
+        # layer block (no `\draw` wrapper).
+        style = _annotation_style_opts(comp, voltage_european, current_european)
+        return [rf"  {_node_command(comp, y_fn, style)}"]
     frags = _component_lines(
         comp, None, y_fn, rot_fn,
         voltage_european=voltage_european, current_european=current_european,
@@ -839,17 +868,32 @@ _validate_codegen_tables()
 _POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
 
 
-def _node_line(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
-    """Render a single-terminal node as: (x,y) node[kind, options] {node_text}
+def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
+    """Render a single-terminal node as the **standalone** command
+    ``\\node[kind, options] at (x,y) {node_text};``.
 
-    The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into
-    the trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a
-    ground's label is set as node text, not via a quick key. (Earlier builds
-    special-cased a power-rail ``l=`` slot into ``label=right:…``; that slot is now
-    migrated to ``node_text`` on load, see ``app.schematic.io``.)
+    A single-point node *is* its own pin and connects to wires purely by coordinate
+    (it carries no named anchor), so it needs no place in the shared ``\\draw`` path;
+    emitting it as its own ``\\node at`` statement matches the junction/open-circle/
+    inversion-bubble dots (all standalone ``\\node`` commands) and reads clearly.
+
+    The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into the
+    trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a ground's
+    label is set as node text, not via a quick key. (Earlier builds special-cased a
+    power-rail ``l=`` slot into ``label=right:…``; that slot is now migrated to
+    ``node_text`` on load, see ``app.schematic.io``.)
+
+    ``Component.node_side`` (``left``/``right``/``above``/``below``), when set, is added
+    as a TikZ placement key right after the kind, so the symbol sits on that side of its
+    coordinate — e.g. an inversion bubble ``\\node[ocirc, left] at (x,y){}`` is tangent
+    to a gate input. The side is the user's explicit choice (set in the inspector), not
+    inferred from gate context.
     """
     x, y = comp.position
     args = comp.kind
+    side = getattr(comp, "node_side", "")
+    if side:
+        args += f", {side}"
     if comp.rotation:
         args += f", rotate={comp.rotation}"
     user = _label_args(comp)
@@ -857,7 +901,7 @@ def _node_line(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
         args += f", {user}"
     for s in style:   # local voltage=european / current=european (per annotation)
         args += f", {s}"
-    return f"({_fmt(x)},{_fmt(y_fn(y))}) node[{args}] {{{_node_text_arg(comp)}}}"
+    return rf"\node[{args}] at ({_fmt(x)},{_fmt(y_fn(y))}) {{{_node_text_arg(comp)}}};"
 
 
 # ---------------------------------------------------------------------------

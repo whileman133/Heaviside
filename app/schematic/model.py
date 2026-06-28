@@ -340,11 +340,22 @@ def is_box_kind(obj: "Component | str") -> bool:
 #: transformer/op-amp anchor tracks the symbol). Single source for the predicate.
 TERMINAL_MARKER_CATEGORIES: frozenset[str] = frozenset({"Terminals"})
 
+#: Single-point marker kinds outside the Terminals category — symbols whose body
+#: *is* their single pin and that are dropped onto another component's connection
+#: point (so they get the same treatment as a junction dot: no red pin marker,
+#: grab-to-select rather than wire-start, magnet-snap onto a pin while placing, and
+#: follow the component they sit on). The inversion dot ``notcirc`` lives in the
+#: Logic category (where users look for it) but is one of these.
+TERMINAL_MARKER_KINDS: frozenset[str] = frozenset({"notcirc"})
+
 
 def is_terminal_marker(obj: "Component | str") -> bool:
     """True when *obj* (a Component or kind string) is a single-point connection
-    marker (a Terminals-category dot/pole)."""
+    marker: a Terminals-category dot/pole, or one of :data:`TERMINAL_MARKER_KINDS`
+    (e.g. the Logic-category inversion dot ``notcirc``)."""
     kind = obj if isinstance(obj, str) else obj.kind
+    if kind in TERMINAL_MARKER_KINDS:
+        return True
     from app.components.registry import REGISTRY
     defn = REGISTRY.get(kind)
     return defn is not None and defn.category in TERMINAL_MARKER_CATEGORIES
@@ -764,6 +775,73 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             rx = -rx
         out.append((ox + rx, oy + ry))
     return out
+
+
+#: Single-point marker kinds usable as a logic-gate **inversion bubble** when dropped
+#: on a gate body anchor (the manual inverts inputs/outputs with an ``ocirc``). The
+#: bubble's tangent side is the user's :attr:`Component.node_side` (a placement key set
+#: in the inspector); :func:`gate_body_anchor_side` only seeds a smart **default** at
+#: placement — it is not consulted at code-generation time.
+INVERSION_BUBBLE_KINDS: frozenset[str] = frozenset({"ocirc", "notcirc"})
+
+#: A node's placement keywords and the canvas/​export offset direction (canvas frame,
+#: +y down) each maps to: ``left`` ⇒ symbol sits left of the point, etc.
+NODE_SIDES: tuple[str, ...] = ("left", "right", "above", "below")
+
+
+def _rotate_mirror(dx: float, dy: float, rotation: int,
+                   mirror: bool) -> tuple[float, float]:
+    """Apply a component's clockwise-rotate-then-horizontal-mirror transform to a
+    local vector (the same transform :func:`component_pin_positions` uses)."""
+    r = rotation % 360
+    if r == 90:
+        rx, ry = (-dy, dx)
+    elif r == 180:
+        rx, ry = (-dx, -dy)
+    elif r == 270:
+        rx, ry = (dy, -dx)
+    else:
+        rx, ry = (dx, dy)
+    return (-rx, ry) if mirror else (rx, ry)
+
+
+def _is_gate_body_anchor(name: str) -> bool:
+    """A logic gate's *body* anchor — the ``b``-prefixed input/output edge points
+    (``bin 1``…/``bout``) where an inversion bubble sits."""
+    return name == "bout" or name.startswith("bin")
+
+
+def _side_from_outward(outward: tuple[float, float]) -> str:
+    """The placement keyword for an outward direction (canvas frame, +y down):
+    left/right horizontally, above/below vertically (canvas-up = TikZ ``above``)."""
+    dx, dy = outward
+    if abs(dx) >= abs(dy):
+        return "left" if dx < 0 else "right"
+    return "above" if dy < 0 else "below"
+
+
+def gate_body_anchor_side(schematic: "Schematic", pin_pos: tuple[float, float]) -> str:
+    """Smart-default placement side for a single-point marker whose pin lands on a logic
+    gate's body anchor (``bin*``/``bout``): the keyword (one of :data:`NODE_SIDES`)
+    pointing **away** from the gate body so a bubble there is tangent on the outer side.
+    Returns ``""`` when *pin_pos* is on no gate body anchor.
+
+    Used only to seed :attr:`Component.node_side` at placement (the user can then change
+    it in the inspector); code generation reads the stored side, never this."""
+    from app.components.registry import REGISTRY
+    from app.components import library
+    key = point_key(pin_pos)
+    for g in schematic.components:
+        if REGISTRY.get(g.kind) is None:
+            continue
+        gpins = library.resolved_pins(g)
+        gpos = component_pin_positions(g)
+        for pin, pos in zip(gpins, gpos):
+            if _is_gate_body_anchor(pin.name) and point_key(pos) == key:
+                local_out = -1.0 if pin.name.startswith("bin") else 1.0
+                return _side_from_outward(
+                    _rotate_mirror(local_out, 0.0, g.rotation, g.mirror))
+    return ""
 
 
 # Spacing of connection points along a rectangle's edges, in GU — the minor
