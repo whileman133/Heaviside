@@ -255,6 +255,25 @@ def test_rotate_vector_45_uses_trig() -> None:
     assert ry == pytest.approx(2.0 * math.sin(math.radians(45)))
 
 
+def test_resized_path_symbol_shifts_body_relative_pins() -> None:
+    """Lengthening a path device moves the far terminal to the new length and shifts its
+    **body-relative** pins (an inductor midtap, a thyristor gate) by half the increase,
+    so they stay attached to the (fixed-size) body centred on the new midpoint; the near
+    terminal is unchanged (§5.7)."""
+    # Inductor: natural midtap at the centre (1,0); at length 4 → the new centre (2,0).
+    ind = Component(id=_uid(), kind="L", position=(0.0, 0.0), rotation=0, options="",
+                    span_override=(4.0, 0.0))
+    p = component_pin_positions(ind)
+    assert p[0] == (0.0, 0.0) and p[1] == (4.0, 0.0)
+    assert p[2] == (2.0, 0.0)                         # midtap followed the body (+1.0)
+    # Thyristor: gate at (1.7, −0.77) shifts by +1.0 with the body.
+    thy = Component(id=_uid(), kind="thyristor", position=(0.0, 0.0), rotation=0,
+                    options="", span_override=(4.0, 0.0))
+    g = component_pin_positions(thy)
+    assert g[1] == (4.0, 0.0)
+    assert g[2] == (2.7, -0.77)
+
+
 def test_component_pin_positions_at_45() -> None:
     """A two-terminal component at 45° puts its far terminal on the 45° diagonal
     (off-grid), reached by the wire magnet / pin-axis alignment (§3.1)."""

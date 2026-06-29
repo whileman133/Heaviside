@@ -162,6 +162,33 @@ def test_multi_select_mixed_kinds_edits_shared_properties(_app):
     assert all(comp.rotation == 0 for comp in scene.schematic.components)
 
 
+def test_path_length_section_resizes_undoably(_app):
+    """The inspector's Length field shows for a two-terminal path symbol and sets its
+    length via an undoable command; it is hidden for nodes and 3-pin path devices."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PathLengthSection, PropertiesPanel
+
+    scene = SchematicScene()
+    r = scene.place_component("R", (2.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(r.id)
+    sec = next(s for s in panel._sections if isinstance(s, PathLengthSection))
+
+    assert sec.applies_to(scene._component_by_id(r.id))
+    sec._length.setValue(5.0)
+    sec._commit()
+    assert scene._component_by_id(r.id).span_override == (5.0, 0.0)
+    scene.undo()
+    assert scene._component_by_id(r.id).span_override in (None, (2.0, 0.0))
+
+    # Shows for a 3-pin path device (thyristor); hidden for a node (op amp).
+    op = scene.place_component("op amp", (10.0, 0.0))
+    thy = scene.place_component("thyristor", (16.0, 0.0))
+    assert sec.applies_to(scene._component_by_id(thy.id))
+    assert not sec.applies_to(scene._component_by_id(op.id))
+
+
 def test_transform_section_offers_45_degree_rotations(_app):
     """The inspector's Rotation control exposes all eight 45° orientations, and a
     diagonal button rotates the component to that angle (undoably)."""

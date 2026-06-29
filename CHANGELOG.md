@@ -5,6 +5,20 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Resize path components by length.** A two-terminal path symbol (resistor,
+  capacitor, diode, source, …) now shows a drag handle at each end when selected —
+  drag either end to lengthen the device (the body stays its natural size, the leads
+  extend, like CircuiTikZ's `to[…]` between two coordinates). There's also a **Length**
+  field in the inspector for a precise value. The end snaps to the 0.25 GU grid when
+  near a node but can land off-grid, and a rotated component lengthens along its own
+  axis — handy for closing up a 45° bridge rectifier ([#38](https://github.com/whileman133/Heaviside/issues/38)).
+  Works for every two-terminal path device, including ones with an extra pin
+  (thyristor/triac gate, potentiometer wiper, inductor midtap) — the extra pin follows
+  the body as it lengthens.
+
 ## [0.5.0] - 2026-06-28
 
 ### Added

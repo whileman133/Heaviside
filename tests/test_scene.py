@@ -4015,6 +4015,58 @@ def test_laplata_draws_off_a_45_degree_rotated_component(scene: SchematicScene):
     assert validate(scene.schematic) == []
 
 
+def test_set_component_length_lengthens_path_symbol(scene: SchematicScene):
+    """`set_component_length` (the inspector Length path) stretches a two-terminal
+    symbol: its far pin moves out, the schematic stays valid, and it's undoable. The
+    length floors at the natural size (lengthen-only)."""
+    from app.schematic.model import component_pin_positions
+    from app.schematic.validate import validate
+    r = scene.place_component("R", (2.0, 2.0))          # pins (2,2),(4,2)
+    scene.set_component_length(r.id, 4.0)
+    c = scene._component_by_id(r.id)
+    assert c.span_override == (4.0, 0.0)
+    assert component_pin_positions(c)[1] == (6.0, 2.0)
+    assert validate(scene.schematic) == []
+    scene.undo()
+    assert scene._component_by_id(r.id).span_override in (None, (2.0, 0.0))
+    # Floored at the natural length (cannot shrink below 2 GU).
+    scene.set_component_length(r.id, 0.5)
+    assert scene._component_by_id(r.id).span_override in (None, (2.0, 0.0))
+
+
+def test_path_symbol_endpoint_drag_grid_magnet_and_offgrid(scene: SchematicScene):
+    """Dragging a path symbol's terminal end magnets to a 0.25 node when near one, but
+    lands free off-grid otherwise (§5.7), constrained to the component axis."""
+    r = scene.place_component("R", (2.0, 2.0))
+    scene._comp_items[r.id].setSelected(True)
+    # Near a node (5.97 ≈ 6.0 → length magnets to 4.0).
+    scene._drag.endpoint_drag = (r.id, 1, (2.0, 0.0))
+    scene._drag.commit_endpoint_drag(r.id, (2.0, 0.0), (5.97, 2.0), 1, raw_gu=(5.97, 2.0))
+    assert scene._component_by_id(r.id).span_override == (4.0, 0.0)
+    # Far from any node → free off-grid length (3.6, not snapped to a 0.25 multiple).
+    scene._drag.endpoint_drag = (r.id, 1, (4.0, 0.0))
+    scene._drag.commit_endpoint_drag(r.id, (4.0, 0.0), (5.6, 2.0), 1, raw_gu=(5.6, 2.0))
+    so = scene._component_by_id(r.id).span_override
+    assert so[0] == pytest.approx(3.6) and so[1] == 0.0
+    assert abs(so[0] - round(so[0] * 4) / 4) > 1e-6      # genuinely off the 0.25 grid
+
+
+def test_path_symbol_lengthens_along_its_45_degree_axis(scene: SchematicScene):
+    """A 45°-rotated symbol lengthens **along its own axis** — the dragged end is
+    projected onto the rotated axis, so the span stays (length, 0) in local frame."""
+    import math
+    from app.schematic.validate import validate
+    r = scene.place_component("R", (2.0, 2.0))
+    scene.rotate_component(r.id, 45)
+    u = (math.cos(math.radians(45)), math.sin(math.radians(45)))
+    raw = (2.0 + 4.0 * u[0], 2.0 + 4.0 * u[1])          # 4 GU along the 45° axis
+    scene._drag.endpoint_drag = (r.id, 1, (2.0, 0.0))
+    scene._drag.commit_endpoint_drag(r.id, (2.0, 0.0), raw, 1, raw_gu=raw)
+    c = scene._component_by_id(r.id)
+    assert c.span_override[0] == pytest.approx(4.0) and c.span_override[1] == 0.0
+    assert validate(scene.schematic) == []
+
+
 def test_set_mark_junctions_toggles_dots(scene: SchematicScene):
     """Toggling the document's mark_junctions adds/removes the canvas junction dots."""
     scene.add_wire([(0.0, 0.0), (2.0, 0.0)])

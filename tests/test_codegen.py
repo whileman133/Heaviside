@@ -903,6 +903,14 @@ def test_wire_laplata_diagonal() -> None:
     assert "(0,0) -- (1,1) -- (4,1)" in src
 
 
+def test_resized_path_symbol_emits_stretched_coords() -> None:
+    """A length-resized two-terminal symbol emits its stretched endpoints — CircuiTikZ
+    extends the leads to fill the longer ``to[…]`` span (§5.7)."""
+    s = _schematic(_comp("R", position=(0.0, 0.0)))
+    s.components[0].span_override = (4.0, 0.0)
+    assert "(0,0) to[R] (4,0)" in generate(s)
+
+
 def test_bipole_at_45_emits_diagonal_endpoints() -> None:
     """A two-terminal symbol rotated 45° draws between diagonal endpoints — the span
     is rotated 45° (so its second coordinate is on the 45° line), matching the canvas

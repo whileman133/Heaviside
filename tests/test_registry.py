@@ -189,6 +189,10 @@ def test_all_kinds_resolve_to_a_component_item() -> None:
     for kind in REGISTRY:
         cls = ITEM_CLASSES.get(kind, ComponentItem)  # the real lookup (scene/palette)
         assert issubclass(cls, ComponentItem), f"kind '{kind}' -> non-ComponentItem {cls}"
-    # Explicit entries exist only for special-behaviour kinds, never plain symbols.
-    assert "R" not in ITEM_CLASSES and "ground" not in ITEM_CLASSES
+    # A single-point node (ground) has no explicit entry — it falls back to the base
+    # ComponentItem. A two-terminal path symbol (R) maps to the length-resizable item
+    # (endpoint handles, §5.7); special-behaviour kinds keep their explicit entries.
+    assert "ground" not in ITEM_CLASSES
+    from app.canvas.items import _ResizablePathItem
+    assert ITEM_CLASSES.get("R") is _ResizablePathItem
     assert {"nigfete", "open", "rect"} <= set(ITEM_CLASSES)
