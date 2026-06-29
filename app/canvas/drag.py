@@ -175,6 +175,57 @@ class DragPreviewController:
             for p in component_connection_points(comp)
         }
 
+    #: A length-resizable path symbol's end magnets to a 0.25-GU node within this
+    #: radius, else lands free (off-grid) — "snaps to grid but not required" (§5.7).
+    _GRID_MAGNET_GU = 0.08
+
+    @staticmethod
+    def _is_soft_endpoint(item) -> bool:
+        """True for a length-resizable **path symbol** (grid-magnet endpoint along its
+        own axis), False for the free-2D / hard-snapped annotations and boxes."""
+        return bool(getattr(item, "endpoint_snap_is_soft", lambda: False)())
+
+    def _axis_pin(
+        self, comp, old_span: tuple[float, float], handle_idx: int,
+        raw_gu: tuple[float, float],
+    ) -> tuple[float, float]:
+        """The dragged end's world position for a soft (path-symbol) drag: the raw
+        cursor **projected onto the component's axis**, magnet-snapped to a **grid
+        crossing on that axis** (so a 45° device snaps to the diagonal grid nodes it
+        actually passes through, not to 0.25 length steps), and floored at the natural
+        length (lengthen-only). For the terminal handle the origin is fixed; for the
+        origin handle the terminal is fixed."""
+        from app.components.registry import REGISTRY
+        defn = REGISTRY[comp.kind]
+        l0 = (defn.default_span[0] ** 2 + defn.default_span[1] ** 2) ** 0.5
+        ux, uy = local_span_to_world((1.0, 0.0), comp.rotation, comp.mirror)  # axis unit
+        ox, oy = comp.position
+        if handle_idx == 1:                      # terminal moves, origin fixed
+            anchor, ax, ay = (ox, oy), ux, uy
+        else:                                    # origin moves, terminal fixed
+            tx, ty = local_span_to_world(old_span, comp.rotation, comp.mirror)
+            anchor, ax, ay = (ox + tx, oy + ty), -ux, -uy
+        length = (raw_gu[0] - anchor[0]) * ax + (raw_gu[1] - anchor[1]) * ay
+        length = self._snap_axis_length(anchor, (ax, ay), length)
+        length = max(length, l0)                 # lengthen-only (never below natural)
+        return (anchor[0] + length * ax, anchor[1] + length * ay)
+
+    def _snap_axis_length(
+        self, anchor: tuple[float, float], u: tuple[float, float], length: float
+    ) -> float:
+        """Magnet the endpoint ``anchor + length·u`` to the nearest 0.25-GU grid node
+        that lies **on the axis**, if within ``_GRID_MAGNET_GU``; else leave it free
+        (off-grid). For an axis-aligned device the on-axis nodes are 0.25 apart; for a
+        45° device they are 0.25·√2 apart (the diagonal crossings), so the length
+        magnets to the points the wire can actually reach on the grid."""
+        px, py = anchor[0] + length * u[0], anchor[1] + length * u[1]
+        gx, gy = round(px * 4) / 4, round(py * 4) / 4          # nearest grid node
+        lg = (gx - anchor[0]) * u[0] + (gy - anchor[1]) * u[1]  # project it onto the axis
+        fx, fy = anchor[0] + lg * u[0], anchor[1] + lg * u[1]   # its foot on the axis
+        on_axis = abs(fx - gx) < 1e-6 and abs(fy - gy) < 1e-6   # node truly lies on the axis
+        near = ((px - fx) ** 2 + (py - fy) ** 2) ** 0.5 <= self._GRID_MAGNET_GU
+        return lg if (on_axis and near) else length
+
     def _endpoint_local_delta(
         self, comp_id: str, gu: tuple[float, float]
     ) -> tuple[_ResizableTwoTerminalItem, object, float, float] | None:
@@ -210,9 +261,14 @@ class DragPreviewController:
         only). Checks selected items first."""
         scene = self._scene
         selected = scene.selectedItems()
+        # Annotations / boxes expose their handles regardless of selection, but a path
+        # **symbol**'s handles are active only when it is selected — its endpoints are
+        # also component pins (wire-start points), so an unselected pin press must fall
+        # through to wire auto-start, not be grabbed as a resize handle.
         candidates = list(selected) + [
             item for item in scene._comp_items.values()
             if isinstance(item, _ResizableTwoTerminalItem) and item not in selected
+            and not self._is_soft_endpoint(item)
         ]
         for item in candidates:
             if not isinstance(item, _ResizableTwoTerminalItem):
@@ -223,11 +279,21 @@ class DragPreviewController:
                 return item.component.id, idx
         return None
 
-    def preview_endpoint_drag(self, gu: tuple[float, float]) -> None:
-        """Live visual update while dragging an endpoint (model untouched)."""
+    def preview_endpoint_drag(
+        self, gu: tuple[float, float], raw_gu: tuple[float, float] | None = None
+    ) -> None:
+        """Live visual update while dragging an endpoint (model untouched).
+
+        *raw_gu* is the un-snapped cursor; for a soft (path-symbol) end it drives the
+        axis-constrained, grid-magnet target (else *gu*, the 0.25-snapped cursor, is
+        used as before)."""
         if self.endpoint_drag is None:
             return
         comp_id, handle_idx, old_span = self.endpoint_drag
+        item = self._scene._comp_items.get(comp_id)
+        if isinstance(item, _ResizableTwoTerminalItem) and self._is_soft_endpoint(item) \
+                and raw_gu is not None:
+            gu = self._axis_pin(item.component, old_span, handle_idx, raw_gu)
         resolved = self._endpoint_local_delta(comp_id, gu)
         if resolved is None:
             return
@@ -357,21 +423,36 @@ class DragPreviewController:
         old_span: tuple[float, float],
         gu: tuple[float, float],
         handle_idx: int = 1,
+        raw_gu: tuple[float, float] | None = None,
     ) -> None:
         """Commit the dragged endpoint: a ResizeCommand for the terminal handle, or
         a MoveEndpointCommand for the origin handle (which moves the component and
-        holds the terminal fixed)."""
+        holds the terminal fixed).
+
+        *raw_gu* (un-snapped cursor) drives a soft (path-symbol) end: the length is
+        axis-constrained and grid-magnet-snapped (off-grid allowed) rather than hard-
+        snapped to the 0.25 grid."""
+        item0 = self._scene._comp_items.get(comp_id)
+        soft = isinstance(item0, _ResizableTwoTerminalItem) \
+            and self._is_soft_endpoint(item0) and raw_gu is not None
+        if soft:
+            gu = self._axis_pin(item0.component, old_span, handle_idx, raw_gu)
         resolved = self._endpoint_local_delta(comp_id, gu)
         if resolved is None:
             return
         item, comp, dx, dy = resolved
         if handle_idx == 0:
-            self._commit_origin_drag(comp_id, comp, old_span, gu)
+            self._commit_origin_drag(comp_id, comp, old_span, gu, soft=soft)
             return
-        # Snap the span to the 0.25 GU grid (matching placement, wire vertices and
-        # the live preview), so what the user dragged is what commits.
-        dx = round(dx * 4) / 4
-        dy = round(dy * 4) / 4
+        if not soft:
+            # Snap the span to the 0.25 GU grid (matching placement, wire vertices and
+            # the live preview), so what the user dragged is what commits.
+            dx = round(dx * 4) / 4
+            dy = round(dy * 4) / 4
+        else:
+            # A soft end keeps its axis-magnet length (resolved by _axis_pin); zero the
+            # perpendicular so the span stays exactly along the component axis.
+            dy = 0.0
         if (dx == 0.0 and dy == 0.0) or (dx, dy) == old_span:
             # Degenerate or unchanged — undo the preview swap, push nothing.
             self.restore_endpoint_preview(comp_id)
@@ -386,15 +467,18 @@ class DragPreviewController:
         comp,  # noqa: ANN001
         old_span: tuple[float, float],
         gu: tuple[float, float],
+        soft: bool = False,
     ) -> None:
         """Commit an origin-endpoint drag. The span is snapped to the 0.25 grid and
         the origin recomputed so the terminal stays exactly fixed; a no-op (zero or
-        unchanged span) restores the preview and pushes nothing."""
+        unchanged span) restores the preview and pushes nothing. A *soft* (path-symbol)
+        end keeps its axis-magnet span (``gu`` is already the resolved origin)."""
         old_origin, terminal = self._origin_terminal_world(comp, old_span)
         raw_span = world_span_to_local(
             (terminal[0] - gu[0], terminal[1] - gu[1]), comp.rotation, comp.mirror
         )
-        new_span = (round(raw_span[0] * 4) / 4, round(raw_span[1] * 4) / 4)
+        new_span = (raw_span[0], 0.0) if soft else (
+            round(raw_span[0] * 4) / 4, round(raw_span[1] * 4) / 4)
         if new_span == (0.0, 0.0) or new_span == old_span:
             self.restore_endpoint_preview(comp_id)
             return

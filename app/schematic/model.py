@@ -859,17 +859,21 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
     nf = node_resize_factors(component)
 
     ox, oy = component.position
+    # A length-resized path symbol shifts its **body-relative** pins (a gate, wiper, or
+    # midtap — index ≥ 2) by half the length increase along the local axis, so they stay
+    # attached to the body (which stays its natural size, centred on the new midpoint);
+    # the near terminal (0) is fixed and the far terminal (1) goes to span_override (§5.7).
+    body_shift = 0.0
+    if defn.resizable and component.span_override is not None:
+        body_shift = (component.span_override[0] - defn.default_span[0]) / 2.0
     out: list[tuple[float, float]] = []
     for i, pin in enumerate(pins):
         dx, dy = pin.offset
-        # For resizable two-terminal components, the terminal pin (index 1)
-        # uses span_override when set instead of the registry default offset.
-        if (
-            i == 1
-            and defn.resizable
-            and component.span_override is not None
-        ):
-            dx, dy = component.span_override
+        if defn.resizable and component.span_override is not None:
+            if i == 1:
+                dx, dy = component.span_override        # far terminal at the new length
+            elif i >= 2:
+                dx, dy = dx + body_shift, dy            # gate/wiper/midtap follow the body
         elif gate is not None:
             dx, dy = gate[i]["pin_offset"]
         if nf is not None:

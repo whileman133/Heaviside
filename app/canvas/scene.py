@@ -1130,6 +1130,25 @@ class SchematicScene(QGraphicsScene):
             return
         self._push(ResizeNodeCommand(component_id, new, old))
 
+    def set_component_length(self, component_id: str, length: float) -> None:
+        """Set a length-resizable path symbol's length (GU) along its axis via an
+        undoable ResizeCommand — the inspector Length field's write path, the same
+        command the endpoint-drag uses (so connected wires follow). Clamped to the
+        natural length (lengthen-only); no-op when unchanged or not such a kind."""
+        from app.canvas.commands import ResizeCommand
+        from app.components import library
+        comp = self._component_by_id(component_id)
+        if comp is None or not library.is_length_resizable(comp.kind):
+            return
+        defn = REGISTRY[comp.kind]
+        l0 = (defn.default_span[0] ** 2 + defn.default_span[1] ** 2) ** 0.5
+        new_len = max(round(length, 6), l0)
+        old_span = comp.span_override if comp.span_override is not None else defn.default_span
+        new_span = (new_len, 0.0)
+        if abs(new_span[0] - old_span[0]) < 1e-9 and abs(old_span[1]) < 1e-9:
+            return
+        self._push(ResizeCommand(component_id, new_span, old_span))
+
     def set_line_style(self, component_id: str, new_style: str) -> None:
         """Set line_style on a StyledComponent (bipole or rect) via an undoable command."""
         from app.components.model import StyledComponent
@@ -2411,7 +2430,8 @@ class SchematicScene(QGraphicsScene):
             return
 
         if self._drag.endpoint_drag is not None:
-            self._drag.preview_endpoint_drag(gu)
+            self._drag.preview_endpoint_drag(
+                gu, raw_gu=self.scene_to_gu(event.scenePos()))
             self._refresh_preview_hops()
             event.accept()
             return
@@ -2817,15 +2837,19 @@ class SchematicScene(QGraphicsScene):
             self._drag.endpoint_drag = None
             self._drag.endpoint_press_gu = None
             gu = self.snap_point_gu(event.scenePos())
-            if gu != press_gu:
-                self._drag.commit_endpoint_drag(comp_id, old_span, gu, handle_idx)
+            raw = self.scene_to_gu(event.scenePos())
+            # Clear any drag-time wire previews up front; the commit rebuilds the real
+            # geometry (or, on a no-op, restore_endpoint_preview resyncs the item).
+            for wire_item in self._wire_items.values():
+                wire_item.clear_preview_points()
+            if gu != press_gu or raw != press_gu:
+                # A real drag (incl. a sub-grid soft drag the snapped cursor misses).
+                # The commit no-ops (and restores the preview) if the span is unchanged.
+                self._drag.commit_endpoint_drag(
+                    comp_id, old_span, gu, handle_idx, raw_gu=raw)
             else:
-                # No movement: clear any wire preview points set during the drag
-                # and restore the item's component — the preview swapped it for a
-                # dataclasses.replace copy, which would otherwise stick (a
-                # drag-and-return would leave the item desynced from the model).
-                for wire_item in self._wire_items.values():
-                    wire_item.clear_preview_points()
+                # Plain click (no movement): restore the item's component — the preview
+                # swapped it for a dataclasses.replace copy, which would otherwise stick.
                 self._drag.restore_endpoint_preview(comp_id)
             # On plain click (no movement) the item is already selected from press.
             event.accept()

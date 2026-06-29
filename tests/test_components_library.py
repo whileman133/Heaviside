@@ -128,6 +128,23 @@ def test_pin_to_ctikz_golden():
     assert {"+": "+", "-": "-", "out": "out"}.items() <= cg._PIN_TO_CTIKZ_ANCHOR["op amp"].items()
 
 
+def test_path_symbols_are_length_resizable():
+    """Every two-axial-terminal path symbol is length-resizable — plain bipoles (R,
+    capacitor, diode, source) **and** path devices with an extra body-relative pin
+    (the inductor's midtap, the thyristor gate, the potentiometer wiper), whose extra
+    pin follows the body centre. Nodes, grounds, and the bespoke annotations are not
+    (§5.7)."""
+    assert all(library.is_length_resizable(k) for k in
+               ("R", "capacitor", "full diode", "american voltage source",
+                "L", "thyristor", "pR")), "path symbols (incl. extra-pin) resize"
+    assert not any(library.is_length_resizable(k) for k in
+                   ("op amp", "npn", "ground", "short", "open")), \
+        "nodes / grounds / bespoke annotations do not"
+    # The ComponentDef carries the flag (drives span_override in pins + codegen).
+    assert REGISTRY["R"].resizable is True
+    assert REGISTRY["op amp"].resizable is False
+
+
 def test_diode_kinds_golden():
     # The two-terminal members of the manual Diodes category (the set CircuiTikZ's
     # ``diodes/scale`` resizes); detection is category-based. The manual library

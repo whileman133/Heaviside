@@ -993,6 +993,28 @@ class ComponentItem(QGraphicsItem):
         lead = paths[widths.index(max(widths))].path.boundingRect()
         return (ratio, lead.center().x(), lead.center().y(), max(widths))
 
+    def _span_extension(self) -> tuple[float, float, float] | None:
+        """For a **length-resized** two-terminal path symbol, return ``(half_px,
+        len_px, default_len_px)`` along the local x axis, else ``None``.
+
+        The symbol body is drawn shifted by ``half_px`` so it re-centres on the new
+        midpoint, and straight stub leads bridge each pin to the (translated) symbol
+        end — so the body keeps its natural size while the leads extend, matching
+        CircuiTikZ's ``to[…]`` between two coordinates. ``None`` for a non-resizable
+        kind, an unset/zero/natural span, or a non-horizontal axis (path symbols are
+        defined horizontally; rotation is the item transform)."""
+        defn = self._defn
+        so = self._component.span_override
+        if so is None or not defn.resizable:
+            return None
+        dl = defn.default_span
+        if abs(dl[1]) > 1e-9 or abs(dl[0]) < 1e-9:
+            return None
+        l0, l = dl[0], so[0]
+        if abs(l - l0) < 1e-9:
+            return None
+        return ((l - l0) * GRID_PX / 2.0, l * GRID_PX, l0 * GRID_PX)
+
     def _node_side_offset_px(self) -> tuple[float, float]:
         """Canvas render shift (scene px) for a single-terminal node's placement
         ``node_side`` (left/right/above/below): the symbol is drawn on that side of its
@@ -1576,6 +1598,13 @@ class ComponentItem(QGraphicsItem):
             grown = QTransform().translate(diode[1], diode[2]).scale(
                 diode[0], diode[0]).translate(-diode[1], -diode[2]).mapRect(rect)
             rect = rect.united(grown)
+        ext = self._span_extension()                     # cover a stretched path symbol
+        if ext is not None:
+            half, lpx, _l0 = ext
+            lo, hi = min(0.0, lpx), max(0.0, lpx)
+            rect = rect.united(QRectF(lo - margin, -margin,
+                                      (hi - lo) + 2 * margin, 2 * margin))
+            rect = rect.united(rect.translated(half, 0.0))
         return rect
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
@@ -1593,10 +1622,13 @@ class ComponentItem(QGraphicsItem):
         # A scaled logic gate draws its body shrunk about the origin (out pin);
         # its pins sit at the true scaled anchor (no lead stubs — a wire connects
         # there directly via the magnet).
+        ext = self._span_extension()        # (half_px, len_px, default_len_px) | None
         painter.save()
         _bdx, _bdy = self._node_side_offset_px()
         if _bdx or _bdy:
             painter.translate(_bdx, _bdy)   # node_side → symbol drawn on the chosen side
+        if ext is not None:
+            painter.translate(ext[0], 0.0)  # re-centre the body on the stretched midpoint
         if s != 1.0:
             painter.scale(s, s)
         diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
@@ -1633,6 +1665,15 @@ class ComponentItem(QGraphicsItem):
                 painter.restore()
         painter.restore()
 
+        # --- extended leads (length-resized path symbol) -----------------
+        # Straight stubs from each pin to the (translated) symbol ends; the body
+        # kept its natural size, so these continue its baked leads seamlessly.
+        if ext is not None:
+            half, lpx, l0px = ext
+            painter.setPen(_pen(color, LINE_W * lw_scale))
+            painter.drawLine(QPointF(0.0, 0.0), QPointF(half, 0.0))
+            painter.drawLine(QPointF(l0px + half, 0.0), QPointF(lpx, 0.0))
+
         # --- transformer polarity dots -----------------------------------
         # A checked dot variant (§5.4) draws a filled circle (CircuiTikZ ``circ``)
         # at its inner-dot anchor; the offsets are in GU at the symbol's scale.
@@ -1655,10 +1696,23 @@ class ComponentItem(QGraphicsItem):
                 pin_offsets = [g["pin_offset"] for g in gate]
             else:
                 pin_offsets = [pdef.offset for pdef in self._resolved_pins()]
-            for dx, dy in pin_offsets:
-                painter.drawEllipse(
-                    QPointF(dx * GRID_PX, dy * GRID_PX), PIN_R, PIN_R
-                )
+            if ext is not None:
+                # A length-resized path symbol: the far terminal (1) sits at the
+                # stretched endpoint; body-relative pins (≥2: gate/wiper/midtap) shift
+                # by half the length increase; the near terminal (0) is fixed (§5.7).
+                half_px, lpx, _l0 = ext
+                pin_px = []
+                for i, (dx, dy) in enumerate(pin_offsets):
+                    if i == 1:
+                        pin_px.append(QPointF(lpx, 0.0))
+                    elif i >= 2:
+                        pin_px.append(QPointF(dx * GRID_PX + half_px, dy * GRID_PX))
+                    else:
+                        pin_px.append(QPointF(dx * GRID_PX, dy * GRID_PX))
+            else:
+                pin_px = [QPointF(dx * GRID_PX, dy * GRID_PX) for dx, dy in pin_offsets]
+            for pt in pin_px:
+                painter.drawEllipse(pt, PIN_R, PIN_R)
 
 
 # ---------------------------------------------------------------------------
@@ -3567,6 +3621,44 @@ class _ResizableGateItem(ComponentItem):
                                  _HANDLE_HALF * 2, _HANDLE_HALF * 2)
 
 
+class _ResizablePathItem(_ResizableTwoTerminalItem):
+    """A length-resizable two-terminal **path symbol** (R, C, L, diode, source, …).
+
+    Unlike the line annotations, it paints the real SVG **symbol** (via the
+    span-aware ``ComponentItem`` painter — fixed body, extended leads) and adds the
+    two endpoint handles. It reuses ``_ResizableTwoTerminalItem``'s endpoint
+    helpers (so the drag controller and ``ResizeCommand`` find its handles
+    unchanged); the length-only / grid-magnet drag behaviour lives in
+    ``DragController`` (it special-cases this item via :meth:`endpoint_snap_is_soft`)."""
+
+    def endpoint_snap_is_soft(self) -> bool:
+        """The dragged end uses a grid **magnet** (snaps near a node, free off-grid),
+        not a hard 0.25 snap — so the scene passes the raw cursor (§5.7/§6.4)."""
+        return True
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        ComponentItem.paint(self, painter, option, widget)   # span-aware symbol + pins
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(QBrush(QColor(style.COLOR_SELECTED)))
+            for h in (QPointF(0.0, 0.0), self._endpoint_px()):
+                painter.drawRect(h.x() - _HANDLE_HALF, h.y() - _HANDLE_HALF,
+                                 _HANDLE_HALF * 2, _HANDLE_HALF * 2)
+
+    def boundingRect(self) -> QRectF:  # noqa: N802
+        rect = ComponentItem.boundingRect(self)              # span-aware symbol bbox
+        m = _HANDLE_HALF + LINE_W
+        for h in (QPointF(0.0, 0.0), self._endpoint_px()):
+            rect = rect.united(QRectF(h.x() - m, h.y() - m, 2 * m, 2 * m))
+        return rect
+
+    def shape(self) -> QPainterPath:
+        # The whole symbol body (not just the axis line) is clickable.
+        p = QPainterPath()
+        p.addRect(self.boundingRect())
+        return p
+
+
 ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "nigfete":   _MosfetItem,   # extends boundingRect for the body_diode variant
     "nigfetd":   _MosfetItem,
@@ -3594,6 +3686,14 @@ for _kind in REGISTRY:
         continue
     ITEM_CLASSES[_kind] = (_ResizableGateItem if _library.gate_uses_height(_kind)
                            else _ResizableNodeItem)
+
+# Length-resizable two-terminal path symbols (R, C, L, diode, source, …) get the
+# endpoint-handle item. ``resizable`` is set on exactly these kinds (a 2-pin path
+# symbol); the bespoke annotations/boxes are already mapped above, so skip those.
+for _kind, _defn in REGISTRY.items():
+    if _kind in ITEM_CLASSES or not _defn.resizable:
+        continue
+    ITEM_CLASSES[_kind] = _ResizablePathItem
 
 # Push into the registry so other modules can look up item classes without
 # importing Qt (they import ITEM_CLASSES from app.components.registry).

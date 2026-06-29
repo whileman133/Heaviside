@@ -326,6 +326,19 @@ def is_logic_gate(kind: str) -> bool:
 _SCALABLE_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
 
 
+def is_length_resizable(kind: str) -> bool:
+    """True for a **length-resizable path symbol** (any ``to[…]`` device with two
+    axial terminals — R, C, L, diode, source, thyristor, potentiometer, …) — the kinds
+    whose ``span_override`` lengthens the device (the body stays fixed, the leads
+    extend, §5.7; extra gate/wiper/midtap pins shift with the body centre). Excludes the
+    bespoke annotations/boxes (open/short/bipole/rect/circle — they have their own
+    resize) and node-placed kinds (no axial span)."""
+    if kind in NON_LIBRARY_KINDS:
+        return False
+    e = load_library().get(kind)
+    return bool(e and e.get("emission") == "path" and len(e.get("pins", [])) >= 2)
+
+
 def is_scalable(kind: str) -> bool:
     """True for every kind whose :attr:`Component.scale` is meaningful — logic
     gates and the digital blocks."""
@@ -453,6 +466,12 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
         default_span = (x1 - x0, y1 - y0)
     else:
         default_span = (0.0, 0.0)
+    # Any path (``to[…]``) symbol with two axial terminals (R, C, L, diode, source,
+    # thyristor, potentiometer, …) is **length-resizable**: drag either end to lengthen
+    # it (the body stays fixed, the leads extend — §5.7). Extra pins (a gate, wiper, or
+    # midtap) are body-relative and shift with the body centre (component_pin_positions).
+    # Node-placed kinds (no axial span) are not.
+    resizable = entry.get("emission") == "path" and len(pins) >= 2
     return ComponentDef(
         kind=kind,
         display_name=entry["display_name"],
@@ -462,7 +481,7 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
         label_slots=list(entry.get("labels", [])),
         tikz_keyword=entry["tikz"],
         default_span=default_span,
-        resizable=False,  # every library (SVG-symbol) kind is fixed-size
+        resizable=resizable,
         # Variants are now generic per-instance state on the base Component, so
         # every library kind uses Component (no DiodeComponent/MosfetComponent).
         component_class=Component,

@@ -791,6 +791,46 @@ class NodeSizeSection(InspectorSection):
         self._apply("Size", lambda s, c: s.set_node_resize_factors(c, wf, hf))
 
 
+class PathLengthSection(InspectorSection):
+    """**Length** (GU) of a length-resizable two-terminal path symbol (R, C, L, diode,
+    source, …). Shows the current length along the component axis (``span_override`` or
+    the natural span); editing it, like dragging an end handle, lengthens the device via
+    ``ResizeCommand`` (body fixed, leads extend). Floored at the natural length."""
+
+    title = "Length"
+
+    def _build(self) -> None:
+        row, self._length = _make_double_spin_row(
+            "Length (GU)", 0.25, 50.0, 0.25, 2, 2.0, lambda _v: self._timer.start())
+        self.body.addLayout(row)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def applies_to(self, comp: Component) -> bool:
+        from app.components import library
+        return library.is_length_resizable(comp.kind)
+
+    def _natural(self, comp: Component) -> float:
+        from app.components.registry import REGISTRY
+        dl = REGISTRY[comp.kind].default_span
+        return (dl[0] ** 2 + dl[1] ** 2) ** 0.5
+
+    def _load(self, comp: Component) -> None:
+        so = comp.span_override
+        cur = ((so[0] ** 2 + so[1] ** 2) ** 0.5) if so is not None else self._natural(comp)
+        self._length.setMinimum(round(self._natural(comp), 2))
+        if not self._length.hasFocus():
+            self._length.blockSignals(True)
+            self._length.setValue(round(cur, 2))
+            self._length.blockSignals(False)
+
+    def _commit(self) -> None:
+        self._apply("Length",
+                    lambda s, cid: s.set_component_length(cid, self._length.value()))
+
+
 class TextContentSection(InspectorSection):
     """Text content (stored in ``options``) for text_node and rect."""
 
@@ -1837,6 +1877,7 @@ class PropertiesPanel(QWidget):
             NodeTextSection(),
             NodePlacementSection(),
             NodeSizeSection(),
+            PathLengthSection(),
             TextContentSection(),
             BipoleLabelSection(),
             VariantSection(),
