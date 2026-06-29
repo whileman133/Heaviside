@@ -21,6 +21,7 @@ from typing import Any
 
 from app.components.model import (
     Component,
+    CustomComponentSpec,
     FontedComponent,
     StyledComponent,
 )
@@ -92,11 +93,17 @@ from app.schematic.validate import validate
 #: ``circ`` dots at wire junctions), both defaulting **on**. A 0.9 build would silently
 #: strip them on save, so the bump refuses the newer file; 0.1–0.9 files load unchanged
 #: (both default on, preserving the prior always-draw behaviour).
-_FORMAT_VERSION: str = "0.10"
+#: 0.11 adds the document ``custom_components`` map to ``config`` — user-defined
+#: components built from a base built-in kind (the scoped ``\ctikzset`` + extra options,
+#: the re-measured pins, and the captured drawable geometry), keyed by their custom
+#: kind. A 0.10 build would silently strip them on save (and could not draw a placed
+#: custom component anyway), so the bump refuses the newer file; 0.1–0.10 files load
+#: unchanged (absent custom_components defaults to empty).
+_FORMAT_VERSION: str = "0.11"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {
-    "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
+    "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11",
 }
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
@@ -269,10 +276,35 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
             "mark_open_ends": s.mark_open_ends,
             "mark_junctions": s.mark_junctions,
             "diode_scale": s.diode_scale,
+            "custom_components": {
+                name: _custom_spec_to_dict(spec)
+                for name, spec in s.custom_components.items()
+            },
         },
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
         "metadata": s.metadata,
+    }
+
+
+def _custom_spec_to_dict(spec: CustomComponentSpec) -> dict[str, Any]:
+    """Serialize one custom-component spec (app.components.custom). The captured
+    geometry is stored verbatim so the component re-renders without LaTeX."""
+    return {
+        "name": spec.name,
+        "display_name": spec.display_name,
+        "category": spec.category,
+        "base_kind": spec.base_kind,
+        "ctikzset": list(spec.ctikzset),
+        "extra_options": spec.extra_options,
+        "pins": [
+            {"name": p["name"], "offset": list(p["offset"]), "anchor": p.get("anchor")}
+            for p in spec.pins
+        ],
+        "bbox": list(spec.bbox),
+        "default_span": list(spec.default_span),
+        "geometry": spec.geometry,
+        "ctikz_version": spec.ctikz_version,
     }
 
 
@@ -467,6 +499,17 @@ def _dict_to_schematic(data: dict) -> Schematic:
     except (TypeError, ValueError):
         diode_scale = 0.8
 
+    # Custom components (added in 0.11). A map of custom kind → spec; malformed
+    # entries are skipped rather than failing the load. Absent → empty, so pre-0.11
+    # files are unchanged.
+    raw_custom = config.get("custom_components", {})
+    custom_components: dict[str, CustomComponentSpec] = {}
+    if isinstance(raw_custom, dict):
+        for key, value in raw_custom.items():
+            spec = _dict_to_custom_spec(value)
+            if spec is not None:
+                custom_components[str(key)] = spec
+
     return Schematic(
         version=version,
         name=name,
@@ -483,7 +526,51 @@ def _dict_to_schematic(data: dict) -> Schematic:
         mark_open_ends=mark_open_ends,
         mark_junctions=mark_junctions,
         diode_scale=diode_scale,
+        custom_components=custom_components,
     )
+
+
+def _dict_to_custom_spec(data: Any) -> CustomComponentSpec | None:
+    """Parse one serialized custom-component spec, or ``None`` if malformed.
+
+    Permissive (coerce/skip rather than raise): a custom component is recoverable
+    user data, and a single bad entry must not make the whole document unopenable."""
+    if not isinstance(data, dict):
+        return None
+    try:
+        name = str(data["name"])
+        base_kind = str(data["base_kind"])
+        geometry = data["geometry"]
+        if not isinstance(geometry, dict):
+            return None
+        pins = []
+        for p in data.get("pins", []):
+            if not isinstance(p, dict):
+                continue
+            off = p.get("offset", [0.0, 0.0])
+            pins.append({
+                "name": str(p.get("name", "")),
+                "offset": [float(off[0]), float(off[1])],
+                "anchor": p.get("anchor"),
+            })
+        bbox = tuple(float(v) for v in data.get("bbox", (0.0, 0.0, 0.0, 0.0)))
+        span = tuple(float(v) for v in data.get("default_span", (0.0, 0.0)))
+        return CustomComponentSpec(
+            name=name,
+            display_name=str(data.get("display_name", name)),
+            category=str(data.get("category", "Custom")),
+            base_kind=base_kind,
+            ctikzset=[str(c) for c in data.get("ctikzset", [])],
+            extra_options=str(data.get("extra_options", "")),
+            pins=pins,
+            bbox=bbox,  # type: ignore[arg-type]
+            default_span=span,  # type: ignore[arg-type]
+            geometry=geometry,
+            ctikz_version=(str(data["ctikz_version"])
+                           if data.get("ctikz_version") is not None else None),
+        )
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
 
 
 def _dict_to_component(data: Any, index: int) -> Component:

@@ -35,8 +35,12 @@ def _palette():
 def test_builds_with_a_card_per_category():
     # One card per registry category; the manual library's categories are used
     # verbatim (no Logic/Sources splitting).
+    from app.ui.palette import CUSTOM_CATEGORY
+
     p = _palette()
-    cats = {d.category for d in REGISTRY.values()}
+    # The Custom category is always present (even with no custom components yet, §5.10),
+    # so it joins the registry-derived categories.
+    cats = {d.category for d in REGISTRY.values()} | {CUSTOM_CATEGORY}
     assert set(p._cards) == cats
     assert p._active_cat in cats  # a default active category is selected
     # The manual categories are present.
@@ -189,10 +193,14 @@ def test_category_icons_render_from_representative_kind():
     from app.ui.palette import _category_pixmap, _category_rep
     from app.components.registry import REGISTRY
 
-    # Every actual palette category resolves to a real, renderable icon.
+    # Every *non-empty* palette category resolves to a real, renderable icon. The
+    # always-present Custom category (§5.10) may be empty (no representative kind); it
+    # falls back to a "+" glyph, exercised elsewhere.
     p = _palette()
     for cat, kinds in p._by_cat.items():
         rep = _category_rep(cat, kinds)
+        if rep is None:
+            continue  # empty category (Custom with no components yet)
         assert rep in REGISTRY, f"{cat}: representative {rep!r} not in registry"
         assert not _category_pixmap(rep, 20).isNull(), f"{cat}: blank icon"
 

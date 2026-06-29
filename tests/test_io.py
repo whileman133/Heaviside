@@ -135,7 +135,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.10"
+    assert data["version"] == "0.11"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
         "symbol_style": {},                # all-american default (§5.4)
@@ -145,6 +145,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
         "mark_open_ends": True,            # draw ocirc/circ dots by default (§6.4)
         "mark_junctions": True,
         "diode_scale": 0.6,                # new-document diodes/scale default (§5)
+        "custom_components": {},           # no custom components (§custom)
     }
 
 
@@ -1199,14 +1200,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_010_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.10; files declaring 0.1–0.10 all load."""
+def test_format_version_011_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.11; files declaring 0.1–0.11 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.10"
-    assert load(p).version == "0.10"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.11"
+    assert load(p).version == "0.11"
 
-    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

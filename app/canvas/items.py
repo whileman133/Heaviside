@@ -56,7 +56,13 @@ from app.canvas.style import (
     PIN_R,
     SVG_PT_PER_GU,
 )
-from app.canvas.svgsym import is_thick, symbol_paths
+from app.canvas.svgsym import (
+    PX_PER_PT,
+    dash_for_pen,
+    effective_color,
+    is_thick,
+    symbol_paths,
+)
 from app.components.registry import REGISTRY
 from app.schematic.model import HOP_ARC_RADIUS_GU, HOP_HALF_GU
 
@@ -1634,11 +1640,18 @@ class ComponentItem(QGraphicsItem):
         diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
         for sym in symbol_paths(self._geometry_kind()):
             lw = _stroke_px(sym.stroke_width, lw_scale)
-            # Counter the body scale so the stroke keeps its on-screen weight.
-            pen = _pen(color, lw / s)
+            # Counter the body scale so the stroke keeps its on-screen weight. A custom
+            # component may carry an explicit stroke colour / dash (``color=``/``dash=``);
+            # a default-black stroke falls back to the theme ink so ordinary symbols
+            # still follow light/dark mode (§5.10).
+            pen_w = lw / s
+            pen = _pen(effective_color(sym.stroke_color, color), pen_w)
+            if sym.dash:
+                pen.setDashPattern(dash_for_pen(sym.dash, PX_PER_PT, pen_w))
             painter.setPen(pen)
             if sym.filled:
-                fill = style.COLOR_BACKGROUND if sym.fill_bg else color
+                fill = (style.COLOR_BACKGROUND if sym.fill_bg
+                        else effective_color(sym.fill_color, color))
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)

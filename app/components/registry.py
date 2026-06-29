@@ -168,6 +168,77 @@ for _k, _v in _BESPOKE.items():                   # rect/circle/text_node/bipole
     REGISTRY.setdefault(_k, _v)
 
 # ---------------------------------------------------------------------------
+# Runtime (document-scoped) custom components
+# ---------------------------------------------------------------------------
+#
+# Custom components (app.components.custom) live on the open document, not in the
+# bundled library, so they are injected into REGISTRY at runtime and scrubbed when
+# another document loads. Built-in lookups (REGISTRY[kind], the palette, validation)
+# then see them transparently. Codegen and the canvas resolve a custom kind's
+# classification, pin→anchor map and geometry via its base kind (no rebuild of the
+# import-time codegen frozensets is needed — see app.codegen.circuitikz and
+# app.canvas.svgsym). The Qt geometry store is touched through a lazy import so this
+# module stays Qt-free for headless codegen/io tests.
+
+_RUNTIME_KINDS: set[str] = set()
+
+
+def _inject_geometry(kind: str, geometry: dict | None) -> None:
+    """Push a custom kind's captured geometry into the canvas geometry store."""
+    if geometry is None:
+        return
+    try:
+        from app.canvas import svgsym
+    except Exception:  # pragma: no cover - canvas/Qt unavailable (headless tools)
+        return
+    from app.components.library import geometry_key
+    svgsym.set_runtime_geometry(geometry_key(kind), geometry)
+    svgsym.symbol_paths.cache_clear()
+
+
+def _clear_geometry() -> None:
+    try:
+        from app.canvas import svgsym
+    except Exception:  # pragma: no cover - canvas/Qt unavailable
+        return
+    svgsym.clear_runtime_geometry()
+    svgsym.symbol_paths.cache_clear()
+
+
+def register_runtime_component(defn: ComponentDef) -> None:
+    """Add a custom :class:`ComponentDef` to the live registry (and its geometry to
+    the canvas store). Idempotent for a given kind — re-registering replaces it."""
+    REGISTRY[defn.kind] = defn
+    _RUNTIME_KINDS.add(defn.kind)
+    _inject_geometry(defn.kind, defn.geometry)
+
+
+def reset_runtime_components() -> None:
+    """Remove every runtime-registered custom component, restoring the import-time
+    registry. Called before switching the active document."""
+    for kind in _RUNTIME_KINDS:
+        REGISTRY.pop(kind, None)
+    _RUNTIME_KINDS.clear()
+    _clear_geometry()
+
+
+def runtime_component_kinds() -> frozenset[str]:
+    """The kinds currently registered as runtime custom components."""
+    return frozenset(_RUNTIME_KINDS)
+
+
+def sync_runtime_components(schematic) -> None:
+    """Make the live registry reflect exactly *schematic*'s custom components:
+    scrub the previous document's customs, then register this document's. The single
+    entry point the UI calls whenever the active document changes."""
+    from app.components.custom import spec_to_component_def
+
+    reset_runtime_components()
+    for spec in getattr(schematic, "custom_components", {}).values():
+        register_runtime_component(spec_to_component_def(spec))
+
+
+# ---------------------------------------------------------------------------
 # ITEM_CLASSES — populated by app/canvas/items.py at import time.
 # Declared here so test_registry.py can verify completeness without importing Qt.
 # ---------------------------------------------------------------------------

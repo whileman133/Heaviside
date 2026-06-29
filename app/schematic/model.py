@@ -13,6 +13,7 @@ from typing import Any
 
 from app.components.model import (  # re-export for backwards compat
     Component,
+    CustomComponentSpec,
     DrawingComponent,
     RectComponent,
     TextNodeComponent,
@@ -20,6 +21,7 @@ from app.components.model import (  # re-export for backwards compat
 
 __all__ = [
     "Component",
+    "CustomComponentSpec",
     "DrawingComponent",
     "RectComponent",
     "TextNodeComponent",
@@ -286,6 +288,17 @@ class Schematic:
     # Applied to the canvas (the diode body is drawn scaled about its centre) and the
     # export (``\ctikzset{diodes/scale=…}``). Travels with the .hv file.
     diode_scale: float = 0.6
+
+    # Document-level **custom components** (§custom): user-defined components built
+    # from a base built-in kind in the creator dialog, keyed by their unique kind
+    # string. Each carries the base kind, the scoped ``\ctikzset`` + extra options,
+    # the re-measured pins, and the captured drawable geometry, so they re-render
+    # without LaTeX and place/export like built-ins. Document-scoped — registered at
+    # runtime (app.components.registry.sync_runtime_components) whenever this document
+    # becomes active, and scrubbed when another document loads. Empty for documents
+    # with no custom components (so pre-0.11 files are unchanged). Travels with the
+    # .hv file (app.schematic.io, format 0.11).
+    custom_components: dict[str, CustomComponentSpec] = field(default_factory=dict)
 
 
 #: Accepted values for the document voltage/current label styles.

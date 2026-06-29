@@ -65,6 +65,24 @@ def _geometry() -> dict:
         return json.load(fh)
 
 
+# Runtime geometry for document-scoped custom components (app.components.custom):
+# their captured geometry is rendered in the same fixed bounding box as the bundled
+# library, so it places through the same ``_local_transform``. Populated by
+# app.components.registry.register_runtime_component; consulted by ``symbol_paths``
+# ahead of the bundled ``_geometry``. Keyed by ``geometry_key(kind)``.
+_RUNTIME_GEOMETRY: dict[str, dict] = {}
+
+
+def set_runtime_geometry(key: str, geometry: dict) -> None:
+    """Register a custom component's geometry under its ``geometry_key``."""
+    _RUNTIME_GEOMETRY[key] = geometry
+
+
+def clear_runtime_geometry() -> None:
+    """Drop all runtime custom-component geometry (on document switch)."""
+    _RUNTIME_GEOMETRY.clear()
+
+
 # Registry ``kind`` -> geometry key.  Canonical definition lives in the Qt-free
 # component library (``library.geometry_key``); re-exported here under the same
 # public name for the canvas and its tests.
@@ -216,6 +234,36 @@ class SymbolPath:
     clip: QPainterPath | None = None  # clip region (local px) — dvisvgm clips e.g. the
     #                             RF antenna's full-circle wavefronts to a wedge so only
     #                             the arcs show; the painter must clip to reproduce it
+    stroke_color: str = ""      # raw SVG stroke colour; "" / black ⇒ theme ink (see
+    #                             effective_color) — a custom component's ``color=red``
+    fill_color: str = ""        # raw SVG fill colour (for a filled body)
+    dash: tuple[float, ...] = ()  # SVG-pt on/off dash lengths; () ⇒ solid (custom ``dash=``)
+
+
+#: SVG stroke colours that mean "default ink": the painter substitutes the theme
+#: colour for these so ordinary (black) symbols still follow light/dark mode; an
+#: explicit colour (a custom component's ``color=…``) is honoured verbatim.
+_DEFAULT_INK = frozenset({"", "#000", "#000000", "black", "none", "currentcolor"})
+
+
+def effective_color(raw: str, default: str) -> str:
+    """*raw* SVG colour, or *default* (the theme ink) when it is a default-ink value."""
+    return default if (raw or "").strip().lower() in _DEFAULT_INK else raw
+
+
+def dash_for_pen(dash, draw_scale: float, pen_width: float) -> list[float]:
+    """A ``QPen`` dash pattern (in units of pen width) for SVG-pt *dash* lengths.
+
+    *draw_scale* converts an SVG-pt length into the painter's draw units; *pen_width*
+    is the pen width in those same units (Qt expresses the dash pattern as multiples
+    of the pen width). Empty when there is no dash."""
+    if not dash or pen_width <= 0:
+        return []
+    return [max(d * draw_scale / pen_width, 0.01) for d in dash]
+
+
+#: SVG-pt → local-pixel scale (exposed for dash computation by the canvas/preview).
+PX_PER_PT = _PX_PER_PT
 
 
 # SVG stroke widths cluster around 0.3985 pt (thin) and 0.797 pt (thick).
@@ -246,9 +294,11 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
       body via ``QTransform(*matrix)`` then the component transform.
     """
     key = geometry_key(kind)
-    if key not in _geometry():
-        return ()
-    entry = _geometry()[key]
+    entry = _RUNTIME_GEOMETRY.get(key)
+    if entry is None:
+        if key not in _geometry():
+            return ()
+        entry = _geometry()[key]
     xform = _local_transform()
 
     out: list[SymbolPath] = []
@@ -262,7 +312,10 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
         fill_bg = fill in ("#fff", "#ffffff", "white")
         clip = xform.map(parse_path(p["clip"])) if p.get("clip") else None
         out.append(SymbolPath(path=local, stroke_width=float(p["stroke_width"]),
-                              filled=filled, fill_bg=fill_bg, clip=clip))
+                              filled=filled, fill_bg=fill_bg, clip=clip,
+                              stroke_color=p.get("stroke", ""),
+                              fill_color=p.get("fill", ""),
+                              dash=tuple(p.get("dash", ()))))
 
     for g in entry.get("glyphs", ()):
         placed = xform.map(QTransform(*g["matrix"]).map(parse_path(g["d"])))

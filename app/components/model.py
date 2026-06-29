@@ -321,3 +321,78 @@ class ComponentDef:
     where the compiled figure places it (a transistor's label just right of the
     symbol, an op-amp's centred, a transformer's a unit above). ``(0, 0)`` for
     kinds without a measured anchor (single-terminal nodes keep their own rule)."""
+
+    # ── Custom-component fields (see app.components.custom / spec §custom) ──
+    # All default to the "built-in" sentinel values; a built-in ComponentDef is
+    # unaffected.  A *custom* def is one the user built from a base kind in the
+    # creator dialog (document-scoped, registered at runtime by registry.py).
+
+    base_kind: str | None = None
+    """The built-in kind this custom component was derived from (its CircuiTikZ
+    ``tikz_keyword``, classification, and pin→anchor map are taken from the base).
+    ``None`` for an ordinary built-in def."""
+
+    ctikzset: tuple[str, ...] = ()
+    """Per-component ``\\ctikzset`` lines the symbol is drawn under (the user's
+    scoped CircuiTikZ customisations). Codegen wraps the instance in a local group
+    so they do not leak to other components (see :mod:`app.codegen.circuitikz`)."""
+
+    extra_options: str = ""
+    """Extra CircuiTikZ node/path options appended after the base keyword
+    (appearance-only — e.g. ``core`` for an iron-core transformer). Placement
+    (rotate/mirror/scale) is handled per-instance and must not go here."""
+
+    geometry: dict | None = None
+    """Captured drawable geometry (``{viewBox, width_pt, height_pt, paths,
+    glyphs}``) rendered in the same fixed bounding box as the built-in library, so
+    the canvas places it through the shared ``origin_svg`` transform. ``None`` for
+    a built-in def (its geometry lives in ``components/generated/geometry.json``)."""
+
+
+@dataclass
+class CustomComponentSpec:
+    """Serializable record of one user-defined custom component, stored on the
+    document (:attr:`app.schematic.model.Schematic.custom_components`) so it travels
+    with the ``.hv`` file and re-renders without LaTeX installed.
+
+    Carries everything needed to rebuild a runtime :class:`ComponentDef` plus its
+    drawable geometry: the base kind, the user's scoped ``\\ctikzset`` and extra
+    options, the (re-measured) pins, and the captured geometry. Built by
+    :func:`app.components.custom.build_custom` and registered via
+    :func:`app.components.registry.register_runtime_component`.
+    """
+
+    name: str
+    """Unique kind key for this custom component (e.g. ``"custom:my xfmr"``)."""
+
+    display_name: str
+    """Human-readable name shown in the palette."""
+
+    category: str
+    """Palette group (defaults to ``"Custom"``)."""
+
+    base_kind: str
+    """The built-in kind it was customised from."""
+
+    ctikzset: list[str]
+    """Scoped ``\\ctikzset`` lines applied when rendering/emitting."""
+
+    extra_options: str
+    """Extra node/path options appended after the base keyword."""
+
+    pins: list[dict]
+    """Pins as ``{"name": str, "offset": [x, y], "anchor": str | None}`` — the base
+    kind's named anchors re-measured under the customisation (axial path terminals
+    keep their base offset and carry ``anchor: null``)."""
+
+    bbox: tuple[float, float, float, float]
+    """Bounding box (x0, y0, x1, y1) in GU, from the captured geometry/pins."""
+
+    default_span: tuple[float, float]
+    """(dx, dy) origin→terminal in GU (the base's span; (0,0) for multi-terminal)."""
+
+    geometry: dict
+    """Captured ``{viewBox, width_pt, height_pt, paths, glyphs}``."""
+
+    ctikz_version: str | None = None
+    """The CircuiTikZ version the geometry/anchors were measured against."""

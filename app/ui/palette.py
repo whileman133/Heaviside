@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QScrollArea,
     QSizePolicy,
     QToolButton,
@@ -45,8 +46,13 @@ from PySide6.QtWidgets import (
 
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
+from app.components.custom import CUSTOM_CATEGORY, is_custom_kind  # noqa: F401 (re-export)
 from app.components.registry import REGISTRY
 from app.ui import theme
+
+# CUSTOM_CATEGORY (the always-present palette category for user-defined components,
+# §5.10) is single-sourced in app.components.custom; re-exported here (imported above)
+# for callers/tests that reference it as app.ui.palette.CUSTOM_CATEGORY.
 
 # Preview glyph + tile sizes — enlarged so the symbols read clearly. The tile
 # leaves a little room around the glyph for the hover outline.
@@ -241,6 +247,25 @@ def _category_pixmap(kind: str | None, size: int) -> QPixmap:
         return QPixmap()
 
 
+def _plus_pixmap(size: int) -> QPixmap:
+    """A "+" glyph for a category with no representative symbol (the Custom category
+    before any custom component exists)."""
+    pix = QPixmap(size * 2, size * 2)
+    pix.setDevicePixelRatio(2.0)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(2.0)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    s = float(size * 2)
+    p.drawLine(QPointF(s * 0.3, s * 0.5), QPointF(s * 0.7, s * 0.5))
+    p.drawLine(QPointF(s * 0.5, s * 0.3), QPointF(s * 0.5, s * 0.7))
+    p.end()
+    return pix
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
@@ -358,12 +383,19 @@ class _CollapsibleSection(QWidget):
 
 
 class _ComponentTile(QToolButton):
-    """Icon-only, clickable component tile; the name is a hover tooltip."""
+    """Icon-only, clickable component tile; the name is a hover tooltip.
+
+    A **custom** component tile (``edit``/``delete`` callbacks supplied) also offers
+    an Edit…/Delete right-click menu (§5.10)."""
 
     def __init__(self, kind: str, place,  # noqa: ANN001
                  parent: QWidget | None = None,
-                 tile_size: int = _TILE_SIZE, thumb_size: int = _THUMB_SIZE) -> None:
+                 tile_size: int = _TILE_SIZE, thumb_size: int = _THUMB_SIZE,
+                 edit=None, delete=None) -> None:  # noqa: ANN001
         super().__init__(parent)
+        self._kind = kind
+        self._edit = edit
+        self._delete = delete
         defn = REGISTRY[kind]
         self.setIcon(QIcon(_thumbnail(kind)))
         self.setIconSize(QSize(thumb_size, thumb_size))
@@ -377,6 +409,38 @@ class _ComponentTile(QToolButton):
             % (theme.HOVER, theme.HOVER_BORDER)
         )
         self.clicked.connect(lambda: place(kind))
+        if is_custom_kind(kind) and (edit or delete):
+            self.setContextMenuPolicy(Qt.CustomContextMenu)
+            self.customContextMenuRequested.connect(self._show_menu)
+
+    def _show_menu(self, pos) -> None:  # noqa: ANN001
+        menu = QMenu(self)
+        if self._edit is not None:
+            menu.addAction("Edit…", lambda: self._edit(self._kind))
+        if self._delete is not None:
+            menu.addAction("Delete", lambda: self._delete(self._kind))
+        if not menu.isEmpty():
+            menu.exec(self.mapToGlobal(pos))
+
+
+class _AddTile(QToolButton):
+    """A "+ New custom component" tile shown in the Custom palette category."""
+
+    def __init__(self, on_click,  # noqa: ANN001
+                 tile_size: int = _TILE_SIZE, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setText("+")
+        self.setFixedSize(tile_size, tile_size)
+        self.setAutoRaise(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("New custom component…")
+        self.setStyleSheet(
+            "QToolButton { border: 1px dashed %s; border-radius: 6px; "
+            "font-size: 24px; color: %s; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            % (theme.HOVER_BORDER, theme.ICON, theme.HOVER, theme.HOVER_BORDER)
+        )
+        self.clicked.connect(lambda: on_click())
 
 
 # The canvas-side quick bar holds the **Terminals** category — the junction-dot /
@@ -602,7 +666,8 @@ class _CategoryCard(QFrame):
         icon = QLabel()
         icon.setFixedSize(20, 20)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setPixmap(_category_pixmap(rep_kind, 20))
+        _pm = _category_pixmap(rep_kind, 20)
+        icon.setPixmap(_pm if not _pm.isNull() else _plus_pixmap(20))
         # Transparent so the card's own fill shows through (a stylesheet'd QLabel
         # would otherwise paint an opaque palette box behind the glyph/text).
         icon.setStyleSheet("background: transparent; border: none;")
@@ -635,14 +700,22 @@ class _CategoryCard(QFrame):
         super().mousePressEvent(event)
 
 
-def _grid(kinds: list[str], place, cols: int = _ITEM_COLS) -> QWidget:  # noqa: ANN001
-    """A grid of component tiles, *cols* per row, left-aligned."""
+def _grid(kinds: list[str], place, cols: int = _ITEM_COLS,  # noqa: ANN001
+          *, edit=None, delete=None, add=None) -> QWidget:  # noqa: ANN001
+    """A grid of component tiles, *cols* per row, left-aligned.
+
+    Custom tiles get the Edit…/Delete context menu (``edit``/``delete``). When
+    ``add`` is given, a trailing "+ New custom component" tile is appended (used in
+    the Custom category)."""
     host = QWidget()
     grid = QGridLayout(host)
     grid.setContentsMargins(0, 0, 0, 0)
     grid.setSpacing(2)
-    for i, kind in enumerate(kinds):
-        grid.addWidget(_ComponentTile(kind, place), i // cols, i % cols)
+    cells = [_ComponentTile(kind, place, edit=edit, delete=delete) for kind in kinds]
+    if add is not None:
+        cells.append(_AddTile(add))
+    for i, cell in enumerate(cells):
+        grid.addWidget(cell, i // cols, i % cols)
     # Push tiles to the top-left so partial last rows don't stretch.
     grid.setColumnStretch(cols, 1)
     return host
@@ -655,6 +728,11 @@ def _grid(kinds: list[str], place, cols: int = _ITEM_COLS) -> QWidget:  # noqa: 
 class ComponentPalette(QWidget):
     """Left-panel palette of all component types (spec §10.2)."""
 
+    #: Custom-component actions (§5.10), connected by the main window.
+    new_custom_requested = Signal()
+    edit_custom_requested = Signal(str)    # kind
+    delete_custom_requested = Signal(str)  # kind
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFixedWidth(_PALETTE_WIDTH)
@@ -665,29 +743,8 @@ class ComponentPalette(QWidget):
 
         self._scene: SchematicScene | None = None
         self._by_cat: dict[str, list[str]] = defaultdict(list)
-        # Within each category the kinds keep their **manual order**: REGISTRY is built
-        # in the CircuiTikZ manual's scrape sequence, so iterating it and appending
-        # per-category preserves, within each category, the order the components appear
-        # in the manual — no re-sort.
-        for kind, defn in REGISTRY.items():
-            self._by_cat[defn.category].append(kind)
-        # Categories follow the manual's own section sequence — registry/
-        # definitions.json order is not the manual order, so we sort by
-        # ``_CATEGORY_DOC`` (authored in manual order); a bespoke category with no
-        # manual section (Drawing) falls after.
-        order = list(_CATEGORY_DOC)
-        self._ordered_cats = [c for c in order if c in self._by_cat] + [
-            c for c in self._by_cat if c not in order
-        ]
-        # Split into the two top-level palette sections (each preserves the order
-        # above): CircuiTikZ symbols vs our vanilla-TikZ drawing primitives.
-        self._circuitikz_cats = [c for c in self._ordered_cats
-                                 if c not in _VANILLA_CATEGORIES]
-        self._vanilla_cats = [c for c in self._ordered_cats
-                              if c in _VANILLA_CATEGORIES]
-        # Open a CircuiTikZ category first (the common case), not a drawing one.
-        first = self._circuitikz_cats or self._ordered_cats
-        self._active_cat = first[0] if first else ""
+        self._active_cat = ""
+        self._recompute_categories(preserve_active=False)
         self._cards: dict[str, _CategoryCard] = {}
 
         outer = QVBoxLayout(self)
@@ -786,12 +843,63 @@ class ComponentPalette(QWidget):
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
         scene.schematic_changed.connect(self._refresh_in_use)
+        # A new/opened document may register a different set of custom components
+        # (§custom); rebuild the category list (and drop stale custom thumbnails). A
+        # paste that imports custom definitions changes them in place — same refresh.
+        scene.document_replaced.connect(self.refresh_registry)
+        scene.custom_components_changed.connect(self.refresh_registry)
         # Track the document symbol style across load/new/undo (no-op when unchanged).
         scene.schematic_changed.connect(
             lambda: self.set_symbol_style(
                 getattr(self._scene.schematic, "symbol_style", {}) or {}))
         self.set_symbol_style(getattr(scene.schematic, "symbol_style", {}) or {})
         self._refresh_in_use()
+
+    def _recompute_categories(self, *, preserve_active: bool = True) -> None:
+        """Rebuild the category→kinds map from the current REGISTRY.
+
+        Within each category the kinds keep their **manual order**: REGISTRY is built
+        in the CircuiTikZ manual's scrape sequence (custom components, registered at
+        runtime, append after the built-ins), so iterating it and appending per-category
+        preserves that order. Categories follow the manual's own section sequence
+        (``_CATEGORY_DOC``); a category with no manual section (Drawing, Custom) falls
+        after.
+        """
+        self._by_cat = defaultdict(list)
+        for kind, defn in REGISTRY.items():
+            self._by_cat[defn.category].append(kind)
+        # The Custom category always exists (even with no custom components yet) so
+        # its "+ New custom component" tile is always reachable (§5.10).
+        self._by_cat.setdefault(CUSTOM_CATEGORY, [])
+        order = list(_CATEGORY_DOC)
+        self._ordered_cats = [c for c in order if c in self._by_cat] + [
+            c for c in self._by_cat if c not in order
+        ]
+        # Split into the two top-level palette sections (each preserves the order
+        # above): CircuiTikZ symbols vs our vanilla-TikZ drawing primitives.
+        self._circuitikz_cats = [c for c in self._ordered_cats
+                                 if c not in _VANILLA_CATEGORIES]
+        self._vanilla_cats = [c for c in self._ordered_cats
+                              if c in _VANILLA_CATEGORIES]
+        if not preserve_active or self._active_cat not in self._by_cat:
+            # Open a CircuiTikZ category first (the common case), not a drawing one.
+            first = self._circuitikz_cats or self._ordered_cats
+            self._active_cat = first[0] if first else ""
+
+    def refresh_registry(self) -> None:
+        """Re-read REGISTRY and rebuild the palette after custom components are
+        registered or cleared at runtime (document open / new / create-custom).
+
+        Custom-component thumbnails are dropped first: a custom kind key can recur
+        across documents with different geometry, so a stale cached pixmap must not
+        survive the document switch."""
+        from app.components.custom import is_custom_kind
+        for key in [k for k in _thumb_cache if is_custom_kind(k[0])]:
+            del _thumb_cache[key]
+        self._recompute_categories()
+        self._build_categories()
+        self._rebuild_active()
+        self._on_search(self._search.text())
 
     def set_symbol_style(self, style: dict) -> None:
         """Render the palette tiles/icons in the document's symbol style (§5.4). Sets
@@ -861,7 +969,11 @@ class ComponentPalette(QWidget):
         self._active.set_doc_link(*(doc if doc else (None, None)))
         body = self._active.body_layout()
         self._clear(body)
-        body.addWidget(_grid(self._by_cat.get(self._active_cat, []), self._place))
+        add = self.new_custom_requested.emit if self._active_cat == CUSTOM_CATEGORY else None
+        body.addWidget(_grid(
+            self._by_cat.get(self._active_cat, []), self._place,
+            edit=self.edit_custom_requested.emit,
+            delete=self.delete_custom_requested.emit, add=add))
 
     def _refresh_in_use(self) -> None:
         if self._scene is None:
@@ -873,7 +985,9 @@ class ComponentPalette(QWidget):
         body = self._in_use.body_layout()
         self._clear(body)
         if kinds:
-            body.addWidget(_grid(kinds, self._place))
+            body.addWidget(_grid(kinds, self._place,
+                                 edit=self.edit_custom_requested.emit,
+                                 delete=self.delete_custom_requested.emit))
         # The pinned bottom panel is hidden when empty, and while a search is
         # active (the results grid takes over the scroll region above).
         visible = bool(kinds) and not self._search.text().strip()
@@ -915,7 +1029,9 @@ class ComponentPalette(QWidget):
         self._results.set_title(f"SEARCH RESULTS ({len(matches)})")
         body = self._results.body_layout()
         self._clear(body)
-        body.addWidget(_grid(matches, self._place))
+        body.addWidget(_grid(matches, self._place,
+                             edit=self.edit_custom_requested.emit,
+                             delete=self.delete_custom_requested.emit))
 
     # -- theme -----------------------------------------------------------
 

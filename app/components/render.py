@@ -295,6 +295,15 @@ def parse_geometry(svg_text: str) -> dict:
                     "fill": child.get("fill") if child.get("fill") is not None else "#000",
                     "stroke": child.get("stroke", "#000"),
                 }
+                # Dashed strokes (a custom component's ``dash=…``): dvisvgm emits a
+                # ``stroke-dasharray`` of on/off lengths in SVG points. Capture them
+                # so the canvas can reproduce the dash (built-in symbols are solid and
+                # carry none).
+                da = child.get("stroke-dasharray")
+                if da and da.strip().lower() != "none":
+                    nums = [float(x) for x in re.split(r"[,\s]+", da.strip()) if x]
+                    if nums:
+                        entry["dash"] = nums
                 clip = _clip_d(child, inherited_clip)
                 if clip:
                     entry["clip"] = clip

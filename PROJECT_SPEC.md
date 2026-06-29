@@ -306,6 +306,7 @@ class Schematic:
     symbol_style: dict[str, str] = {}  # document symbol style per family (§5.4): {"resistors":…,"inductors":…}; empty = american
     siunitx: bool = True             # load siunitx via CircuiTikZ for unit macros in labels; default on (§7.2/§8.3)
     preamble: str = ""               # free-form LaTeX spliced into the document preamble (§7.2/§8.3)
+    custom_components: dict[str, CustomComponentSpec] = {}  # user-defined custom components (§5.10), keyed by kind
 ```
 
 Document-level **symbol style** (`symbol_style`) switches whole
@@ -1005,6 +1006,94 @@ this needs no special-casing:
   position — `commit_component_drag` detects that the item never left its start
   position and pushes no move. A real **drag** re-snaps to the 0.25 grid (the
   component is live-snapped during `mouseMoveEvent`).
+
+### 5.10 Custom Components
+
+A **custom component** lets the user add a component that the bundled library does
+not provide, by *customising a base built-in*. The user picks a base kind (e.g.
+`transformer`), supplies scoped `\ctikzset` settings and extra CircuiTikZ options,
+and Heaviside renders that exact configuration through the same measure-and-parse
+pipeline the offline generator uses (`app/components/render.py`) — capturing the
+drawable geometry and **re-measuring the base's named anchors** under the
+customisation (positions can move, the names do not). Anchors come from the
+installed CircuiTikZ; nothing is invented. The creator/editor dialog
+(`app/ui/custom_component_dialog.py`) has a **searchable** base picker (an editable,
+contains-match combo over the ~400 base kinds). Capture is an **explicit Render step**:
+**Render** runs `build_custom` *and* compiles a literal LaTeX raster in a background
+thread (so the UI stays responsive) and shows **two side-by-side previews** — the
+**canvas representation** (the captured symbol with its **anchor points marked**) and the
+**rendered TeX** image — so the result is reviewed before accepting. **OK** is enabled only
+once a render has succeeded for the current inputs, so accepting is instant (no capture
+lag). `latex`/`dvisvgm` are required to *create or edit* a component but **not** to open
+a file containing one (the captured geometry is stored).
+
+**Creating, editing, deleting (§10.2).** New components are created from **Edit ▸ New
+Custom Component…** or the **+** tile in the palette's always-present **User Defined**
+category (the default category name, `custom.CUSTOM_CATEGORY`; `ComponentPalette` emits
+`new_custom_requested`). Each custom tile carries a right-click
+**Edit…**/**Delete** menu (`edit_custom_requested`/`delete_custom_requested`). Editing
+opens the dialog pre-filled and **keeps the component's kind**, so the new definition
+replaces the old in place and every placed instance is rebuilt with the updated
+geometry/anchors (`scene.reload_components`, which preserves the undo stack). Deletion is
+**blocked while the component is placed** on the canvas (the user removes those instances
+first — an undoable canvas edit); custom-component CRUD is itself **not** on the undo
+stack (it mutates `Schematic.custom_components` directly and marks the document modified).
+
+**Data.** A `CustomComponentSpec` (`app/components/model.py`) holds the base kind,
+the scoped `ctikzset`, the `extra_options`, the re-measured `pins` (name / offset /
+anchor), the `bbox`, the `default_span`, and the captured `geometry`. Specs live on
+the document (`Schematic.custom_components`, §4.4) so they travel with the `.hv` file
+(format 0.11, §9.4). `app/components/custom.py` builds a spec (`build_custom`) and
+converts it to a runtime `ComponentDef` (`spec_to_component_def`) whose
+`tikz_keyword`/`label_slots` are inherited from the base and whose `base_kind`,
+`ctikzset`, `extra_options`, and `geometry` carry the customisation.
+
+**Runtime registration.** Custom components are document-scoped, so they are injected
+into the registry at runtime rather than baked into the bundled library.
+`registry.sync_runtime_components(schematic)` (called by `scene.set_schematic`, which
+fires `document_replaced` for the palette) scrubs the previous document's customs and
+registers the current document's; `register_runtime_component` adds the def to
+`REGISTRY` and the captured geometry to the canvas store
+(`svgsym.set_runtime_geometry`, consulted by `symbol_paths` ahead of the bundled
+geometry). The captured geometry is rendered in the **same fixed bounding box** as
+the bundled library, so it places through the shared `origin_svg` transform with no
+per-component origin. The palette lists custom kinds in the **User Defined** category
+(`refresh_registry`).
+
+**Codegen.** A custom component classifies, references anchors, and uses the
+`tikz_keyword` of its **base kind** — codegen resolves an *effective kind*
+(`_eff_kind`) so the import-time classification tables need no rebuild. Its
+`extra_options` are appended to the node/path bracket, and its scoped `ctikzset` is
+emitted in a local group (`{ \ctikzset{…} \draw …; }`) — both node-style and
+path-style — so the settings do not leak to other components. Because anchor *names*
+are the base's, an anchor reference like a transformer center tap emits unchanged
+(`(node_id-L1.midtap)`, §7.6). No preamble macros are needed (Phase 1 customises an
+existing kind; a future raw-TikZ mode would add them).
+
+**Cross-document copy (§6.7).** The copy/paste clipboard carries the *definitions* of any
+custom components in the copied selection (`scene._clipboard_custom_specs`, captured in
+`copy_selection`). The clipboard survives a document swap (`set_schematic` does not clear
+it), so copying a placed custom component in one document and pasting it into another works:
+`paste` first imports any clipboard custom definitions the target document lacks
+(`_import_clipboard_custom_components` — adds them to `Schematic.custom_components`,
+registers them at runtime, and emits `custom_components_changed` so the palette refreshes),
+then the pasted instances resolve against the registry. A same-named definition already in
+the target is kept (not overwritten). Like all custom CRUD this import is off the undo stack
+(an undo of the paste removes the pasted instances but leaves the imported definition).
+
+**Stroke colour and dashes.** Captured geometry carries each path's stroke colour and
+dash pattern (`render.parse_geometry` records `stroke` and `stroke-dasharray`;
+`svgsym.SymbolPath` carries `stroke_color`/`fill_color`/`dash`), so a custom component
+drawn with `color=…`/`dash=…` renders faithfully on the canvas and in the creator preview.
+A **default-black** stroke maps to the theme ink (so ordinary symbols still follow
+light/dark mode, `svgsym.effective_color`); an explicit colour is honoured verbatim. Dash
+lengths (SVG-pt) are converted to `QPen` dash units — multiples of the pen width — by
+`svgsym.dash_for_pen`. Built-in symbols are solid black and carry neither, so they are
+unaffected.
+
+**Validation.** Invariant 1 (§4.5) accepts a `Component.kind` that the document
+declares in `custom_components` even when its runtime registration is not in effect,
+so a saved document is self-describing.
 
 ---
 
@@ -2078,7 +2167,7 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", "0.2", "0.3", "0.4", "0.5", "0.6"}`); `save` always writes the **current** format version (`0.6`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.11"}`); `save` always writes the **current** format version (`0.11`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
@@ -2092,6 +2181,7 @@ Format versions:
 - **0.8** — adds a per-component **`node_side`** (a single-terminal node's placement keyword left/right/above/below — the user-set inversion-bubble side, §5.4). A 0.7 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.7 files load unchanged — an absent `node_side` defaults to empty (centred).
 - **0.9** — adds three document **`config`** fields: **`mark_unconnected_pins`** and **`line_hops`** (the display options moved out of app Preferences, §10.3) and **`diode_scale`** (the CircuiTikZ `diodes/scale` body size, §5). A 0.8 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.8 files load unchanged — defaults: marks off, line-hops on, diode scale 0.8. New documents declare 0.9.
 - **0.10** — adds two document **`config`** fields: **`mark_open_ends`** (draw `ocirc` terminals at dangling wire ends) and **`mark_junctions`** (draw `circ` dots at wire junctions), both default **on** (§6.4/§10.3). A 0.9 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.9 files load unchanged — both default on, preserving the prior always-draw behaviour. New documents declare 0.10.
+- **0.11** — adds the document **`custom_components`** map to `config` (user-defined custom components, §5.10: base kind, scoped `ctikzset`, extra options, re-measured pins, and captured geometry — keyed by custom kind). A 0.10 build would silently strip them on save (and could not draw a placed custom component), so the bump makes it refuse the newer file. 0.1–0.10 files load unchanged — an absent `custom_components` defaults to empty; a malformed entry is skipped rather than failing the load. New documents declare 0.11.
 
 ### 9.5 Bundled Examples
 
@@ -2674,6 +2764,7 @@ heaviside/
     ├── test_validate.py           # validate() invariants exercised directly (wire ≥ 2 points)
     ├── test_transforms.py         # transform-consistency tripwire (rotate-then-mirror copies agree)
     ├── test_codegen.py            # code generation incl. junction \node[circ]
+    ├── test_custom.py             # custom components (§5.10): capture, runtime registry, codegen, io
     ├── test_io.py
     ├── test_registry.py
     ├── test_commands.py           # undo/redo for all command classes
@@ -3067,6 +3158,29 @@ format round-trips and older versions still load; an invalid schematic raises
 integral-float-vs-bool strictness. Several per-field round-trip cases are
 parametrized tables; the silent-data-loss guard (a serialized field added without
 a `_FORMAT_VERSION` bump) is what they protect (see CLAUDE.md).
+
+#### Custom Components (`test_custom.py`)
+
+Covers the §5.10 feature with a hand-authored `CustomComponentSpec` fixture (so the
+registry/codegen/io/validate behaviour runs **without LaTeX**): `spec_to_component_def`
+inherits the base's `tikz_keyword` while carrying `base_kind`/`ctikzset`/`extra_options`/
+`geometry`; runtime registration round-trips (`register`/`reset`, geometry injected into
+and cleared from the canvas store); `sync_runtime_components` scrubs the previous
+document's customs with **no cross-document leak**; codegen scopes the `ctikzset` in a
+group and appends the extra options for both node and path bases, and emits a
+**base-delegated** sub-node anchor ref (`(node-L1.midtap)`) for a transformer tap;
+`validate` accepts a custom kind the document declares but rejects an undeclared one;
+and the `.hv` round-trips at format `0.11`, skipping a malformed entry. Qt-only tests
+cover the palette (the User Defined category is always present; a registered custom appears
+after `refresh_registry`) and the searchable base picker (partial text yields no base,
+an exact item resolves to its kind). The capture pipeline (`build_custom`), the dialog
+**Render → OK** flow, and **edit mode** (kind preserved) are exercised in tests **gated
+on `latex`/`dvisvgm`** — geometry/anchors are captured and a re-measured anchor matches
+a direct `measure_anchors` call under the same `\ctikzset`. The main-window CRUD handlers
+(`test_mainwindow.py`) cover install/register, delete-and-scrub, and the in-use deletion
+guard. A cross-document paste test copies a placed custom component, switches documents,
+and asserts the definition is imported + registered and the instance resolves; a
+preview-hover hit-test confirms anchor names reveal only near the cursor.
 
 #### Registry (`test_registry.py`)
 

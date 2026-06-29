@@ -220,6 +220,32 @@ def is_single_terminal_node(kind: str) -> bool:
     return kind in _NODE_KINDS
 
 
+# ── Custom-component delegation ────────────────────────────────────────────
+# A custom component (app.components.custom) is derived from a base built-in: it
+# emits as ``\node[<base>, <extra>]`` / ``to[<base>, <extra>]`` with its scoped
+# ``\ctikzset``, and its pins keep the base's anchor names. So the import-time
+# classification frozensets and pin→anchor map need not be rebuilt — codegen simply
+# classifies a custom instance by its base kind. (The frozensets are built once at
+# import; custom kinds are document-scoped and registered later, see registry.py.)
+
+
+def _eff_kind(comp: Component) -> str:
+    """The kind used to classify *comp* for codegen — its base kind if it is a
+    custom component, else its own kind."""
+    d = REGISTRY.get(comp.kind)
+    base = getattr(d, "base_kind", None) if d is not None else None
+    return base or comp.kind
+
+
+def _custom_extra_options(comp: Component) -> str:
+    """The extra CircuiTikZ options a custom component appends after its base
+    keyword (appearance-only), or ``""`` for a built-in."""
+    d = REGISTRY.get(comp.kind)
+    if d is not None and getattr(d, "base_kind", None):
+        return d.extra_options
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -365,13 +391,13 @@ def generate(
         defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
-        anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
+        anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(_eff_kind(comp))
         # A path bipole's two axial terminals (pins[0]/pins[1]) are the literal
         # ``to[…]`` endpoints — already explicit coordinates, with no clean named
         # anchor (CircuiTikZ's ``.left``/``.right`` are the body edges, not the wire
         # ends). Its **extra** terminals (pins[2:] — ``gate``/``wiper``/``midtap``/…)
         # DO have named anchors equal to the pin name; reference those by name.
-        is_path = comp.kind in _TWO_TERMINAL_KINDS
+        is_path = _eff_kind(comp) in _TWO_TERMINAL_KINDS
         # A scaled logic gate's pins sit at the true scaled node anchor (no lead
         # stub), so a connecting wire's endpoint — snapped onto that pin by the
         # magnet — is exactly the node anchor and maps to `(node.anchor)` like any
@@ -474,7 +500,7 @@ def generate(
             continue  # emitted in a background/foreground layer block
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
-        if comp.kind in _NODE_KINDS:
+        if _eff_kind(comp) in _NODE_KINDS:
             node_command_lines.append(rf"  {_node_command(comp, _y, _annotation_style_opts(comp, voltage_european, current_european), pin_coord_to_ref)}")
             continue
         draw_lines.extend(_component_lines(
@@ -596,7 +622,7 @@ def _component_lines(
     current_european: bool = False,
     named_path_devices: "set[str] | frozenset[str]" = frozenset(),
 ) -> list[str]:
-    kind = comp.kind
+    kind = _eff_kind(comp)  # a custom component classifies as its base kind
     style = _annotation_style_opts(comp, voltage_european, current_european)
     if kind in _TWO_TERMINAL_KINDS:
         return [_two_terminal_line(comp, pin_coord_to_ref, y_fn, style,
@@ -638,7 +664,7 @@ def _component_layer_lines(
     """
     if _node_group_ctikzset(comp):
         return _node_group_lines(comp, y_fn, rot_fn)
-    if comp.kind in _NODE_KINDS:
+    if _eff_kind(comp) in _NODE_KINDS:
         # A single-terminal node is its own standalone `\node at` command, even in a
         # layer block (no `\draw` wrapper).
         style = _annotation_style_opts(comp, voltage_european, current_european)
@@ -701,6 +727,9 @@ def _two_terminal_line(
     # reflection, so off-axis features (an LED's emission arrows, a voltage
     # label's side) land where the canvas Flip-X puts them at every rotation.
     opts = [tikz_kind]
+    _eo = _custom_extra_options(comp)   # custom component appearance options
+    if _eo:
+        opts.append(_eo)
     if named:
         opts.append(f"name=node_{comp.id[:8]}")
     lw = _line_width_opt(comp)
@@ -765,15 +794,30 @@ def _node_group_ctikzset(comp: Component) -> list[str]:
     height = _gate_height_setting(comp)
     if height is not None:
         return [f"{height[0]}={height[1]:g}"]   # full precision (grid alignment)
+    # A custom component carries the base's static settings (resolved via the base
+    # kind) plus its own user-supplied scoped settings; both are reverted after.
+    d = REGISTRY.get(comp.kind)
+    if d is not None and getattr(d, "base_kind", None):
+        return _library.node_ctikzset(d.base_kind) + list(d.ctikzset)
     return _library.node_ctikzset(comp.kind)
 
 
 def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
-    """A node needing local ``\\ctikzset`` (gate height / transformer inductor
-    style) wrapped in its own group so the setting reverts after."""
-    node = _multi_terminal_line(comp, y_fn, rot_fn)
+    """A component needing a local ``\\ctikzset`` group (gate height, a cute/european
+    transformer's inductor style, or a custom component's scoped customisations)
+    wrapped so the settings revert after.
+
+    Both node-style and path-style components are supported: a path custom component
+    (e.g. a customised potentiometer) emits its ``to[…]`` fragment in the group.
+    Endpoints use absolute coordinates (the group is emitted before the main ``\\draw``
+    and contributes no named anchor); absolute pin coords connect exactly, so wiring
+    is unaffected (see :func:`generate`)."""
+    if _eff_kind(comp) in _TWO_TERMINAL_KINDS:
+        frag = _two_terminal_line(comp, None, y_fn)
+    else:
+        frag = _multi_terminal_line(comp, y_fn, rot_fn)
     sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
-    return ["  {", *sets, rf"    \draw {node};", "  }"]
+    return ["  {", *sets, rf"    \draw {frag};", "  }"]
 
 
 def _multi_terminal_line(
@@ -798,6 +842,9 @@ def _multi_terminal_line(
     _, _variant_opts = _library.variant_tikz(comp.kind, comp.variants)
     for _opt in _variant_opts:
         kind_arg = f"{kind_arg}, {_opt}"
+    _eo = _custom_extra_options(comp)   # custom component appearance options
+    if _eo:
+        kind_arg = f"{kind_arg}, {_eo}"
     # Per-instance **anisotropic** resize factors (span_override) for the kinds that
     # support independent width/height (manual-library gates, digital blocks, the
     # muxdemux — §6.4); ``None`` for uniform (height) gates and non-resizable kinds.

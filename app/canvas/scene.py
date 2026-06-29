@@ -155,6 +155,16 @@ class SchematicScene(QGraphicsScene):
     schematic_changed = Signal()
     """Emitted after any command mutates the model."""
 
+    document_replaced = Signal()
+    """Emitted when the whole document is swapped (File ▸ New/Open, example load) —
+    not on ordinary edits. The palette listens to rebuild its category list, since a
+    new document may register a different set of custom components (§custom)."""
+
+    custom_components_changed = Signal()
+    """Emitted when this document's set of custom components changes *in place* (not a
+    document swap) — e.g. a paste imports custom definitions from another document
+    (§5.10). The palette listens to refresh its category list."""
+
     mode_changed = Signal(object)
     """Emitted with the new :class:`Mode` when the interaction mode changes."""
 
@@ -256,9 +266,13 @@ class SchematicScene(QGraphicsScene):
             "line_style": "", "line_width": 0.4, "start_marker": "", "end_marker": "",
         }
 
-        # Copy/paste clipboard: deep copies of components and wires.
+        # Copy/paste clipboard: deep copies of components and wires. Custom-component
+        # definitions used by the copied components ride along (keyed by kind) so a
+        # paste into another document carries them (§5.10). The clipboard survives a
+        # document swap (set_schematic does not clear it), enabling cross-document copy.
         self._clipboard_components: list[Component] = []
         self._clipboard_wires: list[Wire] = []
+        self._clipboard_custom_specs: dict = {}
 
         # Use a plain (un-indexed) item list rather than the default BSP tree.
         # _rebuild_items removes coordinate-keyed junction/open-circle dots by
@@ -354,13 +368,30 @@ class SchematicScene(QGraphicsScene):
             r"\usepackage{siunitx}" if self._schematic.siunitx else ""
         )
 
+    def reload_components(self) -> None:
+        """Recreate every component graphics item from the model, preserving the undo
+        stack. Used after a custom component's definition changes (geometry/pins):
+        existing items hold the *old* `ComponentDef`, and `_rebuild_items` is a diff
+        that keeps live items, so they must be dropped and rebuilt to pick up the new
+        registry entry. Wires are kept (they reconcile by coordinate)."""
+        for cid in list(self._comp_items):
+            self._remove_item(self._comp_items.pop(cid))
+        self._rebuild_items()
+        self.schematic_changed.emit()
+
     def set_schematic(self, schematic: Schematic) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
         self._schematic = schematic
+        # Make the runtime registry reflect this document's custom components before
+        # rebuilding items (they look up REGISTRY/geometry by kind). Scrubs the prior
+        # document's customs and registers this one's (§custom).
+        from app.components.registry import sync_runtime_components
+        sync_runtime_components(schematic)
         self._stack = UndoStack(schematic)
         self.sync_label_preamble()   # before _rebuild_items typesets the labels
         self.set_mode(Mode.SELECT)
         self._rebuild_items()
+        self.document_replaced.emit()
         self.schematic_changed.emit()
 
     # ------------------------------------------------------------------
@@ -678,6 +709,14 @@ class SchematicScene(QGraphicsScene):
             for w in self._schematic.wires
             if w.id in wire_ids
         ]
+        # Carry the definitions of any custom components in the selection so a paste
+        # into another document can recreate them (§5.10).
+        from app.components.custom import is_custom_kind
+        self._clipboard_custom_specs = {
+            c.kind: copy.deepcopy(self._schematic.custom_components[c.kind])
+            for c in self._clipboard_components
+            if is_custom_kind(c.kind) and c.kind in self._schematic.custom_components
+        }
 
     def cut_selection(self) -> None:
         """Copy the selection to the clipboard, then delete it (one undoable
@@ -755,6 +794,26 @@ class SchematicScene(QGraphicsScene):
             self._remove_item(item)
         self._paste_ghosts = []
 
+    def _import_clipboard_custom_components(self) -> None:
+        """Add to this document any clipboard custom-component definitions it does not
+        already have, registering each at runtime (§5.10). Same-kind definitions
+        already in the document are kept (not overwritten). Off the undo stack, like
+        all custom-component CRUD; the paste itself is the undoable part."""
+        specs = self._clipboard_custom_specs
+        if not specs:
+            return
+        from app.components.custom import spec_to_component_def
+        from app.components.registry import register_runtime_component
+
+        imported = False
+        for kind, spec in specs.items():
+            if kind not in self._schematic.custom_components:
+                self._schematic.custom_components[kind] = copy.deepcopy(spec)
+                register_runtime_component(spec_to_component_def(spec))
+                imported = True
+        if imported:
+            self.custom_components_changed.emit()
+
     def paste(self, at: tuple[float, float] | None = None) -> None:
         """Paste clipboard contents with new UUIDs.
 
@@ -766,6 +825,10 @@ class SchematicScene(QGraphicsScene):
         """
         if not self._clipboard_components and not self._clipboard_wires:
             return
+        # Bring in any custom-component definitions the clipboard carries that this
+        # document lacks (a cross-document paste), so the pasted instances resolve
+        # against REGISTRY before their items are built.
+        self._import_clipboard_custom_components()
         if at is None:
             off = (1.0, 1.0)
         else:

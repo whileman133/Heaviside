@@ -5,6 +5,37 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Custom components.** Build a component from any built-in CircuiTikZ symbol:
+  pick a base (e.g. a transformer), add scoped `\ctikzset` customisations and extra
+  options, and Heaviside renders the configuration, captures its geometry, and
+  re-measures its anchors so it places, wires, rotates, and exports exactly like a
+  built-in — its anchor names (e.g. a transformer's center taps) carry over. Create
+  one from **Edit ▸ New Custom Component…** or the **+** tile in the palette's **User
+  Defined** category, with a searchable base picker. Press **Render** to capture and preview the
+  component — side-by-side previews show the **canvas representation with anchor points
+  marked** (anchor names appear on hover) and the **literal LaTeX render**, and rendering
+  runs in the background so accepting is instant (no lag). **Edit** and
+  **Delete** are on each custom tile's right-click menu (deletion is blocked while the
+  component is placed on the canvas). Custom components are stored in the document (they
+  travel with the `.hv` file and re-render without LaTeX). This covers the manual's large
+  surface of transformer/inductor/etc. customisations without modeling each one. Requires
+  `latex`/`dvisvgm` to *create or edit* a component (not to open a file that has one).
+  **Copying a placed custom component to another document carries its definition** — paste
+  imports any custom components the target document lacks (no LaTeX needed; the geometry
+  travels on the clipboard).
+- **Canvas honours symbol stroke colour and dashes.** A component's captured geometry now
+  carries per-path stroke colour and dash patterns, so a custom component drawn with
+  `color=…` / `dash=…` renders correctly on the canvas (and in the creator preview), not
+  as solid black. Ordinary black symbols still follow the light/dark theme ink.
+
+### Changed
+- **`.hv` format → 0.11.** Adds the document `custom_components` map. Files from
+  0.1–0.10 open unchanged; a 0.10 build refuses a 0.11 file rather than silently
+  dropping its custom components on save.
+
 ## [0.6.0] - 2026-06-28
 
 ### Added
