@@ -5,7 +5,7 @@ Two engines produce a QPainterPath from a fragment; both normalise to a shared
 baseline so callers can place them identically (see :func:`render_path`):
 
   * **latex** (the reference) reuses the *exact* toolchain that produces the
-    component symbols (``components/generate_components.py`` /
+    component symbols (``components/generate_library.py`` /
     ``app/components/render.py``)::
 
         latex -> .dvi -> dvisvgm --no-fonts -> SVG -> svgsym.parse_path -> QPainterPath

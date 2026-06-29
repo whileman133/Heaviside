@@ -14,7 +14,7 @@ developer-tool dependency, not a shipped-app one):
 * :func:`measure_anchors` — read ``\pgfpointanchor`` dumps -> ``{name: (gu_x, gu_y)}``
   as a **GU offset** (Qt y-down), directly comparable to a pin position.
 
-This is the single renderer/parser: ``components/generate_components.py`` drives it to
+This is the single renderer/parser: ``components/generate_library.py`` drives it to
 produce both the symbol geometry and the component data file.
 """
 
@@ -79,12 +79,51 @@ def _anchor_dump(node_id: str, anchors: list[str]) -> str:
         return ""
     lines = [r"\makeatletter"]
     for name in anchors:
+        # A ``-<sub>.<anchor>`` name is a *sub-node* anchor: ``-L1.midtap`` measures
+        # the ``midtap`` anchor of the internal node ``<node_id>-L1`` (CircuiTikZ
+        # composite shapes such as transformers expose their coils as sub-nodes).
+        # The measurement targets the sub-node, but the HVANCHOR key keeps the full
+        # ``-L1.midtap`` string so the caller's dict matches the pin's ``anchor``.
+        # The embedded "." guards a plain anchor literally named "-" (the op-amp
+        # inverting input), which must measure on the node itself.
+        if name.startswith("-") and "." in name:
+            sub, _, anch = name[1:].partition(".")
+            target, coord_anchor = f"{node_id}-{sub}", anch
+        else:
+            target, coord_anchor = node_id, name
         lines.append(
-            rf"\pgfpointanchor{{{node_id}}}{{{name}}}"
+            rf"\pgfpointanchor{{{target}}}{{{coord_anchor}}}"
             rf"\typeout{{HVANCHOR {name} = \the\pgf@x , \the\pgf@y}}"
         )
     lines.append(r"\makeatother")
     return "\n".join(lines)
+
+
+def compile_log(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
+                node_id: str = "X", anchors: list[str] | None = None) -> str:
+    """Compile a circuitikz ``body`` with ``latex`` only (no ``dvisvgm``) and return
+    the latex log. For querying the symbol table — e.g. an ``\\ifcsname`` anchor
+    enumeration or a ``\\pgfpointanchor`` dump — where the geometry (SVG) is not
+    needed; faster and immune to dvisvgm/Ghostscript failures a shape might hit at
+    the rasterisation stage. Raises :class:`RenderError` if latex produces no DVI."""
+    doc = _DOC % {
+        "border": border_pt,
+        "ctikzset": "\n".join(rf"\ctikzset{{{s}}}" for s in (ctikzset or [])),
+        "body": body,
+        "dump": _anchor_dump(node_id, anchors or []),
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        (work / "sym.tex").write_text(doc, encoding="utf-8")
+        r = subprocess.run(
+            ["latex", "-no-shell-escape", "-interaction=nonstopmode",
+             "-output-directory", str(work), "sym.tex"],
+            capture_output=True, text=True, cwd=work, timeout=60,
+            **_tools.run_kwargs(),
+        )
+        if not (work / "sym.dvi").exists():
+            raise RenderError("latex failed to produce a DVI", r.stdout)
+        return r.stdout
 
 
 def render_svg(body: str, *, border_pt: int = 2, ctikzset: list[str] | None = None,
@@ -212,30 +251,54 @@ def _parse_matrix(transform: str | None):
     return (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
 
+_CLIP_URL_RE = re.compile(r"url\(#([^)]+)\)")
+
+
 def parse_geometry(svg_text: str) -> dict:
     """Parse a dvisvgm SVG into ``{viewBox, width_pt, height_pt, paths, glyphs}``."""
     root = ET.fromstring(svg_text)
     glyph_defs = {el.get("id"): el.get("d", "")
                   for el in root.iter() if _tag(el) == "path" and el.get("id")}
+    # clipPath id -> its (first) path ``d``. dvisvgm clips e.g. the RF antenna's
+    # wavefronts (full circles) to a wedge so only the arcs show; without honouring
+    # the clip the canvas would draw whole circles. Captured per clipped path below.
+    clip_defs: dict[str, str] = {}
+    for cp in root.iter():
+        if _tag(cp) == "clipPath" and cp.get("id"):
+            d = next((g.get("d", "") for g in cp.iter() if _tag(g) == "path"), "")
+            if d:
+                clip_defs[cp.get("id")] = d
     paths: list[dict] = []
     glyphs: list[dict] = []
 
-    def walk(el: ET.Element, inherited: str | None) -> None:
+    def _clip_d(el: ET.Element, inherited_clip: str | None) -> str | None:
+        ref = el.get("clip-path") or inherited_clip
+        if not ref:
+            return None
+        m = _CLIP_URL_RE.search(ref)
+        return clip_defs.get(m.group(1)) if m else None
+
+    def walk(el: ET.Element, inherited: str | None, inherited_clip: str | None) -> None:
         for child in el:
             tag = _tag(child)
             if tag == "g":
-                walk(child, child.get("transform", inherited))
+                walk(child, child.get("transform", inherited),
+                     child.get("clip-path") or inherited_clip)
             elif tag == "path":
                 d = child.get("d", "")
                 if child.get("id") or not re.match(r"^\s*[Mm]", d):
                     continue
                 sw = child.get("stroke-width")
-                paths.append({
+                entry = {
                     "d": d,
                     "stroke_width": float(sw) if sw is not None else 0.3985,
                     "fill": child.get("fill") if child.get("fill") is not None else "#000",
                     "stroke": child.get("stroke", "#000"),
-                })
+                }
+                clip = _clip_d(child, inherited_clip)
+                if clip:
+                    entry["clip"] = clip
+                paths.append(entry)
             elif tag == "use":
                 ref = (child.get(_HREF) or child.get("href") or "").lstrip("#")
                 d = glyph_defs.get(ref)
@@ -257,7 +320,7 @@ def parse_geometry(svg_text: str) -> dict:
                 glyphs.append({"d": rect_d, "matrix": [a, b, c, dd, e, f],
                                "stroke_width": 0.3985})
 
-    walk(root, None)
+    walk(root, None, None)
     return {
         "viewBox": root.get("viewBox", ""),
         "width_pt": root.get("width", ""),

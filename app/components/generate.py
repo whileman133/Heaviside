@@ -1,22 +1,19 @@
 """
-Render/save core for component definitions (Qt-free).
+Render/measure core for component definitions (Qt-free).
 
 Renders a CircuiTikZ symbol in the fixed-bounding-box / origin-at-zero /
-lead-to-grid scheme (spec ``spec/component-pipeline.md`` §2–§4) and writes the
-two data files: the geometry ``geometry.json`` and the registry/codegen
-``definitions.json`` (plus the single ``origin_svg`` constant and the
-``circuitikz_version`` generation stamp).
+lead-to-grid scheme (spec ``spec/component-pipeline.md`` §2–§4) and derives its
+geometry, data entry, and grid alignment from measurement.
 
-``components/generate_components.py`` (batch: re-render everything) is the
-main driver; the ``components/`` authoring scripts use the incremental
-``save_component`` / ``save_muxdemux``. (Formerly ``app/componenteditor/
-renderer.py`` — the GUI editor it served was removed once the automated
-measurement/alignment pipeline made manual fix-ups redundant.)
+``components/generate_library.py`` (the manual-scraped library generator) is the
+driver: it imports these shared render/measure helpers and owns its own write
+path. (Formerly ``app/componenteditor/renderer.py`` — the GUI editor it served
+was removed once the automated measurement/alignment pipeline made manual fix-ups
+redundant.)
 """
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import tomllib
@@ -32,9 +29,6 @@ from app.resources import resource_path
 BBOX = 3.0
 DIODE_SCALE = library.DIODE_SYMBOL_SCALE
 BORDER_PT = 2
-
-DEFINITIONS_PATH = Path(resource_path("components", "definitions.json"))
-GEOMETRY_PATH = Path(resource_path("components", "geometry.json"))
 
 # ---------------------------------------------------------------------------
 # Generation-time configuration (spec/component-pipeline.md §4). Read once, at
@@ -71,7 +65,21 @@ geometry_key = library.geometry_key
 
 
 def is_diode(entry: dict) -> bool:
-    return any(v["name"] == "filled" for v in entry.get("variants", []))
+    """A two-terminal member of the ``Diodes`` family — the set CircuiTikZ's
+    ``diodes/scale`` key actually resizes, so the set whose body must be baked at
+    :data:`DIODE_SCALE`.
+
+    Keyed off ``category``/``emission``/pin-count rather than a ``"filled"`` variant
+    name: the curated diodes carry that variant but the manual-scraped ones do not
+    (their fill is encoded in distinct ``empty``/``full``/``stroke`` *kinds*), so the
+    old variant test silently baked every manual diode — and curated ``photodiode`` —
+    at CircuiTikZ's default 1.0 instead of :data:`DIODE_SCALE`.  Tripoles in the family
+    (thyristor/triac/GTO/PUT) are excluded: their *gate* anchor moves with the scale,
+    which would desync the canvas pin from the export.  This must stay in lock-step with
+    :func:`app.components.library.is_diode`, the runtime counterpart."""
+    return (entry.get("category") == "Diodes"
+            and entry.get("emission") == "path"
+            and len(entry.get("pins", [])) == 2)
 
 
 def ctikzset(entry: dict) -> list[str]:
@@ -241,7 +249,11 @@ def best_alignment(entry: dict) -> tuple[list[float] | None, list[dict]]:
     pins = entry["pins"]
     anchors = [p["anchor"] for p in pins if p.get("anchor")]
     measured = render.measure_anchors(entry["tikz"], anchors, ctikzset=ctikzset(entry))
-    sx, sy = _scale_for(measured, anchors)
+    # The grid-alignment scale is derived from the node's own terminal anchors only.
+    # Sub-node anchors (``-L1.midtap`` taps) are interior connection points carried
+    # along by the same scale — they must not pull on the alignment optimisation.
+    grid_anchors = [a for a in anchors if not a.startswith("-")]
+    sx, sy = _scale_for(measured, grid_anchors)
     out_pins = _scaled_pins(pins, measured, sx, sy)
     scale = None if (sx == 1.0 and sy == 1.0) else [sx, sy]
     return scale, out_pins
@@ -343,8 +355,8 @@ def data_entry(kind: str, entry: dict) -> dict:
         "emission": entry["emission"],
         "tikz": entry["tikz"],
         "labels": list(entry.get("labels", [])),
-        # Placeholder; render_store/save_component overwrite this with the
-        # bbox computed from the rendered ink extent (compute_bbox).
+        # Placeholder; the generator overwrites this with the bbox computed from
+        # the rendered ink extent (compute_bbox).
         "bbox": list(entry.get("bbox", [0.0, 0.0, 0.0, 0.0])),
         "pins": [
             {"name": p["name"], "offset": list(p["offset"]), "anchor": p.get("anchor")}
@@ -478,94 +490,6 @@ def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     return geoms, de
 
 
-def render_store(authored: dict[str, dict]) -> tuple[dict, dict, tuple[float, float]]:
-    """Render every component: returns (geometry, components_data, origin_svg).
-
-    The ``scale`` and pin offsets are re-derived per multi-terminal component
-    (``best_alignment``, §4), so the output reflects the current CircuiTikZ
-    library, not the stored values."""
-    origin = measure_origin(authored["R"]) if "R" in authored else measure_origin(
-        next(iter(authored.values()))
-    )
-    geometry: dict[str, dict] = {}
-    components: dict[str, dict] = {}
-    for kind in sorted(authored):
-        if "muxdemux" in authored[kind]:
-            # Two-parameter mux/demux: every (data, select) combo is rendered
-            # and measured. Regression guard: routed as a plain node, these
-            # would silently lose params/n_data and every kind:data:select
-            # geometry combo.
-            geoms, de = render_muxdemux(kind, authored[kind], origin)
-            geometry.update(geoms)
-            components[kind] = de
-            continue
-        if is_parametric(authored[kind]):
-            geoms, de = render_parametric(kind, authored[kind], origin)
-            geometry.update(geoms)
-            components[kind] = de
-            continue
-        entry = realigned(authored[kind])
-        mes = geometry_entries(kind, entry)
-        geometry.update(mes)
-        de = data_entry(kind, entry)
-        de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
-        components[kind] = de
-    return geometry, components, origin
-
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
-
-def load_authored() -> dict[str, dict]:
-    """The authored component records from definitions.json (new or old format)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    return data.get("components", data)
-
-
-def measure_circuitikz_version() -> str | None:
-    """The installed CircuiTikZ version, from a minimal probe compile.
-
-    ``None`` when the package reports no version. Used by the batch generator
-    to stamp ``definitions.json`` with the version the library was rendered
-    against, so symbol/anchor drift is diagnosable later."""
-    _svg, log = render.render_svg(r"\draw (0,0) -- (0.25,0);", border_pt=BORDER_PT)
-    return render.circuitikz_version(log)
-
-
-def write_store(geometry: dict, components: dict, origin: tuple[float, float],
-                circuitikz_version: str | None = None) -> None:
-    """Write both data files. *circuitikz_version* stamps definitions.json with
-    the version the library was generated against (omitted when unknown)."""
-    GEOMETRY_PATH.write_text(json.dumps(geometry, indent=2) + "\n", encoding="utf-8")
-    data: dict = {"origin_svg": list(origin)}
-    if circuitikz_version:
-        data["circuitikz_version"] = circuitikz_version
-    data["components"] = components
-    DEFINITIONS_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def save_component(kind: str, entry: dict) -> None:
-    """Add/replace one component: merge its geometry into geometry.json and its
-    record into definitions.json (re-using the existing origin_svg and the
-    batch-generation circuitikz_version stamp)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    components = data.get("components", data)
-    origin = tuple(data["origin_svg"]) if "origin_svg" in data else measure_origin(entry)
-    geometry = json.loads(GEOMETRY_PATH.read_text(encoding="utf-8"))
-
-    mes = geometry_entries(kind, entry)
-    geometry.update(mes)
-    de = data_entry(kind, entry)
-    de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
-    components[kind] = de
-    write_store(geometry, components, origin,
-                circuitikz_version=data.get("circuitikz_version"))
-
-
 # ---------------------------------------------------------------------------
 # Multi-parameter mux/demux (CircuiTikZ ``muxdemux`` shape).
 #
@@ -578,21 +502,31 @@ def save_component(kind: str, entry: dict) -> None:
 # magnet. The body size follows the [muxdemux] config knobs.
 # ---------------------------------------------------------------------------
 
+# Fixed nominal body size (GU) for every (data, select) combo — the box no longer
+# grows with the pin count (the pins simply redistribute inside it); the user
+# resizes the placed instance freely via the 2D drag handles (a per-instance scale,
+# §6.4). Chosen to reproduce the original default (2 data lines, 1 select) so a
+# default placement is unchanged.
+MUX_FIXED_LH: float = 4.0   # left edge height (data side of a mux)
+MUX_FIXED_RH: float = 2.0   # right edge height (output side of a mux)
+MUX_FIXED_W: float = 2.0    # body width
+
+
 def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tuple[str, str]]]:
     """The concrete ``muxdemux def`` option, the measured (unscaled) anchors, and
     the (pin-name, anchor) pairs for one (data, select) combo of a *mux*/*demux*.
-    ``Lh``/``Rh`` track the data count (scaled by ``MUX_DATA_PITCH_GU``); ``w``
-    tracks the select count (scaled by ``MUX_SELECT_SPACING_GU``) so the bottom
-    pins don't crowd. The defaults (1.0/1.0) reproduce the original body."""
-    dh = round(2 * data * MUX_DATA_PITCH_GU, 4)
-    w = round(sel * MUX_SELECT_SPACING_GU + 1, 4)
+    The body is a **fixed** size (``MUX_FIXED_LH``/``RH``/``W``) independent of the
+    pin counts — more pins simply pack closer; the user resizes the placed instance
+    via the drag handles (§6.4). (A demux is a mirrored mux, so only the ``mux``
+    role is generated; the ``demux`` branch is kept for completeness.)"""
+    lh, rh, w = MUX_FIXED_LH, MUX_FIXED_RH, MUX_FIXED_W
     if role == "mux":      # data inputs on the left, one output right, selects below
-        defstr = (f"muxdemux def={{Lh={dh}, Rh=2, NL={data}, "
+        defstr = (f"muxdemux def={{Lh={lh}, Rh={rh}, NL={data}, "
                   f"NR=1, NB={sel}, NT=0, w={w}}}")
         pairs = ([(f"in{i}", f"lpin {i + 1}") for i in range(data)]
                  + [("out", "rpin 1")])
     else:                  # demux: one input left, data outputs right, selects below
-        defstr = (f"muxdemux def={{Lh=2, Rh={dh}, NL=1, "
+        defstr = (f"muxdemux def={{Lh={rh}, Rh={lh}, NL=1, "
                   f"NR={data}, NB={sel}, NT=0, w={w}}}")
         pairs = ([("in", "lpin 1")]
                  + [(f"out{i}", f"rpin {i + 1}") for i in range(data)])
@@ -601,7 +535,7 @@ def _muxdemux_combo(role: str, data: int, sel: int) -> tuple[str, dict, list[tup
     return defstr, measured, [p for p in pairs if p[1] in measured]
 
 
-def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
+def render_muxdemux(kind: str, entry: dict, origin, *, align: bool = True) -> tuple[dict, dict]:
     """Render every (data, select) combo of a mux/demux. Returns
     ``(geometry_by_key, data_entry)`` — geometry keyed ``kind:data:select`` (the
     default aliased under the plain key), and a multi-parameter data entry whose
@@ -614,21 +548,34 @@ def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     dspec, sspec = specs[dname], specs[sname]
     base = {k: v for k, v in entry.items() if k not in ("params", "muxdemux")}
 
+    # The body is a *fixed* size (``_muxdemux_combo``). To keep the *display* size
+    # constant too, bake the **default combo's** alignment scale for every combo —
+    # a per-combo scale would re-grow the body as the pin count changes. A default
+    # placement is unchanged; other counts pack their pins closer (connected via the
+    # magnet) and the user resizes the instance with the 2D drag handles.
+    # ``align=False`` (Option A) bakes no grid scale: the trapezoid renders at true
+    # size with natural (off-grid) pins reached by the magnet.
+    _dd, _sd = int(dspec["default"]), int(sspec["default"])
+    _opt0, _m0, _pairs0 = _muxdemux_combo(role, _dd, _sd)
+    sx, sy = _scale_for(_m0, [a for _, a in _pairs0]) if align else (1.0, 1.0)
+
     geoms: dict[str, dict] = {}
     n_data: dict[str, dict] = {}
     for d in range(int(dspec["min"]), int(dspec["max"]) + 1):
         for s in range(int(sspec["min"]), int(sspec["max"]) + 1):
             opt, measured, pairs = _muxdemux_combo(role, d, s)
-            sx, sy = _scale_for(measured, [a for _, a in pairs])
             pins = _scaled_pins([{"name": nm, "anchor": a} for nm, a in pairs],
                                 measured, sx, sy)
-            scale = [sx, sy]
-            ce = {**base, "tikz": "muxdemux", "emission": "node",
-                  "pins": pins, "scale": scale}
+            scale = [sx, sy] if align else None
+            ce = {**base, "tikz": "muxdemux", "emission": "node", "pins": pins}
+            nd = {"option": opt, "pins": pins}
+            if scale:
+                ce["scale"] = scale
+                nd["scale"] = scale
             g = geometry(ce, option=", " + opt)
             geoms[f"{geometry_key(kind)}:{d}:{s}"] = g
-            n_data[f"{d},{s}"] = {"option": opt, "scale": scale,
-                                  "pins": pins, "bbox": compute_bbox(g, origin, pins)}
+            nd["bbox"] = compute_bbox(g, origin, pins)
+            n_data[f"{d},{s}"] = nd
     dd, sd = int(dspec["default"]), int(sspec["default"])
     geoms[geometry_key(kind)] = geoms[f"{geometry_key(kind)}:{dd}:{sd}"]   # static alias
     default = n_data[f"{dd},{sd}"]
@@ -636,25 +583,11 @@ def render_muxdemux(kind: str, entry: dict, origin) -> tuple[dict, dict]:
         "display_name": entry["display_name"], "category": entry["category"],
         "emission": "node", "tikz": "muxdemux", "labels": [],
         "pins": default["pins"], "bbox": default["bbox"],
-        # The authoring rec is persisted so the batch generator (render_store)
-        # can re-render the combos from definitions.json alone.
+        # The authoring rec is persisted so the generator can re-render the
+        # combos from its source definitions alone.
         "params": entry["params"], "muxdemux": rec, "n_data": n_data,
     }
     return geoms, de
-
-
-def save_muxdemux(kind: str, entry: dict) -> None:
-    """Render and merge a parametric mux/demux into the data files (incremental —
-    does not re-render the rest of the library)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    components = data["components"]
-    origin = tuple(data["origin_svg"])
-    geometry = json.loads(GEOMETRY_PATH.read_text(encoding="utf-8"))
-    geoms, de = render_muxdemux(kind, entry, origin)
-    geometry.update(geoms)
-    components[kind] = de
-    write_store(geometry, components, origin,
-                circuitikz_version=data.get("circuitikz_version"))
 
 
 # ---------------------------------------------------------------------------

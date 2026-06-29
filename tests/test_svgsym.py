@@ -77,23 +77,32 @@ def _expected_geometry_keys() -> list[tuple[str, str]]:
         expected.append((kind, gk(kind)))
         # Variants: suffix mode appends the token; option mode appends _token;
         # dot variants overlay marks on the base geometry (no key of their own).
+        # Tokens can contain spaces (``schottky base``); the geometry is keyed by
+        # the *sanitised* form, exactly as the runtime looks it up — it builds
+        # ``kind + suffix`` and passes the whole thing through geometry_key
+        # (items.py ``_geometry_kind`` -> svgsym ``symbol_paths``). Mirror that by
+        # sanitising the assembled key here.
         for v in entry.get("variants", []):
             if v.get("mode") == "dot":
                 continue
             if v["mode"] == "suffix":
-                expected.append((kind, gk(kind) + v["token"]))
+                expected.append((kind, gk(gk(kind) + v["token"])))
             else:
-                expected.append((kind, gk(kind) + "_" + v["token"]))
-        # Single-parameter kinds (logic gates): kind:N for every declared value.
+                expected.append((kind, gk(gk(kind) + "_" + v["token"])))
+        # Single-parameter kinds (logic gates, DIP/QFP chips): kind:N for every
+        # *declared* value. ``step`` defaults to 1, but stepped kinds skip values
+        # (a DIP has even pin counts only, a QFP multiples of four), so honour it
+        # — the same clamp the runtime applies before looking geometry up.
         p = entry.get("param")
         if p:
-            for n in range(int(p["min"]), int(p["max"]) + 1):
+            for n in range(int(p["min"]), int(p["max"]) + 1, int(p.get("step", 1))):
                 expected.append((kind, f"{gk(kind)}:{n}"))
-        # Multi-parameter kinds (mux/demux): kind:v1:v2 for every value combo,
-        # in declaration order.
+        # Multi-parameter kinds (mux/demux, multi-collector BJTs): kind:v1:v2 for
+        # every value combo, in declaration order, honouring each spec's step.
         specs = entry.get("params")
         if specs:
-            ranges = [range(int(s["min"]), int(s["max"]) + 1) for s in specs]
+            ranges = [range(int(s["min"]), int(s["max"]) + 1, int(s.get("step", 1)))
+                      for s in specs]
             for combo in product(*ranges):
                 expected.append(
                     (kind, gk(kind) + "".join(f":{v}" for v in combo))
@@ -126,13 +135,19 @@ def test_parametric_n_data_covers_every_combo() -> None:
     from app.components.library import load_library
 
     for kind, entry in load_library().items():
+        # The declared values are ``min..max`` on the spec's ``step`` grid (step
+        # defaults to 1). A DIP chip steps by 2 (even pin counts), a QFP by 4, so
+        # ``n_data`` is keyed by those stepped values only — derive ``want`` from
+        # the same declared step the generator baked from, not a contiguous range.
         p = entry.get("param")
         if p:
-            want = {str(n) for n in range(int(p["min"]), int(p["max"]) + 1)}
+            want = {str(n) for n in
+                    range(int(p["min"]), int(p["max"]) + 1, int(p.get("step", 1)))}
             assert set(p.get("n_data", {})) == want, kind
         specs = entry.get("params")
         if specs:
-            ranges = [range(int(s["min"]), int(s["max"]) + 1) for s in specs]
+            ranges = [range(int(s["min"]), int(s["max"]) + 1, int(s.get("step", 1)))
+                      for s in specs]
             want = {",".join(str(v) for v in combo) for combo in product(*ranges)}
             assert set(entry.get("n_data", {})) == want, kind
 
@@ -142,30 +157,32 @@ def test_geometry_is_self_contained_for_glyph_kind() -> None:
     so the app needs no .svg access at run time."""
     with open(GEOMETRY_PATH, encoding="utf-8") as fh:
         geometry = json.load(fh)
-    entry = geometry[geometry_key("cV")]
-    assert entry["glyphs"], "cV must carry baked glyph marks"
+    entry = geometry[geometry_key("american controlled voltage source")]
+    assert entry["glyphs"], "controlled voltage source must carry baked glyph marks"
     g = entry["glyphs"][0]
     assert g["d"].lstrip()[:1] in "Mm"          # real path geometry, not a placeholder
     assert len(g["matrix"]) == 6                 # baked affine transform
 
 
 def test_cV_paths_all_real_geometry() -> None:
-    """Every path returned for cV has real geometry — no opaque glyph-ref leaks.
+    """Every path returned for the controlled voltage source has real geometry —
+    no opaque glyph-ref leaks.
 
     The +/- glyph marks are resolved into concrete filled paths; if svgsym let
     one through unresolved it would be an empty/degenerate path. All returned
     paths must carry actual elements.
     """
-    paths = symbol_paths("cV")
+    paths = symbol_paths("american controlled voltage source")
     assert len(paths) >= 4   # diamond + strokes + the two resolved glyph marks
     for sp in paths:
         assert sp.path.elementCount() > 0
 
 
 def test_cV_has_more_paths_than_plain_diamond() -> None:
-    """cV resolves its glyph marks: it has strictly more paths than the bare
-    geometry would (the diamond + its connecting strokes alone)."""
-    cv = symbol_paths("cV")
+    """The controlled voltage source resolves its glyph marks: it has strictly
+    more paths than the bare geometry would (the body + its connecting strokes
+    alone)."""
+    cv = symbol_paths("american controlled voltage source")
     # A plain resistor carries no glyph marks — sanity that glyph kinds add paths.
     assert len(cv) > len(symbol_paths("R"))
 
@@ -178,14 +195,18 @@ def test_plain_resistor_unaffected() -> None:
 
 
 def test_filled_diode_body_is_filled() -> None:
-    """A filled diode (`D*`) has a filled body path; the plain diode (`D`) does
-    not — so toggling the filled option visibly changes the canvas (regression).
+    """A filled diode (`full diode`) has a filled body path; the outline diode
+    (`empty diode`) does not — so the two render visibly differently (regression).
 
-    The fill is a bare dvisvgm `<path>` (SVG default black fill); recording it as
-    `fill='none'` previously made `D` and `D*` render identically.
+    The manual library encodes fill as distinct kinds (`full diode` with a filled
+    body vs `empty diode`, outline only) rather than as a suffix variant. The fill
+    is a bare dvisvgm `<path>` (SVG default black fill); recording it as
+    `fill='none'` previously made the two render identically.
     """
-    assert not any(sp.filled for sp in symbol_paths("D")), "plain D must be unfilled"
-    assert any(sp.filled for sp in symbol_paths("D*")), "D* must have a filled body"
+    assert not any(sp.filled for sp in symbol_paths("empty diode")), \
+        "'empty diode' must be unfilled"
+    assert any(sp.filled for sp in symbol_paths("full diode")), \
+        "'full diode' must have a filled body"
 
 
 def test_stroke_only_symbols_not_filled() -> None:
@@ -193,3 +214,24 @@ def test_stroke_only_symbols_not_filled() -> None:
     — a guard that the 'bare path = fill' rule does not over-fill stroked bodies."""
     for kind in ("L", "C", "R"):
         assert not any(sp.filled for sp in symbol_paths(kind)), kind
+
+
+def test_symbol_path_carries_clip(monkeypatch) -> None:
+    """A geometry path with a ``clip`` ``d`` (the RF antenna wedge that turns full
+    wavefront circles into arcs) is parsed into a clip ``QPainterPath`` on its
+    ``SymbolPath`` so the canvas can clip when painting."""
+    import app.canvas.svgsym as S
+
+    fake = {"R": {"paths": [
+        {"d": "M0 0L1 0L1 1Z", "stroke_width": 0.4, "fill": "none",
+         "clip": "M0 0L2 0L2 2Z"},
+        {"d": "M0 0L1 1", "stroke_width": 0.4, "fill": "none"},
+    ], "glyphs": []}}
+    monkeypatch.setattr(S, "_geometry", lambda: fake)
+    S.symbol_paths.cache_clear()
+    try:
+        paths = S.symbol_paths("R")
+        assert paths[0].clip is not None and paths[0].clip.elementCount() > 0
+        assert paths[1].clip is None
+    finally:
+        S.symbol_paths.cache_clear()

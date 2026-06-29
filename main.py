@@ -21,6 +21,7 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from app.resources import resource_path
+
 from app.ui.mainwindow import MainWindow
 
 

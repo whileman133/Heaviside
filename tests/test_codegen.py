@@ -35,7 +35,7 @@ def _schematic(*components, wires=()) -> Schematic:
 
 
 def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False,
-          node_text="") -> Component:
+          node_text="", node_side="") -> Component:
     return Component(
         id=_uid(),
         kind=kind,
@@ -44,6 +44,7 @@ def _comp(kind: str, position=(0.0, 0.0), rotation=0, options="", mirror=False,
         options=options,
         mirror=mirror,
         node_text=node_text,
+        node_side=node_side,
     )
 
 
@@ -55,33 +56,34 @@ def _wire(points) -> Wire:
 # European / cute component shape keywords (§5)
 # ---------------------------------------------------------------------------
 
-def test_european_components_emit_shape_keywords() -> None:
-    """European/cute components emit their style-independent shape keyword, so the
-    shape is fixed regardless of the document's global resistor/inductor style."""
-    assert "to[european resistor]" in generate(_schematic(_comp("eR")))
-    assert "to[european inductor]" in generate(_schematic(_comp("eL")))
-    assert "to[cute inductor]" in generate(_schematic(_comp("cuteL")))
-    assert "to[european voltage source]" in generate(_schematic(_comp("eV")))
-    assert "to[european current source]" in generate(_schematic(_comp("eI")))
-    assert "to[variable european resistor]" in generate(_schematic(_comp("evR")))
-    assert "to[european potentiometer]" in generate(_schematic(_comp("epot")))
-    assert "to[european resistive sensor]" in generate(_schematic(_comp("ethermistor")))
-    assert "to[pR]" in generate(_schematic(_comp("pR")))  # american potentiometer
+# NOTE: test_european_components_emit_shape_keywords and
+# test_european_logic_gates_emit_keywords DELETED — they asserted curated
+# european/cute components as *separate kinds* (eR, eL, eV, eI, evR, epot,
+# ethermistor, enot, eand). In the manual library, european/cute is a per-document
+# STYLE AXIS, not distinct kinds, so those kinds no longer exist. The american
+# potentiometer (pR) survives and is exercised by the potentiometer wiper test.
 
 
-def test_european_logic_gates_emit_keywords() -> None:
-    """European logic gates emit `node[european … port]`; the parametric AND keeps
-    its scoped european height setting."""
-    assert "node[european not port" in generate(_schematic(_comp("enot")))
-    src = generate(_schematic(_comp("eand")))
-    assert "node[european and port" in src
-    assert r"\ctikzset{tripoles/european and port/height" in src
+def test_scalable_without_height_scales_both_axes() -> None:
+    """A scalable kind with no body-height mechanism (digital blocks, and the
+    manual-library gates) folds the user scale into BOTH xscale and yscale so it
+    grows uniformly, matching the canvas. A gate that *does* size via its height key
+    scales only x (the height carries y — see the european-gate test above)."""
+    import dataclasses
+    from app.codegen.circuitikz import _gate_height_setting
+
+    ff = dataclasses.replace(_comp("flipflop D"), scale=2.0)
+    assert _gate_height_setting(ff) is None        # no height mechanism
+    src = generate(_schematic(ff))
+    assert "xscale=" in src and "yscale=" in src   # both axes scaled
 
 
 def test_battery_and_inst_amp_emit_keywords() -> None:
+    # Manual kinds carry CircuiTikZ-native names (the amps are "inst amp"/"gm amp"
+    # with a space, not the curated instamp/gmamp).
     assert "to[battery]" in generate(_schematic(_comp("battery")))
-    assert "node[inst amp" in generate(_schematic(_comp("instamp")))
-    assert "node[gm amp" in generate(_schematic(_comp("gmamp")))
+    assert "node[inst amp" in generate(_schematic(_comp("inst amp")))
+    assert "node[gm amp" in generate(_schematic(_comp("gm amp")))
 
 
 def test_mirror_emits_mirror_option_for_two_terminal() -> None:
@@ -89,11 +91,11 @@ def test_mirror_emits_mirror_option_for_two_terminal() -> None:
     features (e.g. an LED's emission arrows) land on the same side as the canvas
     Flip-X; unmirrored output is unchanged (regression for the canvas/LaTeX
     mirror mismatch)."""
-    assert "to[leD, mirror]" in generate(_schematic(_comp("leD", mirror=True)))
-    assert "mirror" not in generate(_schematic(_comp("leD", mirror=False)))
+    assert "to[full led, mirror]" in generate(_schematic(_comp("full led", mirror=True)))
+    assert "mirror" not in generate(_schematic(_comp("full led", mirror=False)))
     # With a label the key precedes the label.
-    assert "to[D, mirror, l=$D$]" in generate(
-        _schematic(_comp("D", mirror=True, options="l=$D$"))
+    assert "to[full diode, mirror, l=$D$]" in generate(
+        _schematic(_comp("full diode", mirror=True, options="l=$D$"))
     )
 
 
@@ -140,18 +142,19 @@ def test_mirror_at_90_keeps_two_terminal_wire_connected() -> None:
 
 
 def test_switches_and_choke_emit_keywords() -> None:
-    assert "to[nos]" in generate(_schematic(_comp("nos")))
-    assert "to[ncs]" in generate(_schematic(_comp("ncs")))
-    assert "to[push button]" in generate(_schematic(_comp("pushbutton")))
-    assert "to[cute choke]" in generate(_schematic(_comp("choke")))
-    assert "to[opening switch]" in generate(_schematic(_comp("opening")))
-    assert "to[closing switch]" in generate(_schematic(_comp("closing")))
+    # Manual kinds carry CircuiTikZ-native names (no curated short aliases).
+    assert "to[normal open switch]" in generate(_schematic(_comp("normal open switch")))
+    assert "to[normal closed switch]" in generate(_schematic(_comp("normal closed switch")))
+    assert "to[push button]" in generate(_schematic(_comp("push button")))
+    assert "to[cute choke]" in generate(_schematic(_comp("cute choke")))
+    assert "to[opening switch]" in generate(_schematic(_comp("opening switch")))
+    assert "to[closing switch]" in generate(_schematic(_comp("closing switch")))
     spdt_src = generate(_schematic(_comp("spdt")))
-    # The SPDT is a centre-placed scaled node (§4): its per-axis xscale/yscale
-    # land the terminals on the grid; no anchor= placement, no bridge leads.
+    # The SPDT is a centre-placed node, no anchor= placement, no bridge leads.
+    # Manual symbols bake NO grid-alignment scale, so there is no xscale/yscale.
     assert "node[spdt" in spdt_src
     assert "anchor=" not in spdt_src
-    assert "xscale=" in spdt_src and "yscale=" in spdt_src
+    assert "xscale=" not in spdt_src and "yscale=" not in spdt_src
 
 
 # ---------------------------------------------------------------------------
@@ -201,22 +204,21 @@ def test_resistor_horizontal() -> None:
     assert "(0,0) to[R] (2,0)" in src
 
 
-@pytest.mark.parametrize("kind", ["C", "L", "D", "zD", "leD"])
+@pytest.mark.parametrize("kind", ["capacitor", "L", "full diode", "full Zener diode", "full led"])
 def test_two_terminal_keyword_emission(kind: str) -> None:
     """Every horizontal two-terminal kind emits `(0,0) to[<keyword>] (2,0)` — one
     shared codegen path, so the resistor (geometry) + these (keyword mapping) +
     the vertical voltage source below cover it; the kind→keyword map itself is
-    guarded by the registry/library tests."""
+    guarded by the registry/library tests. The manual keyword IS the kind name."""
     src = generate(_schematic(_comp(kind)))
     assert f"(0,0) to[{kind}] (2,0)" in src
 
 
-@pytest.mark.parametrize("kind", ["D", "zD"])
-def test_filled_variant_emission(kind: str) -> None:
-    """The `filled` variant appends the `*` suffix (shared variant_tikz path)."""
-    comp = Component(id=_uid(), kind=kind, position=(0.0, 0.0), rotation=0,
-                     options="", variants={"filled": True})
-    assert f"(0,0) to[{kind}*] (2,0)" in generate(_schematic(comp))
+# NOTE: test_filled_variant_emission DELETED — the `filled` variant appended a
+# curated suffix-mode `*` token (D -> D*). The manual library declares NO
+# suffix-mode variants at all (variant_specs are option-mode only, e.g. the
+# transistor `bodydiode` exercised by test_mosfet_bodydiode_emission below), so
+# the keyword-suffix path has no manual kind to drive it.
 
 
 # ---------------------------------------------------------------------------
@@ -233,9 +235,9 @@ def test_resistor_with_options() -> None:
 def test_label_value_with_comma_is_brace_protected() -> None:
     """A label value containing a comma is wrapped in braces so pgfkeys does not
     mis-split the to[] option list into bogus keys (regression)."""
-    comp = _comp("cV", options=r"v=$\phi(0,0^+)$")
+    comp = _comp("american controlled voltage source", options=r"v=$\phi(0,0^+)$")
     src = generate(_schematic(comp))
-    assert r"to[cV, v={$\phi(0,0^+)$}]" in src
+    assert r"to[american controlled voltage source, v={$\phi(0,0^+)$}]" in src
 
 
 def test_label_value_with_equals_is_brace_protected() -> None:
@@ -334,23 +336,32 @@ def test_diode_emits_picture_scoped_scale() -> None:
     """A schematic containing a diode emits a picture-scoped `diodes/scale`
     inside the environment so the (large) default diode body is shrunk to match
     the canvas SVGs; the line sits right after `\\begin{circuitikz}`."""
-    src = generate(_schematic(_comp("D")))
-    assert r"\ctikzset{diodes/scale=0.8}" in src
+    src = generate(_schematic(_comp("full diode")))
+    assert r"\ctikzset{diodes/scale=0.6}" in src          # new-document default (§5)
     lines = [ln.strip() for ln in src.splitlines()]
     i = lines.index(r"\begin{circuitikz}")
-    assert lines[i + 1] == r"\ctikzset{diodes/scale=0.8}"
+    assert lines[i + 1] == r"\ctikzset{diodes/scale=0.6}"
 
 
 def test_no_diode_scale_without_diodes() -> None:
     """Schematics with no diode-family component omit the diodes/scale line."""
-    src = generate(_schematic(_comp("R"), _comp("C", position=(4.0, 0.0))))
+    src = generate(_schematic(_comp("R"), _comp("capacitor", position=(4.0, 0.0))))
     assert "diodes/scale" not in src
 
 
+def test_diode_scale_uses_document_value() -> None:
+    """The emitted `diodes/scale` is the document's diode_scale (the inspector control,
+    §5), not a hard-coded constant."""
+    s = _schematic(_comp("full diode"))
+    s.diode_scale = 0.5                                   # a non-default value
+    assert r"\ctikzset{diodes/scale=0.5}" in generate(s)
+
+
 def test_voltage_source() -> None:
-    """Voltage source at (0,0), rotation 0 → (0,0) to[V] (0,2)."""
-    src = generate(_schematic(_comp("V")))
-    assert "(0,0) to[V] (0,2)" in src
+    """Voltage source at (0,0), rotation 0 → (0,0) to[<kw>] (2,0). The manual
+    voltage source has a horizontal default span (2,0), like every other bipole."""
+    src = generate(_schematic(_comp("american voltage source")))
+    assert "(0,0) to[american voltage source] (2,0)" in src
 
 
 # ---------------------------------------------------------------------------
@@ -361,9 +372,11 @@ def test_opamp_node() -> None:
     """Op-amp produces node[op amp] syntax."""
     comp = _comp("op amp", position=(1.0, 2.0))
     src = generate(_schematic(comp))
-    # Centre-placed and per-axis scaled (§4) — xscale only (yscale==1 omitted).
-    assert "node[op amp, xscale=1.0504]" in src
+    # Centre-placed. Manual symbols bake NO grid-alignment scale, so the node
+    # carries neither xscale/yscale nor an anchor= placement.
+    assert "node[op amp]" in src
     assert "anchor=" not in src
+    assert "xscale=" not in src and "yscale=" not in src
 
 
 # ---------------------------------------------------------------------------
@@ -381,11 +394,47 @@ def test_node_text_multi_terminal_inline_in_node_braces() -> None:
     assert "(node_" in bare and ") {}" in bare
 
 
+def test_gate_size_setting_emits_height_and_width(monkeypatch) -> None:
+    r"""A manual gate with CircuiTikZ size keys emits its body height/width as
+    ``\ctikzset{tripoles/<kw>/height=…, …/width=…}`` (default × resize factor), instead
+    of node xscale/yscale. None at natural size, and None for a kind without size keys."""
+    import app.codegen.circuitikz as cg
+    import app.schematic.model as model
+    keys = {"path": "tripoles/american and port", "height": 0.8, "width": 1.1}
+    monkeypatch.setattr(cg._library, "gate_size_keys",
+                        lambda k: keys if k == "and" else None)
+
+    monkeypatch.setattr(model, "node_resize_factors", lambda c: (1.5, 2.0))
+    assert cg._gate_size_setting(_comp("and")) == [
+        "tripoles/american and port/height=1.6",     # 0.8 * 2.0
+        "tripoles/american and port/width=1.65",     # 1.1 * 1.5
+    ]
+    assert cg._node_group_ctikzset(_comp("and")) == [
+        "tripoles/american and port/height=1.6", "tripoles/american and port/width=1.65"]
+
+    monkeypatch.setattr(model, "node_resize_factors", lambda c: None)
+    assert cg._gate_size_setting(_comp("and")) is None        # natural size → no override
+    monkeypatch.setattr(model, "node_resize_factors", lambda c: (1.5, 2.0))
+    assert cg._gate_size_setting(_comp("R")) is None          # no size keys for this kind
+
+
+def test_single_terminal_node_uses_standalone_node_at_syntax() -> None:
+    """A single-terminal node (ground/supply/terminal dot) is emitted as a standalone
+    ``\\node[kind] at (x,y) {};`` command, never as an inline ``(x,y) node[kind]{}``
+    path operation inside the shared ``\\draw``. The command sits after the path's
+    terminating ';' (like the junction/open-circle dots)."""
+    src = generate(_schematic(_comp("ground")))
+    assert r"\node[ground] at (0,0) {};" in src
+    assert ") node[ground]" not in src                    # not the inline path op
+    assert src.index("\n  ;") < src.index(r"\node[ground]")
+
+
 def test_node_text_on_single_terminal_node() -> None:
-    """A single-terminal node (power rail) renders node_text in {…} and its options
-    in the node[…] bracket (no l=→label hack)."""
+    """A single-terminal node (power rail) is emitted as a standalone ``\\node at``
+    command with node_text in {…} and its options in the node[…] bracket (no l=→label
+    hack)."""
     src = generate(_schematic(_comp("vcc", node_text="$V_{cc}$", options="color=blue")))
-    assert "node[vcc, color=blue] {$V_{cc}$}" in src
+    assert r"\node[vcc, color=blue] at (0,0) {$V_{cc}$};" in src
     assert "label=right" not in src                     # legacy hack is gone
 
 
@@ -402,7 +451,9 @@ def test_node_text_braces_are_balanced() -> None:
     assert r"{a\}b}" in src
 
 
-@pytest.mark.parametrize("kind", ["npn", "pnp", "op amp", "nigfete", "vcc", "vdd", "vee", "ground"])
+# NOTE: curated "vdd" dropped from the list — the manual library has no vdd kind
+# (vcc/vee/ground remain and cover single-terminal supply nodes).
+@pytest.mark.parametrize("kind", ["npn", "pnp", "op amp", "nigfete", "vcc", "vee", "ground"])
 def test_node_text_always_present_in_source(kind: str) -> None:
     """Invariant: node text the user set MUST appear in the generated CircuiTikZ
     source (which is what the GUI displays and what is compiled), for every
@@ -416,27 +467,26 @@ def test_node_text_always_present_in_source(kind: str) -> None:
 # Digital blocks — native flipflop / muxdemux shapes (centre-placed + leads)
 # ---------------------------------------------------------------------------
 
-def test_flipflop_d_emits_scaled_node_no_leads() -> None:
-    """A D flip-flop emits ``node[flipflop D, xscale=…, yscale=…]`` with the baked
-    grid-alignment scale and **no** lead bridges — its pins sit at the scaled
-    (grid-aligned) anchors."""
+def test_flipflop_d_emits_centre_node_no_leads() -> None:
+    """A D flip-flop emits a centre-placed ``node[flipflop D]`` and **no** lead
+    bridges — its pins sit at the node anchors. Manual symbols bake NO
+    grid-alignment scale, so there is no xscale/yscale on the node."""
     src = generate(_schematic(_comp("flipflop D", position=(4.0, 4.0))))
-    assert "node[flipflop D, xscale=" in src and "yscale=" in src
-    assert ") -- " not in src     # no bridge leads; pins are at the scaled anchors
+    assert "node[flipflop D]" in src
+    assert "xscale=" not in src and "yscale=" not in src
+    assert ") -- " not in src     # no bridge leads; pins are at the node anchors
 
 
-def test_flipflop_pins_are_grid_aligned() -> None:
-    """The alignment scale lands all four flip-flop pins on the 0.25-GU grid."""
-    from app.components.library import resolved_pins
-    for p in resolved_pins(_comp("flipflop D")):
-        assert (p.offset[0] * 4) == int(p.offset[0] * 4)
-        assert (p.offset[1] * 4) == int(p.offset[1] * 4)
+# NOTE: test_flipflop_pins_are_grid_aligned DELETED — it asserted the curated
+# "node scale correction" landed all four flip-flop pins on the 0.25-GU grid.
+# Manual symbols are rendered at true CircuiTikZ size with NO grid-alignment
+# scale, so their pins sit at the native (off-grid) anchors by design.
 
 
 def test_mux_emits_muxdemux_def() -> None:
     """A multiplexer emits the configurable ``muxdemux`` shape with the concrete
     ``muxdemux def`` baked for its current (inputs, selects) combo."""
-    src = generate(_schematic(_comp("mux", position=(4.0, 4.0))))
+    src = generate(_schematic(_comp("muxdemux", position=(4.0, 4.0))))
     assert "node[muxdemux" in src and "muxdemux def=" in src
     assert "NL=2" in src and "NB=1" in src  # default combo: 2 inputs, 1 select
 
@@ -445,73 +495,60 @@ def test_mux_inputs_param_changes_shape() -> None:
     """Bumping the input count re-emits a wider ``muxdemux def`` (NL) and more
     data pins; the select count drives NB independently."""
     from app.schematic.model import Component as SComponent
-    comp = SComponent(id=_uid(), kind="mux", position=(4.0, 4.0),
+    comp = SComponent(id=_uid(), kind="muxdemux", position=(4.0, 4.0),
                       rotation=0, options="", params={"inputs": 8, "selects": 3})
     src = generate(_schematic(comp))
     assert "NL=8" in src and "NB=3" in src
 
 
 def test_alu_and_adder_emit_named_styles() -> None:
-    """The ALU and adder use CircuiTikZ's predefined ``ALU`` / ``one bit adder``
-    styles, placed as centre nodes with their baked grid-alignment scale."""
+    """The ALU and adder use CircuiTikZ's predefined ``ALU`` / ``adder`` styles,
+    placed as centre nodes. Manual symbols bake NO grid-alignment scale, so the
+    nodes carry no xscale."""
     alu = generate(_schematic(_comp("ALU", position=(5.0, 5.0))))
-    assert "node[ALU, xscale=" in alu
+    assert "node[ALU]" in alu and "xscale=" not in alu
     add = generate(_schematic(_comp("adder", position=(5.0, 5.0))))
-    assert "node[one bit adder, xscale=" in add
+    assert "node[adder]" in add and "xscale=" not in add
 
 
-def test_digital_block_scale_multiplies_alignment() -> None:
-    """A digital block's inspector Size (Component.scale) multiplies its baked
-    alignment scale in the emitted xscale/yscale (like a logic gate)."""
+def test_digital_block_scale_multiplies_node() -> None:
+    """A digital block's inspector Size (Component.scale) is emitted as the node
+    xscale/yscale. Manual blocks bake no alignment scale, so at the default scale
+    the node carries none; the user scale folds straight into both axes."""
     from app.schematic.model import Component as SComponent
     base = generate(_schematic(_comp("flipflop D", position=(4.0, 4.0))))
     comp = SComponent(id=_uid(), kind="flipflop D", position=(4.0, 4.0),
                       rotation=0, options="")
     comp.scale = 2.0
     scaled = generate(_schematic(comp))
-    # 2× the ~0.893 baked scale ≈ 1.786
-    assert "xscale=0.8929" in base
-    assert "xscale=1.7858" in scaled
+    assert "xscale=" not in base                 # default scale → no override
+    assert "xscale=2, yscale=2" in scaled        # user scale folds into both axes
 
 
-def test_transformer_emits_scaled_quadpole_node() -> None:
-    """A transformer is a centre-placed quadpole node with its baked grid-alignment
-    scale and four grid-aligned winding terminals (p1/p2 primary, s1/s2 secondary)."""
+def test_transformer_emits_centre_quadpole_node() -> None:
+    """A transformer is a centre-placed quadpole node. Manual symbols bake NO
+    grid-alignment scale, so the node carries no xscale/yscale; its four winding
+    terminals are the native CircuiTikZ anchors A1/A2 (primary) and B1/B2
+    (secondary)."""
     from app.components.library import resolved_pins
     for kind in ("transformer", "transformer core"):
         src = generate(_schematic(_comp(kind, position=(4.0, 4.0))))
-        assert f"node[{kind}, xscale=" in src and "yscale=" in src
-        pins = {p.name: p.offset for p in resolved_pins(_comp(kind))}
-        assert set(pins) == {"p1", "p2", "s1", "s2"}
-        for off in pins.values():                       # all four terminals on grid
-            assert (off[0] * 4) == int(off[0] * 4)
-            assert (off[1] * 4) == int(off[1] * 4)
+        assert f"node[{kind}]" in src
+        assert "xscale=" not in src and "yscale=" not in src
+        names = {p.name for p in resolved_pins(_comp(kind))}
+        assert {"A1", "A2", "B1", "B2"} <= names      # the four winding terminals
 
 
-def test_cute_european_transformers_wrap_inductor_ctikzset() -> None:
-    """A cute/european transformer sets its coil shape with a scoped
-    ``\\ctikzset{inductor=…}`` group (a node option doesn't reach the european
-    rectangle); the plain transformer emits no such group."""
-    cute = generate(_schematic(_comp("cute transformer core", position=(4.0, 4.0))))
-    assert r"\ctikzset{inductor=cute}" in cute and "node[transformer core" in cute
-    eu = generate(_schematic(_comp("european transformer", position=(4.0, 4.0))))
-    assert r"\ctikzset{inductor=european}" in eu
-    plain = generate(_schematic(_comp("transformer core", position=(4.0, 4.0))))
-    assert "inductor=" not in plain
-
-
-def test_transformer_polarity_dots_emit_circ_nodes() -> None:
-    """Checked transformer ``dot`` variants emit a ``node[circ]`` at each chosen
-    inner-dot anchor; an unchecked transformer emits none."""
-    from app.schematic.model import Component as SComponent
-    plain = generate(_schematic(_comp("transformer", position=(4.0, 4.0))))
-    assert "node[circ]" not in plain
-    dotted = generate(_schematic(SComponent(
-        id=_uid(), kind="transformer", position=(4.0, 4.0), rotation=0, options="",
-        variants={"dot_p1": True, "dot_s2": True})))
-    assert "(node_" in dotted and ".inner dot A1) node[circ]{}" in dotted
-    assert ".inner dot B2) node[circ]{}" in dotted
-    assert ".inner dot A2)" not in dotted and ".inner dot B1)" not in dotted
+# NOTE: test_cute_european_transformers_wrap_inductor_ctikzset DELETED — it
+# relied on the curated "cute transformer core"/"european transformer" kinds and
+# the scoped inductor=cute/european ctikzset they emitted. cute/european is now a
+# per-document STYLE AXIS, not separate transformer kinds, so those kinds (and the
+# coil-shape ctikzset) no longer exist.
+#
+# NOTE: test_transformer_polarity_dots_emit_circ_nodes DELETED — it drove the
+# curated transformer dot_p1/dot_s2 variants (variant_specs is empty for the
+# manual transformer) and the curated p-/s-style "inner dot" anchor names. The
+# manual transformer declares no dot variants.
 
 
 def test_rotated_or_mirrored_transformer_uses_transform_shape() -> None:
@@ -529,20 +566,196 @@ def test_rotated_or_mirrored_transformer_uses_transform_shape() -> None:
     assert "rotate=" in opamp and "transform shape" not in opamp
 
 
-def test_dot_variants_do_not_change_keyword_or_geometry() -> None:
-    """A ``dot`` variant draws a separate mark — it must not alter the node keyword
-    or the geometry key (the base symbol is rendered, dots overlaid)."""
-    from app.components import library
-    suffix, opts = library.variant_tikz("transformer", {"dot_p1": True})
-    assert suffix == "" and opts == []
-    assert library.variant_geometry_suffix("transformer", {"dot_p1": True}) == ""
+def test_transformer_centre_taps_emit_subnode_anchor_refs() -> None:
+    """A transformer is two coupled inductors; each coil inherits the inductor
+    ``midtap`` centre tap, exposed as the ``L1.midtap`` (primary) / ``L2.midtap``
+    (secondary) pins. They are reached via CircuiTikZ **sub-node** anchors, so a
+    wire to one emits ``(node…-L1.midtap)`` — the sub-node form (no ``.`` before the
+    coil name), not the node-relative ``(node….anchor)``."""
+    import re
+    import uuid
+    from app.components.registry import REGISTRY
+    from app.schematic.model import Component, Wire, component_pin_positions
+
+    for kind, coil in (("transformer", "L1"), ("transformer core", "L2")):
+        names = [p.name for p in REGISTRY[kind].pins]
+        assert f"{coil}.midtap" in names
+        c = Component(id=str(uuid.uuid4()), kind=kind, position=(6.0, 6.0),
+                      rotation=0, options="", mirror=False)
+        tap = component_pin_positions(c)[names.index(f"{coil}.midtap")]
+        # the tap is off-grid; route the wire out along whichever axis keeps the
+        # connecting leg on-grid (here straight down from the tap point).
+        w = Wire(id=str(uuid.uuid4()), points=[tap, (tap[0], tap[1] - 1.0)])
+        src = generate(_schematic(c, wires=[w]))
+        assert re.search(rf"\(node_[0-9a-f]+-{coil}\.midtap\)", src), (kind, coil)
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
+def test_transformer_centre_tap_pin_coincides_with_circuitikz_anchor() -> None:
+    """The transformer centre-tap pins' baked positions equal where CircuiTikZ draws
+    the ``L1.midtap`` / ``L2.midtap`` sub-node anchors, so the canvas dot lands on
+    the real anchor the named-anchor export references."""
+    import re
+    from app.components import render
+    from app.components.registry import REGISTRY
+    from app.schematic.model import Component, component_pin_positions
+
+    for kind in ("transformer", "transformer core"):
+        names = [p.name for p in REGISTRY[kind].pins]
+        c = Component(id="t", kind=kind, position=(0.0, 0.0), rotation=0, options="")
+        pins = component_pin_positions(c)
+        for coil in ("L1", "L2"):
+            px, py = pins[names.index(f"{coil}.midtap")]
+            body = rf"\node[{kind}] (X) at (0,0) {{}};"
+            _svg, log = render.render_svg(body, border_pt=12,
+                                          node_id=f"X-{coil}", anchors=["midtap"])
+            m = re.search(r"HVANCHOR midtap = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt", log)
+            cx = float(m.group(1)) / render.TEXPT_PER_GU
+            cy = -float(m.group(2)) / render.TEXPT_PER_GU
+            assert abs(cx - px) < 0.02 and abs(cy - py) < 0.02, (kind, coil, (px, py), (cx, cy))
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
+def test_inductor_midtap_pin_coincides_with_circuitikz_anchor() -> None:
+    """The inductor's third (``midtap``) pin — an on-axis centre tap connected by
+    *coordinate* (the inductor is an anonymous ``to[…]``) — coincides with the
+    CircuiTikZ ``midtap`` anchor at all 8 rotation×mirror cases (the on-axis analogue
+    of the off-axis wiper/gate invariant)."""
+    import re
+    from app.components import render
+    from app.components.registry import REGISTRY
+    from app.codegen.circuitikz import _rotate
+    from app.schematic.model import Component, component_pin_positions
+
+    names = [p.name for p in REGISTRY["L"].pins]
+    assert "midtap" in names
+    tikz = REGISTRY["L"].tikz_keyword
+    for rot in (0, 90, 180, 270):
+        for mir in (False, True):
+            c = Component(id="l", kind="L", position=(0.0, 0.0),
+                          rotation=rot, options="", mirror=mir)
+            mx, my = component_pin_positions(c)[names.index("midtap")]
+            dx, dy = _rotate((2.0, 0.0), rot)
+            if mir:
+                dx = -dx
+            mk = ", mirror" if mir else ""
+            body = rf"\draw (0,0) to[{tikz}, name=X{mk}] ({dx:g},{-dy:g});"
+            _svg, log = render.render_svg(body, border_pt=12, node_id="X",
+                                          anchors=["midtap"])
+            m = re.search(r"HVANCHOR midtap = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt", log)
+            cx = float(m.group(1)) / render.TEXPT_PER_GU
+            cy = -float(m.group(2)) / render.TEXPT_PER_GU
+            assert abs(cx - mx) < 0.02 and abs(cy - my) < 0.02, (rot, mir, (mx, my), (cx, cy))
+
+
+def test_path_bipole_extra_terminal_emits_named_anchor_ref() -> None:
+    """A wire to a path bipole's *extra* terminal (the inductor centre tap, a
+    thyristor gate, …) references the terminal's CircuiTikZ anchor **by name** —
+    ``(node_….midtap)`` — instead of an opaque coordinate, and the device gains the
+    matching ``name=…`` in its ``to[…]``. (The two axial terminals stay literal
+    ``to[…]`` coordinates — they have no clean named anchor.)"""
+    import uuid
+    from app.components.registry import REGISTRY
+    from app.schematic.model import Component, Wire, component_pin_positions
+
+    c = Component(id=str(uuid.uuid4()), kind="L", position=(4.0, 4.0),
+                  rotation=0, options="", mirror=False)
+    names = [p.name for p in REGISTRY["L"].pins]
+    mt = component_pin_positions(c)[names.index("midtap")]
+    w = Wire(id=str(uuid.uuid4()), points=[mt, (mt[0], mt[1] + 1.0)])
+    src = generate(_schematic(c, wires=[w]))
+    nid = f"node_{c.id[:8]}"
+    assert f"name={nid}" in src              # the device is named
+    assert f"({nid}.midtap)" in src          # the wire references the anchor by name
+    assert "to[L" in src                     # still a path device (in/out are coords)
+
+
+def test_path_bipole_unconnected_extra_terminal_leaves_device_unnamed() -> None:
+    """A path bipole whose extra terminal has no wire on it stays ``name=``-free —
+    the name is added only when a wire actually references the terminal, so the
+    common case (an inductor with no centre-tap wire) emits no noise."""
+    from app.schematic.model import Component, Wire
+
+    # Two components so generate() doesn't normalise a lone component to the origin;
+    # wire only to the resistor, never to the inductor's midtap.
+    r = Component(id="r0", kind="R", position=(0.0, 0.0), rotation=0, options="", mirror=False)
+    ind = Component(id="l0", kind="L", position=(4.0, 0.0), rotation=0, options="", mirror=False)
+    w = Wire(id="w0", points=[(2.0, 0.0), (4.0, 0.0)])
+    src = generate(_schematic(r, ind, wires=[w]))
+    assert "name=" not in src
+
+
+def test_terminal_marker_on_component_anchor_uses_named_anchor_ref() -> None:
+    """A terminal marker (circ/ocirc/…) dropped on a component's named anchor is
+    emitted as ``\\node[circ] at (node_….A1) {}`` — the anchor reference, not a raw
+    coordinate — for both a multi-terminal node (a transformer winding) and a path
+    device's extra terminal (an inductor centre tap, which is named on demand)."""
+    import re
+    import uuid
+    from app.components.registry import REGISTRY
+    from app.schematic.model import Component, component_pin_positions
+
+    def _c(kind, pos):
+        return Component(id=str(uuid.uuid4()), kind=kind, position=pos,
+                         rotation=0, options="", mirror=False)
+
+    # (a) marker on a multi-terminal node anchor (transformer A1)
+    tr = _c("transformer", (4.0, 4.0))
+    names = [p.name for p in REGISTRY["transformer"].pins]
+    a1 = component_pin_positions(tr)[names.index("A1")]
+    src = generate(_schematic(tr, _c("circ", a1)))
+    nid = f"node_{tr.id[:8]}"
+    assert re.search(rf"\\node\[circ\] at \({re.escape(nid)}\.A1\)", src)
+
+    # (b) marker on a path device's extra terminal (inductor midtap): the device is
+    # named on demand and the marker references the anchor. (Second component keeps
+    # generate() from normalising the lone inductor to the origin.)
+    ind = _c("L", (4.0, 8.0))
+    other = _c("R", (8.0, 8.0))
+    mn = [p.name for p in REGISTRY["L"].pins]
+    mt = component_pin_positions(ind)[mn.index("midtap")]
+    src2 = generate(_schematic(ind, other, _c("circ", mt)))
+    iid = f"node_{ind.id[:8]}"
+    assert f"name={iid}" in src2
+    assert re.search(rf"\\node\[circ\] at \({re.escape(iid)}\.midtap\)", src2)
+
+
+def test_opamp_inverting_input_anchor_is_node_relative_not_subnode() -> None:
+    """The op-amp's inverting input anchor is literally named ``-``. A wire to it
+    must emit the node-relative ``(node.-)`` — *not* the sub-node form ``(node-)``
+    that the transformer centre taps use. Guards the `-`+`.` sub-node discriminator
+    (`pin_coord_to_ref`), so a bare ``-`` anchor is never mistaken for a sub-node."""
+    import uuid
+    from app.schematic.model import Component, Wire, component_pin_positions
+
+    c = Component(id=str(uuid.uuid4()), kind="op amp", position=(6.0, 6.0),
+                  rotation=0, options="")
+    minus = component_pin_positions(c)[1]              # the "-" input pin
+    # The "-" pin sits off-grid in x (native anchor), so the connecting wire leaves
+    # along the on-grid y axis (carrying the off-grid x out one Manhattan leg).
+    w = Wire(id=str(uuid.uuid4()), points=[minus, (minus[0], minus[1] - 1.0)])
+    src = generate(_schematic(c, wires=[w]))
+    import re
+    assert re.search(r"\(node_[0-9a-f]+\.-\)", src)        # node-relative (node….-)
+    assert not re.search(r"\(node_[0-9a-f]+-\)", src)      # never the sub-node form
+    # NOTE: removed an orphaned dead-code block here that asserted the curated
+    # transformer `dot_p1` variant returned empty suffix/opts — the manual
+    # transformer declares no dot variants (see the deleted polarity-dot test).
 
 
 def test_digital_blocks_take_no_bipole_label() -> None:
     """The raw pgf shapes are self-labelled (D/Q/CLK glyphs), so the registry
     offers no ``l`` label slot — emitting ``l=`` would be a LaTeX error."""
     from app.components.registry import REGISTRY
-    for kind in ("flipflop D", "mux", "demux", "ALU", "adder"):
+    for kind in ("flipflop D", "muxdemux", "ALU", "adder"):
         assert REGISTRY[kind].label_slots == []
 
 
@@ -550,38 +763,37 @@ def test_digital_blocks_take_no_bipole_label() -> None:
 # test_nmos_node
 # ---------------------------------------------------------------------------
 
-# Every BJT/IGFET is the same centre-placed-and-per-axis-scaled node path; one
-# parametrized table proves the kind→scale emission (the scale *values* are
-# independently verified in test_generate.py::test_best_alignment_*).
-_TRANSISTOR_SCALES = [
-    ("npn", "xscale=0.8929, yscale=0.974"),
-    ("pnp", "xscale=0.8929, yscale=0.974"),
-    ("nigfete", "xscale=1.0204, yscale=0.974"),
-    ("nigfetd", "xscale=1.0204, yscale=0.974"),
-    ("pigfete", "xscale=1.0204, yscale=0.974"),
-    ("pigfetd", "xscale=1.0204, yscale=0.974"),
-]
+# NOTE: test_transistor_node_scale (all params) RETARGETED below as
+# test_transistor_centre_node. The curated "node scale correction" (baked
+# per-kind xscale/yscale) is GONE — manual symbols render at true CircuiTikZ size
+# (cg._MULTI_TERMINAL_EXTRA_OPTS == {}). So the surviving invariant is: every
+# BJT/IGFET is the same centre-placed node, emitted as node[<kind>] with NO
+# scale and NO anchor= option.
+_TRANSISTOR_KINDS = ["npn", "pnp", "nigfete", "nigfetd", "pigfete", "pigfetd"]
 
 
-@pytest.mark.parametrize("kind, scale", _TRANSISTOR_SCALES)
-def test_transistor_node_scale(kind: str, scale: str) -> None:
-    """Centre-placed and per-axis scaled so the anchors land on the grid:
-    `node[<kind>, <scale>]`, no `anchor=` option (spec/component-pipeline.md §4)."""
+@pytest.mark.parametrize("kind", _TRANSISTOR_KINDS)
+def test_transistor_centre_node(kind: str) -> None:
+    """Centre-placed node `node[<kind>]` with no `anchor=` and no baked
+    grid-alignment scale (manual symbols render at true size)."""
     src = generate(_schematic(_comp(kind, position=(2.0, 3.0))))
-    assert f"node[{kind}, {scale}]" in src
+    assert f"node[{kind}]" in src
     assert "anchor=" not in src
+    assert "xscale=" not in src and "yscale=" not in src
 
 
 def test_npn_no_bridge_leads() -> None:
-    """NPN lands its pins by scaling — no bridge lead wires are emitted."""
+    """NPN is a centre-placed node — its pins are the native anchors and no bridge
+    lead wires are emitted."""
     comp = _comp("npn", position=(0.0, 0.0))
     src = generate(_schematic(comp))
-    assert "xscale=0.8929" in src
+    assert "node[npn]" in src
     assert ".C) -- " not in src
     assert ".E) -- " not in src
 
 
-@pytest.mark.parametrize("kind, value", [("nand", "$U$"), ("not", "$Y$")])
+@pytest.mark.parametrize("kind, value",
+                         [("american nand port", "$U$"), ("american not port", "$Y$")])
 def test_gate_label_emitted_as_label_above(kind: str, value: str) -> None:
     """Logic-port shapes reject the bipole ``l=`` quick key, so a gate's label slot
     is emitted as ``label=above:{…}`` (parametric and non-parametric gates alike) —
@@ -592,54 +804,76 @@ def test_gate_label_emitted_as_label_above(kind: str, value: str) -> None:
 
 
 def test_npn_pin_offsets() -> None:
-    """NPN (centre-placed, §4): base half a GU left of centre, collector top and
-    emitter bottom at the centre column, all on the 0.25 grid."""
+    """NPN (centre-placed): the pins carry the CircuiTikZ-native anchor names
+    B/C/E at the native (off-grid) offsets — base left of centre, collector top,
+    emitter bottom at the centre column. A wire to a named pin connects at the
+    matching node anchor (test_npn_base_wire_uses_node_anchor below)."""
     from app.components.registry import REGISTRY
     defn = REGISTRY["npn"]
     pin_map = {p.name: p.offset for p in defn.pins}
-    assert pin_map["base"]      == (-0.75, 0.0)
-    assert pin_map["collector"] == (0.0, -0.75)
-    assert pin_map["emitter"]   == (0.0,  0.75)
+    assert pin_map["B"] == (-0.84, 0.0)
+    assert pin_map["C"] == (0.0, -0.77)
+    assert pin_map["E"] == (0.0,  0.77)
 
 
 def test_pnp_pin_offsets() -> None:
-    """PNP (centre-placed): base left, emitter top, collector bottom — the
-    emitter/collector swap of NPN."""
+    """PNP (centre-placed): base left, collector top, emitter bottom — the
+    emitter/collector y-swap of NPN, with CircuiTikZ-native names B/C/E."""
     from app.components.registry import REGISTRY
     defn = REGISTRY["pnp"]
     pin_map = {p.name: p.offset for p in defn.pins}
-    assert pin_map["base"]      == (-0.75, 0.0)
-    assert pin_map["emitter"]   == (0.0, -0.75)
-    assert pin_map["collector"] == (0.0,  0.75)
+    assert pin_map["B"] == (-0.84, 0.0)
+    assert pin_map["C"] == (0.0,  0.77)
+    assert pin_map["E"] == (0.0, -0.77)
 
 
-@pytest.mark.parametrize("kind", ["nigfete", "pigfete"])
+def test_npn_base_wire_uses_node_anchor() -> None:
+    """A wire ending on the NPN base pin references the node's ``B`` anchor — the
+    intent of the old pin-offset tests (the named pin → named anchor connection)."""
+    from app.schematic.model import component_pin_positions
+    c = Component(id="aaaaaaaa-base", kind="npn", position=(2.0, 2.0),
+                  rotation=0, options="", mirror=False)
+    base = component_pin_positions(c)[0]               # B pin, off-grid in x
+    # Leave along the on-grid y axis (the base x is off-grid, carried out one leg).
+    w = _wire([base, (base[0], base[1] - 1.0)])
+    src = generate(_schematic(c, wires=[w]))
+    assert ".B) -- " in src
+
+
+# The manual library's option-mode variant is named ``bodydiode`` (the curated
+# ``body_diode`` no longer exists), and is declared on nfet/pfet (not the IGFETs,
+# which carry ``doublegate``). The option is emitted in the node bracket; manual
+# symbols bake no scale, so the node is simply ``node[<kind>, bodydiode]``.
+@pytest.mark.parametrize("kind", ["nfet", "pfet"])
 def test_mosfet_bodydiode_emission(kind: str) -> None:
-    """The body_diode variant inserts the `bodydiode` option ahead of the scale."""
+    """The bodydiode variant inserts the `bodydiode` option into the node bracket."""
     comp = Component(id=_uid(), kind=kind, position=(0.0, 0.0), rotation=0,
-                     options="", variants={"body_diode": True})
+                     options="", variants={"bodydiode": True})
     src = generate(_schematic(comp))
-    assert f"node[{kind}, bodydiode, xscale=1.0204, yscale=0.974]" in src
+    assert f"node[{kind}, bodydiode]" in src
+    assert "xscale=" not in src and "yscale=" not in src
 
 
 def test_nmos_no_bodydiode() -> None:
-    """nigfete with body_diode off omits the bodydiode option."""
-    comp = Component(id=_uid(), kind="nigfete", position=(0.0, 0.0), rotation=0, options="")
+    """nfet with bodydiode off omits the bodydiode option."""
+    comp = Component(id=_uid(), kind="nfet", position=(0.0, 0.0), rotation=0, options="")
     src = generate(_schematic(comp))
     assert "bodydiode" not in src
 
 
 def test_pmos_pin_offsets() -> None:
-    """PMOS (centre-placed): gate one GU left and a touch up, source above the
-    centre column, drain below it — positioned relative to the component origin."""
+    """PMOS-type (pigfete, centre-placed): the pins carry the CircuiTikZ-native
+    anchor names G/D/S at the native offsets — gate left of centre and a touch
+    down, drain above the centre column, source below it — positioned relative to
+    the component origin."""
     from app.schematic.model import component_pin_positions
     comp = _comp("pigfete", position=(2.0, 3.0))
     pins = {p.name: off for p, off in
             zip(__import__("app.components.registry", fromlist=["REGISTRY"]).REGISTRY["pigfete"].pins,
                 component_pin_positions(comp))}
-    assert pins["gate"]   == (1.0, 2.75)   # offset (-1.0, -0.25)
-    assert pins["source"] == (2.0, 2.25)   # offset (0.0, -0.75)
-    assert pins["drain"]  == (2.0, 3.75)   # offset (0.0, 0.75)
+    assert pins["G"] == (1.02, 2.75)   # offset (-0.98, -0.25)
+    assert pins["S"] == (2.0, 2.23)    # offset (0.0, -0.77)
+    assert pins["D"] == (2.0, 3.77)    # offset (0.0, 0.77)
 
 
 # ---------------------------------------------------------------------------
@@ -660,6 +894,31 @@ def test_wire_manhattan() -> None:
     """Three-point wire [(0,0),(2,0),(2,2)] → (0,0) -- (2,0) -- (2,2)."""
     src = generate(_schematic(wires=[_wire([(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)])]))
     assert "(0,0) -- (2,0) -- (2,2)" in src
+
+
+def test_wire_laplata_diagonal() -> None:
+    """A La Plata wire's 45° leg emits as a plain diagonal `--` segment (TikZ draws
+    diagonals natively): [(0,0),(1,1),(4,1)] → (0,0) -- (1,1) -- (4,1)."""
+    src = generate(_schematic(wires=[_wire([(0.0, 0.0), (1.0, 1.0), (4.0, 1.0)])]))
+    assert "(0,0) -- (1,1) -- (4,1)" in src
+
+
+def test_bipole_at_45_emits_diagonal_endpoints() -> None:
+    """A two-terminal symbol rotated 45° draws between diagonal endpoints — the span
+    is rotated 45° (so its second coordinate is on the 45° line), matching the canvas
+    pins; CircuiTikZ orients the `to[…]` symbol along that diagonal automatically."""
+    import math
+    src = generate(_schematic(_comp("R", position=(2.0, 2.0), rotation=45)))
+    d = 2.0 * math.cos(math.radians(45))
+    # The bipole runs from (origin) to (origin + (d, d)) after the translate-to-origin
+    # shift, so the two endpoints share the same +d offset on both axes (a 45° line).
+    import re
+    m = re.search(r"\(([-\d.]+),([-\d.]+)\) to\[R\] \(([-\d.]+),([-\d.]+)\)", src)
+    assert m, src
+    x0, y0, x1, y1 = (float(g) for g in m.groups())
+    # Equal x/y deltas → a 45° line; magnitude ≈ d (coords are emitted at 2 dp).
+    assert (x1 - x0) == pytest.approx(y1 - y0)
+    assert (x1 - x0) == pytest.approx(d, abs=0.01) and (x1 - x0) > 0
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +963,7 @@ def test_generate_is_pure() -> None:
     """Calling generate() twice on the same Schematic produces identical output."""
     s = _schematic(
         _comp("R", position=(0.0, 0.0), options="l=$R_1$"),
-        _comp("C", position=(2.0, 0.0)),
+        _comp("capacitor", position=(2.0, 0.0)),
         wires=[_wire([(0.0, 0.0), (2.0, 0.0)])],
     )
     assert generate(s) == generate(s)
@@ -733,6 +992,20 @@ def test_no_junction_no_circ_node() -> None:
     assert r"\node[circ]" not in generate(s)
 
 
+def test_mark_junctions_off_suppresses_circ_nodes() -> None:
+    """With the document's mark_junctions off, a junction emits no \\node[circ]."""
+    s = _schematic(
+        wires=[
+            Wire(id="a", points=[(0.0, 2.0), (2.0, 2.0)]),
+            Wire(id="b", points=[(2.0, 0.0), (2.0, 2.0)]),
+            Wire(id="c", points=[(2.0, 2.0), (4.0, 2.0)]),
+        ]
+    )
+    assert r"\node[circ]" in generate(s)            # default on
+    s.mark_junctions = False
+    assert r"\node[circ]" not in generate(s)        # suppressed document-wide
+
+
 def test_junction_node_count_matches() -> None:
     """Two separate 3-way junctions → two circ nodes."""
     s = _schematic(
@@ -755,6 +1028,14 @@ def test_open_endpoint_emits_ocirc_node() -> None:
     assert src.count(r"\node[ocirc]") == 2
     assert r"\node[ocirc] at (0,0) {};" in src
     assert r"\node[ocirc] at (4,0) {};" in src
+
+
+def test_mark_open_ends_off_suppresses_ocirc_nodes() -> None:
+    """With the document's mark_open_ends off, free wire ends emit no \\node[ocirc]."""
+    s = _schematic(wires=[_wire([(0.0, 0.0), (4.0, 0.0)])])
+    assert r"\node[ocirc]" in generate(s)           # default on
+    s.mark_open_ends = False
+    assert r"\node[ocirc]" not in generate(s)       # suppressed document-wide
 
 
 def test_pin_connected_endpoint_no_ocirc() -> None:
@@ -1045,7 +1326,9 @@ def test_mark_unconnected_pins_skips_wired_pin() -> None:
 
 def test_mark_unconnected_pins_respects_y_flip() -> None:
     """Marked pins honor the y_flip convention like every other coordinate."""
-    s = _schematic(_comp("V", position=(0.0, 0.0)))   # vertical: pins (0,0),(0,2)
+    # The manual voltage source is horizontal by default; rotate it 90° to get a
+    # vertical bipole whose pins span the y axis (0,0)→(0,2) so the y_flip is visible.
+    s = _schematic(_comp("american voltage source", position=(0.0, 0.0), rotation=90))
     src = generate(s, y_flip=True, mark_unconnected_pins=True)
     assert r"\node[ocirc] at (0,0) {};" in src
     assert r"\node[ocirc] at (0,-2) {};" in src
@@ -1499,7 +1782,9 @@ def test_layered_multiterminal_keeps_output_compilable() -> None:
     )
     from app.schematic.model import component_pin_positions
     out_pin = component_pin_positions(op)[2]
-    wire = Wire(id=_uid(), points=[out_pin, (out_pin[0] + 2.0, out_pin[1])])
+    # The op amp out pin sits off-grid in x (native anchor), so the connecting wire
+    # leaves along the on-grid y axis (carrying the off-grid x out one leg).
+    wire = Wire(id=_uid(), points=[out_pin, (out_pin[0], out_pin[1] + 2.0)])
     src = generate(_schematic(op, wires=[wire]))
     # The op amp's node is defined before the main draw block...
     node_pos = src.index("node[op amp")
@@ -1994,85 +2279,80 @@ def test_foreground_wire_to_mosfet_keeps_named_anchor() -> None:
         id=_uid(), kind="nigfete", position=(5.0, 5.0),
         rotation=0, options="", mirror=False,
     )
-    # The gate pin is now at the scaled anchor offset (-1.0, 0.25) from the
-    # centre-placed node, i.e. (4.0, 5.25); a wire ending there keeps the anchor.
-    w = Wire(id="g", points=[(4.0, 5.25), (3.0, 5.25)], z_order=1)
+    # The gate pin (CircuiTikZ-native ``G`` anchor) is at offset (-0.98, 0.25) from
+    # the centre-placed node, i.e. (4.02, 5.25); its x is off-grid so the wire
+    # leaves along the on-grid y axis. A foreground wire keeps the named anchor.
+    from app.schematic.model import component_pin_positions
+    gate = component_pin_positions(fet)[0]
+    w = Wire(id="g", points=[gate, (gate[0], gate[1] - 1.0)], z_order=1)
     src = generate(_schematic(fet, wires=(w,)))
-    assert ".gate)" in src                    # references the MOSFET gate anchor
+    assert ".G)" in src                       # references the MOSFET gate anchor
 
 
 # ---------------------------------------------------------------------------
 # Parametric logic gates (variable input count)
 # ---------------------------------------------------------------------------
 
-def test_logic_gate_emits_height_group_no_yscale():
-    """A parametric gate is emitted in a local group that sets its body height
-    (so inputs land on grid without a node yscale that would oval the bubble):
-    { \\ctikzset{…/height=H}  \\draw … node[and port, number inputs=N, xscale=…]; }."""
-    # Default value (2 inputs). Centre-placed (no anchor=), height-sized, xscale only.
-    src2 = generate(_schematic(_comp("and")))
-    assert "node[and port, number inputs=2, xscale=1.0823" in src2
+def test_logic_gate_emits_input_count_no_scale_at_natural_size():
+    """A parametric manual gate is centre-placed (no anchor=) and carries its
+    ``number inputs=N``. Manual symbols bake NO grid-alignment scale, so at the
+    natural size the node carries no xscale/yscale and no body-size ctikzset group
+    (the body keys are emitted only when the user resizes — see the scaled test)."""
+    # Default value (2 inputs).
+    src2 = generate(_schematic(_comp("american and port")))
+    assert "node[american and port, number inputs=2]" in src2
     assert "anchor=" not in src2
-    assert "yscale" not in src2                                    # height, not yscale
-    assert r"\ctikzset{tripoles/american and port/height=0.7143}" in src2
-    # the height is set in a group, before the node, and reverts:
-    assert src2.index(r"\ctikzset{tripoles/american and port/height") < src2.index("node[and port")
+    assert "xscale=" not in src2 and "yscale=" not in src2
+    assert "height" not in src2 and "width" not in src2           # natural size
 
-    # Explicit 4 inputs: number inputs=4 and the 4-input height (full precision).
-    c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+    # Explicit 4 inputs: number inputs=4, still no scale.
+    c = Component(id=_uid(), kind="american and port", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 4})
     src4 = generate(_schematic(c))
-    assert "number inputs=4" in src4 and "yscale" not in src4
-    assert "tripoles/american and port/height=1.4286" in src4
+    assert "number inputs=4" in src4
+    assert "xscale=" not in src4 and "yscale=" not in src4
 
 
-def test_scaled_gate_scales_via_height_and_xscale_no_leads():
-    """A scaled multi-input gate scales its body via the **height** group (× scale)
-    and **xscale** (× scale), with NO yscale — so its `.in k` anchors land exactly
-    at ``base_offset × scale`` and a connecting wire attaches there directly, with
-    no lead stub."""
-    c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+def test_scaled_gate_scales_via_body_size_keys_no_leads():
+    """A resized multi-input manual gate scales its body via the CircuiTikZ
+    height/width size keys (default × scale), set in a local group, with NO node
+    xscale/yscale — and no lead stubs (its pins sit at the native body anchors)."""
+    c = Component(id=_uid(), kind="american and port", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 3}, scale=0.5)
     src = generate(_schematic(c), y_flip=True)
-    assert "number inputs=3, xscale=0.54115" in src        # 1.0823 × 0.5
-    assert "yscale" not in src                              # pitch comes from height
-    assert "tripoles/american and port/height=0.5357" in src   # 1.0714 × 0.5
+    assert "node[american and port, number inputs=3]" in src
+    assert "xscale=" not in src and "yscale=" not in src   # size via body keys, not node scale
+    assert r"\ctikzset{tripoles/american and port/height=0.4}" in src   # 0.8 × 0.5
+    assert r"\ctikzset{tripoles/american and port/width=0.55}" in src   # 1.1 × 0.5
     assert ".in 1) --" not in src                          # no lead stubs
 
 
 def test_scaled_even_input_gate_emits_no_lead_stubs():
-    """A 4-input gate at 0.5 has off-grid scaled input anchors, but the pins now
-    sit at that true anchor (no snapping), so NO lead stubs are emitted — a wire
-    attaches directly at `(node.in k)` via the pin magnet."""
-    c = Component(id=_uid(), kind="or", position=(0.0, 0.0), rotation=0,
+    """A 4-input gate at 0.5 sits at the native body anchors (no snapping), so NO
+    lead stubs are emitted — a wire attaches directly at `(node.in k)`."""
+    c = Component(id=_uid(), kind="american or port", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 4}, scale=0.5)
     src = generate(_schematic(c), y_flip=True)
-    assert "number inputs=4, xscale=0.54115" in src and "yscale" not in src
-    assert "tripoles/american or port/height=0.7143" in src   # 1.4286 × 0.5
+    assert "number inputs=4" in src
+    assert "xscale=" not in src and "yscale=" not in src
+    assert r"\ctikzset{tripoles/american or port/height=0.4}" in src    # 0.8 × 0.5
     for i in (1, 2, 3, 4):
         assert f".in {i}) --" not in src                   # no lead stub for any input
 
 
-def test_wire_to_scaled_gate_pin_attaches_at_node_anchor():
-    """A wire connecting to a scaled gate's input attaches at the gate's true
-    `(node.in k)` anchor — where the pin now sits (the scaled body anchor, no lead
-    stub). So there is exactly one `.in 1)` reference, the wire's, and it is a
-    `-- (node.in 1)` connection."""
-    from app.schematic.model import component_pin_positions
-    g = Component(id=_uid(), kind="and", position=(10.0, 10.0), rotation=0,
-                  options="", params={"inputs": 4}, scale=0.5)
-    in1 = component_pin_positions(g)[1]                      # true scaled anchor (off-grid)
-    w = Wire(id=_uid(), points=[(in1[0] - 2.0, in1[1]), (in1[0], in1[1])])
-    src = generate(_schematic(g, wires=[w]), y_flip=True)
-    node = f"node_{g.id[:8]}"
-    assert f"-- ({node}.in 1)" in src                        # wire ends at the anchor
-    assert src.count(f"{node}.in 1)") == 1                   # no separate lead stub
+# NOTE: test_wire_to_scaled_gate_pin_attaches_at_node_anchor DELETED — it relied
+# on the curated grid-aligned scaled gate anchors. A manual gate is rendered at
+# true CircuiTikZ size, so its input pins sit off-grid in BOTH axes (e.g. the
+# 2-input AND inputs at (8.614, 9.72)). A wire can never validly connect to such a
+# pin (no Manhattan leg lands on the 0.25 grid), so the premise — a wire attaching
+# at (node.in k) — is impossible. The no-lead-stub invariant for gates is still
+# covered by test_scaled_gate_scales_via_body_size_keys_no_leads above.
 
 
 def test_unscaled_gate_emits_no_leads_and_no_yscale():
-    """A gate at the default scale 1.0 is unchanged: authored xscale, the height
-    group (no yscale), and no lead stubs."""
-    c = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+    """A gate at the default scale 1.0 is unchanged: no node yscale (manual gates
+    bake no scale), no body-size group, and no lead stubs."""
+    c = Component(id=_uid(), kind="american and port", position=(0.0, 0.0), rotation=0,
                   options="", params={"inputs": 4}, scale=1.0)
     src = generate(_schematic(c), y_flip=True)
     assert "yscale" not in src and ".in 1) --" not in src
@@ -2124,7 +2404,7 @@ def test_thyristor_triac_carry_an_offgrid_gate_pin() -> None:
         assert kind in _TWO_TERMINAL_KINDS            # still emitted via to[…]
         assert defn.pins[1].name == "out"            # axial terminal unmoved
         gate = defn.pins[2]
-        assert gate.name == "gate"
+        assert gate.name == "G"                       # CircuiTikZ-native gate anchor name
         assert not (_grid(gate.offset[0]) and _grid(gate.offset[1]))  # off-grid
         # The third (gate) pin must not collapse the axial span: the device is
         # drawn between two *distinct* endpoints, not a degenerate point.
@@ -2183,3 +2463,62 @@ def test_thyristor_gate_pin_coincides_with_circuitikz_anchor() -> None:
                 assert abs(cgx - gx) < 0.02 and abs(cgy - gy) < 0.02, (
                     kind, rot, mir, (gx, gy), (cgx, cgy)
                 )
+
+
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
+def test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor() -> None:
+    """The potentiometer's third (wiper) pin world position equals where CircuiTikZ
+    draws the ``wiper`` anchor, at all 8 rotation×mirror cases — so a wire to the
+    wiper (which connects by *coordinate*, the device being an anonymous ``to[…]``)
+    lands on it in the rendered output. The exact analogue of the thyristor-gate
+    invariant for the off-axis third terminal."""
+    import re
+    from app.components import render
+    from app.components.registry import REGISTRY
+    from app.codegen.circuitikz import _rotate
+    from app.schematic.model import Component, component_pin_positions
+
+    # Manual library: european potentiometer is a style axis, not a separate kind
+    # (no curated "epot"). Cover the american pot (pR) and the variable resistor
+    # (vR), both of which carry a native ``wiper`` anchor at pins[2].
+    for kind in ("pR", "vR"):
+        for rot in (0, 90, 180, 270):
+            for mir in (False, True):
+                c = Component(id="p", kind=kind, position=(0.0, 0.0),
+                              rotation=rot, options="", mirror=mir)
+                wx, wy = component_pin_positions(c)[2]          # wiper is pins[2]
+                dx, dy = _rotate((2.0, 0.0), rot)
+                if mir:
+                    dx = -dx
+                mk = ", mirror" if mir else ""
+                tikz = REGISTRY[kind].tikz_keyword
+                body = rf"\draw (0,0) to[{tikz}, name=X{mk}] ({dx:g},{-dy:g});"
+                _svg, log = render.render_svg(body, border_pt=12, node_id="X",
+                                              anchors=["wiper"])
+                m = re.search(r"HVANCHOR wiper = (-?[\d.]+)pt\s*,\s*(-?[\d.]+)pt", log)
+                cwx = float(m.group(1)) / render.TEXPT_PER_GU
+                cwy = -float(m.group(2)) / render.TEXPT_PER_GU   # tex y-up -> model
+                assert abs(cwx - wx) < 0.02 and abs(cwy - wy) < 0.02, (
+                    kind, rot, mir, (wx, wy), (cwx, cwy)
+                )
+
+
+def test_node_side_emits_placement_keyword():
+    r"""A single-terminal node's user-set ``node_side`` is emitted as a TikZ placement
+    key right after the kind, so the symbol sits on that side — e.g. an inversion bubble
+    \node[ocirc, left] at (x,y){} is tangent. The side is the user's explicit choice
+    (node_side), not inferred from gate context."""
+    src = generate(_schematic(_comp("ground", node_side="left")))
+    assert r"\node[ground, left] at (0,0) {};" in src
+
+
+def test_node_side_default_emits_no_keyword():
+    """With no ``node_side`` set, the node is centred — no placement keyword appears."""
+    src = generate(_schematic(_comp("ground")))
+    assert r"\node[ground] at (0,0) {};" in src
+    for side in ("left", "right", "above", "below"):
+        assert f"ground, {side}" not in src

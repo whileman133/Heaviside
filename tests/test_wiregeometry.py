@@ -79,11 +79,11 @@ def test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor():
     With raw_gu the off-grid pin is grabbed; with only the grid-snapped cursor it
     is missed (the point that motivates threading raw_gu through)."""
     from app.schematic.model import component_pin_positions
-    # OR at 0.5 has an input at (-0.75, 0.125) relative to a position — both axes
-    # land off-grid once placed at a fractional spot.
-    g = Component(id="g", kind="or", position=(5.0, 5.0), rotation=0, options="",
+    # An american OR port at 0.5 has an input whose offset lands off-grid in both
+    # axes once placed.
+    g = Component(id="g", kind="american or port", position=(5.0, 5.0), rotation=0, options="",
                   scale=0.5, params={"inputs": 4})
-    in_pin = component_pin_positions(g)[1]          # off-grid (y = 5.125)
+    in_pin = component_pin_positions(g)[1]          # off-grid
     assert abs(round(in_pin[1] / 0.25) * 0.25 - in_pin[1]) > 1e-9   # truly off-grid
     wg = _wg(g)
     # Raw cursor right on the pin → grabbed exactly at the off-grid pin.
@@ -95,7 +95,7 @@ def test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor():
 def test_unconnected_pin_at_grabs_offgrid_gate_pin():
     """Auto-starting a wire from a free off-grid gate pin works (raw-cursor grab)."""
     from app.schematic.model import component_pin_positions
-    g = Component(id="g", kind="or", position=(5.0, 5.0), rotation=0, options="",
+    g = Component(id="g", kind="american or port", position=(5.0, 5.0), rotation=0, options="",
                   scale=0.5, params={"inputs": 4})
     in_pin = component_pin_positions(g)[1]
     wg = _wg(g)

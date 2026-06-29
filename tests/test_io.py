@@ -135,11 +135,72 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.6"
+    assert data["version"] == "0.10"
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
+        "symbol_style": {},                # all-american default (§5.4)
         "siunitx": True, "preamble": "",   # siunitx defaults on (§7.2)
+        "mark_unconnected_pins": False,    # display options (§10.3), at their defaults
+        "line_hops": True,
+        "mark_open_ends": True,            # draw ocirc/circ dots by default (§6.4)
+        "mark_junctions": True,
+        "diode_scale": 0.6,                # new-document diodes/scale default (§5)
     }
+
+
+def test_symbol_style_roundtrip(tmp_path: Path) -> None:
+    """The document symbol-style map round-trips; absent → empty (all american)."""
+    s = Schematic(version="0.1", name="sty",
+                  symbol_style={"inductors": "european", "resistors": "european"})
+    p = tmp_path / "sty.hv"
+    save(s, p)
+    assert load(p).symbol_style == {"inductors": "european", "resistors": "european"}
+
+    # A pre-0.7 file (no symbol_style) loads with an empty map.
+    q = tmp_path / "old.hv"
+    q.write_text('{"version": "0.6", "name": "old", "components": [], "wires": []}',
+                 encoding="utf-8")
+    assert load(q).symbol_style == {}
+
+
+def test_display_and_diode_settings_roundtrip(tmp_path: Path) -> None:
+    """The document display options (mark_unconnected_pins, line_hops) and diode_scale
+    round-trip; a pre-0.9 file loads with their defaults (off / on / 0.8)."""
+    s = Schematic(version="0.1", name="disp", mark_unconnected_pins=True,
+                  line_hops=False, diode_scale=0.6)
+    p = tmp_path / "disp.hv"
+    save(s, p)
+    loaded = load(p)
+    assert loaded.mark_unconnected_pins is True
+    assert loaded.line_hops is False
+    assert loaded.diode_scale == 0.6
+
+    q = tmp_path / "old.hv"
+    q.write_text('{"version": "0.8", "name": "old", "components": [], "wires": []}',
+                 encoding="utf-8")
+    old = load(q)
+    assert old.mark_unconnected_pins is False
+    assert old.line_hops is True
+    assert old.diode_scale == 0.8
+
+
+def test_mark_open_ends_and_junctions_roundtrip(tmp_path: Path) -> None:
+    """The open-end / junction display toggles round-trip; a pre-0.10 file loads with
+    both on (the prior always-draw behaviour)."""
+    s = Schematic(version="0.1", name="dots",
+                  mark_open_ends=False, mark_junctions=False)
+    p = tmp_path / "dots.hv"
+    save(s, p)
+    loaded = load(p)
+    assert loaded.mark_open_ends is False
+    assert loaded.mark_junctions is False
+
+    q = tmp_path / "old.hv"
+    q.write_text('{"version": "0.9", "name": "old", "components": [], "wires": []}',
+                 encoding="utf-8")
+    old = load(q)
+    assert old.mark_open_ends is True
+    assert old.mark_junctions is True
 
 
 def test_preamble_settings_roundtrip(tmp_path: Path) -> None:
@@ -228,9 +289,9 @@ def test_parametric_params_round_trip(tmp_path: Path) -> None:
     """A parametric component's integer params (logic-gate input count) survive
     save/load; the default is omitted from the file."""
     s = Schematic(version="0.1", name="gates", components=[
-        Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+        Component(id=_uid(), kind="american and port", position=(0.0, 0.0), rotation=0,
                   options="l=$U_1$", params={"inputs": 5}),
-        Component(id=_uid(), kind="and", position=(4.0, 0.0), rotation=0,
+        Component(id=_uid(), kind="american and port", position=(4.0, 0.0), rotation=0,
                   options="l=$U_2$"),  # default inputs -> no params
     ])
     p = tmp_path / "gates.hv"
@@ -308,6 +369,24 @@ def test_node_text_roundtrips_and_omitted_when_empty(tmp_path: Path) -> None:
     loaded = load(p)
     assert loaded.components[0].node_text == "$Q_1$"
     assert loaded.components[1].node_text == ""
+
+
+def test_node_side_roundtrips_and_omitted_when_empty(tmp_path: Path) -> None:
+    """node_side (the single-terminal placement keyword) round-trips and is omitted
+    from the JSON when empty (centred, the common case)."""
+    s = Schematic(version="0.1", name="ns", components=[
+        Component(id=_uid(), kind="ground", position=(2.0, 2.0), rotation=0,
+                  options="", node_side="left"),
+        Component(id=_uid(), kind="vcc", position=(6.0, 0.0), rotation=0, options=""),
+    ])
+    p = tmp_path / "ns.hv"
+    save(s, p)
+    raw = json.loads(p.read_text(encoding="utf-8"))
+    assert raw["components"][0]["node_side"] == "left"
+    assert "node_side" not in raw["components"][1]            # empty → omitted
+    loaded = load(p)
+    assert loaded.components[0].node_side == "left"
+    assert loaded.components[1].node_side == ""
 
 
 def test_legacy_power_rail_l_slot_migrates_to_node_text(tmp_path: Path) -> None:
@@ -389,20 +468,22 @@ def test_load_missing_field(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_load_invalid_invariant(tmp_path: Path) -> None:
-    """Loading a file that violates an invariant (diagonal wire) raises SchematicLoadError."""
+    """Loading a file that violates an invariant (a non-45° slanted wire) raises
+    SchematicLoadError. (A 45° wire is valid La Plata routing, §6.4 — so use a 2:1
+    slant, which is neither axis-aligned nor 45°.)"""
     data = {
         "version": "0.1",
         "name": "bad",
         "components": [],
         "wires": [
-            {"id": _uid(), "points": [[0.0, 0.0], [1.0, 1.0]]}  # diagonal
+            {"id": _uid(), "points": [[0.0, 0.0], [2.0, 1.0]]}  # non-45° slant
         ],
         "metadata": {},
     }
-    p = tmp_path / "diagonal.hv"
+    p = tmp_path / "slanted.hv"
     p.write_text(json.dumps(data), encoding="utf-8")
 
-    with pytest.raises(SchematicLoadError, match="invariant|diagonal|Manhattan"):
+    with pytest.raises(SchematicLoadError, match="invariant|45|horizontal"):
         load(p)
 
 
@@ -464,7 +545,7 @@ def test_save_invalid_schematic_raises_and_writes_nothing(tmp_path: Path) -> Non
     from app.schematic.io import SchematicSaveError
 
     bad = Schematic(version="0.1", name="bad", wires=[
-        Wire(id=_uid(), points=[(0.0, 0.0), (1.0, 1.0)]),   # diagonal
+        Wire(id=_uid(), points=[(0.0, 0.0), (2.0, 1.0)]),   # non-45° slant (invalid)
     ])
     p = tmp_path / "bad.hv"
     with pytest.raises(SchematicSaveError, match="invariant"):
@@ -734,9 +815,9 @@ def test_component_scale_roundtrip(tmp_path: Path) -> None:
     """A logic gate's non-default scale survives save/load; the default (1.0) is
     omitted from the JSON, and a legacy gate file without `scale` loads at 1.0."""
     from app.components.model import Component
-    gate = Component(id=_uid(), kind="and", position=(0.0, 0.0), rotation=0,
+    gate = Component(id=_uid(), kind="american and port", position=(0.0, 0.0), rotation=0,
                      options="", params={"inputs": 3}, scale=0.5)
-    plain = Component(id=_uid(), kind="or", position=(4.0, 0.0), rotation=0,
+    plain = Component(id=_uid(), kind="american or port", position=(4.0, 0.0), rotation=0,
                       options="", params={"inputs": 2})  # scale defaults to 1.0
     s = Schematic(version="0.1", name="scale", components=[gate, plain])
     p = tmp_path / "scale.hv"
@@ -783,7 +864,7 @@ def test_legacy_variant_keys_back_compat(tmp_path: Path) -> None:
     p.write_text(json.dumps({
         "version": "0.1", "name": "legacy", "metadata": {},
         "components": [
-            {"id": _uid(), "kind": "D", "position": [0, 0], "rotation": 0,
+            {"id": _uid(), "kind": "full diode", "position": [0, 0], "rotation": 0,
              "mirror": False, "options": "", "filled": True},
             {"id": _uid(), "kind": "nigfete", "position": [2, 0], "rotation": 0,
              "mirror": False, "options": "", "body_diode": True},
@@ -1118,14 +1199,14 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_06_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.6; files declaring 0.1–0.6 all load."""
+def test_format_version_010_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes version 0.10; files declaring 0.1–0.10 all load."""
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.6"
-    assert load(p).version == "0.6"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.10"
+    assert load(p).version == "0.10"
 
-    for old in ("0.1", "0.2", "0.3", "0.4", "0.5"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

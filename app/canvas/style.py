@@ -7,7 +7,7 @@ current zoom transform automatically, so these constants stay fixed at all zoom
 levels — they define the *schematic-space* geometry of each symbol.
 """
 
-from app.resources import resource_path
+from app.resources import component_data_path, resource_path
 
 # ---------------------------------------------------------------------------
 # Core spatial constants
@@ -38,6 +38,12 @@ LINE_W_THICK: float = LINE_W * 2.0
 PIN_R: float = 3.0
 """Radius of pin indicator dots, in pixels."""
 
+PIN_FILL_ALPHA: float = 0.3
+"""Opacity of the pin-dot *fill*. Pins are drawn as a solid ``COLOR_PIN`` ring with
+only a translucent fill, so a small one-pin symbol underneath (e.g. a junction dot
+``circ``/``ocirc``) shows through instead of being hidden by an opaque red blob. The
+ring keeps the pin clearly marked as a connection point."""
+
 # ---------------------------------------------------------------------------
 # Colors (ARGB hex strings — compatible with the QColor(str) constructor)
 # ---------------------------------------------------------------------------
@@ -59,6 +65,7 @@ _LIGHT = {
     "COLOR_GRID":       "#FFBFBFBF",   # integer-lattice dots (stronger)
     "COLOR_GRID_SUB":   "#FFDCDCDC",   # 0.25 GU minor dots (lighter, still visible)
     "COLOR_GRID_FINE":  "#FFDCDCDC",   # (kept as an alias of the minor dot colour)
+    "COLOR_GUIDE":      "#660055CC",   # faint pin-alignment guide line (selection blue)
 }
 _DARK = {
     "COLOR_NORMAL":     "#FFE6E6E6",   # near-white ink on a dark canvas
@@ -71,6 +78,7 @@ _DARK = {
     "COLOR_GRID":       "#FF60636B",   # integer-lattice dots (light on dark)
     "COLOR_GRID_SUB":   "#FF44464D",   # 0.25 GU minor dots (dimmer, still visible)
     "COLOR_GRID_FINE":  "#FF44464D",
+    "COLOR_GUIDE":      "#665C9DFF",   # faint pin-alignment guide line (selection blue)
 }
 
 # Active values — module globals, defaulting to light. ``set_dark`` rebinds them.
@@ -84,6 +92,7 @@ COLOR_LABEL_BG   = _LIGHT["COLOR_LABEL_BG"]
 COLOR_GRID       = _LIGHT["COLOR_GRID"]
 COLOR_GRID_SUB   = _LIGHT["COLOR_GRID_SUB"]
 COLOR_GRID_FINE  = _LIGHT["COLOR_GRID_FINE"]
+COLOR_GUIDE      = _LIGHT["COLOR_GUIDE"]
 
 
 def set_dark(on: bool) -> None:
@@ -108,8 +117,9 @@ OPEN_ANNOTATION_OPACITY: float = 0.3
 # SVG symbol reference (see app/canvas/svgsym.py)
 # ---------------------------------------------------------------------------
 
-GEOMETRY_PATH: str = str(resource_path("components", "geometry.json"))
-"""Absolute path to the generated CircuiTikZ symbol geometry file."""
+GEOMETRY_PATH: str = str(component_data_path("geometry.json"))
+"""Absolute path to the CircuiTikZ symbol geometry file
+(``components/generated/geometry.json``)."""
 
 SVG_PT_PER_GU: float = 28.34765
 """SVG point units per grid unit.

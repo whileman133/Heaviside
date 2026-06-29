@@ -85,7 +85,7 @@ from app.preview.worker import PreviewWorker
 from app.schematic import io as schematic_io
 from app.schematic.io import SchematicLoadError, SchematicSaveError, load, save
 from app.schematic.model import Schematic
-from app.ui.palette import ComponentPalette
+from app.ui.palette import ComponentPalette, WiringQuickBar
 from app.ui import theme
 from app.ui.preferences import Preferences, PreferencesDialog
 from app.ui.properties import DocumentPropertiesPanel, PropertiesPanel
@@ -341,8 +341,8 @@ class MainWindow(QMainWindow):
         # Apply configured external-tool paths before any discovery (dependency
         # check, preview, math-label engine) so they honour the user's settings.
         tools.set_tool_paths(self._prefs.tool_paths)
-        self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
-        self._scene.set_line_hops(self._prefs.line_hops)
+        # "Mark unconnected pins" and "line-hops" are now **document** options (§10.3):
+        # the scene renders them straight off its schematic, so nothing to apply here.
         self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
         mathrender.set_force_ziamath(self._prefs.force_ziamath)
 
@@ -561,7 +561,7 @@ class MainWindow(QMainWindow):
         self._sync_theme_action()  # state-dependent icon (monitor/sun/moon), re-tinted
         self._view.setStyleSheet(theme.scrollbar_qss())  # canvas scrollbars
         # Side panels rebuild their own theme-token stylesheets.
-        for panel in (self._palette, self._props, self._doc_props,
+        for panel in (self._palette, self._wiring_bar, self._props, self._doc_props,
                       self._source_panel, self._preview_panel):
             if hasattr(panel, "apply_theme"):
                 panel.apply_theme()
@@ -596,6 +596,10 @@ class MainWindow(QMainWindow):
         self._scene.sync_label_preamble()
         self._scene.retypeset_labels()
         self._scene.relayout_annotations()
+        # A symbol-style change (§5.4) re-keys each styled component's geometry, so
+        # repaint the canvas and re-render the palette tiles to the new style.
+        self._scene.update()
+        self._palette.set_symbol_style(self._scene.schematic.symbol_style)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802, ANN001
         """Window-level component-placement shortcuts (§10.2). A key that no focused
@@ -985,7 +989,19 @@ class MainWindow(QMainWindow):
         # stay the native light look when the toolbar toggle forces dark mode).
         self._view.setStyleSheet(theme.scrollbar_qss())
         self._canvas_stack.setCurrentIndex(0)
-        top_split.addWidget(self._canvas_stack)
+
+        # Canvas + a slim wiring quick-bar glued to its right edge (junction dots,
+        # jumpers) — wrapped together so the bar tracks the canvas/inspector boundary
+        # rather than being an independently draggable splitter pane.
+        canvas_row = QWidget()
+        canvas_row_layout = QHBoxLayout(canvas_row)
+        canvas_row_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_row_layout.setSpacing(0)
+        canvas_row_layout.addWidget(self._canvas_stack, 1)
+        self._wiring_bar = WiringQuickBar()
+        self._wiring_bar.set_scene(self._scene)
+        canvas_row_layout.addWidget(self._wiring_bar)
+        top_split.addWidget(canvas_row)
 
         # Inspector tabs: the per-object Properties inspector and the per-document
         # Document inspector (the latter replaces the old Document Settings dialog).
@@ -1177,8 +1193,8 @@ class MainWindow(QMainWindow):
             return
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:  # noqa: BLE001 — keep the preview alive, but visible
             self._status_compile.setText(f"Preview update failed: {exc}")
             return
@@ -1193,8 +1209,8 @@ class MainWindow(QMainWindow):
             return
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             self._status_compile.setText(f"Error: {exc}")
             return
@@ -1450,8 +1466,8 @@ class MainWindow(QMainWindow):
         # Snapshot on the UI thread — the worker never touches the live model.
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                              mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                              mark_line_hops=self._prefs.line_hops)
+                              mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                              mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:  # noqa: BLE001 — never block the save
             self._status_compile.setText(f"Auto-export failed ({exc})")
             return
@@ -1510,8 +1526,7 @@ class MainWindow(QMainWindow):
         display change (e.g. marking unconnected pins) is reflected immediately.
         """
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
-            self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
-            self._scene.set_line_hops(self._prefs.line_hops)
+            # (Unconnected-pin marks / line-hops are document options now, §10.3.)
             self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
             # Apply configured tool paths first so the engine choice, re-typeset,
             # and recompile below all see the updated discovery (§8.7 / §10.8).
@@ -1534,8 +1549,8 @@ class MainWindow(QMainWindow):
         self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
             return
@@ -1570,8 +1585,8 @@ class MainWindow(QMainWindow):
         self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             if not quiet:
                 QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")

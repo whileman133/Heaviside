@@ -25,8 +25,8 @@ An opinionated [WYSIWYM](https://en.wikipedia.org/wiki/WYSIWYM) editor for build
       <sub><b>Porous Electrode Interface</b> · dark mode</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/examples/mux-4-1-dark.png" alt="4:1 multiplexer logic example open in the Heaviside editor, dark mode"><br>
-      <sub><b>4:1 MUX</b> · dark mode</sub>
+      <img src="docs/images/examples/boost-converter-dark.png" alt="Boost converter power-electronics example open in the Heaviside editor, dark mode"><br>
+      <sub><b>Boost Converter</b> · dark mode</sub>
     </td>
   </tr>
 </table>

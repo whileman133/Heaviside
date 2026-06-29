@@ -37,3 +37,18 @@ def resource_path(*parts: str) -> Path:
     Example: ``resource_path("assets", "icon.png")``.
     """
     return _base_dir().joinpath(*parts)
+
+
+# The component library is generated from the CircuiTikZ manual by
+# ``components/generate_library.py`` and lives in ``components/generated/``
+# (``definitions.json`` + ``geometry.json``).
+def component_lib_dir() -> Path:
+    """Directory of the component library (its ``definitions.json`` +
+    ``geometry.json``): ``components/generated/``."""
+    return resource_path("components", "generated")
+
+
+def component_data_path(name: str) -> Path:
+    """Path to a data file (``definitions.json`` / ``geometry.json``) in the
+    component library."""
+    return component_lib_dir() / name

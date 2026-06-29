@@ -73,10 +73,31 @@ from app.schematic.validate import validate
 #: component). A 0.5 build would silently strip it on save, so the bump refuses the
 #: newer file; 0.1–0.5 files load unchanged (absent node_text defaults to empty,
 #: and a legacy power-rail ``l=`` slot is migrated into it on load).
-_FORMAT_VERSION: str = "0.6"
+#: 0.7 adds the document ``symbol_style`` map to ``config`` (per-family symbol style:
+#: american/european resistors, cute/american/european inductors — manual library). A
+#: 0.6 build would silently strip it on save, so the bump refuses the newer file;
+#: 0.1–0.6 files load unchanged (absent symbol_style defaults to all-american).
+#: 0.8 adds a per-component ``node_side`` (a single-terminal node's placement keyword:
+#: left/right/above/below — the user-set inversion-bubble side, replacing the former
+#: gate-context inference). A 0.7 build would silently strip it on save, so the bump
+#: refuses the newer file; 0.1–0.7 files load unchanged (absent node_side defaults to
+#: empty = centred).
+#: 0.9 adds three document fields to ``config``: ``mark_unconnected_pins`` and
+#: ``line_hops`` (the display options moved out of app Preferences) and ``diode_scale``
+#: (the CircuiTikZ ``diodes/scale`` body size). A 0.8 build would silently strip them on
+#: save, so the bump refuses the newer file; 0.1–0.8 files load unchanged (defaults:
+#: mark_unconnected_pins off, line_hops on, diode_scale 0.8).
+#: 0.10 adds two document fields to ``config``: ``mark_open_ends`` (draw open-circle
+#: ``ocirc`` terminals at dangling wire ends) and ``mark_junctions`` (draw solid
+#: ``circ`` dots at wire junctions), both defaulting **on**. A 0.9 build would silently
+#: strip them on save, so the bump refuses the newer file; 0.1–0.9 files load unchanged
+#: (both default on, preserving the prior always-draw behaviour).
+_FORMAT_VERSION: str = "0.10"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6"}
+_KNOWN_VERSIONS: set[str] = {
+    "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
+}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -240,8 +261,14 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
         "config": {
             "voltage_style": s.voltage_style,
             "current_style": s.current_style,
+            "symbol_style": dict(s.symbol_style),
             "siunitx": s.siunitx,
             "preamble": s.preamble,
+            "mark_unconnected_pins": s.mark_unconnected_pins,
+            "line_hops": s.line_hops,
+            "mark_open_ends": s.mark_open_ends,
+            "mark_junctions": s.mark_junctions,
+            "diode_scale": s.diode_scale,
         },
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
@@ -261,6 +288,10 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # Node-style {…} slot text; omitted when empty (the common case).
     if c.node_text:
         d["node_text"] = c.node_text
+    # Single-terminal node placement keyword (left/right/above/below); omitted when
+    # empty (centred, the common case).
+    if getattr(c, "node_side", ""):
+        d["node_side"] = c.node_side
     if c.label_offset is not None:
         d["label_offset"] = list(c.label_offset)
     if c.span_override is not None:
@@ -413,6 +444,29 @@ def _dict_to_schematic(data: dict) -> Schematic:
     raw_preamble = config.get("preamble", "")
     preamble = raw_preamble if isinstance(raw_preamble, str) else ""
 
+    # Symbol style (added in 0.7). A string→string map (family → style value); unknown
+    # axes/values are clamped to the default at render time (library.style_value), so we
+    # keep it permissive here. Absent → empty (all american), so pre-0.7 files are
+    # unchanged.
+    raw_symbol = config.get("symbol_style", {})
+    symbol_style = ({str(k): str(v) for k, v in raw_symbol.items()}
+                    if isinstance(raw_symbol, dict) else {})
+
+    # Display options + diode scale (added in 0.9; moved out of app Preferences).
+    # Defaults match the prior preference defaults / the diode constant, so a pre-0.9
+    # file opens unchanged: marks off, line-hops on, diode scale 0.8. (0.8 is the baked
+    # baseline a pre-field file was effectively drawn at — preserving its look — distinct
+    # from the **new-document** default of 0.6, the manual's recommendation, set on the
+    # Schematic dataclass.) Values are coerced rather than failing the load.
+    mark_unconnected_pins = bool(config.get("mark_unconnected_pins", False))
+    line_hops = bool(config.get("line_hops", True))
+    mark_open_ends = bool(config.get("mark_open_ends", True))
+    mark_junctions = bool(config.get("mark_junctions", True))
+    try:
+        diode_scale = float(config.get("diode_scale", 0.8))
+    except (TypeError, ValueError):
+        diode_scale = 0.8
+
     return Schematic(
         version=version,
         name=name,
@@ -421,8 +475,14 @@ def _dict_to_schematic(data: dict) -> Schematic:
         metadata=metadata,
         voltage_style=_style("voltage_style"),
         current_style=_style("current_style"),
+        symbol_style=symbol_style,
         siunitx=siunitx,
         preamble=preamble,
+        mark_unconnected_pins=mark_unconnected_pins,
+        line_hops=line_hops,
+        mark_open_ends=mark_open_ends,
+        mark_junctions=mark_junctions,
+        diode_scale=diode_scale,
     )
 
 
@@ -483,6 +543,11 @@ def _dict_to_component(data: Any, index: int) -> Component:
     # files keep their rail labels. Other slots in ``options`` are preserved.
     if not node_text and kind in _LEGACY_POWER_RAIL_KINDS:
         node_text, options = _split_off_l_slot(options)
+
+    raw_side = data.get("node_side", "")
+    if not isinstance(raw_side, str):
+        raise SchematicLoadError(f"{ctx}.node_side must be a string")
+    node_side = raw_side
 
     label_offset: tuple[float, float] | None = None
     raw_lo = data.get("label_offset")
@@ -557,6 +622,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "mirror": mirror,
         "options": options,
         "node_text": node_text,
+        "node_side": node_side,
         "label_offset": label_offset,
         "span_override": span_override,
         "variants": variants,

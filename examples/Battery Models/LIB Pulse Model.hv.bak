@@ -1,21 +1,25 @@
 {
-  "version": "0.5",
+  "version": "0.9",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
-    "siunitx": false,
-    "preamble": ""
+    "symbol_style": {},
+    "siunitx": true,
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "diode_scale": 0.8
   },
   "components": [
     {
       "id": "6a5674ec-f4e3-4c3e-89ae-305b4f580ec7",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         74.0,
         77.5
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "v=$\\tilde{\\phi}^\\mathrm{n}_\\mathrm{se}(0,0^+)$",
       "label_offset": [
@@ -25,12 +29,12 @@
     },
     {
       "id": "190860cd-e636-4ba5-99b1-ee4bf0e3c6c4",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         77.0,
         77.5
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "v=$\\tilde{\\phi}^\\mathrm{n}_\\mathrm{se}(1,0^+)$",
       "label_offset": [
@@ -40,12 +44,12 @@
     },
     {
       "id": "7774a394-054f-45bd-a0a3-4a39f691acaa",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         80.0,
         77.5
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "v=$\\tilde{\\phi}^\\mathrm{p}_\\mathrm{se}(2,0^+)$",
       "label_offset": [
@@ -55,12 +59,12 @@
     },
     {
       "id": "4ac2d6c8-38f6-4507-b74e-3cf322e7bacb",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         83.0,
         77.5
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "v=$\\tilde{\\phi}^\\mathrm{p}_\\mathrm{se}(3,0^+)$",
       "label_offset": [

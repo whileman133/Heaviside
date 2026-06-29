@@ -21,13 +21,19 @@ from app.components.registry import REGISTRY
 
 _LIBRARY_KINDS = set(REGISTRY) - library.NON_LIBRARY_KINDS
 
+# The manual library also contains scraped kinds (e.g. "short") that collide with
+# the bespoke annotations; the registry uses the bespoke version, so those keys are
+# in NON_LIBRARY_KINDS yet still present in the raw library. Account for the overlap.
+_BESPOKE_IN_LIBRARY = set(library.load_library()) & library.NON_LIBRARY_KINDS
+
 
 # ---------------------------------------------------------------------------
 # The library covers the right kinds and the registry is wired from it
 # ---------------------------------------------------------------------------
 
 def test_library_covers_the_svg_symbol_kinds():
-    assert set(library.load_library()) == _LIBRARY_KINDS
+    # registry library-kinds == library keys, minus the bespoke-overridden collisions.
+    assert set(library.load_library()) - _BESPOKE_IN_LIBRARY == _LIBRARY_KINDS
 
 
 def test_registry_is_sourced_from_library():
@@ -51,134 +57,26 @@ def test_resistor_def():
     assert r.component_class is Component
 
 
-def test_op_amp_def():
-    a = REGISTRY["op amp"]
-    # Centre-placed and scaled (§4): pins at the scaled triangle edge, no leads.
-    assert a.pins == [
-        PinDef("+", (-1.25, 0.5)), PinDef("-", (-1.25, -0.5)), PinDef("out", (1.25, 0.0)),
-    ]
-    assert a.bbox == (-1.25, -1.0, 1.25, 1.0)
-    assert a.label_slots == ["l"]
-
-
-def test_nigfete_def():
-    m = REGISTRY["nigfete"]
-    # Centre-placed: gate left, drain/source at the centre column (§4).
-    assert m.pins == [
-        PinDef("gate", (-1.0, 0.25)), PinDef("drain", (0.0, -0.75)), PinDef("source", (0.0, 0.75)),
-    ]
-    # Variants are generic per-instance state now; the kind is a plain Component.
-    assert m.component_class is Component
-    assert "body_diode" in {v["name"] for v in library.variant_specs("nigfete")}
-
-
-def test_diode_declares_filled_variant():
-    assert REGISTRY["D"].component_class is Component
-    assert "filled" in {v["name"] for v in library.variant_specs("D")}
-
-
-# ---------------------------------------------------------------------------
-# Golden codegen-table values (now sourced from the library)
-# ---------------------------------------------------------------------------
-
-def test_two_terminal_kinds_include_bespoke():
-    # Library two-terminal kinds plus the bespoke open/short annotations.
-    assert {"R", "C", "L", "D", "V", "open", "short"} <= cg._TWO_TERMINAL_KINDS
-    assert "op amp" not in cg._TWO_TERMINAL_KINDS
-
-
-def test_european_and_cute_variants_present():
-    """European resistor/inductor and cute inductor are registered path elements
-    using CircuiTikZ's style-independent shape keywords, in the R/L categories."""
-    expected = {
-        "eR": ("Resistors", "european resistor"),
-        "eL": ("Inductors", "european inductor"),
-        "cuteL": ("Inductors", "cute inductor"),
-    }
-    for kind, (category, tikz) in expected.items():
-        defn = REGISTRY[kind]
-        assert defn.category == category
-        assert defn.tikz_keyword == tikz
-        assert [p.name for p in defn.pins] == ["in", "out"]
-        # path emission (to[…]), so not classified multi-terminal/node
-        assert kind in cg._TWO_TERMINAL_KINDS
-
-
-def test_european_sources_and_variable_resistors_present():
-    """European sources and variable-resistor/potentiometer are path elements in
-    the Sources / Resistors categories, using `european …` shape keywords."""
-    expected = {
-        "eV": ("Sources", "european voltage source"),
-        "eI": ("Sources", "european current source"),
-        "ecV": ("Sources", "european controlled voltage source"),
-        "ecI": ("Sources", "european controlled current source"),
-        "evR": ("Resistors", "variable european resistor"),
-        "epot": ("Resistors", "european potentiometer"),
-        "ethermistor": ("Resistors", "european resistive sensor"),
-        "pR": ("Resistors", "pR"),  # american potentiometer, pairs with epot
-    }
-    for kind, (category, tikz) in expected.items():
-        defn = REGISTRY[kind]
-        assert defn.category == category
-        assert defn.tikz_keyword == tikz
-        assert kind in cg._TWO_TERMINAL_KINDS  # two-terminal to[…] path elements
-
-
-def test_european_logic_gates_present():
-    """European (IEC) logic gates use the style-independent `european … port`
-    keywords; the AND/OR family is parametric, NOT/buffer are fixed; all are
-    multi-terminal nodes in the Logic category."""
-    parametric = {"eand": "and", "eor": "or", "enand": "nand",
-                  "enor": "nor", "exor": "xor", "exnor": "xnor"}
-    fixed = {"enot": "not", "ebuffer": "buffer"}
-    for kind, word in {**parametric, **fixed}.items():
-        defn = REGISTRY[kind]
-        assert defn.category == "Logic"
-        assert defn.tikz_keyword == f"european {word} port"
-        assert kind in cg._MULTI_TERMINAL_KINDS
-    for kind in parametric:
-        assert library.param_spec(kind) is not None      # variable input count
-        assert library.param_spec(kind)["height_key"].startswith("tripoles/european")
-    for kind in fixed:
-        assert library.param_spec(kind) is None
-
-
-def test_switches_choke_and_merged_categories():
-    """Switches + choke present; Supplies merged into Sources (no Supplies left)."""
-    for kind, tikz in (("nos", "nos"), ("ncs", "ncs"), ("pushbutton", "push button")):
-        assert REGISTRY[kind].category == "Switches"
-        assert REGISTRY[kind].tikz_keyword == tikz
-        assert kind in cg._TWO_TERMINAL_KINDS
-    assert REGISTRY["choke"].category == "Inductors"
-    assert REGISTRY["choke"].tikz_keyword == "cute choke"
-    # opening/closing (2-terminal) and the 3-terminal SPDT switch.
-    for kind, tikz in (("opening", "opening switch"), ("closing", "closing switch")):
-        assert REGISTRY[kind].category == "Switches"
-        assert REGISTRY[kind].tikz_keyword == tikz
-        assert kind in cg._TWO_TERMINAL_KINDS
-    spdt = REGISTRY["spdt"]
-    assert spdt.category == "Switches" and spdt.tikz_keyword == "spdt"
-    assert [p.name for p in spdt.pins] == ["in", "out1", "out2"]
-    assert "spdt" in cg._MULTI_TERMINAL_KINDS
-    # Supplies folded into Sources.
-    cats = {d.category for d in REGISTRY.values()}
-    assert "Supplies" not in cats
-    assert REGISTRY["vcc"].category == "Sources"
-
-
-def test_battery_cell_and_inst_amp_components():
-    """Battery (multi-cell), the relabeled single Cell, and the instrumentation /
-    transconductance amplifiers are registered with the right kind/category."""
-    assert REGISTRY["battery1"].display_name == "Cell"          # single-cell, relabeled
-    assert REGISTRY["battery"].display_name == "Battery"
-    assert REGISTRY["battery"].category == "Sources"
-    assert "battery" in cg._TWO_TERMINAL_KINDS                  # two-terminal to[…]
-    for kind, tikz in (("instamp", "inst amp"), ("gmamp", "gm amp")):
-        defn = REGISTRY[kind]
-        assert defn.category == "Amplifiers"
-        assert defn.tikz_keyword == tikz
-        assert kind in cg._MULTI_TERMINAL_KINDS                 # node[…] with anchors
-        assert [p.name for p in defn.pins] == ["+", "-", "out"]
+# NOTE: deleted the curated golden ComponentDef/codegen tests that pinned the
+# curated library's contents, all gone with the curated library:
+#   - test_op_amp_def, test_nigfete_def: curated baked pin offsets/scale (manual
+#     op amp pins are at ±1.19 with empty label_slots; nfet variant is "bodydiode").
+#   - test_diode_declares_filled_variant, test_diodes_have_filled_variant,
+#     test_mosfets_have_body_diode_variant: curated "filled"/"body_diode" variant
+#     names; the manual library models fills as distinct *kinds* (full/empty/stroke
+#     diode) and uses a "bodydiode" variant name.
+#   - test_two_terminal_kinds_include_bespoke: used curated C/D/V kinds.
+#   - test_european_and_cute_variants_present, test_european_sources_and_variable_
+#     resistors_present, test_european_logic_gates_present: the separate
+#     eR/eL/cuteL/eV/eand/enot kinds do not exist — american/european/cute is a
+#     per-document style axis in the manual library (library.STYLE_AXES), not kinds.
+#   - test_switches_choke_and_merged_categories, test_battery_cell_and_inst_amp_
+#     components: pinned curated kind names/categories/labels (nos/ncs/choke/
+#     instamp/Supplies-merge) that don't match the manual scrape.
+#   - test_scale_corrections_golden, test_pin_to_ctikz npn half (below): manual
+#     bakes NO per-kind scale (_MULTI_TERMINAL_EXTRA_OPTS is empty).
+#   - test_parametric_accessors_for_logic_gate: used the curated "and" pin layout.
+# The manual library's contents are contract-tested by tests/test_generated_library.py.
 
 
 def test_emission_is_path_or_node():
@@ -207,22 +105,9 @@ def test_multi_terminal_kinds():
     )
 
 
-def test_scale_corrections_golden():
-    # Every multi-terminal node is centre-placed and scaled (per-axis) so its pins
-    # land on the grid (§4) — including the op amp, which formerly used leads.
-    # A unit axis is omitted (op amp yscale=1.0).  Checked per-kind so a re-import
-    # that shifts a curated value is caught.
-    expected = {
-        "npn": "xscale=0.8929, yscale=0.974",
-        "pnp": "xscale=0.8929, yscale=0.974",
-        "nigfete": "xscale=1.0204, yscale=0.974",
-        "nigfetd": "xscale=1.0204, yscale=0.974",
-        "pigfete": "xscale=1.0204, yscale=0.974",
-        "pigfetd": "xscale=1.0204, yscale=0.974",
-        "op amp": "xscale=1.0504",
-    }
-    for kind, opts in expected.items():
-        assert cg._MULTI_TERMINAL_EXTRA_OPTS[kind] == opts
+# NOTE: deleted test_scale_corrections_golden — the manual library renders symbols
+# at true size and bakes NO per-kind scale corrections (_MULTI_TERMINAL_EXTRA_OPTS
+# is empty), so the curated golden xscale/yscale values no longer exist.
 
 
 def test_no_leads_or_anchor_pin_tables():
@@ -235,12 +120,30 @@ def test_no_leads_or_anchor_pin_tables():
 
 
 def test_pin_to_ctikz_golden():
-    assert cg._PIN_TO_CTIKZ_ANCHOR["npn"] == {"base": "B", "collector": "C", "emitter": "E"}
-    assert cg._PIN_TO_CTIKZ_ANCHOR["op amp"] == {"+": "+", "-": "-", "out": "out"}
+    # Pin → CircuiTikZ anchor map: the manual library names pins by their CircuiTikZ
+    # anchor verbatim, so the map is identity. Each kind also carries the manual's other
+    # documented anchors (geometric, body-diode, circle), so assert the primary
+    # terminals as a subset rather than an exact map.
+    assert {"B": "B", "C": "C", "E": "E"}.items() <= cg._PIN_TO_CTIKZ_ANCHOR["npn"].items()
+    assert {"+": "+", "-": "-", "out": "out"}.items() <= cg._PIN_TO_CTIKZ_ANCHOR["op amp"].items()
 
 
 def test_diode_kinds_golden():
-    assert cg._DIODE_KINDS == frozenset({"D", "zD", "sD", "tD", "zzD", "leD"})
+    # The two-terminal members of the manual Diodes category (the set CircuiTikZ's
+    # ``diodes/scale`` resizes); detection is category-based. The manual library
+    # models fills as distinct *kinds* (full/empty/stroke), so assert a
+    # representative handful is present and the set is non-empty.
+    assert cg._DIODE_KINDS
+    assert {"full diode", "empty diode", "stroke diode",
+            "full Schottky diode", "full Zener diode"} <= cg._DIODE_KINDS
+
+
+def test_diode_kinds_exclude_tripoles():
+    # Thyristor/triac are in the Diodes category but are tripoles — their gate anchor
+    # moves with diodes/scale, which would desync the canvas pin from the export, so
+    # they must NOT be treated as scalable diodes.
+    assert "thyristor" not in cg._DIODE_KINDS
+    assert "triac" not in cg._DIODE_KINDS
 
 
 def test_diode_scale_single_sourced():
@@ -265,40 +168,12 @@ def test_geometry_key_single_sourced():
     assert library.geometry_key("R") == "R"
 
 
-# ---------------------------------------------------------------------------
-# Variants reflect filled / body_diode
-# ---------------------------------------------------------------------------
-
-def test_diodes_have_filled_variant():
-    lib = library.load_library()
-    for kind in ("D", "zD", "sD", "tD", "zzD", "leD"):
-        assert "filled" in {v["name"] for v in lib[kind].get("variants", [])}
-
-
-def test_mosfets_have_body_diode_variant():
-    lib = library.load_library()
-    for kind in ("nigfete", "nigfetd", "pigfete", "pigfetd"):
-        assert "body_diode" in {v["name"] for v in lib[kind].get("variants", [])}
-
-
-def test_parametric_accessors_for_logic_gate():
-    """library resolves a parametric kind's value and pins from the instance."""
-    from app.components import library
-    from app.components.model import Component
-
-    assert library.is_parametric("and") and not library.is_parametric("R")
-    c = Component(id="x", kind="and", position=(0, 0), rotation=0, options="",
-                  params={"inputs": 4})
-    assert library.param_value(c) == 4
-    pins = library.resolved_pins(c)
-    assert [p.name for p in pins] == ["out", "in1", "in2", "in3", "in4"]
-    # inputs symmetric about the output, on the 0.25 grid
-    ys = [p.offset[1] for p in pins[1:]]
-    assert ys == [-0.75, -0.25, 0.25, 0.75]
-    # value clamps to the declared range
-    over = Component(id="y", kind="and", position=(0, 0), rotation=0, options="",
-                     params={"inputs": 99})
-    assert library.param_value(over) == 16
+# NOTE: deleted test_diodes_have_filled_variant, test_mosfets_have_body_diode_variant,
+# and test_parametric_accessors_for_logic_gate — these pinned curated variant names
+# ("filled"/"body_diode") and the curated "and" gate's pin layout. The manual library
+# models diode fills as distinct kinds, names the MOSFET variant "bodydiode", and the
+# parametric gate kind is "american and port" (not "and"). Variant/parametric
+# behaviour is contract-tested by tests/test_generated_library.py.
 
 
 def test_node_text_anchor_measured_per_kind():

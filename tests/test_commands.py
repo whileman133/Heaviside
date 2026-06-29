@@ -1262,6 +1262,46 @@ def test_group_rotate_redo():
 
 
 # ---------------------------------------------------------------------------
+# MoveCommand — terminal markers follow the component they sit on
+# ---------------------------------------------------------------------------
+
+def test_move_follows_terminal_marker_on_pin(monkeypatch):
+    """A terminal marker sitting on a moving component's pin rides along with the
+    move (so a junction dot placed on a transformer/op-amp anchor tracks it), and
+    undo reverses it. The curated test library has no Terminals kind, so a single-
+    pin ground stands in as the marker."""
+    from app.schematic import model
+
+    monkeypatch.setattr(model, "TERMINAL_MARKER_CATEGORIES", frozenset({"Grounds"}))
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="r", position=(2.0, 2.0))))  # pin (2,2)
+    dot = Component(id="d", kind="ground", position=(2.0, 2.0), rotation=0, options="")
+    stack.push(PlaceCommand(dot))
+
+    stack.push(MoveCommand(["r"], delta=(1.0, -1.0)))
+    moved = next(c for c in stack.schematic.components if c.id == "d")
+    assert moved.position == (3.0, 1.0)                  # followed the resistor
+
+    stack.undo()
+    restored = next(c for c in stack.schematic.components if c.id == "d")
+    assert restored.position == (2.0, 2.0)              # undo reverses the follow
+
+
+def test_move_does_not_follow_marker_off_pin(monkeypatch):
+    """A terminal marker not on a moving pin stays put."""
+    from app.schematic import model
+
+    monkeypatch.setattr(model, "TERMINAL_MARKER_CATEGORIES", frozenset({"Grounds"}))
+    stack = _stack()
+    stack.push(PlaceCommand(_resistor(comp_id="r", position=(2.0, 2.0))))
+    dot = Component(id="d", kind="ground", position=(9.0, 9.0), rotation=0, options="")
+    stack.push(PlaceCommand(dot))
+
+    stack.push(MoveCommand(["r"], delta=(1.0, -1.0)))
+    assert next(c for c in stack.schematic.components if c.id == "d").position == (9.0, 9.0)
+
+
+# ---------------------------------------------------------------------------
 # ResizeCommand
 # ---------------------------------------------------------------------------
 

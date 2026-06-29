@@ -1,6 +1,6 @@
 # Heaviside — Specification
 
-**Version:** 0.6  
+**Version:** 0.7  
 **Status:** Draft (alpha — interfaces, file format, and architecture may change)  
 **Author:** Wes H.
 
@@ -68,7 +68,7 @@ This document specifies a graphical editor for creating publication-quality circ
 - SPICE integration
 - LyX/LaTeX editor plugin or inset integration
 - Round-trip parsing of existing CircuiTikZ source into the visual canvas
-- Arbitrary free-rotation (only 0°, 90°, 180°, 270°)
+- Arbitrary free-rotation (components orient in **45° increments** only: 0°, 45°, …, 315°)
 - Hierarchical or multi-sheet schematics
 - Bus wiring
 
@@ -83,11 +83,12 @@ This document specifies a graphical editor for creating publication-quality circ
 | **ComponentDef** | A static definition of a component type: its CircuiTikZ keyword, bounding box, pin locations, and label slots. Lives in the component registry. |
 | **ComponentItem** | A `QGraphicsItem` subclass responsible for painting one component type on the canvas using `QPainter`. One subclass per component type. |
 | **Pin** | A named connection point on a component, located at a fixed offset from the component origin (every pin offset is a multiple of 0.25 GU). Its absolute position is on the 0.25 GU grid whenever the component is. |
-| **Wire** | A Manhattan-routed (horizontal + vertical segments only) polyline connecting pins, other wires, and/or open grid points. |
+| **Wire** | A polyline connecting pins, other wires, and/or open grid points. Segments are horizontal, vertical, or 45° — Manhattan routing by default, La Plata (45°) when that style is selected (§6.4). |
 | **Junction** | A coordinate where wires/pins are electrically tied together such that a connection must be marked — defined by the degree rule in §6.4. Rendered as a solid dot on the canvas and emitted as `\node[circ]` in the output. |
 | **Open endpoint** | A wire endpoint that does not coincide with any *connecting* component pin. Rendered as an open circle on the canvas and emitted as `\node[ocirc]` in the output. Interior wire vertices are never open endpoints. A voltage annotation (`open`) pin does not connect, so a wire ending on one is still open (see `NON_CONNECTING_KINDS`). |
 | **Options string** | A raw CircuiTikZ option string stored on a component, passed verbatim into the `to[]` or `node[]` *bracket* (e.g. `l=$R_1$, v=$V_s$, color=red`). Replaces the former per-slot label dict. For a **node-style** component the trailing `{…}` text is a separate field — see **Node text**. |
-| **Node text** | The text in the trailing `{…}` of a node-style component's emitted `(x,y) node[…] {TEXT}` (`Component.node_text`), e.g. a transistor's `$Q_1$` or a power rail's `$V_{cc}$`. Distinct from the options string (the `[…]` bracket). Meaningful only for node-style kinds (`is_node_style`); path-style `to[…]` components and drawing annotations ignore it. |
+| **Node text** | The text in the trailing `{…}` of a node-style component's emitted node — a multi-terminal `(x,y) node[…] {TEXT}` in the shared `\draw`, or a single-terminal `\node[…] at (x,y) {TEXT};` standalone command (`Component.node_text`), e.g. a transistor's `$Q_1$` or a power rail's `$V_{cc}$`. Distinct from the options string (the `[…]` bracket). Meaningful only for node-style kinds (`is_node_style`); path-style `to[…]` components and drawing annotations ignore it. |
+| **Node side** | A **single-terminal** node's placement keyword (`Component.node_side`: `""`/`left`/`right`/`above`/`below`), emitted as a TikZ placement key in the `node[…]` bracket so the symbol sits on that side of its coordinate (`left` ⇒ `anchor=east`). The user picks it in the inspector **Placement** dropdown; it makes an inversion bubble (`ocirc`/`notcirc`) tangent to a gate input/output. Default `""` = centred. Meaningful only for single-terminal node kinds (`is_single_terminal_node`). |
 | **Schematic** | The complete logical description of a circuit: a list of components, a list of wires, and metadata. |
 | **Registry** | The global static dictionary mapping CircuiTikZ keywords to `ComponentDef` objects. |
 | **Origin** | The canvas coordinate (0, 0), located at the top-left of the canvas grid. Y increases downward, consistent with Qt's coordinate system. |
@@ -100,8 +101,8 @@ This document specifies a graphical editor for creating publication-quality circ
 ### 3.1 Grid Definition
 
 - The canvas grid has spacing of **1.0 GU**.
-- All component placements, wire vertices, and junctions snap to **0.25 GU** increments — the *minor grid* (`SNAP_GU = 0.25`). This lets components be centred a quarter-cell off the half-grid (e.g. the IGFET MOSFET, whose body does not sit on the half-grid) while every connected wire stays grid-valid in any direction; arrow keys nudge one minor cell (0.25 GU).
-- **Off-grid pins (one exception).** A scaled logic gate's pins sit at the true scaled anchor (`base × scale`), generally off the 0.25 GU grid (§5.4). A wire endpoint may rest off-grid **only** when it coincides with such a pin (the magnet snaps it there, §6.4); the Manhattan corner routing into it may carry the pin's off-grid coordinate. Validation therefore allows an off-grid wire coordinate **only when it lines up with a component pin's off-grid coordinate** (the same off-grid x, or the same off-grid y); any other off-grid value is still an error. Interior wire geometry stays on the grid otherwise.
+- All component placements, wire vertices, and junctions snap to **0.25 GU** increments — the *minor grid* (`SNAP_GU = 0.25`). This lets components be centred a quarter-cell off the half-grid (e.g. the IGFET MOSFET, whose body does not sit on the half-grid) while every connected wire stays grid-valid in any direction; arrow keys nudge one minor cell (0.25 GU). **One snapping exception:** a single-point **terminal marker** (a junction/inversion dot) snaps to the **union of the 0.25 GU grid and the connection points** (component pins + wire vertices/segments, off-grid included) — whichever is **nearest** the cursor (ties to the pin). So it still snaps to the grid everywhere it isn't near a connection point, but where the cursor is closest to an **off-grid** pin it lands exactly on that pin (the dot is meant to sit *on* a connection point, and the library's symbols / scaled gates carry off-grid pins, §5.4). This holds both while **placing** (`SchematicScene._place_target`) and while **dragging** a lone marker (the move handler and `commit_component_drag` use `_marker_drag_snap`); `_marker_drop_position` computes the union via `wire_snap_target` vs. the nearest grid node. The dragged marker's **own** pins are excluded from the magnet (the schematic still holds it at its pre-drag position during the gesture, which would otherwise pin it back to where it started). A pure grid snap made off-grid pins unreachable (the dense grid pull dominated the small pin magnet); a pure free-float lost the grid; the union is the wanted behaviour. `place_component` keeps a terminal marker's snapped (possibly off-grid) position rather than re-snapping to the grid. Every other kind (and a multi-component group drag) snaps to the grid only.
+- **Off-grid pins & pin-axis alignment (one exception).** A scaled logic gate's pins — and the manual library's native anchors generally (§5.4) — sit at the true anchor (`base × scale`), usually off the 0.25 GU grid. A wire endpoint may rest off-grid when it coincides with such a pin (the magnet snaps it there, §6.4); the Manhattan corner routing into it may carry the pin's off-grid coordinate. **Beyond the pin itself, a wire end may also sit off-grid when it is *collinear* with any pin:** each pin's off-grid x and y act as an *artificial grid line* extending across the canvas, so an end (or routing corner) can align to a pin's column/row without landing on the pin. When resolving a wire end the scene snaps each axis to the **nearer** of the 0.25 GU grid or any pin's off-grid axis line (`_all_offgrid_pin_axes` / `_axis_snap`; the magnet still wins when the cursor is closer to an actual pin/wire than to a line — `_resolve_wire_end`). This applies both while **drawing** a wire and while **dragging** a wire vertex/junction (preview and commit share `_resolve_wire_end`, so they agree). Validation therefore allows an off-grid wire coordinate when it lies on one of the off-grid pin's **lines**: its **axis** (the same off-grid x, or the same off-grid y — the Manhattan lead), **or** its **45° diagonal** (the same `x − y` or `x + y` — the La Plata lead off a 45°-rotated / off-grid pin, §6.4); any other off-grid value is still an error. When an end snaps to a pin **axis** line, a faint **alignment guide** (a full-span dashed line in the selection colour) is drawn through that pin (`AlignmentGuideItem`, `_show_guides`) so it is clear *why* the end went off-grid; it clears when the cursor leaves every pin axis or the gesture ends. Interior wire geometry stays on the grid otherwise.
 - The grid is rendered as a **dotted lattice** in the canvas background (a dot at each grid intersection rather than full ruled lines, so the grid orients the eye without competing with the schematic ink). The integer-GU intersections carry slightly larger/stronger dots; the 0.25 GU minor intersections get small faint dots that are drawn **only when zoomed in far enough** to read as distinct (skipped when the on-screen cell is too small, keeping zoomed-out views clean and cheap). Dots are stroked at a constant **device** size (a round-cap pen, drawn with world-matrix disabled) so they stay crisp and small at every zoom level instead of scaling with the view transform.
 - Proximity radii for snapping/grabbing (`PIN_SNAP_GU` = 0.125, `VERTEX_HIT_GU` / `PIN_GRAB_GU` = 0.15) are kept below half the 0.25 spacing so a click is never ambiguous between adjacent nodes.
 
@@ -168,7 +169,7 @@ class Component:                        # circuit components (R, C, L, op amp, �
     id: str                             # UUID, assigned at placement
     kind: str                           # Must exist as key in REGISTRY
     position: tuple[float, float]       # (x, y) of origin pin in schematic coordinates
-    rotation: int                       # 0, 90, 180, or 270 degrees
+    rotation: int                       # a 45° multiple: 0, 45, 90, …, 315 degrees
     options: str                        # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
     mirror: bool = False                # global horizontal mirror, applied after rotation (§7 Mirror)
     label_offset: tuple[float, float] | None = None  # legacy; persisted but no longer affects display (§5.8)
@@ -187,7 +188,7 @@ class Component:                        # circuit components (R, C, L, op amp, �
     scale: float = 1.0                  # LOGIC GATES ONLY (kinds whose CircuiTikZ keyword ends in " port").
                                         #   Uniform body multiplier about the `out` pin; pins sit at the true
                                         #   scaled anchor (base × scale, generally off-grid; no leads — §5.4).
-                                        #   Gates default to 0.5 at placement; other kinds keep 1.0. Persisted
+                                        #   Gates default to 1.0 (full size) at placement, like other kinds. Persisted
                                         #   only when ≠ 1.0; absent → 1.0 (back-compat).
 
 # Diodes and MOSFETs are plain Components: their `filled` / `body_diode` toggles
@@ -302,9 +303,23 @@ class Schematic:
     metadata: dict[str, Any]         # Arbitrary key-value store for future use
     voltage_style: str = "american"  # document voltage-label style: "american"/"european" (§7.2)
     current_style: str = "american"  # document current-label style: "american"/"european" (§7.2)
+    symbol_style: dict[str, str] = {}  # document symbol style per family (§5.4): {"resistors":…,"inductors":…}; empty = american
     siunitx: bool = True             # load siunitx via CircuiTikZ for unit macros in labels; default on (§7.2/§8.3)
     preamble: str = ""               # free-form LaTeX spliced into the document preamble (§7.2/§8.3)
 ```
+
+Document-level **symbol style** (`symbol_style`) switches whole
+CircuiTikZ *families* at once — `library.STYLE_AXES` defines the axes: **resistors**
+(american/european) and **inductors** (american/cute/european, also driving
+transformers). American/european/cute symbol variants are this per-document style
+axis, **not** separate kinds: the generator auto-detects which components respond to
+each axis (rendering under the axis's `\ctikzset` and keeping the geometry where it
+changes), stores the per-style geometry under `geometry_key(kind):<value>`, and tags
+the component `style_axis`. The canvas appends the document style for a tagged
+component (`items._geometry_kind`), codegen emits the matching global `\ctikzset`
+(only when a component of that family is placed), and the map is saved in the `.hv`
+`config` (absent → all-american). Edited in the Document tab; the section shows
+whenever the library declares any style axis (it always does).
 
 Document-level `voltage_style` / `current_style` (`LABEL_STYLES = ("american",
 "european")`) select the CircuiTikZ arrow convention for `v=`/`i=` labels for the
@@ -351,9 +366,9 @@ LaTeX label engine is affected; the ziamath fallback cannot load siunitx at all)
 The following must hold at all times for a valid schematic:
 
 1. All `Component.kind` values exist as keys in `REGISTRY`.
-2. All `Component.rotation` values are in `{0, 90, 180, 270}`.
-3. All `Wire.points` vertices lie on 0.25 GU boundaries (the minor grid, §3.1) — **except** an off-grid coordinate that lines up with a component pin's off-grid coordinate (a scaled logic gate's terminal: the endpoint resting on it, or a Manhattan corner collinear with it). Otherwise, because every pin offset is a multiple of 0.25 and components snap to the 0.25 grid, a wire endpoint that follows a moved pin stays on grid.
-4. All consecutive wire segment pairs are strictly horizontal or vertical (Manhattan constraint).
+2. All `Component.rotation` values are a 45° multiple (`{0, 45, 90, 135, 180, 225, 270, 315}`). A 45° orientation puts the component's pins off the 0.25 grid, reached by the wire magnet / pin-axis alignment (§3.1).
+3. All `Wire.points` vertices lie on 0.25 GU boundaries (the minor grid, §3.1) — **except** an off-grid coordinate that lies on one of an off-grid component pin's **lines**: its axis (the same off-grid x or y — a scaled gate's terminal, or a Manhattan corner collinear with it) or its 45° diagonal (the same `x − y` or `x + y` — a La Plata lead off a 45°-rotated / off-grid pin, §6.4). Otherwise, because every pin offset is a multiple of 0.25 and components snap to the 0.25 grid, a wire endpoint that follows a moved pin stays on grid.
+4. Every wire segment is horizontal, vertical, or exactly 45° (`|dx| == |dy|`) — Manhattan or La Plata routing (§6.4); any other slant is invalid.
 5. No two components share the same `id`; no two wires share the same `id`.
 6. Every wire has **at least two points** (`len(points) ≥ 2`) — enforced by
    `validate()` (and therefore rejected on load, §9.3). A degenerate 0/1-point
@@ -385,7 +400,15 @@ The registry is a module-level dictionary:
 REGISTRY: dict[str, ComponentDef] = { ... }
 ```
 
-It is populated at import time from static definitions. No runtime mutation.
+It is populated at import time from the generated library
+(`components/generated/definitions.json`) in the data file's **manual order**
+(`generate_library` sorts by manual source position). A **bespoke kind** (`open`,
+`short`, `rect`, `circle`, `text_node`, `bipole`) **overrides** any same-named library
+kind and takes that kind's **position** (an in-place override): so `short` keeps its
+manual slot at the front of Resistors rather than drifting to the end, and `open` (no
+library entry) is anchored right after it (`registry._BESPOKE_AFTER`). The purely-bespoke
+kinds with no library counterpart (`rect`/`circle`/`text_node`/`bipole`) append at the
+end, forming their trailing Drawing/Misc categories. No runtime mutation.
 
 ### 5.2 ComponentItem and Painting
 
@@ -405,25 +428,25 @@ All `ComponentItem` subclasses import these constants, ensuring consistent propo
 
 **All component symbols must be derived from CircuiTikZ SVG exports.** Hand-drawn symbols are prohibited — they will inevitably diverge from what CircuiTikZ actually renders and produce previews that don't match the canvas.
 
-Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_components.py`. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box with origin-at-zero / lead-to-grid placement, and writes two files: the **self-contained** `components/geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `components/definitions.json` (registry/codegen data + the single `origin_svg` placement constant + a `circuitikz_version` stamp recording the CircuiTikZ release the library was generated against, measured via the package's own `\pgfcircversion` macro; see [`spec/component-pipeline.md`](spec/component-pipeline.md)). **The application reads only those two files at run time.** Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
+Symbols come from **CircuiTikZ renders** produced by the single deterministic Python pipeline `components/generate_library.py`, which scrapes the CircuiTikZ manual for component definitions and renders each. It renders each component (and variant) with `latex` + `dvisvgm` (`[american]` option), in a fixed bounding box at the symbol's true CircuiTikZ size (no grid-alignment scale baked), and writes two files into `components/generated/`: the **self-contained** `geometry.json` (symbol geometry, read by `app/canvas/svgsym.py`) and `definitions.json` (registry/codegen data + the single `origin_svg` placement constant + a `circuitikz_version` stamp recording the CircuiTikZ release the library was generated against, measured via the package's own `\pgfcircversion` macro; see [`spec/component-pipeline.md`](spec/component-pipeline.md)). **The application reads only those two files at run time** (`app.resources.component_lib_dir()` always returns `components/generated/`). Output is byte-stable (dvisvgm writes no timestamp), so re-running on the same toolchain reproduces identical files.
 
-Each component declares an **`emission`** type in `definitions.json` that selects which CircuiTikZ syntax renders it (and later generates — §5.6); this is independent of its palette `category`. There are exactly two emission types, named for the syntax they produce:
+Each component declares an **`emission`** type in `components/generated/definitions.json` that selects which CircuiTikZ syntax renders it (and later generates — §5.6); this is independent of its palette `category`. There are exactly two emission types, named for the syntax they produce:
 
 | `emission` | LaTeX syntax | Examples |
 |------------|----------------|---------|
 | `path` | `\draw (0,0) to[kind] (2,0);` | R, C, L, D |
-| `node` | `\draw (0,0) node[kind] {};` (single point), or `\node[kind, anchor=…] (X) at (0,0) {}; <leads>` (multi-terminal) | ground, vcc, … (single point); op amp, nigfete, npn (multi-terminal) |
+| `node` | `\node[kind] at (0,0) {};` (single point, standalone command), or `(0,0) node[kind, anchor=…] (X) {} <leads>` in the shared `\draw` (multi-terminal) | ground, vcc, … (single point); op amp, nigfete, npn (multi-terminal) |
 
-A **`node`** element comes in two flavours, distinguished by the *data* rather than a third emission type: a **single-point** node (grounds, power rails — pins carry no CircuiTikZ anchor) placed at one coordinate, and a **multi-terminal** node (op amps, transistors, logic gates — at least one pin maps to a CircuiTikZ anchor, or an `anchor_pin` is set) placed by one anchor with computed lead routing extending each other terminal to a grid-aligned coordinate (`library.is_multi_terminal_entry`; §4 of [`spec/component-pipeline.md`](spec/component-pipeline.md)). The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds).
+A **`node`** element comes in two flavours, distinguished by the *data* rather than a third emission type: a **single-point** node (grounds, power rails — pins carry no CircuiTikZ anchor) placed at one coordinate, and a **multi-terminal** node (op amps, transistors, logic gates — at least one pin maps to a CircuiTikZ anchor) placed **centre-at-origin** and aligned by a per-axis scale (`library.is_multi_terminal_entry`; §4 of [`spec/component-pipeline.md`](spec/component-pipeline.md)). Its pins sit at their native (mostly off-grid) anchor positions and are reached by the canvas wire magnet / off-grid snap. The component set is exactly what the registry uses (every entry in `definitions.json`, plus the 6 bespoke kinds).
 
 **Geometry schema.** Each entry is keyed by component name and holds `kind`, `name`, `viewBox`, `width_pt`/`height_pt`, and two geometry lists (both in SVG point coordinates):
 
 - **`paths`** — the stroked/filled body geometry: `{d, stroke_width, fill, stroke}`.
 - **`glyphs`** — text marks (the `+`/`−` of sources, a flip-flop's D/Q/CLK). dvisvgm emits these as `<use>` references into `<defs>`; the pipeline **resolves them at build time** into `{d, matrix, stroke_width}`, where `matrix` is the composed affine (enclosing-group matrix ∘ `<use>` translation). This is why the geometry is self-contained — no `<use>`/`<defs>` indirection survives, so the app needs no SVG access. A TeX **rule** (e.g. the overline of `\ctikztextnot{Q}` — the flip-flop's Q̄) is emitted as a `<rect>`; `render.parse_geometry` captures it as a glyph too (a closed rectangle path + the rect's transform), so the bar paints on the canvas rather than being dropped (regression: `test_parse_geometry_captures_rect_as_glyph`). `svgsym.symbol_paths` paints each glyph as a filled body via `QTransform(*matrix)` then the component transform.
 
-**Diode body scale.** CircuiTikZ's default diode body is visually large next to the other bipoles, so every diode-family symbol (`D`/`zD`/`sD`/`tD`/`zzD`/`leD` and their filled `*` variants) is rendered with `\ctikzset{diodes/scale=0.8}` and the code generator emits the **same** picture-scoped `\ctikzset{diodes/scale=0.8}` for any schematic containing a diode (see §7.2). `DIODE_SYMBOL_SCALE` in `app/codegen/circuitikz.py` and `DIODE_SCALE` in the export script are the two sources of truth and **must match**. The scale shrinks only the body (the 2-GU span and pin positions are unchanged — leads auto-extend), and it does not affect the MOSFET body-diode (a tripole shape), so the canvas and the rendered output stay in sync.
+**Diode body scale (a document property).** CircuiTikZ's default diode body is visually large next to the other bipoles (the manual recommends shrinking it), so the diode body size is a **per-document** setting, `Schematic.diode_scale`, edited from the Document inspector's **Diode scale** field (§10.3) and **defaulting to 0.6** for a new document (the manual's recommended value). A pre-0.9 file that predates the field still loads at the baked baseline **0.8**, so its diodes are unchanged (`io.load`). The code generator emits a picture-scoped `\ctikzset{diodes/scale=<diode_scale>}` for any schematic containing a diode-family symbol. **What counts as a diode** is decided by `library.is_diode` (and its generator twin `generate.is_diode`): a **two-terminal member of the `Diodes` category** (`category == "Diodes"`, `emission == "path"`, exactly two pins) — the set CircuiTikZ's `diodes/scale` key actually resizes. This is keyed off category/emission/pin-count rather than a `filled` variant name, because the library encodes diode fill in distinct `empty`/`full`/`stroke` *kinds* with no variant, so a variant-name test would miss them. **Tripoles in the family (thyristor/triac/GTO/PUT) are excluded**: their gate anchor moves with `diodes/scale`, which would desync the canvas pin from the export. The geometry pipeline **bakes** the canvas SVG assets at `DIODE_SYMBOL_SCALE` (0.8) — the baseline (`generate.is_diode` gates that baking, so the runtime and generator diode sets must stay identical) — and the canvas reflects a *different* document scale by drawing the diode **body** scaled about its centre by `diode_scale / 0.8` (`ComponentItem._diode_body_scale`): the body is every path except the full-span axial **lead** (which runs terminal-to-terminal *under* the body, so scaling the body leaves no gap), matching CircuiTikZ, which shrinks only the body while the leads auto-extend (the 2-GU span and pin positions are unchanged). It does not affect the MOSFET body-diode (a tripole shape). `DIODE_SYMBOL_SCALE` in `app/components/library.py` (the baked baseline) and `DIODE_SCALE` in the export script must match.
 
-To add a new component: add an entry to `components/definitions.json` (measure its pins with `app/components/render.py`) and re-run `components/generate_components.py` (see [`spec/component-pipeline.md`](spec/component-pipeline.md)). That is the whole procedure for a plain symbol — the registry, codegen tables, and canvas all derive from the data; the canvas item falls back to the generic `ComponentItem`, and `_DISPLAY_ORDER` is only a preference so the palette shows it automatically. No `ITEM_CLASSES` entry, `_DISPLAY_ORDER` edit, or `svgsym.py` anchor is required (placement is the single `origin_svg` constant). Only a component needing special item behaviour (custom `boundingRect`/hit-testing/resize) also needs a `ComponentItem` subclass + `ITEM_CLASSES` row.
+The library is regenerated from the CircuiTikZ manual by re-running `components/generate_library.py` (see [`spec/component-pipeline.md`](spec/component-pipeline.md)). The registry, codegen tables, and canvas all derive from the generated data; the canvas item falls back to the generic `ComponentItem`, and the palette shows every kind automatically (it has no manual display-order list). No `ITEM_CLASSES` entry or `svgsym.py` anchor is required (placement is the single `origin_svg` constant). Only a component needing special item behaviour (custom `boundingRect`/hit-testing/resize) also needs a `ComponentItem` subclass + `ITEM_CLASSES` row.
 
 To implement a new `ComponentItem`, look up the component in `geometry.json`, read the `paths` (and `glyphs`) arrays, and translate each path `d` string into `QPainterPath` calls:
 
@@ -438,7 +461,9 @@ To implement a new `ComponentItem`, look up the component in `geometry.json`, re
 
 Coordinates are scaled from SVG pt units to `GRID_PX` by dividing by the SVG `viewBox` height and multiplying by the component's height in pixels. The SVG y-axis matches Qt's (y-down), so no axis flip is required.
 
-**Fill rule.** dvisvgm emits a solid body (the filled diode triangle, transistor/LED arrowheads, …) as a **bare** `<path>` — no `stroke` and no `fill` attribute — which in SVG is the default **black fill**; the body's outline is a separate `fill='none'` stroke path. The export pipeline records a bare path's fill as `#000` (the SVG default), so `svgsym.symbol_paths` treats a path as **filled** unless its fill is the explicit `none`. (An earlier version recorded the absent attribute as `none`, which made `D` and `D*` — and every other solid body — render identically; the regression test is `test_filled_diode_body_is_filled`.) `stroke_width` values in the geometry are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`. The `glyphs` list is always filled.
+**Fill rule.** dvisvgm emits a solid body (the filled diode triangle, transistor/LED arrowheads, …) as a **bare** `<path>` — no `stroke` and no `fill` attribute — which in SVG is the default **black fill**; the body's outline is a separate `fill='none'` stroke path. The export pipeline records a bare path's fill as `#000` (the SVG default), so `svgsym.symbol_paths` treats a path as **filled** unless its fill is the explicit `none`. (An earlier version recorded the absent attribute as `none`, which made `D` and `D*` — and every other solid body — render identically; the regression test is `test_filled_diode_body_is_filled`.) `stroke_width` values in the geometry are relative — thin strokes (≈0.4pt) map to `LINE_W`; thick strokes (≈0.8pt) map to `LINE_W * 2`. Those two mappings equal the stroke scaled by `_PX_PER_PT` (`GRID_PX / SVG_PT_PER_GU`), so the binary weights are already *proportional* at the two common widths; art **genuinely thicker** than `_TRUE_WIDTH_MIN_PT` (≈1 pt — the seven-segment segment spines, cute-switch contacts, battery/source bars) keeps its **true proportional width** (`stroke_width × _PX_PER_PT`) instead of being thinned to the body weight, so it matches the compiled figure (`items._stroke_px`; `test_items_stroke.py`). The `glyphs` list is always filled.
+
+**Clipping.** dvisvgm clips some art with a `<clipPath>` — e.g. an RF antenna's wavefronts are drawn as **full circles** clipped to a wedge so only the arcs show. `render.parse_geometry` captures a clipped path's `clip-path='url(#id)'` reference, resolves it to the clip region's `d`, and stores it on the path (`"clip"`); `svgsym.SymbolPath` parses it into a clip `QPainterPath`, and `ComponentItem.paint` clips to it before drawing, so the canvas shows the arcs rather than whole circles (`test_parse_geometry_captures_clip_path`, `test_symbol_path_carries_clip`).
 
 The mapping from `kind` to item class is:
 
@@ -519,9 +544,9 @@ The component palette renders each component's thumbnail by instantiating its `C
 
 The **Generic Bipole** (`bipole`) component appears in the **Misc** group — see §7.7.
 
-Each component's `bbox` is **computed**, not hand-chosen: `components/generate_components.py` takes the extent of the rendered ink (paths + glyphs) unioned with the pin positions and rounds it outward to 0.05 GU (`renderer.compute_bbox`; see [`spec/component-pipeline.md`](spec/component-pipeline.md) §3). So every box is snug to the actual symbol — the resistor/inductor stay tight perpendicular to the leads (≈±0.25 around the zigzag/humps), the capacitor reaches its plates (±0.45), and the LED's box follows its emission arrows (asymmetric, y0=−0.6, y1=0.3). This drives label clearance (§5.8) and the hit/selection region (§5.4), so the box tracks the drawn symbol rather than a typed constant.
+Each component's `bbox` is **computed**, not hand-chosen: `components/generate_library.py` takes the extent of the rendered ink (paths + glyphs) unioned with the pin positions and rounds it outward to 0.05 GU (`generate.compute_bbox`; see [`spec/component-pipeline.md`](spec/component-pipeline.md) §3). So every box is snug to the actual symbol — the resistor/inductor stay tight perpendicular to the leads (≈±0.25 around the zigzag/humps), the capacitor reaches its plates (±0.45), and the LED's box follows its emission arrows (asymmetric, y0=−0.6, y1=0.3). This drives label clearance (§5.8) and the hit/selection region (§5.4), so the box tracks the drawn symbol rather than a typed constant.
 
-**Variants (per-instance boolean attributes).** A component's *kind* may declare boolean variants in `components/definitions.json` (`{name, token, mode}`); the active set is stored generically in `Component.variants` (a `{name: bool}` map). The Properties panel's `VariantSection` auto-generates one checkbox per declared variant, and toggling pushes an undoable `SetVariantCommand`. A `suffix`-mode variant appends a keyword suffix (diode `filled` → `KIND*` and the `*` SVG); an `option`-mode variant adds a node option (MOSFET `body_diode` → `bodydiode` and the `*_bodydiode` SVG, e.g. `node[nigfete, bodydiode, anchor=gate]`). This generalises the former hardcoded `filled`/`body_diode` fields. In the `.hv` file only active variants are stored (`"variants": {"filled": true}`); legacy `filled`/`body_diode` keys are still read for back-compat (§9).
+**Variants (per-instance boolean attributes).** A component's *kind* may declare boolean variants in `components/generated/definitions.json` (`{name, token, mode}`); the active set is stored generically in `Component.variants` (a `{name: bool}` map). The Properties panel's `VariantSection` auto-generates one checkbox per declared variant, and toggling pushes an undoable `SetVariantCommand`. A `suffix`-mode variant appends a keyword suffix (diode `filled` → `KIND*` and the `*` SVG); an `option`-mode variant adds a node option (MOSFET `body_diode` → `bodydiode` and the `*_bodydiode` SVG, e.g. `node[nigfete, bodydiode, anchor=gate]`). This generalises the former hardcoded `filled`/`body_diode` fields. In the `.hv` file only active variants are stored (`"variants": {"filled": true}`); legacy `filled`/`body_diode` keys are still read for back-compat (§9).
 
 #### Tripoles
 
@@ -553,21 +578,28 @@ Both BJTs are placed with `anchor=B` (base pin) at `Component.position` and **sc
 
 #### Digital blocks (flip-flops, multiplexers, ALU)
 
-Digital MIPS-datapath blocks in the **Logic** category, drawn with native CircuiTikZ shapes — `flipflop` (the `flipflop D/SR/JK/T` presets) and the configurable `muxdemux` (also exposed by the predefined `ALU`, `demux`, and `one bit adder` styles). Each is a **centre-placed** multi-terminal node (`anchor_pin` null, like the op amp). The native anchors are off the 0.25-GU grid (e.g. ±0.56, ±0.84, ±0.98), so generation applies a **best-effort grid alignment**: `renderer.best_alignment_scale` picks a single uniform scale that lands as many pins as possible on the grid (ties broken toward 1.0), bakes it into the rendered geometry, and stores it as the symbol's `scale`. Flip-flops align **fully** (one scale lands all four corners on the grid); a mux/demux aligns its data lines while the slanted **select** pins, and the **ALU** operands, can't be brought on-grid by a uniform scale and stay off-grid (a wire snaps onto them via the magnet, exactly as for a scaled logic gate — §5.6, §6.4; only those kinds are exempt from the on-grid-pin invariant). No lead bridges: pins sit at the scaled anchors. They carry **no `l` label slot** — the raw pgf shapes reject the bipole `l=` quick key and are self-labelled by their pin glyphs (D/Q/CLK, A/B, …).
+Digital MIPS-datapath blocks in the **Logic** category, drawn with native CircuiTikZ shapes — `flipflop` (the `flipflop D/SR/JK/T` presets) and the configurable `muxdemux` (also exposed by the predefined `ALU`, `demux`, and `one bit adder` styles). Each is a **centre-placed** multi-terminal node (like the op amp), rendered at its true CircuiTikZ size with no grid-alignment scale baked. The native anchors are off the 0.25-GU grid (e.g. ±0.56, ±0.84, ±0.98), so a wire snaps onto each pin via the magnet (§5.4, §6.4). No lead bridges: pins sit at their native anchors. They carry **no `l` label slot** — the raw pgf shapes reject the bipole `l=` quick key and are self-labelled by their pin glyphs (D/Q/CLK, A/B, …).
 
 #### Extended component library (build-out)
 
-Beyond the families above, the library covers a broad set of additional CircuiTikZ symbols, authored through the same data-driven pipeline (`components/add_library.py` → `renderer.save_component`; every keyword is verified to compile against the installed CircuiTikZ — see `components/_probe.py`). They use the existing emission machinery, so no new model/canvas/codegen code is needed:
+**Anchor-exposure policy.** The library exposes **every anchor the manual documents** as a wireable pin — electrical terminals, body-border anchors (`bin`/`bout`/`bgate`/`bpin N`/`bup`/`bdown`), the polarity-dot marks, the **geometric** anchors (`north`/`center`/`left`/`right`/…, and their `circle …`/`tube …` variants), the internal centres and body-diode/circle taps, and the option-state `no…` anchors — on the principle that CircuiTikZ documents an anchor because it's useful to wire to or align with. The manual's bare scrape (`scrape_manual`) under-reports anchors for some shapes, so the generator merges in the fuller per-keyword list from `extract_doc_anchors.extract(keep_geo=True)` (the parser the discovery tool uses). Two filters apply, both deliberately narrow:
+- **`generate_library._is_doc_anchor`** (the documented path) drops only the label/decoration *draw-positions* (`label`/`text` — already used for node-text placement — and `tip`/`arrows`) and the non-referenceable `<anchor>.<direction>` compass sub-anchors (`out.n`; genuine internal sub-nodes like `L1.midtap` come through `_extra_subnode_anchors`). **`_is_terminal`** is the stricter variant used only for the **render-probe fallback** (under-documented shapes): it additionally drops the geographical set, so the engine's generic compass never leaks onto every probed shape — geometric anchors reach the library only when the manual *explicitly* documents them.
+
+Two structural rules keep the result sane: (1) **single-point symbols stay single-point** — a node whose documented anchors are *all* geographic (a ground, supply rail, terminal marker) is not promoted to a multi-terminal node (that would break its standalone `\node[…] at` emission and scatter a compass rose); geometric anchors are additive only on a node that also carries a real terminal (a BNC's `left`/`right`/`center` beside `hot`/`zero`/`shield`). (2) Within a kind, **named terminals are ordered before geometric** ones so a coincidence resolves in the terminal's favour (a 7-seg's middle segment `g` wins over `center`); remaining coincidences (`anode`/`cathode` over `in`/`out`, FET-name aliases on a BJT) collapse via `_dedupe_by_position`, so no duplicate pins appear. A node whose documented anchors are all *option-conditional* (e.g. `pnp`, documented only on its body-diode variant) unions in the probe's base terminals so `B`/`C`/`E` aren't lost behind a variant-only list. Consequence: a richly-documented shape carries many pins (e.g. `npn` → B/C/E + 4 body-diode + 5 circle anchors). The one documented set still not surfaced is the parametric `muxdemux`'s body-border anchors (`blpin`/`bbpin`/`brpin`), which would require extending the parametric mux builder. Run `components/extract_doc_anchors.py` to audit coverage (`[ok]`/`[MISSING]` per kind).
+
+Beyond the families above, the library covers a broad set of additional CircuiTikZ symbols, all produced by the single data-driven pipeline (`components/generate_library.py`, which scrapes the manual and verifies every keyword compiles against the installed CircuiTikZ). They use the existing emission machinery, so no new model/canvas/codegen code is needed:
 
 - **Two-terminal bipoles** (`emission: "path"`): more resistors/sensors (`varistor`, `photoresistor`, NTC/PTC `thermistor`), capacitors (`vC`, `feC`, `cC`, `sC`, `piezoelectric`), inductors (`vL`, `sL`), thyristors (`thyristor`/SCR, `triac`), sources (`dcvsource`, `dcisource`, `vsourcesquare`, `vsourcetri`, `vsourceN`), switches (`spst`, `cute open/closed switch`, `reed`, `toggle switch`), instruments (`oscope`, `rmeter`), transducers (`loudspeaker`, `mic`, `buzzer`), signal-processing/RF **Blocks** (`amp`, `adc`, `dac`, `lowpass`/`highpass`/`bandpass`/`allpass`, `phaseshifter`, `detector`, `vco`), and misc (`afuse`, `squid`, `bulb`).
   - **Thyristor/triac gate (an off-axis pin on a path device).** `thyristor` and `triac` are two-terminal `to[…]` devices that additionally carry a third **`gate`** pin. Unlike the two anode/cathode terminals (which lie on the device axis), the gate sticks out perpendicular to it, at the native CircuiTikZ `gate` anchor (offset ≈ `(1.7, −0.77)` GU — off the 0.25 grid, so magnet-connected). No codegen change is needed: the device is still emitted as an anonymous `to[…]` (the gate stub is part of the symbol), and a wire connects to the gate **by coordinate**, because `component_pin_positions` transforms the gate offset with the *same* rotate-then-mirror transform CircuiTikZ uses to place the drawn stub — verified to coincide at all eight rotation×mirror cases (`test_codegen.test_thyristor_gate_pin_coincides_with_circuitikz_anchor`). The gate is `pins[2]`, so the axial terminal stays `pins[1]` for the resize/`default_span` machinery; `thyristor`/`triac` join the off-grid-pin invariant exemption.
-- **Anchor-pinned tripoles** (placed by one anchor + grid-aligning `scale`, like the BJTs): IGBTs (`nigbt`/`pigbt`), simplified MOS (`nmos`/`pmos`/`nmosd`/`pmosd`), and `isfet`. (This model needs a *per-axis* scale to land both off-axis pins on the grid, which is only safe when the pins are symmetric — a non-uniform scale shears the symbol's strokes anisotropically in the output, see the switches below.)
-- **Centre-placed multi-terminal nodes** (best-effort *uniform* grid alignment, like the digital blocks): electron **Tubes** (`triode`, `diodetube`, `pentode`, `tetrode` — the multi-grid tubes expose the extra grid taps: `tetrode` adds a `screen` grid, `pentode` adds `screen` + `suppressor`), the fully-differential op-amp (`fd op amp`), the Schmitt triggers (`schmitt`/`invschmitt`), the `gyrator`, and the **SPDT/rotary switches** (`cute spdt up/down/mid`, `rotaryswitch`). These keep native off-grid anchors (magnet-connected) and join `mux`/`demux`/`ALU`/`adder` in the on-grid-pin invariant exemption (`tests/test_registry._OFFGRID_PIN_KINDS`). **A centre-placed node must scale *uniformly*** (`best_alignment_scale` returns a single factor): a non-uniform scale shears the drawn strokes (e.g. a slanted switch blade) in the LaTeX output, but the canvas re-strokes every path at a uniform width — desyncing canvas from output. The SPDT/rotary switches were originally authored anchor-pinned, whose forced-symmetric grid targets produced exactly that non-uniform shear; they are centre-placed for a uniform scale (`tests/test_registry.test_centre_placed_nodes_use_uniform_scale`).
+  - **Potentiometer wiper (an off-axis terminal on a path device).** A potentiometer is a *three*-terminal device; `pR` (american potentiometer) and the variable resistor `vR` carry a third **`wiper`** pin in addition to the two axial terminals (european is the document style axis, not a separate `epot` kind). Exactly like the thyristor gate, the wiper is the CircuiTikZ `wiper` anchor (off-axis, off the 0.25 grid → magnet-connected), kept as `pins[2]`, with `anchor: null` so a wire connects to it **by coordinate** (no codegen change; coincidence verified at all eight rotation×mirror cases by `test_codegen.test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor`).
+  - **Centre taps (an on-axis third terminal on a path device).** Some devices document a centre tap on the device *axis*, between the two endpoints — distinct from the off-axis gate/wiper. The **inductor `midtap`** (at the body centre `(1.0, 0)`) is the canonical case; the centre-tapped source windings (`ioosource`/`voosource`/`oosourcetrans` → `centerprim`/`centersec`, and the AC-coupled `tacdc`/`tdcac`/`tacac` → `ac mid in`/`ac mid out`) carry the same kind of tap. The generator surfaces these by an explicit **name allowlist** (`generate_library._MIDSPAN_TAP_ANCHORS`) rather than a geometric "on-axis but not an endpoint" rule, because several devices document on-axis anchors that are merely *aliases* of the two main terminals (`anode`/`cathode`) or internal body points (`bin`/`bout`) — those stay folded into in/out. A centre tap is `pins[2]`, `anchor: null`, connected **by coordinate** (coincidence at all 8 cases: `test_codegen.test_inductor_midtap_pin_coincides_with_circuitikz_anchor`).
+- **Centre-placed transistor-family nodes** (true-size, native anchors, like the BJTs): IGBTs (`nigbt`/`pigbt`), simplified MOS (`nmos`/`pmos`/`nmosd`/`pmosd`), and `isfet`. Their off-axis pins sit at the native off-grid anchors and connect via the magnet.
+- **Centre-placed multi-terminal nodes** (like the digital blocks): electron **Tubes** (`triode`, `diodetube`, `pentode`, `tetrode` — the multi-grid tubes expose the extra grid taps: `tetrode` adds a `screen` grid, `pentode` adds `screen` + `suppressor`), the fully-differential op-amp (`fd op amp`), the Schmitt triggers (`schmitt`/`invschmitt`), the `gyrator`, and the **SPDT/rotary switches** (`cute spdt up/down/mid`, `rotaryswitch`). These render at their true CircuiTikZ size and keep their native (off-grid) anchors, connected by the pin magnet (§5.4/§6.4); the meaningful grid guarantee is the two-terminal-axial-pins invariant (`tests/test_registry.test_two_terminal_axial_pins_on_quarter_grid`), which the multi-terminal nodes are not subject to.
 - **Single-terminal node**: `antenna` (placed at its feed point, like a ground).
 
 Not included (out of scope for the data-driven pipeline — they need parametric pin layout / new canvas items): the configurable IC packages (`dipchip`/`qfpchip`) and the multi-port RF/DSP block library (`mixer`, `circulator`, `oscillator`, …).
 
-Like a logic gate, every digital block is **scalable** (`library.is_scalable`): the inspector **Size** dropdown (§10.3) sets `Component.scale`, which multiplies the baked alignment scale in the emitted `xscale`/`yscale` (and the canvas transform). At 100 % the pins are grid-aligned (best-effort); other multipliers may push them off-grid, where the magnet still connects.
+Like a logic gate, every digital block is **scalable** (`library.is_scalable`): the inspector **Size** control (§10.3) sets a per-instance size factor that scales the symbol in the emitted node options (and the canvas transform). At natural size the pins sit at their native anchors; resizing moves them, and the magnet connects wherever they land.
 
 | Kind | Display Name | CircuiTikZ shape | Pins |
 |------|-------------|------------------|------|
@@ -580,21 +612,21 @@ Like a logic gate, every digital block is **scalable** (`library.is_scalable`): 
 | `ALU` | ALU | `ALU` (notched trapezoid) | `A`, `B`, `result`, `op0`, `op1`, `zero` |
 | `adder` | Adder | `one bit adder` | `A`, `B`, `sum`, `cin` |
 
-The fixed-geometry kinds (flip-flops, ALU, adder) are authored by [`components/add_digital.py`](components/add_digital.py) via `renderer.save_component` (measure anchors, render geometry, merge into both data files); re-run it after a CircuiTikZ upgrade.
+The fixed-geometry kinds (flip-flops, ALU, adder), like every other component, are generated by [`components/generate_library.py`](components/generate_library.py); re-run it after a CircuiTikZ upgrade.
 
-**Parametric mux/demux (two parameters).** The `mux` and `demux` are **multi-parameter** kinds: a data-line count (`inputs`/`outputs`, 2–16) and a select-line count (`selects`, 1–4), each a spinbox in the inspector (§10.3). The configurable `muxdemux` trapezoid is rendered for **every value combination** (`renderer.render_muxdemux`, driven by the entry's `muxdemux` recipe + `params` list) — `Lh`/`Rh` track the data count (2× keeps the data-pin pitch constant), `w` tracks the select count. Because the trapezoid's anchors don't sit on the grid and shift per combo, each combo's pins are **measured** and baked into `n_data["<data>,<select>"]["pins"]` along with the concrete `muxdemux def` option codegen re-emits; geometry is keyed `mux:<data>:<select>`. This is the general multi-parameter mechanism (logic gates are the single-parameter case, §5.6); see §10.3 for the inspector and §4.2 for `Component.params`.
+**Parametric mux/demux (two parameters).** The `mux` and `demux` are **multi-parameter** kinds: a data-line count (`inputs`/`outputs`, 2–16) and a select-line count (`selects`, 1–4), each a spinbox in the inspector (§10.3). The configurable `muxdemux` trapezoid is rendered for **every value combination** (`generate.render_muxdemux`, driven by the entry's `muxdemux` recipe + `params` list) — `Lh`/`Rh` track the data count (2× keeps the data-pin pitch constant), `w` tracks the select count. Because the trapezoid's anchors don't sit on the grid and shift per combo, each combo's pins are **measured** and baked into `n_data["<data>,<select>"]["pins"]` along with the concrete `muxdemux def` option codegen re-emits; geometry is keyed `mux:<data>:<select>`. This is the general multi-parameter mechanism (logic gates are the single-parameter case, §5.6); see §10.3 for the inspector and §4.2 for `Component.params`.
 
 #### Transformers (quadpoles)
 
-Two-winding transformers in the **Inductors** category, drawn with CircuiTikZ's **quadpole** shapes — `transformer` (air-core) and `transformer core` (iron-core), each in three coil styles: **american** (`transformer`), **cute** (`cute transformer`) and **european** (`european transformer`), and likewise for the cored versions (six kinds total). The coil shape is the CircuiTikZ `inductor=american`/`cute`/`european` choice; because the `european` value only takes effect as a *scoped* `\ctikzset` (a node option reaches `cute` but not the european rectangle), the cute/european entries carry a static `ctikzset` field (`library.node_ctikzset`) and codegen wraps the node in its own `{ \ctikzset{inductor=…} \draw …; }` group so the setting reverts — the same group mechanism a parametric gate's body-height uses (`circuitikz._node_group_lines`). The terminals/dots are identical across the styles. Like the op amp and the digital blocks, each is a **centre-placed** multi-terminal node (`anchor_pin` null) with the same best-effort grid alignment: the native winding terminals sit at ±1.05 GU, so a baked uniform scale (≈0.952) lands all four on the grid — primary `p1`/`p2` (left, CircuiTikZ anchors `A1`/`A2`) and secondary `s1`/`s2` (right, `B1`/`B2`). They are **not user-scalable** (no Size dropdown — they behave like the other passive symbols, keeping only the fixed baked alignment scale) and carry **no `l` label slot** (the raw quadpole rejects the bipole `l=` key) — caption a transformer with a nearby text annotation. **Rotation and mirroring** are emitted with **`transform shape`**: a CircuiTikZ quadpole flips its internal coils when its node is rotated by an odd 90° (crossing the terminal leads) or mirrored (the coils face outward), whereas `transform shape` reorients the shape rigidly — matching the canvas — without changing the terminal anchors (so connected wires still meet them); codegen adds it only for `transformer*` kinds when the instance is rotated or mirrored.
+Two-winding transformers in the **Transformers** category, drawn with CircuiTikZ's **quadpole** shapes — `transformer` (air-core) and `transformer core` (iron-core). The coil shape (american/cute/european) is **not** a separate kind: it follows the document **inductor symbol style** axis (§4.4/§5.4), driven by the CircuiTikZ `inductor=american`/`cute`/`european` choice; because the `european` value only takes effect as a *scoped* `\ctikzset` (a node option reaches `cute` but not the european rectangle), the affected entries carry a static `ctikzset` field (`library.node_ctikzset`) and codegen wraps the node in its own `{ \ctikzset{inductor=…} \draw …; }` group so the setting reverts — the same group mechanism a parametric gate's body-height uses (`circuitikz._node_group_lines`). The terminals/dots are identical across the styles. Like the op amp and the digital blocks, each is a **centre-placed** multi-terminal node rendered at true CircuiTikZ size (no baked scale): the winding terminals sit at their native anchors — primary `A1`/`A2` (left) and secondary `B1`/`B2` (right) — off the 0.25 grid, magnet-connected. Each coil is a CircuiTikZ **sub-node** (`L1` primary, `L2` secondary) that inherits the inductor `midtap` centre tap, so the transformer also exposes **`L1.midtap`**/**`L2.midtap`** pins reached via the **sub-node anchor ref** `(node-L1.midtap)` — the one place codegen emits the `-`-prefixed sub-node form instead of `(node.anchor)` (`circuitikz` pin-ref builder; `test_codegen.test_transformer_centre_taps_emit_subnode_anchor_refs`, and coincidence in `…_centre_tap_pin_coincides_with_circuitikz_anchor`). The generator injects these documented coil taps via `generate_library._extra_subnode_anchors` (the manual lists `midtap` on the inductor, not on the transformer's own anchor list). They are **not user-scalable** (no Size control — they behave like the other passive symbols, rendered at native size) and carry **no `l` label slot** (the raw quadpole rejects the bipole `l=` key) — caption a transformer with a nearby text annotation. **Rotation and mirroring** are emitted with **`transform shape`**: a CircuiTikZ quadpole flips its internal coils when its node is rotated by an odd 90° (crossing the terminal leads) or mirrored (the coils face outward), whereas `transform shape` reorients the shape rigidly — matching the canvas — without changing the terminal anchors (so connected wires still meet them); codegen adds it only for `transformer*` kinds when the instance is rotated or mirrored.
 
-**Polarity dots.** A transformer's winding-polarity dots are a per-instance choice: four independent **`dot` variants** (`dot_p1`/`dot_p2`/`dot_s1`/`dot_s2`) surface as checkboxes in the inspector (`VariantSection`, §10.3). A `dot` variant is unlike the `suffix`/`option` variants — it changes neither the node keyword nor the geometry key (`variant_tikz`/`variant_geometry_suffix` skip it); instead it is a separate mark: codegen emits `(node.<inner dot A1…>) node[circ]{}` for each checked dot, and the canvas paints a filled circle at the dot's measured `offset` (`library.dot_marks`). So the base (dot-less) symbol is rendered once and the chosen dots are overlaid. Authored by [`components/add_transformers.py`](components/add_transformers.py) (measure terminal + `inner dot` anchors → best-effort align → `renderer.save_component`); re-run after a CircuiTikZ upgrade.
+**Polarity dots.** A transformer's winding-polarity dots are a per-instance choice: independent **`dot` variants** surface as checkboxes in the inspector (`VariantSection`, §10.3). A `dot` variant is unlike the `suffix`/`option` variants — it changes neither the node keyword nor the geometry key (`variant_tikz`/`variant_geometry_suffix` skip it); instead it is a separate mark: codegen emits `(node.<inner dot A1…>) node[circ]{}` for each checked dot, and the canvas paints a filled circle at the dot's measured `offset` (`library.dot_marks`). So the base (dot-less) symbol is rendered once and the chosen dots are overlaid. Like every component, the transformers and their dot anchors are produced by [`components/generate_library.py`](components/generate_library.py); re-run after a CircuiTikZ upgrade.
 
 #### Nodes (single-terminal)
 
-Single-terminal components are placed as `(x,y) node[kind, <options>] {<node_text>}` in the generated LaTeX (the `options` go in the bracket, the **node text** inline in the `{…}` — CircuiTikZ anchors a single-terminal node's text clear of the symbol, e.g. above a power rail, so it neither clips nor overlaps). They have one pin (`in` at (0,0)) and `default_span=(0,0)`. **Power-rail labels.** A power rail's voltage name (`$V_{cc}$`) is set as **node text** (the `{…}` slot), not a quick key — earlier builds special-cased an `l=` slot into `label=right:…`; that slot is now migrated into `node_text` on load (§9), so the rail's name renders from the `{…}` and any other `options` pass through the bracket unchanged.
+Single-terminal components are emitted as the **standalone command** `\node[kind, <options>] at (x,y) {<node_text>};` in the generated LaTeX (the `options` go in the bracket, the **node text** inline in the `{…}` — CircuiTikZ anchors a single-terminal node's text clear of the symbol, e.g. above a power rail, so it neither clips nor overlaps). A single-point node *is* its own pin: it connects to wires purely by coordinate and carries no named anchor, so it needs no place in the shared `\draw` path. Emitting it as its own `\node at` statement (after the `\draw`, alongside the junction/open-circle/inversion-bubble dots, which are likewise standalone `\node` commands) keeps the output uniform and readable; `_node_command` builds it and `generate`/`_component_layer_lines` place it. They have one pin (`in` at (0,0)) and `default_span=(0,0)`. **Power-rail labels.** A power rail's voltage name (`$V_{cc}$`) is set as **node text** (the `{…}` slot), not a quick key — earlier builds special-cased an `l=` slot into `label=right:…`; that slot is now migrated into `node_text` on load (§9), so the rail's name renders from the `{…}` and any other `options` pass through the bracket unchanged.
 
-**Node text** is emitted **inline in the node's own `{…}`** — the CircuiTikZ-idiomatic `node[npn] (id) {$Q_1$}` form. A caveat: a multi-terminal symbol has a *fixed* bounding box that does not grow to fit the text, so a label that overflows the symbol is clipped by the standalone crop (§8.3) when the node sits at the **figure's edge** (interior nodes, surrounded by wires/other components, are unaffected). **On-canvas placement** matches the compiled figure exactly. CircuiTikZ **west-anchors** a node's inline text at the shape's `text` anchor (its left edge sits there, extending right), and that anchor is offset from the node centre by a *per-shape* amount (a transistor's a hair east so the label sits just right of the symbol, an op-amp's at the centre, a transformer's a unit north, a power rail's above the bar). That offset is **measured per kind** into `ComponentDef.text_anchor` by `components/add_text_anchors.py` (which renders the same node the generator emits and reads `(node.text) − (node.center)` via `\pgfpointanchor`, like the pin anchors). The canvas west-anchors the node-text label (and its in-place editor) at the item origin + `text_anchor` (`ComponentItem._node_text_anchor_rel`), so it lands where the export puts it. **Re-run `add_text_anchors.py` after a CircuiTikZ upgrade or a component regeneration.** The node-text label paints a **transparent backdrop** (unlike the axis-centred annotation labels, which fill an opaque `COLOR_LABEL_BG` so they read over the line they sit on) to match CircuiTikZ, which draws no fill behind a node's `{…}` text — so the symbol shows through. The source view is **soft-wrapped** (§10.5) so a long node line is never scrolled off-screen. **Invariant:** node text the user sets always appears in the generated source (what the GUI shows and what compiles), so the source matches what is rendered.
+**Node text** is emitted **inline in the node's own `{…}`** — the CircuiTikZ-idiomatic `node[npn] (id) {$Q_1$}` form. A caveat: a multi-terminal symbol has a *fixed* bounding box that does not grow to fit the text, so a label that overflows the symbol is clipped by the standalone crop (§8.3) when the node sits at the **figure's edge** (interior nodes, surrounded by wires/other components, are unaffected). **On-canvas placement** matches the compiled figure exactly. CircuiTikZ **west-anchors** a node's inline text at the shape's `text` anchor (its left edge sits there, extending right), and that anchor is offset from the node centre by a *per-shape* amount (a transistor's a hair east so the label sits just right of the symbol, an op-amp's at the centre, a transformer's a unit north, a power rail's above the bar). That offset is **measured per kind** into `ComponentDef.text_anchor` by `components/generate_library.py` (which renders the same node the generator emits and reads `(node.text) − (node.center)` via `\pgfpointanchor`, like the pin anchors). The canvas west-anchors the node-text label (and its in-place editor) at the item origin + `text_anchor` (`ComponentItem._node_text_anchor_rel`), so it lands where the export puts it. **Re-run `generate_library.py` after a CircuiTikZ upgrade to refresh these.** The node-text label paints a **transparent backdrop** (unlike the axis-centred annotation labels, which fill an opaque `COLOR_LABEL_BG` so they read over the line they sit on) to match CircuiTikZ, which draws no fill behind a node's `{…}` text — so the symbol shows through. The source view is **soft-wrapped** (§10.5) so a long node line is never scrolled off-screen. **Invariant:** node text the user sets always appears in the generated source (what the GUI shows and what compiles), so the source matches what is rendered.
 
 | Kind | Display Name | Canvas Symbol | Label Slots |
 |------|-------------|--------------|-------------|
@@ -618,11 +650,20 @@ Single-terminal components are placed as `(x,y) node[kind, <options>] {<node_tex
 |------|-------------|------|-------------|-----------|-------------|
 | `open` | Voltage Annotation | `in` (0,0), `out` (2,0) | (2,0) | Yes | `v`, `v^`, `v_`, `i`, `i_` |
 
+`open`/`short` are bespoke kinds (not CircuiTikZ commands derived from the library); in the palette they appear under the **Resistors** category — the section the CircuiTikZ manual documents them in ("Resistive bipoles") — rather than an invented "Annotations" group with no manual counterpart. (This subsection groups them by *behaviour*; their palette home is Resistors.)
+
 The `open` component renders a **translucent** (mostly-opaque) solid line between its two endpoints — drawn at `OPEN_ANNOTATION_OPACITY` (0.5) so it is visually distinct from both solid and dashed wires — with a voltage/current annotation from the options string. Unlike other components, its annotation **value label** is **centred over the middle of the line** rather than offset to a side, while its decoration — a current arrowhead centred on the line, or `±` voltage signs at the terminals — is drawn like CircuiTikZ's `to[open, …]` (see §5.8).
 
 **Placed by a two-click span gesture** (click the origin, then the terminal) rather than the single-click ghost-follow used by other components — see §6.2.
 
 **Both endpoints are draggable.** When selected, square drag handles appear at both endpoints, and a press on **either** handle starts an endpoint drag (`SchematicScene` press-handler precedence, ahead of vertex drag and SELECT-mode wire auto-start, so clicking-and-holding an endpoint that coincides with a connectable pin — e.g. a current annotation's — drags the endpoint instead of starting a wire). The two endpoints are symmetric: whichever is grabbed follows the cursor while the **other stays fixed**. Dragging the **terminal** handle holds the origin fixed and changes `span_override` only (undoable via `ResizeCommand`); dragging the **origin** handle holds the terminal fixed, shifting `Component.position` to the new origin and adjusting `span_override` so the terminal does not move (undoable via `MoveEndpointCommand`, the mirror image of `ResizeCommand`). Either way the dragged endpoint follows the cursor on the **0.25 GU grid** — the same node grid as placement and wire vertices, with **no dead-zone** (the handle is not sticky on pickup and does not freeze near the other endpoint) — and connected wires follow the moved endpoint (the terminal's wires stay put during an origin drag, and vice-versa). The origin handle is offered only by **line** annotations (`open`/`short`/`bipole`); boxes (`rect`/`circle`) resize as an anchored scale about their fixed first corner and expose only the terminal handle (`_ResizableTwoTerminalItem._origin_draggable`).
+
+**Drag-resize (corner handle).** Resizable multi-terminal symbols expose a square **corner handle** when selected and are resized by dragging it — there is **no discrete Size dropdown**. The drag is **item-driven**: the resizable item supplies a small protocol (`resize_handle_at` / `resize_value` / `resize_from_local` / `apply_resize_preview` / `resize_command`) and the scene's drag controller is kind-agnostic (`drag.resize_handle_at` / `preview_resize` / `commit_resize`, routed like an endpoint resize). The cursor is mapped into the component's local frame (undoing rotation/mirror), the item computes the new size from the local-frame corner offset, the preview is shown live, and **connected wires follow each relocated pin**. Two flavours:
+
+The split is by whether the kind is sized via a CircuiTikZ body-**height** key (`library.gate_uses_height`), assigned automatically by a load-time loop over the library (no per-kind listing):
+
+- **Anisotropic** (`items._ResizableNodeItem`, `model.is_resizable_node` = `is_scalable` ∧ not height-keyed — the non-height-keyed gates, the digital blocks, and the muxdemux): independent width/height factors `(wf, hf)` stored in `span_override` (reusing the field — **no `.hv` format change**; default unset = no scaling; a legacy uniform `Component.scale` is read as `(s, s)` for old documents), multiplying the symbol geometry and every pin offset about the origin (`model.node_resize_factors`, applied in `component_pin_positions`). The item scales the path *coordinates* (pen weight and pin-dot radius stay constant, so a stretch never ovalises the *dots*; a gate's inversion *bubble* does follow the x/y stretch, as expected for independent scaling). The corner drag is **continuous** (each axis independently), with a gentle magnet at the factors that land a pin on the grid (`model.snap_resize_factor`: a factor `f` grid-aligns a pin at offset `o` when `o·f` is a 0.25-GU multiple; among the pins within `RESIZE_SNAP_GU` = 0.05 GU of alignment the nearest pull wins, else the raw factor stands), floored at 0.25. Commits via `ResizeNodeCommand` (reshaping connected wires through one **simultaneous** old→new pin map, so densely-spaced pins never cross-assign). **Codegen** emits the size one of two ways: a **gate with CircuiTikZ body keys** (`library.gate_size_keys` — the american/european and/or/nand/nor/xnor families) is sized with `\ctikzset{tripoles/<kw>/height=H, …/width=W}` (`H = height_default × hf`, `W = width_default × wf`) in its local node group — the CircuiTikZ-recommended way, which **redraws the symbol at native stroke width** rather than stretching it like `xscale`/`yscale` (`circuitikz._gate_size_setting`); the height/width keys move each pin to `base × factor`, exactly matching the canvas (whose pins scale by the same factors), so canvas and export stay in sync. Every **other** anisotropic kind (the digital blocks, the muxdemux, the ieeestd / not / buffer gates that don't expose the keys) emits the resize factors directly as the node `xscale`/`yscale`. A handle sits at **each of the four body corners**; the hit-test records the grabbed corner (`_active_corner`) and the drag-start factors/position. The resize holds the diagonally-**opposite** corner fixed (`geometry.anchored_resize_factors`): because the model only scales about the origin, anchoring the opposite corner means the origin **shifts**, so `ResizeNodeCommand` also carries a new `position`. The shift is stored **exactly** (not grid-snapped) so the body stays precisely where the live preview showed it — the anchor corner does not move on release. The origin may therefore land off-grid; that is fine, as its pins become off-grid pins that wires connect to via the magnet, exactly like a scaled gate's (the off-grid-pin invariant exemption). Anchoring makes the grabbed corner track the cursor at the **same rate from any corner**, regardless of where the origin sits inside the body (e.g. a gate's output-pin origin no longer makes the near corners scale faster). The scene drag controller measures the cursor against the *original* origin captured at grab time (the previewed origin moves), so the anchor can't drift. The live preview translates the **item** (`setPos`) to the anchored origin, not just the model, so the body sits where it will commit — without it the origin shift would appear only on the commit rebuild (a jump on release).
+- **Uniform** (`items._ResizableGateItem`, the **height-keyed gates**): one factor driving the per-instance `Component.scale`, continuous with the same pin-grid magnet (`snap_resize_factor` over every pin coordinate, since the single scale moves both axes) and floored at `MIN_GATE_SCALE`. Four corner handles with the same opposite-corner anchoring as above (the larger axis ratio drives the single scale); `SetComponentScaleCommand` likewise carries the exact (non-snapped) position shift. These must lock aspect — the height key carries the y-size and keeps the inversion bubble a **circle** in the export; an `xscale`≠`yscale` node transform would oval it (the baked geometry is not pre-stretched, so the export would also diverge from the canvas). Codegen scales x via the node and y via the scaled `\ctikzset{…/height=…}` group. Commits via `SetComponentScaleCommand` (which already follows wires).
 
 #### Drawing Annotations
 
@@ -721,29 +762,19 @@ A re-layered (`z_order ≠ 0`) circuit component is emitted in **its own** `\dra
 
 **SetZOrderCommand:** An undoable command that sets `Component.z_order` (any component).
 
-The palette category display order is (read row-by-row, three cards per row to match the 3-column grid — §10.2): **Resistors | Inductors | Capacitors → Diodes | Transistors | Switches → Sources | Supplies | Grounds → Annotations | Amplifiers | Instruments → Gates (Am) | Gates (Eu) | Logic → Blocks | Tubes | Antennas → Transducers | Misc | Drawing** — engineer-facing groups rather than the CircuiTikZ bipole/tripole classification. (**Tubes** = electron tubes; **Blocks** = signal-processing / RF blocks — amplifier/ADC/DAC/filter/phase-shifter/detector/VCO/gyrator; **Transducers** = loudspeaker/microphone/buzzer; **Antennas** = antenna. These are ordinary registry categories, set on each entry, so they need no special handling in `_palette_category`.) The palette refines the raw registry `category` for display (`palette._palette_category`): the raw **Logic** category splits three ways — the boolean **gates** split by symbol style into **Gates (Am)** / **Gates (Eu)**, while the logic **blocks** (flip-flops, mux/demux, ALU, adder — identified by their `flipflop`/`muxdemux`/`ALU`/`one bit adder` shape keyword, `palette._is_logic_block`) form their own **Logic** category. The power-supply rails + batteries (`_SUPPLY_KINDS`: `vcc`/`vdd`/`vee`/`vss`/`battery`/`battery1`) split out of the raw **Sources** category into a palette-only **Supplies** group (the actual sources, including the european ones, stay in Sources). This is a UI-grouping concern; the model `ComponentDef.category` is unchanged. The order is a *preference*: a component whose category is not listed still appears (after the listed groups), so a new category never silently hides its components. **Within** a category, the explicit display order (`registry._DISPLAY_ORDER`, via `registry.display_rank`) wins — so the **Inductors** group reads inductors → transformers → choke (all six transformer styles grouped, even though the european inductor `eL` then precedes the american transformers). For kinds **not** in that order, the palette falls back to grouping american-style first and european-style after (`palette._is_european_style`, derived from the `european …` CircuiTikZ keyword), so the two conventions don't interleave (`palette._within_category_key`).
+The palette shows the **library's own categories** — the CircuiTikZ manual's sections (e.g. Resistors, Cap/Ind, Diodes, Sources, Grounds, Transistors, Tubes, Amplifiers, Blocks, Switches, Logic, Flip-flops, Mux/Demux, Chips, Instruments, Transformers, Misc) in the manual's section order (`_CATEGORY_DOC` in `app/ui/palette.py`), with the bespoke **Drawing** category appended at the end (the bespoke `open`/`short` fold into **Resistors**, the manual section they're documented in, at the **front** where the manual lists them — `short` overrides its library slot in place, `open` is anchored right after it — rather than an invented "Annotations" group). The palette does **not** refine or split the registry categories: there is no engineer-facing remap, no Logic→gates/blocks split, and no Sources→Supplies split — the category a component carries in the data file is the category it appears under. A category the palette has no entry for still appears (after the documented ones), so a new category never silently hides its components. **Within** a category the components are in the **manual's own order**. The generator sorts every component by its **source position** in the manual (`scrape_manual` records each component's `pos`; `generate_library` sorts by it) — the scrape's separate node (`\circuitdesc`) and path (`\circuitdescbip`) passes would otherwise interleave a category's symbols — so `definitions.json`, and hence `REGISTRY`, lists each category's components in the sequence the manual presents them. The palette buckets `REGISTRY` by category (preserving that order) and orders the categories themselves by `_CATEGORY_DOC`.
 
-**American vs. european shapes.** Both conventions are offered as *distinct
-components* sitting side by side in their category, rather than a global toggle:
-the american resistor `R` and **european resistor** `eR`, the variable resistor
-`vR`/`evR`, the potentiometer `pR`/`epot`, and the resistive sensor
-`thermistor`/`ethermistor` (Resistors); the
-american inductor `L` with the **european** `eL` and **cute** `cuteL` inductors
-(Inductors); and the american gates (`and`, `or`, `nand`, `nor`,
-`xor`, `xnor`, `not`, `buffer`) in **Gates (Am)** alongside their european/IEC
-counterparts (`eand`, `eor`, `enand`, `enor`, `exor`, `exnor`, `enot`, `ebuffer`)
-in **Gates (Eu)**; and the
-european **sources** `eV`/`eI` and controlled `ecV`/`ecI` (Sources). Each
-european kind uses CircuiTikZ's *style-independent* shape keyword (`european
-resistor`, `european inductor`, `cute inductor`, `european and port`, `european
-voltage source`, `variable european resistor`, …), so its
-shape is fixed in both the canvas and the output regardless of any global
-`resistor`/`inductor`/`logic ports` style. The european AND/OR-family gates are
-**parametric** (2–16 inputs) exactly like the american ones, with their own
-measured per-N alignment and the `tripoles/european … port/height` body-height
-key (§5.5); `enot`/`ebuffer` are fixed single-input. (This is orthogonal to the
-document **voltage/current label** styles of §7.2, which are a per-document
-setting.)
+**American vs. european shapes (symbol style axis).** american/european/cute
+symbol variants are **not** separate kinds — they are a per-document **symbol
+style axis** (`library.STYLE_AXES`: **resistors** american/european; **inductors**
+american/cute/european, also driving transformers), edited in the Document
+inspector (§4.4/§10.3) and applied to **every** document. A single kind (e.g. the
+resistor `R`) renders in whichever style the document selects: the generator bakes
+the per-style geometry under `geometry_key(kind):<value>`, the canvas appends the
+document style for the tagged component, and codegen emits the matching global
+`\ctikzset` only when a component of that family is placed. So there is one
+`R`/`L` in the palette, not separate `eR`/`eL` kinds. (This is orthogonal to the
+document **voltage/current label** styles of §7.2, also a per-document setting.)
 
 **Logic-gate size (`Component.scale`).** Logic gates (every kind whose CircuiTikZ
 keyword ends in `` port``) carry a per-instance uniform size multiplier,
@@ -791,28 +822,28 @@ export fail.
 ### 5.5 Multi-Terminal Pin Geometry — Alignment Procedure
 
 > **Superseded.** This manual procedure no longer applies to the running app.
-> Every CircuiTikZ symbol's pins, alignment, geometry, and placement are now
-> generated by `components/generate_components.py` (which renders each symbol in a
-> **fixed bounding box** with a single constant placement origin and a **computed**
-> scale and/or lead alignment) into `components/definitions.json` + `geometry.json`,
+> Every CircuiTikZ symbol's pins, geometry, and placement are now
+> generated by `components/generate_library.py` (which scrapes the CircuiTikZ
+> manual and renders each symbol in a **fixed bounding box** with a single constant
+> placement origin, at the symbol's true CircuiTikZ size with no grid-alignment
+> scale baked) into `components/generated/definitions.json` + `geometry.json`,
 > and `REGISTRY`, the codegen tables, and the `svgsym` canvas transform are all
-> built from that data. The per-component scale/leads are measured, not
-> hand-typed. See [`spec/component-pipeline.md`](spec/component-pipeline.md) §4 — that
-> is the authoritative procedure for adding/aligning a component. The
+> built from that data. Pins sit at their native (mostly off-grid) anchors;
+> wires reach them via the canvas magnet. See
+> [`spec/component-pipeline.md`](spec/component-pipeline.md) — that is the
+> authoritative reference for the pipeline. The
 > detailed steps that once lived here (measure CTikZ anchors → snap to 0.25 GU →
-> scale-correct or bridge-lead → re-export SVGs) are now the generator's job; see
-> [`spec/component-pipeline.md`](spec/component-pipeline.md) §4 for the authoritative
-> procedure. Off-grid pins and how a wire still connects to them are specified in
+> scale-correct or bridge-lead → re-export SVGs) are now the generator's job.
+> Off-grid pins and how a wire still connects to them are specified in
 > §3.1 (off-grid exception) and §5.4.
 
 ### 5.6 Extensibility
 
-To add a new CircuiTikZ component type:
+The CircuiTikZ component library is regenerated wholesale:
 
-1. Add an entry to `components/definitions.json` (emission, `tikz`, pins with their measured offsets/anchors, `anchor_pin`, labels, variants) — measure the pin anchors with `app/components/render.py`. The leads/scale and the `bbox` are computed automatically (the `bbox` from the rendered ink extent ∪ pins).
-2. Run `components/generate_components.py` to render the geometry into `geometry.json` and rebuild `definitions.json`. `REGISTRY`, the codegen tables, and the `svgsym` placement all build from this data — no `registry.py`/`circuitikz.py`/`svgsym.py` constants are edited (see [`spec/component-pipeline.md`](spec/component-pipeline.md)).
-3. *(Only if the component needs special canvas behaviour.)* Add a `ComponentItem` subclass + an `ITEM_CLASSES` row in `app/canvas/items.py` — for a custom `boundingRect`, hit-testing, or resize. Plain symbols need nothing here: the lookup is `ITEM_CLASSES.get(kind, ComponentItem)`, and the base class paints any kind from its geometry. `_DISPLAY_ORDER` in `registry.py` is a preference, not a requirement — an unlisted kind still appears (at the end of its palette category); edit it only to fix an unusual position.
-4. No changes to the schematic model, code generator, or UI layout are required.
+1. Run `components/generate_library.py` to scrape the CircuiTikZ manual, render each symbol's geometry into `components/generated/geometry.json`, and build `components/generated/definitions.json`. `REGISTRY`, the codegen tables, and the `svgsym` placement all build from this data — no `registry.py`/`circuitikz.py`/`svgsym.py` constants are edited (see [`spec/component-pipeline.md`](spec/component-pipeline.md)).
+2. *(Only if a component needs special canvas behaviour.)* Add a `ComponentItem` subclass + an `ITEM_CLASSES` row in `app/canvas/items.py` — for a custom `boundingRect`, hit-testing, or resize. Plain symbols need nothing here: the lookup is `ITEM_CLASSES.get(kind, ComponentItem)`, and the base class paints any kind from its geometry. The palette shows every kind automatically — there is no display-order list to edit.
+3. No changes to the schematic model, code generator, or UI layout are required.
 
 (The bespoke non-CircuiTikZ kinds — `open`/`short`/`bipole`/`rect`/`circle`/`text_node` — instead keep a hand-written `ComponentDef` literal in `registry.py`.)
 
@@ -822,7 +853,7 @@ All canvas symbols follow **American/IEEE style**, matching the `[american]` Cir
 
 #### General Drawing Rules
 
-- All symbols are drawn as `QPainterPath` geometry translated from `components/geometry.json`. No external image assets are used.
+- All symbols are drawn as `QPainterPath` geometry translated from `components/generated/geometry.json`. No external image assets are used.
 - Stroke width is `LINE_W` for normal strokes and `LINE_W * 2` for thick strokes (e.g. gate electrodes). At palette thumbnail scale (`_THUMB_SIZE`px), stroke width is reduced to `LINE_W_THIN` to prevent fine detail from filling in.
 - Pin indicator dots of radius `PIN_R` are drawn at every `PinDef` offset. They are visible in normal and selected states; suppressed in ghost (placement preview) state.
 - No label text is drawn inside palette thumbnails. Component identity is conveyed by shape alone.
@@ -1031,7 +1062,7 @@ draws:
 - Selected components can be dragged; the component item snaps to 0.25 GU **during** the drag (not only on release), so the visual position always lands on a grid point. Movement records a `MoveCommand`. Component drag/selection is enabled **only in Select mode** — in Place/Wire/Pan modes component items are non-movable and non-selectable so a stray press cannot desync an item from its model position.
 - **Wires follow the components they connect to.** When a component moves (by drag or by arrow-key nudge), any wire endpoint coinciding with one of its pins moves by the same delta — **provided that pin is the wire's sole lead.** A connected endpoint that would leave its adjacent segment diagonal gets an auto-elbow inserted to stay Manhattan; if both ends of a wire ride the same move, the whole polyline translates rigidly. **Junction re-stretch rule.** If a moving pin sits on a coordinate where **two or more wire endpoints** coincide (a junction — e.g. a component pin dragged onto a node where a rail is split), those wires do **not** follow (only a pin that is the *unique* wire endpoint at its coordinate carries its lead — the `endpoint_count == 1` gate). Dragging every stub off the node would tear the rail apart and leave overlapping segments and a phantom junction dot. Instead the component **stays connected**: the move reshape (`reshape.compute_move_reshape`, applied by `MoveCommand`) grows a fresh **re-stretch lead** from the node (the pin's pre-move coordinate) to the pin's new position — a `route()`-shaped 2-segment Manhattan wire with a new id, captured for exact undo (removed on undo, re-added on redo). So dragging a component onto a junction (its single lead collapses and is removed) and back **fully restores the original topology** — the lead re-grows identically. The live drag preview ghosts these leads (`DragPreviewController._update_restretch_preview`, throwaway non-interactive `WireItem`s) so the preview matches the committed result rather than showing a momentarily-disconnected component. (The all-components-moved and explicitly-selected-wire cases below still translate rigidly regardless, and create no re-stretch leads.) **When all components in the schematic are moved together (select-all drag), every wire translates rigidly regardless of connectivity** — free (open-circle) endpoints move with the rest of the circuit instead of being left behind. **Explicitly-selected wires** (rubber-band selection includes wire items) are also translated rigidly as part of the drag — the scene passes the selected wire IDs to `MoveCommand` via the `wire_ids` parameter, and the preview treats those wires the same way. The reshape is part of the same `MoveCommand` and is fully reversed on undo. A live ghost of the reshaped, simplified wires is shown during the drag.
 - **Whole-wire drag (move a wire).** Pressing a wire's **body** (not a vertex handle, mid-label, or endpoint handle — those gestures take priority) and dragging translates the whole wire. The pressed wire is selected if it wasn't, and every selected wire translates together; the scene drives this through `DragPreviewController.preview_wire_drag` (live ghost) and commits a `MoveCommand([], delta, wire_ids=…)`. **Junction taps follow.** Any *other* wire joined to a translated wire at a shared vertex or segment point has that shared point move by the same delta and reshapes Manhattan to stay connected, while its far (e.g. pinned) end stays put — so dragging a bus repositions it without detaching its taps. (Implemented in `reshape.compute_move_reshape`: a non-explicit wire endpoint that lies on a translated wire's pre-move polyline, `_point_on_polyline`, is treated as a hit.) The whole move is one undoable step.
-- `R` rotates the selection 90° CW around the bounding-box centroid of the selected component positions (snapped to 0.25 GU); records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. Connected wires are reshaped or rigidly rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `R` cycles the ghost's rotation instead.
+- `Ctrl+R` rotates the selection CW around the bounding-box centroid of the selected component positions (snapped to 0.25 GU) in **45° steps**; records a `GroupRotateCommand`. When a single component is selected the centroid equals its own position, so it spins in place. **The step falls back to 90° when a wire is part of the selection** — rotating free wire vertices by 45° would leave them off-grid on no pin axis (invalid); a components-only rotation steps 45° and reshapes connected wires to follow (an internal wire is re-routed between the moved pins; a boundary wire reshapes; both stay valid). Connected wires are reshaped or rotated according to whether their other endpoint is inside or outside the selection (see §6.6 `GroupRotateCommand` note). `Component.label_offset` is cleared for each rotated component so the label auto-repositions. In **Place** mode `Ctrl+R` cycles the ghost's rotation by 45° instead.
 - Arrow keys nudge selected components by `NUDGE_GU` (0.25 GU, one minor-grid cell) per keypress, in any direction. Connected wires follow (§6.6) and stay grid-valid.
 - `Delete` or `Backspace` deletes the current selection — components (and any wires connected to their pins) **and** any directly-selected wires; records a `DeleteCommand`.
 
@@ -1083,6 +1114,52 @@ thyristor/triac gate — has no single lead axis, so it follows the heading: *ei
 orientation keeps a valid corner because the corner inherits one of the pin's own
 off-grid coordinates, so you can route up/down from the gate exactly as you route
 left/right. See `route_pin_aware`, §5.4.)
+
+#### Routing styles — Manhattan and La Plata (45°)
+
+Wires are drawn in one of two **routing styles** (`model.ROUTING_STYLES`), selected
+from the wiring quick-bar (§10.x — two mutually-exclusive tiles, the active style
+shown checked):
+
+- **Manhattan** (default) — the axis-only elbow described above.
+- **La Plata** — adds a **45°** leg (octilinear routing), for the diagonal
+  connections the CircuiTikZ manual uses in a few figures. `route_diagonal(a, b)`
+  returns `[a, b]` for an axis run or a clean single diagonal (`|dx| == |dy|`), else
+  `[a, corner, b]` with an **axis-first** corner: a straight axis leg leaves `a` along
+  the longer axis, then a 45° leg angles into `b` (the diagonal sits at the target end,
+  matching the manual's "run straight, then angle in" figures).
+
+**No new grid is needed.** A 45° leg has slope ±1, so between two 0.25-GU lattice
+points it threads a grid node at every 0.25 step — the corner is automatically
+on-grid. The lattice and the snapping (§3.1, including pin-axis alignment) are
+unchanged; the style only changes the leg *shape*. The scene's `_route` picks the
+style from `SchematicScene._wire_routing` (set by `set_wire_routing`), so the draw
+preview and the commit agree. Validation invariant 4 accepts a segment that is
+horizontal, vertical, **or** exactly 45° (`|dx| == |dy|`); any other slant is still
+an error.
+
+The routing style is **editor state, not document data** — it shapes the router, not
+the stored geometry (a diagonal segment is self-describing in `Wire.points`), so it
+is **not** persisted and the `.hv` format is unchanged. (A file that *contains* a La
+Plata wire will not load in a build without 45° support — its validator rejects the
+diagonal — but a Manhattan-only file stays fully cross-compatible.)
+
+**Off-grid pins.** La Plata routing also works **off an off-grid pin** — a scaled gate
+or a **45°-rotated component** — and the 45° leg comes *straight off the pin* with no
+Manhattan jog (`route_pin_aware` → `_route_diagonal_pin_aware`): drawing **from** an
+off-grid pin uses a **diagonal-first** elbow (`_route_diagonal_first`, the mirror of
+`route_diagonal`), so the diagonal touches the pin; ending **on** one uses the
+diagonal-last `route_diagonal`. The elbow corner lands on the off-grid pin's **45° line**
+(`x − y` or `x + y` constant) — an "artificial 45° grid line" through the pin — which
+validation permits (§3.1), so the wire is valid without bridging onto the grid. (For a
+45°-rotated component whose pin sits on a grid-threading diagonal, the corner is simply
+on-grid; otherwise it rests on the pin's diagonal.)
+
+**v1 limitations** (documented, not silent): (a) **line-hops are not drawn on
+diagonal segments** — `_axis_segments` only yields horizontal/vertical segments, so a
+crossing involving a 45° leg produces no hop; (b) **mid-segment T-junctions onto a
+diagonal are not offered** as a snap target (`nearest_wire_segment_point` stays
+axis-only) — a diagonal wire is still connectable at its vertices.
 
 #### Drawing
 
@@ -1147,7 +1224,9 @@ off-grid pin whose nearest grid node equals the press node still reads as a drag
 
 #### Finalizing and mode transitions
 
-- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component. **A resizable line-annotation endpoint handle takes priority over this auto-start:** because the endpoint-drag check runs first in the press handler, pressing-and-holding an `open`/`short`/`bipole` endpoint drags that endpoint (§11 Annotations) even when it coincides with a connectable pin (a `short`'s endpoints connect), rather than starting a wire.
+- In **Select** mode, left-clicking an **unconnected** pin (a pin with no wire endpoint on it) auto-switches to **Wire** mode and begins a wire there. Clicking a connected pin, or a component body, does normal selection/drag instead. The auto-start uses a tight grab radius so a press near a component's centre still selects/drags the component. **A resizable line-annotation endpoint handle takes priority over this auto-start:** because the endpoint-drag check runs first in the press handler, pressing-and-holding an `open`/`short`/`bipole` endpoint drags that endpoint (§11 Annotations) even when it coincides with a connectable pin (a `short`'s endpoints connect), rather than starting a wire. **A single-point terminal marker is also excepted:** a connection dot whose symbol *is* its own pin — a Terminals-category dot (`circ`/`ocirc`/`diamondpole`/…) **or** a marker *kind* like the Logic-category inversion dot `notcirc` (`model.TERMINAL_MARKER_KINDS`) — would make an auto-start impossible to select; a press whose matched pin belongs to such a marker (`SchematicScene._pin_belongs_to_terminal_marker`) falls through to normal selection/drag so the dot can be moved or deleted (wire from it by entering Wire mode first). So an `ocirc`/`notcirc` drops onto a gate's `bout`/`bin` **body anchors** (exposed as pins) to form a NAND/NOR/inverted input, shows no red pin marker, is grab-selectable, and rides along when the gate moves; its tangent side is `Component.node_side` (§10.3) — seeded with a smart default pointing away from the gate body when placed on a body anchor (`model.gate_body_anchor_side`), then freely changed in the inspector **Placement** control; the canvas draws the symbol shifted to that side (§5.4) while the pin stays on the anchor. The magnet snaps the marker (centre pin) **onto** the anchor — both **while placing** (`_place_target`, §3.1) and **during/after a drag** (the move handler and `commit_component_drag` snap a lone dragged marker onto the nearest connection point) — using the same magnet wire drawing uses, so the dot lands exactly on a terminal even off-grid (the library's symbols, scaled gates). A terminal marker snaps to the **union of the grid and the connection points** (§3.1): away from any pin/wire it snaps to the nearest grid node, but where the cursor is closest to an off-grid pin it lands on that pin, so it both keeps grid snapping and can reach off-grid terminals (its own pins are excluded from the magnet while it is dragged). It also **follows the component it sits on**: when a component moves, any terminal marker whose pin coincides with one of the moving component's pins rides along by the same delta (`MoveCommand`, previewed in `drag.py`, undone together). The shared predicate is `model.is_terminal_marker` (`TERMINAL_MARKER_CATEGORIES` ∪ `TERMINAL_MARKER_KINDS`) — the single source the red-pin-dot suppression, grab-not-wire, placement-magnet, and move-follow all use.
+
+  **Inversion bubble (user-set tangent side, smart default).** An `ocirc`/`notcirc` (`model.INVERSION_BUBBLE_KINDS`) dropped on a gate body anchor sits centred on that anchor (its pin coincides — it move-follows the gate, §6.x). The **tangent side** is stored in `Component.node_side` (one of `""`/`left`/`right`/`above`/`below`) and is the user's to change in the inspector **Placement** dropdown (§10.3); it is **not** consulted at code-generation time as an inference (the old `gate_body_anchor_attachment` + `_tikz_side` codegen inference, fragile under rotation/mirror, is gone). **Smart default:** when a bubble is *placed* on a gate body anchor, `place_component` seeds `node_side` from `model.gate_body_anchor_side` — the side pointing **away** from the gate body at that anchor (`bin*` inputs face out the input side, `bout` the output side; rotated/mirrored with the gate), so it lands tangent without manual setup. This runs only at placement (a convenience default), never at export. On the **canvas** the symbol is drawn **shifted to `node_side`** (`ComponentItem._node_side_offset_px`, measured from the **actual drawn symbol extent** — the union of its paths — *not* the registry bbox, which is a loose snap bound that would leave a gap), so the symbol's near edge lands exactly on the point and the preview shows the bubble tangent on the chosen side, while its pin (the model position, where wires connect) stays on the anchor; with no side it draws centred. On **export** the bubble is just a single-terminal node like any other: `\node[ocirc, <node_side>] at (x,y) {};`, where CircuiTikZ's placement key (`left` ⇒ `anchor=east`, …) offsets the circle tangent. No gate-anchor reference, no post-`\draw` special pass — one uniform single-terminal-node path (§7.x Nodes).
 - In **Select** mode, a **double-click on blank canvas** (no wire or component hit) enters **Wire** mode, starting a free wire from the snapped 0.25 GU grid point.
 - In **Select** mode, **double-clicking a wire's rendered label** — an endpoint label (`_WireEndLabel`) or the mid-wire label (`_WireMidLabel`) — opens its in-place text editor (§4.3) instead of routing. These checks run **before** the wire-body check so a rendered label isn't shadowed by the "double-click wire → edit mid-label" gesture. The **mid-wire label is also draggable**: a left-press on it (handled in the scene's `mousePressEvent`, ahead of vertex-drag/selection) starts a drag that slides it along the wire; `mouseMoveEvent` previews and `mouseReleaseEvent` commits the new fractional position. A no-movement press falls through to the double-click edit.
 - In **Select** mode, **double-clicking a wire endpoint** (any first/last vertex, via `wire_vertex_at` — endpoints are draggable, including connected ones) opens that endpoint's label editor (§4.3) — so a label can be started even when none is set yet and there is no rendered label to click. This applies to free endpoints **and endpoints connected to a component pin or a drawing element**. Interior vertices and the segment body fall through to the wire-body (split-and-start) gesture below. This check runs after the rendered-label check and before the wire-body check.
@@ -1260,7 +1339,7 @@ Notes:
 - `MergeWireCommand` merges two wire stubs that share a free endpoint into one wire; it is bundled after a `DeleteCommand` inside a `MacroCommand` when the deletion dissolves a T-junction (see §6.4). The two wires are **re-resolved at `do()` time**: if a referenced wire id no longer exists (an earlier merge in the same macro consumed it — deleting both taps of a bus dissolves two junctions that share the rail), the merge falls back to whichever wire currently ends at the merge point, so sequential merges compose into one wire instead of silently no-opping.
 - `DeleteCommand` accepts both component ids and wire ids, removing components, the wires connected to their pins, and any directly-selected wires.
 - Commands that **remove** a wire as a side effect (a `Resize`/`MoveWireVertex`/`MoveJunction`/`GroupRotate` collapse, a redundant fully-contained wire after a move) capture the pristine `Wire` object and its list position, so undo restores the wire **verbatim** — labels, markers, line style, and stacking position included — at its original index.
-- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It rotates positions around the bounding-box centroid of the selection (snapped to the 0.25 GU grid), increments each component's `rotation` by 90°, clears `label_offset` (reset to auto), rotates all selected and internal wire vertices, and reshapes boundary wires (one endpoint on a selected pin, one not) using the same elbow logic as `MoveCommand`. If a boundary wire's reshape collapses it to a single point (its moving end folds onto its fixed end), the wire is **removed** rather than left as a degenerate single-point wire — and `undo` re-adds it (same guard `MoveCommand` applies to wire-following). For a **mirrored** component the rotation field steps by **−90 instead of +90**: the mirror is applied *outermost* (after rotation, §4.2/§7.2), so `R90·M·R(r) = M·R(r−90)` — using +90 would send the pins to the mirror-image of where the geometric rotation moved the wires and detach them.
+- `GroupRotateCommand` is used by `rotate_selected_cw()` for all rotations (single or multi-component). It takes a **`step`** angle (a 45° multiple; the action passes **45°** for a components-only selection, **90°** when wires are selected). It rotates positions around the bounding-box centroid of the selection (`rotate_vector`, shared with the pin transform; 90° multiples land exactly on-grid, a 45° step may land off-grid which is allowed), increments each component's `rotation` by the step, clears `label_offset` (reset to auto), and handles wires: at a **90° step** it rotates all selected and internal wire vertices and reshapes boundary wires (one endpoint on a selected pin, one not) with the same elbow logic as `MoveCommand`; at a **45° step** an internal wire (both ends on moving pins) is **re-routed** between the new pin positions (`route_pin_aware`, whose corner lands on the pins' axes → valid) since rotating its vertices 45° would be off-grid-invalid, and boundary wires reshape as before. If a boundary wire's reshape collapses it to a single point (its moving end folds onto its fixed end), the wire is **removed** rather than left as a degenerate single-point wire — and `undo` re-adds it (same guard `MoveCommand` applies to wire-following). For a **mirrored** component the rotation field steps by **−step instead of +step**: the mirror is applied *outermost* (after rotation, §4.2/§7.2), so `R·M·R(r) = M·R(r−step)` — using +step would send the pins to the mirror-image of where the geometric rotation moved the wires and detach them. (`_rot90cw` remains as the exact 90° reference; the generalized `_rot` rotates by `step`.)
 - `MacroCommand.do()` **unwinds on failure**: if a child command raises, the already-executed children are undone in reverse order before the exception propagates, so a failed composite (e.g. a multi-component inspector edit) never leaves a half-applied document. `UndoStack.push` records nothing when `do()` raises.
 - The stack is `UndoStack` (`app/canvas/commands.py`). Besides `push` (apply + record) it offers `record()` — record an **already-applied** command without re-executing it, used by `scene.batch()`, which applies each command immediately at push time (so later commands in the batch compute against the **live** document state) and records the wrapping `MacroCommand` once at the end. The stack also tracks the **save point**: `mark_save_point()` records the history position at each successful save/load/new, and `is_modified()` is true iff the current position differs from it — so undoing back to the saved state clears the window's dirty marker, while divergent edits (undo past the save point, then a new push) make the saved state unreachable and the document stays modified until the next save. The main window derives its modified state and the **Undo/Redo actions' enabled state** (`can_undo()` / `can_redo()`, synced after every command/undo/redo) from the stack.
 
@@ -1450,46 +1529,41 @@ header comment (§8.4/§8.5). Covered by `tests/test_latex_security.py` and the
 containment cases in `tests/test_codegen.py`.
 
 **Diode scale.** When the schematic contains any diode-family component
-(`D`/`zD`/`sD`/`tD`/`zzD`/`leD`), the generator emits a picture-scoped
-`\ctikzset{diodes/scale=0.8}` as the first line inside `\begin{circuitikz}` (the
-factor is `DIODE_SYMBOL_SCALE` in `app/components/library.py` — single-sourced
-there, like the kind→geometry mapping `geometry_key()`, so the canvas symbol
-geometry and the emitted LaTeX can never disagree). This shrinks CircuiTikZ's oversized default
+(a two-terminal member of the `Diodes` category — `library.is_diode`, §5.3),
+the generator emits a picture-scoped
+`\ctikzset{diodes/scale=<diode_scale>}` as the first line inside `\begin{circuitikz}`
+— the **document's** `diode_scale` (the inspector control, §5; new documents default
+to **0.6**, the manual's recommendation). The canvas draws the diode body at the same
+scale (relative to the baked `DIODE_SYMBOL_SCALE` baseline, 0.8, in
+`app/components/library.py`), so the canvas symbol and the emitted LaTeX can never
+disagree. This shrinks CircuiTikZ's oversized default
 diode to match the canvas SVGs (§5.3) and the user's exported snippet alike;
 being inside the environment's group it never leaks into the user's other
 figures. The line is omitted entirely when no diode is present.
 
 #### Multi-Terminal Components (Tripoles)
 
-These map to CircuiTikZ `node` syntax, placed by a named anchor rather than
-the node center:
+These map to CircuiTikZ `node` syntax, **centre-placed** at the component origin:
 
 ```latex
-(pin_x, pin_y) node[KIND, anchor=ANCHOR, OPTS] (NODEID) {LABEL}
+(cx, cy) node[KIND, OPTS] (NODEID) {LABEL}
 ```
 
-Where `(pin_x, pin_y)` is the absolute coordinate of the registry pin
-corresponding to `ANCHOR`, and `NODEID` is `node_<first8charsofUUID>`.
+Where `(cx, cy)` is the component's origin coordinate and `NODEID` is
+`node_<first8charsofUUID>`.
 
-CircuiTikZ's internal pin anchors do not land on the 0.25-GU grid, so the node is
-placed by its origin pin (`anchor=…`, or by centre for the op amp) and aligned
-with a **computed** per-axis scale (`xscale=`/`yscale=`) and/or short bridge
-leads — both derived from the measured anchors and stored in
-`components/definitions.json` (see [`spec/component-pipeline.md`](spec/component-pipeline.md)
-§4). The canvas geometry carries the same scale + leads, so the two agree.
-BJTs/MOSFETs are scaled onto the grid; the op amp extends leads to its outward
-pins.
+Each symbol renders at its **true CircuiTikZ size** — no grid-alignment scale is
+baked, so no `xscale=`/`yscale=` stretch and no bridge leads are emitted. The pins
+therefore sit at the symbol's native anchors, which do not land on the 0.25-GU grid;
+a connecting wire references the named anchor `(node_id.<anchor>)` (see below) and is
+reached on-canvas by the pin magnet (§5.4). The canvas geometry carries the same
+true-size symbol, so the two agree.
 
 ```latex
-% op amp (placed by centre): clean leads bridge every terminal to its grid pin
-(node_id.+) -- (pin_plus_coord)
-(node_id.-) -- (pin_minus_coord)
-(node_id.out) -- (pin_out_coord)
-% npn (placed anchor=B): scaled so C/E land on grid — no leads
-(0,1) node[npn, xscale=1.1905, yscale=1.2987, anchor=B] (node_id) {}
-% nigfete (placed anchor=gate): scaled, plus a short residual lead for the source
-(0,1) node[nigfete, xscale=1.0204, yscale=0.962, anchor=gate] (node_id) {}
-(node_id.source) -- (source_coord)
+% npn (centre-placed, true size): pins at native anchors, no scale, no leads
+(0,1) node[npn] (node_id) {}
+% a wire connects to a terminal by its named anchor:
+(node_id.C) -- (...)
 ```
 
 #### Named Anchor References
@@ -1504,6 +1578,10 @@ coordinates:
 ```
 
 This makes connections explicit and produces cleaner output. **Scaled logic gates** are no exception: a scaled gate's pins sit at the true `.in k`/`.out` anchor (sized via the body height/xscale so the anchor lands at `base × scale`, §5.4), so a wire ending on such a pin is emitted as the named `(node.in k)` reference like any other multi-terminal pin — there is no lead stub and no off-grid/snapped mismatch.
+
+**Path bipoles' extra terminals** are referenced by name too. A path bipole's two axial terminals (`pins[0]`/`pins[1]`) are the literal `to[…]` endpoints — already explicit coordinates with no clean named anchor (CircuiTikZ's `.left`/`.right` are the body *edges*, ≈ `(0.44,0)`/`(1.56,0)`, not the wire ends at `(0,0)`/`(2,0)`). But its **extra** terminals (`pins[2:]` — a thyristor `gate`, a potentiometer `wiper`, an inductor `midtap`, the centre-tapped source windings, whose pin name *is* the CircuiTikZ anchor) do have named anchors. When a wire (or a terminal marker, below) lands on one, codegen **names the device** (`to[L, name=node_xxxx]`) and emits `(node_xxxx.midtap)` instead of an opaque coordinate. The `name=` is added only when something actually references the extra terminal (`generate.named_path_devices`), so the common case — an inductor with no centre-tap connection — stays name-free (no noise). Like every named reference, this is suppressed for re-layered (`z_order ≠ 0`) devices and background-layer wires (which would be forward references). Tests: `test_codegen.test_path_bipole_extra_terminal_emits_named_anchor_ref` / `…_unconnected_extra_terminal_leaves_device_unnamed`.
+
+**Terminal markers placed on an anchor** use the anchor name as well. A single-terminal node — a junction/open dot (`circ`/`ocirc`/…), a ground, a supply rail — is emitted as a standalone `\node[kind, …] at (coord) {…}` after the shared `\draw` (§7.x). When its position coincides with another component's named anchor, that `at` coordinate is emitted as the anchor reference: a `circ` dropped on a transformer winding becomes `\node[circ] at (node_xxxx.A1) {};`, and on an inductor centre tap `\node[circ] at (node_xxxx.midtap) {};` (naming the inductor on demand). This reuses the same `pin_coord_to_ref` map (and the single-terminal-node positions join the wire endpoints as the "reference consumers" that trigger on-demand naming of a path device); `_node_command` resolves the `at` through it. Because the markers are emitted after the `\draw` that defines those nodes, the references resolve. Test: `test_codegen.test_terminal_marker_on_component_anchor_uses_named_anchor_ref`.
 
 #### Wires
 
@@ -1903,13 +1981,19 @@ failure to write the `.bak` never blocks the save itself.
 
 ```json
 {
-  "version": "0.6",
+  "version": "0.9",
   "name": "My Schematic",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
+    "symbol_style": {},
     "siunitx": true,
-    "preamble": ""
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "mark_open_ends": true,
+    "mark_junctions": true,
+    "diode_scale": 0.6
   },
   "components": [
     {
@@ -1940,7 +2024,8 @@ failing the load. `save` always writes the object at the current version.
 A component may also carry optional keys when non-default: `span_override`,
 `z_order`, the unified `line_width` (stroke/outline width), **`node_text`** (the
 `{…}` slot text of a node-style component, written only when non-empty, §5.4),
-drawing-style fields
+**`node_side`** (a single-terminal node's placement keyword `left`/`right`/`above`/
+`below`, written only when non-empty — format 0.8, §5.4), drawing-style fields
 (`fill_color`/`line_style`/font fields), and **`variants`** — a `{name: true}`
 map of active boolean variants
 (§5.4), e.g. `"variants": {"filled": true}`. Only active variants are written.
@@ -1951,7 +2036,7 @@ that does not bump the format version (§9.4).
 
 **Kind stability across CircuiTikZ re-generations.** A component stores only its
 `kind` string — never its geometry, pins, or bbox, all of which are looked up
-fresh from the registry at load time. So re-running `components/generate_components.py`
+fresh from the registry at load time. So re-running `components/generate_library.py`
 against a new CircuiTikZ library is safe by construction: appearance/alignment
 changes flow into old files automatically, and the `kind` (a separate field from
 the CircuiTikZ `tikz` keyword) is the stable identifier. The *one* thing that can
@@ -2001,6 +2086,10 @@ Format versions:
 - **0.4** — extends `z_order` from drawing annotations to **every component** (any component can be sent to front/back, §9.4 Z-order). A 0.3 build would silently strip a plain component's `z_order` on save, so the bump makes it refuse the newer file. 0.1–0.3 files load unchanged (an absent `z_order` defaults to 0); new documents declare 0.4.
 - **0.5** — adds the document **preamble settings** to `config` (`siunitx` flag and free-form `preamble` string, §7.2). A 0.4 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.4 files load unchanged — an absent `siunitx` key defaults **on** (the new-document default) and `preamble` to empty; new documents declare 0.5.
 - **0.6** — adds a per-component **`node_text`** (the `{…}` slot of a node-style component, §5.4). A 0.5 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.5 files load unchanged — an absent `node_text` defaults to empty, and a **legacy power-rail `l=` slot is migrated into `node_text` on load** (the rail's voltage name now renders from the `{…}` slot; other options in the bracket are preserved). New documents declare 0.6.
+- **0.7** — adds the document **`symbol_style`** map to `config` (per-family symbol style: american/european resistors, cute/american/european inductors — §5.4). A 0.6 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.6 files load unchanged — an absent `symbol_style` defaults to empty (all american). New documents declare 0.7.
+- **0.8** — adds a per-component **`node_side`** (a single-terminal node's placement keyword left/right/above/below — the user-set inversion-bubble side, §5.4). A 0.7 build would silently strip it on save, so the bump makes it refuse the newer file. 0.1–0.7 files load unchanged — an absent `node_side` defaults to empty (centred).
+- **0.9** — adds three document **`config`** fields: **`mark_unconnected_pins`** and **`line_hops`** (the display options moved out of app Preferences, §10.3) and **`diode_scale`** (the CircuiTikZ `diodes/scale` body size, §5). A 0.8 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.8 files load unchanged — defaults: marks off, line-hops on, diode scale 0.8. New documents declare 0.9.
+- **0.10** — adds two document **`config`** fields: **`mark_open_ends`** (draw `ocirc` terminals at dangling wire ends) and **`mark_junctions`** (draw `circ` dots at wire junctions), both default **on** (§6.4/§10.3). A 0.9 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.9 files load unchanged — both default on, preserving the prior always-draw behaviour. New documents declare 0.10.
 
 ### 9.5 Bundled Examples
 
@@ -2053,7 +2142,26 @@ enforces this — it loads every bundled example and asserts each declares
 
 The **palette spans the full window height** on the left; the canvas + properties
 and, beneath them, the source/preview strip occupy the region to its right (so the
-source and preview no longer run underneath the palette).
+source and preview no longer run underneath the palette). A slim **wiring quick-bar**
+(`palette.WiringQuickBar`) is docked to the **right edge of the canvas** — a vertical
+strip of icon tiles for the most common wiring gestures, a single click from the
+canvas. Top to bottom: the two **wire routing-mode** tiles — **Manhattan** (a
+stepped-line glyph, 90°) and **La Plata** (a 45° step glyph) — a **mutually-exclusive**
+pair (a `QButtonGroup`) whose **checked** tile marks the active routing style (§6.4);
+clicking either sets the scene's style (`set_wire_routing`) and enters Wire mode (like
+the left tool ribbon / `W`). Then the **current** and **voltage**
+annotations — `short` and `open`, drawn with italic *i* / *v* letter glyphs (the same
+i/v mnemonics as their placement keys) and starting placement on click — then, below a
+divider, the **Terminals** connection markers (filled/open dots `circ`/`ocirc`, diamond
+and square poles), which also start placement on click. The routing-mode + i/v tools are
+always present; the markers are sourced by category (`WIRING_CATEGORY = "Terminals"`),
+so that group tracks the library and is empty where there are none. The wire glyphs and
+the i/v letters are hand-drawn pixmaps (`_wire_quick_pixmap`, `_laplata_quick_pixmap`,
+`_letter_pixmap`), not component thumbnails, so the bar reads as tools rather than
+symbols. The bar owns the routing selection and pushes it to each scene it is bound to
+(`set_scene`), so the active mode survives a document switch. These markers *are*
+the connection point, so the canvas suppresses their red pin indicator
+(`items._NO_PIN_MARKER_CATEGORIES`); the pin still exists for wiring/snapping.
 
 **Visual language.** A single flat theme unifies the chrome with the component
 palette, defined as colour tokens + stylesheet fragments in `app/ui/theme.py`
@@ -2158,21 +2266,43 @@ matter how far the categories are scrolled. The sections are
   above it; height capped at `_IN_USE_MAX_H` ≈ three tile rows, scrolling within
   itself past that). Rebuilt on `schematic_changed`; the whole bottom panel is
   hidden when the document is empty (or while a search is active).
-- **Categories** — a **3-column grid** of cards (the split gate groups use the
-  compact names "Gates (Am)" / "Gates (Eu)" so they fit). `_CATEGORY_ORDER` is
-  written row-by-row to match the grid (`_build_categories` fills it
-  left-to-right), so the cards read: Resistors | Inductors | Capacitors, then
-  Diodes | Transistors | Switches, and so on. Each card shows the
-  **actual symbol of a representative component** for that category (`_CATEGORY_REP` → rendered by
+- **CircuiTikZ** / **TikZ** — the category cards, split into **two** collapsible
+  sections: **CircuiTikZ** (header "CIRCUITIKZ") holds every CircuiTikZ component
+  category, **TikZ** holds our own vanilla-TikZ drawing-primitive categories (the
+  **Drawing** group — rectangle, circle, text — `_VANILLA_CATEGORIES`; future custom
+  drawing categories are added there). Both sections share one selection model: a
+  card in either makes its category the single **active** one. The TikZ section is
+  hidden when it has no categories. Each is a **3-column grid** of cards, filled
+  left-to-right by `_build_category_grid`. Each card shows the
+  **actual symbol of a representative component** for that category (`_category_rep` → rendered by
   `_category_pixmap`, so the icons always match the components rather than using a
   decorative stand-in) and the category name. Clicking a card makes
-  it the **active** category (highlighted); category order follows §5.4. The
-  palette refines the raw registry `category` via `_palette_category`: the raw
-  **Logic** category splits into the boolean **Gates (Am)** / **Gates (Eu)** (by
-  symbol style) and a **Logic** blocks group (flip-flops, mux/demux, ALU, adder),
-  and the supply rails + batteries (`_SUPPLY_KINDS`) split out of **Sources** into
-  a **Supplies** group (a palette-only grouping; the model `category` is unchanged).
-- **&lt;active category&gt;** — the components in the active category.
+  it the **active** category (highlighted). The card order follows the **manual's
+  own section sequence** (`list(_CATEGORY_DOC)`, authored in manual order — the
+  registry/`definitions.json` order is not the manual order), with the bespoke
+  **Drawing** category (no manual section) falling after; the
+  default-open category is the first **CircuiTikZ** one. The palette shows the
+  registry `category` **as-is** — it does not split the Logic or Sources categories
+  (there is no engineer-facing remap and no separate Gates/Supplies groups).
+- **&lt;active category&gt;** — the components in the active category. Its header
+  shows the category's **full manual section name** (e.g. "RESISTIVE BIPOLES" for
+  the **Resistors** card — the cards keep the short tag to fit the grid, the open
+  category has room for the long name), falling back to the short name where there
+  is no manual section. Section titles are **word-wrapping labels**
+  (`_CollapsibleSection` uses an arrow toggle beside a wrapping `_ClickableLabel`,
+  the arrow and link top-aligned), so a long name wraps to multiple lines within
+  the palette pane instead of clipping; clicking the title still collapses the
+  section. When the category maps to a CircuiTikZ manual section, a
+  small **documentation-link** button (an "external link" glyph,
+  `palette._doc_link_icon`) appears next to the section title; clicking it opens
+  that section of the online manual
+  (`palette._MANUAL_BASE_URL` — the "The components: list" page — plus the
+  section's `#sec:…` fragment anchor) in the browser via `QDesktopServices`. The
+  button's tooltip is the **full manual section name** (e.g. "Resistive bipoles"
+  for the short **Resistors** card). The mapping (`palette._CATEGORY_DOC`, keyed by
+  category) covers the library's manual sections; the bespoke **Drawing** category (no manual
+  section) shows no link. The `#sec:…` anchors are the manual's own LaTeX labels
+  (stable across builds), kept in one place for easy refresh.
 
 Components are **icon-only tiles**: a thumbnail rendered from the component's own
 `ComponentItem` (`_THUMB_SIZE`=48 in a `_TILE_SIZE`=64 tile, `_ITEM_COLS`=4 columns —
@@ -2225,7 +2355,7 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 - Selecting a single **wire** shows the wire inspector instead of the component sections (header "Wire").
 - **Multi-select bulk edit.** When **several components** are selected (no wires), the panel binds editor sections that load values from the first component; **editing any field applies it to every selected component as one undo step**. The bind is via `InspectorSection.bind_multi`, and each write goes through `InspectorSection._apply`, which wraps the per-component commands in `scene.batch()` (one `MacroCommand`, §6). Two cases:
   - **Same kind** — every section that applies to the kind is shown (header `N × <name>`), so the full per-kind editor is available across the selection.
-  - **Mixed kinds** (e.g. a resistor + a capacitor) — only the *shared*, kind-independent capability sections are shown (header `N items selected (M types — shared properties)`), and only those that apply to **every** selected component. A section is eligible iff its `multi_kind_safe` class flag is set: `FontSection`, `FillBorderSection`, `StrokeWidthSection`, `TransformSection`, `LayerSection`. Kind-specific sections (`OptionsSection`, `NodeTextSection`, `TextContentSection`, `BipoleLabelSection`, `VariantSection`, `ParamSection`) stay `multi_kind_safe = False` because their value (a free-text options/node-text/label string, or a kind-structural variant/param) has a different meaning per kind, so they bind only when the whole selection shares one kind.
+  - **Mixed kinds** (e.g. a resistor + a capacitor) — only the *shared*, kind-independent capability sections are shown (header `N items selected (M types — shared properties)`), and only those that apply to **every** selected component. A section is eligible iff its `multi_kind_safe` class flag is set: `FontSection`, `FillBorderSection`, `StrokeWidthSection`, `TransformSection`, `LayerSection`. Kind-specific sections (`OptionsSection`, `NodeTextSection`, `NodePlacementSection`, `NodeSizeSection`, `TextContentSection`, `BipoleLabelSection`, `VariantSection`, `ParamSection`) stay `multi_kind_safe = False` because their value (a free-text options/node-text/label string, or a kind-structural variant/param) has a different meaning per kind, so they bind only when the whole selection shares one kind.
 
   A mixed selection that shares **no** eligible section (e.g. a path symbol whose stroke/rotation apply, plus a `rect` for which neither does), or any selection that includes wires, falls back to a count-only view (`show_multi_select`).
 
@@ -2235,6 +2365,8 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 |---------|-----------|----------|
 | `OptionsSection` | plain circuit (not `DrawingComponent`) | options field + slot hint; for a node-style kind the title/hint read **Node options** (it is the `node[…]` bracket only — the `{…}` text is in `NodeTextSection`) |
 | `NodeTextSection` | node-style kinds (`is_node_style` — single- and multi-terminal nodes) | **Node text** field (`node_text`, the `{…}` slot); `EditNodeTextCommand`. Also editable in place by double-clicking the node-text label on the canvas (§6.5) |
+| `NodePlacementSection` | single-terminal node kinds (`is_single_terminal_node`) | **Placement** dropdown (Center/Left/Right/Above/Below → `node_side`); `EditNodeSideCommand`. Emits the TikZ placement key in the `node[…]` bracket so the symbol (e.g. an inversion bubble) sits tangent on the chosen side |
+| `NodeSizeSection` | manual gates with CircuiTikZ body keys (`library.gate_size_keys`) | **Size**: numeric **Height**/**Width** fields (the `\ctikzset` key values = default × resize factor). Writes the `(wf, hf)` factors back via `ResizeNodeCommand` (`scene.set_node_resize_factors`) — the same factors a corner drag sets |
 | `TextContentSection` | `text_node`, `rect`, `circle` | text-content field (stored in `options`) |
 | `BipoleLabelSection` | `bipole` | `t=` label field + other-options field + hint |
 | `VariantSection` | any kind that declares variants in `definitions.json` | one checkbox per declared boolean variant (e.g. diode **Filled**, MOSFET **Body diode**, a transformer's four **polarity-dot** `dot` variants); auto-generated (uses the variant's `label` if present), `SetVariantCommand` |
@@ -2242,7 +2374,7 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 | `FontSection` | `FontedComponent` (text_node, rect, circle, bipole) | size / bold / italic / family |
 | `FillBorderSection` | `StyledComponent` (rect, circle, bipole) | line style, fill |
 | `StrokeWidthSection` | every drawable kind except `text_node` (symbols **and** blocks) | the unified stroke/outline width (`line_width`, pt); `SetComponentLineWidthCommand` |
-| `ScaleSection` | scalable kinds (`library.is_scalable` — logic gates **and** the digital blocks: flip-flops, mux/demux, ALU, adder) | **Size** dropdown (25 %–200 %; multiplies the symbol's baked alignment scale, pins at the true anchor) for `scale`; `SetComponentScaleCommand` (§5.4) |
+| `NodeSizeSection` | scalable kinds (`library.is_scalable` — logic gates **and** the digital blocks: flip-flops, mux/demux, ALU, adder) | **Size** Height/Width factors (for gates with CircuiTikZ body keys) or the uniform size factor; resizes the symbol about its origin, pins follow; `ResizeNodeCommand` / `SetComponentScaleCommand` (§5.4, §6.4) |
 | `TransformSection` | all but `rect`/`circle` (their rotation is a codegen no-op) | rotation buttons; mirror checkbox (circuit + bipole only) |
 | `LayerSection` | `DrawingComponent` (text_node, rect, circle, bipole) | move front/back buttons + z-order spinbox |
 
@@ -2333,7 +2465,7 @@ light/dark theme via `apply_theme`.
 | Select mode | `S` |
 | Wire mode | `W` |
 | Pan mode (persistent) | `P` |
-| Rotate selection / placement ghost 90° CW (§10.2) | `Ctrl+R` (⌘R on macOS) |
+| Rotate selection / placement ghost 45° CW — 90° when a wire is selected (§10.2) | `Ctrl+R` (⌘R on macOS) |
 | Place a component by its key — or swap the active ghost (configurable, §10.2) | `r`/`c`/`l`/`d`/`g`/`t`/`v`/`i`, … |
 | Focus palette search | `Ctrl+/` |
 | Cycle, while hovering: endpoint-label position (over a label) / endpoint marker (over any endpoint) / line style (over the body) | `Tab` / `Shift+Tab` |
@@ -2404,8 +2536,6 @@ Current settings:
 | Auto-export SVG on save | `export/auto_svg_on_save` | **off** | After a successful save, also write `<name>.svg` to the same directory. Off by default: SVG serves non-LaTeX destinations and is the only format needing a PDF→vector converter (pdftocairo or Inkscape, §8.6) — defaulting it on made converter-less saves fail the export with a status-bar notice on every save. A missing tool still fails this export non-fatally (status bar), never the save. |
 | Auto-export PNG on save | `export/auto_png_on_save` | **on** | After a successful save, also write `<name>.png` (rendered at the PNG-resolution preference) to the same directory. Needs pdflatex. |
 | PNG resolution | `export/png_dpi` | **300** | Dots-per-inch for **Copy PNG** and **PNG export / auto-export** (300 dpi is publication grade). A spin box (72–1200) in the Auto-export group. The accessor **clamps the stored value to 72–1200 on read**, so a corrupt or hand-edited settings file cannot drive a pathological render size. |
-| Mark unconnected component pins | `display/mark_unconnected_pins` | off | Draw an open circle at every component pin with no wire attached — on the **canvas**, and as `\node[ocirc]` in the preview, source panel, and exports (§7.6). |
-| Draw line-hops | `display/line_hops` | **on** | Draw a hop where the higher-`z_order` wire crosses another without connecting (§6.4) — on the **canvas** as an arc, and as a CircuiTikZ `jump crossing` node in the preview, source panel, and exports (§7.6). |
 | Force built-in (ziamath) renderer | `render/force_ziamath` | off | Typeset on-canvas equation labels with the bundled pure-Python ziamath engine even when system LaTeX is present (§8.4). A debug aid; ziamath is used automatically anyway when LaTeX is absent. Toggling re-typesets existing labels (`retypeset_labels`). |
 | Tool paths | `tools/pdflatex`, `tools/latex`, `tools/dvisvgm`, `tools/pdftocairo`, `tools/inkscape` | empty (auto-detect) | Explicit path to each external tool (§8.7). Blank = discover on `PATH`. A **Tools** group in the dialog provides a field + **Browse…** per tool with live status (found-on-PATH / will-use-this-path / not-found). Applied via `tools.set_tool_paths()` on accept, then the dependency check, label re-typeset, and recompile re-run. |
 | Component placement shortcuts | `keybindings/component_shortcuts` | `DEFAULT_COMPONENT_SHORTCUTS` (`r`/`c`/`l`/`d`/`g`/`t`/`v`/`i`) | The key → component-kind placement map (§10.2), edited in the **Shortcuts** tab and stored as JSON. Sanitised on read/write (reserved `s`/`w`/`p`, non-letter keys, and unknown kinds dropped). Applied to the canvas via `SchematicView.set_placement_shortcuts` at startup and on accept. |
@@ -2434,23 +2564,37 @@ one finishes — rapid saves coalesce instead of piling up compiles.
 
 ### 10.9 Document properties (inspector "Document" tab)
 
-The **Document** tab of the inspector (§10.3, `DocumentPropertiesPanel`) edits the
-*per-document* CircuiTikZ conventions — the **voltage** and **current** label
-styles (american / european, §7.2) — as opposed to the app-wide Preferences
-(§10.8). It also exposes the **LaTeX preamble settings** (§7.2): an **SI units
-(siunitx)** checkbox and a free-form **custom preamble** editor (committed when
-the editor loses focus). It **replaced the former modal Edit ▸ Document Settings…
-dialog**. Edits apply **live and are undoable**: changing a combo, the checkbox,
-or the preamble text pushes a `SetDocumentPropertiesCommand` (§6.6) — which
-carries the optional `siunitx`/`preamble` old/new values alongside the styles —
-onto the scene's undo stack and emits
+The **Document** tab of the inspector (§10.3, `DocumentPropertiesPanel`) holds the
+*per-document* settings (stored in the `.hv` `config`, §9.2, so they travel with the
+file rather than the application). It carries **no help text** — the controls are
+self-explanatory. Sections:
+
+- **CircuiTikZ conventions** — the **voltage** and **current** label styles
+  (american / european, §7.2) and the **diode scale** spinbox (`diode_scale`, §5;
+  the `\ctikzset{diodes/scale=…}` body size, new-document default 0.6).
+- **Symbol style** — the resistor/inductor family switches (§5.4).
+- **Display** — **Mark unconnected pins**, **Draw line-hops**, **Mark open wire ends**,
+  and **Draw junction dots** checkboxes. The first two **moved here from app Preferences**
+  (they affect the figure and belong with it). **Mark open wire ends**
+  (`Schematic.mark_open_ends`, default **on**) toggles the `ocirc` open-circle terminals
+  auto-drawn at dangling wire ends, and **Draw junction dots** (`Schematic.mark_junctions`,
+  default **on**) toggles the solid `circ` dots auto-drawn where wires/pins are tied
+  (§6.4) — turning either off suppresses that whole class of automatic dots document-wide
+  (per-wire `no_termination_dots` / `no_junction_dots` opt-outs remain independent). The
+  scene renders all four straight off the `Schematic` fields, and `generate()` / the
+  source panel read the same fields, so canvas and export agree.
+- **LaTeX preamble** — an **SI units (siunitx)** checkbox and a free-form **custom
+  preamble** editor (committed when the editor loses focus).
+
+It **replaced the former modal Edit ▸ Document Settings… dialog**. Edits apply **live
+and are undoable**: any control pushes a single `SetDocumentPropertiesCommand` (§6.6)
+— carrying old/new values for the styles, `siunitx`/`preamble`, the symbol style, the
+two display options, and `diode_scale` — onto the scene's undo stack (so `_push` /
+undo / redo each `_rebuild_items()`, refreshing markers/hops/diode rendering) and emits
 `DocumentPropertiesPanel.document_changed`, which the main window
-(`_on_document_props_changed`) turns into `SchematicScene.relayout_annotations()`
-(re-place the on-canvas ± signs / arrows for the new style) + `schematic_changed`
-(mark modified, refresh the source panel and preview — the styles flow into
-`generate()`). The panel reloads its combos from the document via `refresh()` on
-New / Open / Open-Example. The settings persist in the `.hv` `config` object
-(§9.2), so they travel with the document rather than the application.
+(`_on_document_props_changed`) turns into `SchematicScene.relayout_annotations()` +
+a repaint. The panel reloads its controls from the document via `refresh()` on
+New / Open / Open-Example.
 
 ---
 
@@ -2472,9 +2616,10 @@ heaviside/
 │   ├── dmg_settings.py            # dmgbuild layout for the drag-to-Applications image
 │   └── heaviside.iss              # Inno Setup script for the Windows installer (§11.1)
 ├── components/
-│   ├── generate_components.py     # Batch renderer CLI (→ geometry.json + definitions.json)
-│   ├── geometry.json              # Generated symbol geometry (bundled runtime resource)
-│   └── definitions.json            # Generated per-component registry/codegen data + origin_svg
+│   ├── generate_library.py        # Manual-scraping batch renderer CLI (→ generated/{geometry,definitions}.json)
+│   └── generated/
+│       ├── geometry.json          # Generated symbol geometry (bundled runtime resource)
+│       └── definitions.json       # Generated per-component registry/codegen data + origin_svg
 ├── examples/                      # Bundled example .hv schematics in category sub-folders (File → Open Example, §9.5)
 ├── app/
 │   ├── resources.py               # resource_path(): frozen-safe bundled-file resolution
@@ -2496,11 +2641,11 @@ heaviside/
 │   ├── components/
 │   │   ├── model.py               # ComponentDef, PinDef, Component (+ variants) dataclasses
 │   │   ├── registry.py            # REGISTRY: bespoke literals + library-derived kinds
-│   │   ├── library.py             # loads components/definitions.json → ComponentDefs,
+│   │   ├── library.py             # loads components/generated/definitions.json → ComponentDefs,
 │   │   │                          #   codegen tables, origin_svg, variant helpers
 │   │   ├── render.py              # render a symbol + measure pin anchors (latex/dvisvgm)
-│   │   └── generate.py            # Qt-free render/save/alignment/validation core
-│   │                              #   (spec/component-pipeline.md; drives the batch generator)
+│   │   └── generate.py            # Qt-free shared render/measure/alignment helpers
+│   │                              #   (spec/component-pipeline.md; used by generate_library.py)
 │   ├── schematic/
 │   │   ├── model.py               # Component, Wire, Schematic dataclasses + geometry helpers
 │   │   │                          #   (simplify_points, component_pin_positions,
@@ -2586,6 +2731,13 @@ has it, so the no-LaTeX experience — the preview's "LaTeX not found" notice
 developer aid, not part of the file-association path; `_schematic_arg` ignores it
 (it is not a `.hv` path).
 
+**Component library.** There is a single component library, generated from the
+CircuiTikZ manual by `components/generate_library.py` and living in
+`components/generated/`. Plain `python main.py` loads it
+(`app.resources.component_lib_dir()` always returns that directory); there is no
+library-selection flag or environment variable. The registry is built from this
+library at import time (§5.1).
+
 **Release artifacts.** Each platform ships its conventional installer in addition
 to a portable archive, all assembled by `scripts/` helpers and the release
 workflow (mechanics in `docs/releasing.md`): Windows — an Inno Setup
@@ -2601,8 +2753,8 @@ README's light-theme view is the demo GIF hero), regenerated on each version tag
 its `SHOTS` manifest is the single source tested in `test_screenshots.py`.
 
 **Runtime resources.** Four resources are read at runtime and must be bundled:
-`assets/icon.png`, `components/geometry.json` (symbol geometry),
-`components/definitions.json` (per-component registry/codegen data + the
+`assets/icon.png`, `components/generated/geometry.json` (symbol geometry),
+`components/generated/definitions.json` (per-component registry/codegen data + the
 `origin_svg` placement constant — read by `app/components/library.py`), and
 `pyproject.toml` (the runtime version source — `app/version.py` reads it via
 `resource_path`. PyInstaller does not bundle the package's dist-info metadata, so
@@ -2821,7 +2973,7 @@ Tests are organized into three tiers: **unit tests** covering pure logic with no
 
 All unit tests live in `tests/` and are run with `pytest`. They must pass with no network access, no display server, and no LaTeX installation.
 
-**Slow tests (`--run-slow`).** A test marked `@pytest.mark.slow` is **skipped by default** and runs only with `pytest --run-slow` (see `tests/conftest.py`). The one slow test is `test_render_store_reproduces_committed_files`, which re-renders every symbol through `latex`/`dvisvgm` (~3 min) to verify the committed `components/*.json` are reproducible. It is a **local/manual** check, **not run in CI**: it needs the TeX toolchain (which CI does not install) *and* the exact CircuiTikZ version the committed files were rendered with, so running it in CI would be both slow and version-fragile. Run it locally after regenerating components (`python components/generate_components.py`).
+**Slow tests (`--run-slow`).** A test marked `@pytest.mark.slow` is **skipped by default** and runs only with `pytest --run-slow` (see `tests/conftest.py`). There are currently no slow tests: the former curated-library reproduction check (`test_render_store_reproduces_committed_files`, which re-rendered every symbol through `latex`/`dvisvgm` to verify the committed curated `components/*.json`) was removed along with the curated library and its batch-store I/O. The library is now generated by `components/generate_library.py`, which owns its own write path.
 
 **Render-pool drain (autouse).** `tests/conftest.py` defines an autouse fixture that, after each test, waits for the async label-render `QThreadPool` (`mathrender._pool`) to finish and flushes the queued results. The cross-thread render segfault itself is fixed in `mathrender` (workers emit only SVG; the UI thread builds the `QPainterPath` — §5.8); this fixture is **hygiene** on top of that: it keeps a worker's queued result from being delivered across a test boundary during pytest-qt teardown and silences "QThread destroyed while running" noise. It mirrors the app's own `aboutToQuit` pool drain and is a no-op when the pool was never used.
 
@@ -2835,7 +2987,7 @@ drift out of date). Read the named file in `tests/` for the exact assertions.
 Covers the data-model dataclasses, the mixin composition that defines which
 components carry font/style/drawing capabilities (guarding the base-ordering that
 dataclass field inheritance is sensitive to), and the `validate()` invariants:
-known `kind`, allowed rotations (90° multiples), positions and wire vertices on
+known `kind`, allowed rotations (45° multiples), positions and wire vertices on
 the 0.25 GU grid, Manhattan-only wire segments, and unique component ids. Also
 covers the block-diagram connection-point helpers — `rect_perimeter_points`,
 `circle_connection_points`, and `component_connection_points` — and how a wire
@@ -2866,8 +3018,8 @@ their pins — fails CI immediately. (The Qt-dependent checks run offscreen.)
 #### Code Generation (`test_codegen.py`)
 
 The largest unit file: verifies the `Schematic → CircuiTikZ` mapping end to end —
-the `to[…]`/`node[…]` syntax and computed scale/lead alignment per kind, the
-document voltage/current styles, `generate()` determinism, coordinate formatting
+the `to[…]`/`node[…]` syntax (centre-placed, true-size nodes; named-anchor pin
+references), the document voltage/current styles, `generate()` determinism, coordinate formatting
 and origin normalisation (§7.3), the Y-flip convention, junction/open-endpoint
 emission with every suppression rule, wire styling and z-layering (shared vs.
 standalone `\draw`, background/foreground ordering, named-anchor-vs-absolute
@@ -2878,15 +3030,24 @@ markers/labels and their Y-flip-aware anchoring, drawing annotations,
 and the `build_tex`/`build_snippet`/EPS/SVG helpers. The **brace-balancing
 containment** security rule (§7.2) is pinned at each emission site, along with
 generation-time degenerate-wire rejection and the dark-preview template colours.
-The **node-style `{…}` text** (`node_text`, §5.4) is pinned: it is emitted inline in
-the node's own `{…}` (`node[npn] (id) {$Q_1$}`) for both multi- and single-terminal
-nodes, a single-terminal node also renders its options in the `node[…]` bracket (no
-`label=right:` legacy hack), a path-style `to[…]` component ignores `node_text`, and
-the slot text is brace-balanced. The **source-matches-render invariant** is pinned by
+The **node-style `{…}` text** (`node_text`, §5.4) is pinned: it is emitted in the
+node's own `{…}` for both multi-terminal (`node[npn] (id) {$Q_1$}`, in the shared
+`\draw`) and single-terminal nodes (the standalone `\node[vcc] at (x,y) {$V_{cc}$};`,
+`test_single_terminal_node_uses_standalone_node_at_syntax`); a single-terminal node
+also renders its options in the `node[…]` bracket (no `label=right:` legacy hack), a
+path-style `to[…]` component ignores `node_text`, and the slot text is brace-balanced. The **source-matches-render invariant** is pinned by
 `test_node_text_always_present_in_source` (node text appears in the generated source
 for every node-style kind) and, at the panel level, by `test_source_panel_shows_node_text`
 and `test_source_panel_soft_wraps` in `test_sourcepanel.py` (the source view soft-wraps
-so chained node text is never scrolled off-screen).
+so chained node text is never scrolled off-screen). **Off-axis / extra-anchor pins** (§5.4) are
+pinned: the thyristor/triac gate, the potentiometer (`pR`/`vR`) wiper, and the inductor
+`midtap` centre tap coincide with their CircuiTikZ anchors at all eight rotation×mirror cases
+(`test_thyristor_gate_pin_coincides_with_circuitikz_anchor`,
+`test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor`,
+`test_inductor_midtap_pin_coincides_with_circuitikz_anchor` — connected by coordinate). The
+transformer primary/secondary centre taps are reached via **sub-node anchors**
+(`test_transformer_centre_taps_emit_subnode_anchor_refs`,
+`test_transformer_centre_tap_pin_coincides_with_circuitikz_anchor`).
 
 #### File I/O (`test_io.py`)
 
@@ -2909,9 +3070,10 @@ a `_FORMAT_VERSION` bump) is what they protect (see CLAUDE.md).
 
 Cross-checks registry integrity: every `kind` resolves to a `ComponentItem` —
 explicit `ITEM_CLASSES` entry or the generic fallback (`test_all_kinds_resolve_to_a_component_item`);
-`_DISPLAY_ORDER` is a preference, so an unlisted kind still appears
-(`test_display_order_is_a_preference_not_exhaustive`); every
-`PinDef.offset` lies on the 0.25 GU grid (`test_all_pins_on_quarter_grid`),
+every two-terminal path device's two **axial** terminals lie on the 0.25 GU grid
+(`test_two_terminal_axial_pins_on_quarter_grid` — the multi-terminal symbols keep
+their native off-grid anchors, reached by the magnet, so the old blanket every-pin
+grid invariant no longer holds);
 two-terminal `default_span` equals the terminal pin offset, no duplicate kinds,
 and that `circle` is registered like `rect` (Drawing category, no pins,
 resizable, `CircleComponent`).
@@ -2937,7 +3099,7 @@ The pure, Qt-scene-free helpers in `app/canvas/geometry.py` are unit-tested dire
 
 #### Commands (`test_commands.py`)
 
-The pure (Qt-free) command layer is unit-tested directly (undo/redo behaviour also exercised via §13.3). Coverage spans every command class — `MoveCommand` (wire-following: endpoint-follow, rigid translate, auto-elbow, re-stretch lead off a multi-wire junction, whole-wire move with junction taps), `Split`/`MergeWireCommand`, `MoveWireVertexCommand` (reshape/simplify, collapse-removes-wire), `DeleteCommand`, `MacroCommand` (composition and failure-unwinding), `MoveOptionsLabelCommand`, the `ResizeCommand`/`MoveEndpointCommand` span/position math, the `Set*` attribute setters, and `GroupRotateCommand` (centroid rotation, boundary-wire reshape, mirrored −90 step). The non-trivial invariants are the focus: exact undo, **decoration preservation** across split/merge/collapse with **verbatim restore at the original list index**, block-diagram rect-edge / circle-cardinal connections following move and anchored-scale resize, execution-time split-index resolution (clean no-op when bundled reshapes move the point), `point_key` float-noise tolerance (§4.5), and the `UndoStack` save-point / `record()` semantics.
+The pure (Qt-free) command layer is unit-tested directly (undo/redo behaviour also exercised via §13.3). Coverage spans every command class — `MoveCommand` (wire-following: endpoint-follow, rigid translate, auto-elbow, re-stretch lead off a multi-wire junction, whole-wire move with junction taps), `Split`/`MergeWireCommand`, `MoveWireVertexCommand` (reshape/simplify, collapse-removes-wire), `DeleteCommand`, `MacroCommand` (composition and failure-unwinding), `MoveOptionsLabelCommand`, the `ResizeCommand`/`MoveEndpointCommand` span/position math, the `Set*` attribute setters, and `GroupRotateCommand` (centroid rotation, boundary-wire reshape, mirrored −step; 90° and 45° steps). The **45° rotation** (components orient in 45° increments, §6.x) is pinned in `test_model.py` (`test_component_45_degree_rotation_is_valid`, `test_rotate_vector_right_angles_are_exact`/`…_45_uses_trig`, `test_component_pin_positions_at_45`), `test_codegen.test_bipole_at_45_emits_diagonal_endpoints`, `test_scene.py` (`test_rotate_action_steps_45_for_component_only_selection`, `test_rotate_action_steps_90_when_a_wire_is_selected`), and the inspector control `test_properties.test_transform_section_offers_45_degree_rotations` (all eight 45° buttons; a diagonal button rotates undoably). The non-trivial invariants are the focus: exact undo, **decoration preservation** across split/merge/collapse with **verbatim restore at the original list index**, block-diagram rect-edge / circle-cardinal connections following move and anchored-scale resize, execution-time split-index resolution (clean no-op when bundled reshapes move the point), `point_key` float-noise tolerance (§4.5), and the `UndoStack` save-point / `record()` semantics.
 
 #### Preview Worker (`test_worker.py`)
 
@@ -2994,10 +3156,9 @@ a snippet); and a blank preamble is a no-op.
 The `Preferences` wrapper and `PreferencesDialog` (§10.8), exercised against an
 isolated `QSettings` backed by a temp INI file (never touching the real user
 store): **TeX/PDF/PNG auto-export default on and EPS/SVG off**
-(`test_export_defaults` — the defaults need no converter: TeX needs nothing, PDF/PNG only pdflatex),
-mark-unconnected-pins defaults off, **line-hops
-defaults on** (`test_line_hops_default_on_and_roundtrip`); TeX/PDF/EPS/SVG/PNG, the
-`force_ziamath` render flag, and the display flags round-trip and persist across
+(`test_export_defaults` — the defaults need no converter: TeX needs nothing, PDF/PNG only pdflatex);
+TeX/PDF/EPS/SVG/PNG and the
+`force_ziamath` render flag round-trip and persist across
 new `Preferences` instances over the
 same backing file; `_to_bool` normalizes the string booleans `QSettings` may
 return; the **per-tool path** accessors default to empty and round-trip (trimmed);
@@ -3111,7 +3272,7 @@ Integration tests run against `SchematicScene` / `SchematicView` (file `test_sce
 
 These exercise the full editor on a live scene: component placement, move, delete, and label editing each updating the model and being undoable (including a 20-deep undo/redo stack returning to the empty state), 0.25 GU snapping (including mid-drag, not just on release), and that items are movable only in SELECT mode. They cover the wiring state machine end to end — the in-progress wire ghost and its cursor-tracking snap markers, dominant-axis corner routing, the auto-enter/auto-exit transitions between SELECT and WIRE mode, intermediate-anchor drops, and the various double-click behaviors (entering WIRE mode from blank canvas or a wire body, the Alt+double-click mid-label editor, and per-end label editors on free and connected endpoints). Vertex and junction dragging is covered: reshaping stays Manhattan and simplified in the live preview, connected endpoints drag off their pin to disconnect, junctions drag all coincident wires together while preserving each wire's orientation into the junction, with the drag highlight/affordance items. The Tab-cycle family is covered per target (endpoint-label placement, endpoint markers, and body/interior line style, each with correct priority and wrap/reverse), as are new-wire style inheritance, block-diagram rect-edge and circle-cardinal connection dots and auto-start, open-circle and unconnected-pin item tracking, the canvas line-hop bumps (population, toggling, z-order/`hop_mode` hopper selection, and live preview during draw/drag), combined wire+component z-ordering (`bring_to_front`/`send_to_back` with a z=0 baseline, undoable) — now spanning **every** component, including plain circuit symbols (their canvas z-value tracks the model), reached through the **right-click context menu** (target resolution against the selection, front/back as one undoable batch preserving relative order, the swallowed right-button press) as well as the inspector buttons; the context menu's **Cut/Copy/Paste** (§6.7) is covered too — cut copies-then-deletes in one undoable step, paste-at-cursor anchors the group's top-left at the click while the keyboard paste keeps its fixed 1 GU offset, both no-op on an empty selection/clipboard, and an empty-space right-click still raises the menu; plus the thin-band wire hit area, and split-on-join / merge-on-delete connectivity (mid-segment and L-corner splits as single undoable actions). Two regressions are pinned as memory-safety guards for the §6.8 graphics-item-lifetime invariant: `test_no_index_method` / `test_group_rotate_then_delete_then_paint_does_not_crash` (the scene uses `QGraphicsScene.NoIndex` so a freed coordinate-keyed dot cannot leave a dangling BSP-index pointer) and `test_random_mutation_sequences_never_crash_paint` (randomized place/wire/rotate/delete/undo/redo sequences painting through a real view after every step). The **`scene.batch()`** grouping is covered: several edits inside a batch collapse into one MacroCommand (a single undo reverts them all), and a one-command batch is pushed directly. The **slot labels & annotation decorations** (§5.8) are covered: per-side slot labels appear/hide with the options string and land on the correct (traversal-relative) sides under rotation, with the voltage-source default-`v` flip and same-side stacking; a `v=` slot draws the american ± signs by default and the european arrow when the document `voltage_style` is european (updating live via `relayout_annotations`), an `i=` slot draws a current arrow, a plain `l=` and the centred `open` annotation draw none, and the decoration axis follows the on-screen traversal direction (vertical on a 90°-rotated body). The **dotted-grid** background paints onto a device-space painter without error. Newer scene regressions pin: off-grid-pin routing and vertex drags (the first jog stays on the pin's lead line, a dragged vertex lands on — or slides along the axis of — an off-grid pin, and the spot between two adjacent off-grid pins stays reachable); a drag does **not** resurrect a suppressed termination dot (the live preview honours the same junction/termination opt-outs as the committed render, `test_open_endpoints_overrides_match_committed`); wires follow a gate's pins when its scale or input count changes; whole-wire drags translate the wire with junction taps following; releasing a resize/endpoint handle without moving leaves no stale preview; and a line annotation is draggable from **either** endpoint — the origin handle (`open`/`short`/`bipole`, not boxes) holds the terminal fixed while moving the component (`MoveEndpointCommand`), a `short`'s origin press drags rather than auto-starting a wire, and connected wires follow the dragged origin. The **component placement shortcuts** (§10.2) are covered at the view: a mapped plain key (incl. `v`/`i` → the annotations) starts placement from the Select tool; pressing a key while a ghost is up (Place mode) **swaps** it to the new kind; plain `r` places a resistor rather than rotating (it no longer rotates — rotate moved to `Ctrl+R`); and the keys are inert in Wire mode. The **window-wide** delegation and the **`Ctrl+R` rotate** shortcut are covered in `test_mainwindow.py` (a key bubbling up to `MainWindow` still places; a Ctrl-chord and a focused text input are ignored; `_rotate_shortcut` is bound to `Ctrl+R` and rotates the selection; and the **Edit-menu Paste action** starts the cursor-follow paste (`begin_paste`) without crashing — the regression guard for [#33](https://github.com/whileman133/Heaviside/issues/33), where `QAction.triggered`'s `checked` bool reached `paste`'s `at` parameter). The **cursor-follow paste** itself (§6.7) is covered in `test_scene.py`: `begin_paste` spawns one ghost per clipboard component and defers the commit, a left-click commits the group's min-corner at the cursor (matching the ghost), and a right-click / Escape cancels with nothing pasted (empty clipboard is a no-op). The **mode cursor** (§6.1) is covered: the view shows a crosshair in Wire/Place mode, an open hand in Pan, the arrow in Select, and a transient `Space`-pan restores the crosshair on release.
 
-The **inspector** (`test_properties.py`) additionally covers **multi-select bulk edit**: `PropertiesPanel.show_components` over several same-kind components binds the sections (`bind_multi`) and an `OptionsSection` edit applies to all of them as one undo step; over a **mixed-kind** selection it binds only the shared `multi_kind_safe` sections — a resistor + capacitor edit a shared stroke-width and rotation as one undo step (`OptionsSection` suppressed), and a resistor + rectangle (a symbol + a block) edit the **unified** stroke/outline width together via the single `StrokeWidthSection` while the symbol-only options and block-only fill are suppressed. **Logic-gate size** is covered by `test_scale_section_applies_to_gates_only_and_is_undoable` (the `ScaleSection` shows for gates only and pushes an undoable `SetComponentScaleCommand`), with the geometry/codegen side tested elsewhere: true-scaled-anchor pins and the full-size (1.0) placement default (`test_logic_gate_placed_full_size_pins_on_grid`, `test_set_component_scale_is_undoable`, and the placement-ghost default scale `test_placement_ghost_uses_default_scale` in `test_scene.py`), the `scale` round-trip + back-compat (`test_component_scale_roundtrip` in `test_io.py`), the height/xscale sizing with **no lead stubs** even for even-input gates (`test_scaled_*` in `test_codegen.py`), and that a wire to a scaled gate's pin attaches at the true `(node.in k)` anchor (`test_wire_to_scaled_gate_pin_attaches_at_node_anchor`). The **off-grid pin magnet** is covered in `test_wiregeometry.py` (`test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor`, `test_unconnected_pin_at_grabs_offgrid_gate_pin`), the **validation relaxation** in `test_model.py` (`test_wire_endpoint_on_offgrid_gate_pin_is_valid`, `test_wire_offgrid_vertex_not_on_a_pin_is_invalid`, `test_wire_corner_aligned_with_offgrid_pin_is_valid`), and the **on-grid corner routing** in `test_scene.py` (`test_route_to_offgrid_pin_keeps_corner_on_grid`). **Multi-wire bulk edit** is covered by `test_multi_wire_select_edits_all_as_one_undo_step` (`show_wires` over several wires binds them and a line-width or marker edit applies to all as one undo step). The **node-text inspector** (§10.3) is covered in `test_properties.py`: `NodeTextSection` binds for node-style kinds (npn, vcc) and not for path-style (R) or drawing annotations; editing the field commits `node_text` via an undoable `EditNodeTextCommand`; and `OptionsSection` relabels its title to **Node options** for a node-style kind (and back to **CircuiTikZ options** for a path-style one). The on-canvas `{…}` label is covered in `test_scene.py` (`test_node_text_renders_on_canvas_for_node_style`: the label appears when node_text is set and hides when cleared; `test_node_text_anchor_uses_measured_offset`: it is west-anchored at the origin + the measured per-kind `text_anchor`, with the measured offsets themselves pinned by `test_node_text_anchor_measured_per_kind` in `test_components_library.py`), as is its **in-place editor** (`test_node_text_inline_editor_commits_separately_from_options` — the node-text editor commits to `node_text` verbatim, independent of the options editor — and `test_node_text_editor_cancel_keeps_value`) and the **double-click behaviour** (`test_double_click_node_edits_node_text_not_options`: a node-style component always edits its node text on the canvas, even with options set) and that **node options are not shown on the canvas** (`test_node_style_options_show_no_slot_labels`: a node-style component renders no option slot labels, while a path-style one still does). The **source-matches-render invariant** is pinned in `test_codegen.py` (`test_node_text_always_present_in_source`, parametrized over node-style kinds). The round-trip + legacy power-rail `l=`→`node_text` migration is in `test_io.py`. The inspector's **edit-loss guards** (§10.3) are pinned in `test_properties.py`: unbinding a section (or calling the panel-level `flush_pending_edits`) commits a pending debounced edit instead of dropping it; a programmatic reload does not clobber a focused field; a bipole `t=` label whose math contains commas (`$f(a,b)$`) survives extraction and round-trips; combo loads preserve hand-authored fill/line-style values that match no preset; and a Document-tab style change is undoable (`test_document_panel_change_is_undoable`).
+The **inspector** (`test_properties.py`) additionally covers **multi-select bulk edit**: `PropertiesPanel.show_components` over several same-kind components binds the sections (`bind_multi`) and an `OptionsSection` edit applies to all of them as one undo step; over a **mixed-kind** selection it binds only the shared `multi_kind_safe` sections — a resistor + capacitor edit a shared stroke-width and rotation as one undo step (`OptionsSection` suppressed), and a resistor + rectangle (a symbol + a block) edit the **unified** stroke/outline width together via the single `StrokeWidthSection` while the symbol-only options and block-only fill are suppressed. **Logic-gate size** is covered by the `NodeSizeSection` Height/Width tests (`test_node_size_section_edits_height_width_as_factors` / `…_hidden_without_size_keys`, see the gate body-size keys below), with the geometry/codegen side tested elsewhere: the full-size placement default (`test_logic_gate_placed_full_size` and the placement-ghost default scale `test_placement_ghost_uses_default_scale` in `test_scene.py`), the `scale` round-trip + back-compat (`test_component_scale_roundtrip` in `test_io.py`, `test_set_component_scale_is_undoable` in `test_scene.py`), and the body-size-key sizing with **no lead stubs** even for even-input gates (`test_scaled_gate_scales_via_body_size_keys_no_leads` in `test_codegen.py`). The **off-grid pin magnet** is covered in `test_wiregeometry.py` (`test_wire_snap_target_grabs_offgrid_gate_pin_via_raw_cursor`, `test_unconnected_pin_at_grabs_offgrid_gate_pin`), the **validation relaxation** in `test_model.py` (`test_wire_endpoint_on_offgrid_gate_pin_is_valid`, `test_wire_offgrid_vertex_not_on_a_pin_is_invalid`, `test_wire_corner_aligned_with_offgrid_pin_is_valid`), and the **on-grid corner routing** in `test_scene.py` (`test_route_offgrid_pin_extends_along_pin_lead_then_elbows`). The **pin-axis alignment** (a wire end snapping off-grid because it is collinear with any pin, plus the alignment guide, §3.1) is covered in `test_scene.py` by `test_all_offgrid_pin_axes_collects_every_pin` (every component pin's off-grid x/y becomes a snap line), `test_resolve_wire_end_aligns_to_foreign_pin_axis` (an end aligns to a pin it does not connect to and reports a guide), `test_resolve_wire_end_on_grid_reports_no_guide`, and the end-to-end `test_drawing_wire_snaps_endpoint_to_pin_axis_and_shows_guide` (the previewed end carries the pin column and a guide appears, then clears when the cursor leaves every pin axis). **La Plata (45°) routing** (§6.4) is covered in `test_model.py` (`test_route_diagonal_*` for the primitive's axis-run / pure-diagonal / diagonal-first-elbow / sign cases and on-grid corner validity, `test_route_pin_aware_laplata_uses_diagonal_between_grid_points`, and the **off-grid pin** routing `test_route_pin_aware_laplata_off_one_axis_offgrid_pin` / `…_off_both_axes_offgrid_pin` — the 45° leg comes straight off the pin, no jog), `test_validate`/`test_model` (`test_wire_45_degree_is_valid`, `test_wire_non_45_diagonal_is_invalid`, and the diagonal exemption `test_wire_corner_on_offgrid_pin_diagonal_is_valid` / `test_wire_offgrid_vertex_off_every_pin_line_is_invalid`), `test_scene.py` (`test_scene_route_uses_active_wire_routing`, `test_laplata_drawing_commits_a_45_degree_wire`, `test_laplata_draws_off_an_offgrid_pin`, `test_laplata_draws_off_a_45_degree_rotated_component`), `test_codegen.test_wire_laplata_diagonal` (a 45° leg emits as a plain `--` segment), and `test_palette.py` (`test_wiring_quickbar_routing_modes_are_exclusive_and_set_scene` — the two mode tiles are mutually exclusive, set the scene style, and enter Wire mode). **Multi-wire bulk edit** is covered by `test_multi_wire_select_edits_all_as_one_undo_step` (`show_wires` over several wires binds them and a line-width or marker edit applies to all as one undo step). The **node-text inspector** (§10.3) is covered in `test_properties.py`: `NodeTextSection` binds for node-style kinds (npn, vcc) and not for path-style (R) or drawing annotations; editing the field commits `node_text` via an undoable `EditNodeTextCommand`; and `OptionsSection` relabels its title to **Node options** for a node-style kind (and back to **CircuiTikZ options** for a path-style one). The **Placement** control (§10.3, single-terminal `node_side`) is covered by `test_node_placement_section_applies_only_to_single_terminal_nodes` (shows for ground/vcc, hidden for the multi-terminal npn, path-style R, and drawing kinds) and `test_node_placement_section_edits_node_side_undoably` (choosing a side commits `node_side` via an undoable `EditNodeSideCommand`); codegen emits the side keyword (`test_node_side_emits_placement_keyword`, `test_node_side_default_emits_no_keyword`) and it round-trips in `test_io.test_node_side_roundtrips_and_omitted_when_empty`. The **smart default** is covered by `test_model.test_gate_body_anchor_side_returns_outward_side` (the helper returns the outward side at a body anchor, "" elsewhere) and `test_scene.test_inversion_bubble_placement_gets_default_side_on_body_anchor` (placement seeds `node_side`); the **canvas offset** by `test_scene.test_node_side_offsets_canvas_symbol` (a node with a side draws shifted that way and its boundingRect grows). The **gate body-size keys** (§5.6) are covered by `test_generated_library.test_logic_gates_carry_ctikzset_size_keys` (american/european families bake `size_keys`; not/buffer/ieeestd don't), `test_codegen.test_gate_size_setting_emits_height_and_width` (a size-key gate emits `tripoles/<kw>/height=…, …/width=…` = default × factor, none at natural size or for a keyless kind), and `test_properties.test_node_size_section_edits_height_width_as_factors` / `…_hidden_without_size_keys` (the **Size** Height/Width fields show default × factor and write the `(wf, hf)` factors back undoably; hidden for keyless kinds). The on-canvas `{…}` label is covered in `test_scene.py` (`test_node_text_renders_on_canvas_for_node_style`: the label appears when node_text is set and hides when cleared; `test_node_text_anchor_uses_measured_offset`: it is west-anchored at the origin + the measured per-kind `text_anchor`, with the measured offsets themselves pinned by `test_node_text_anchor_measured_per_kind` in `test_components_library.py`), as is its **in-place editor** (`test_node_text_inline_editor_commits_separately_from_options` — the node-text editor commits to `node_text` verbatim, independent of the options editor — and `test_node_text_editor_cancel_keeps_value`) and the **double-click behaviour** (`test_double_click_node_edits_node_text_not_options`: a node-style component always edits its node text on the canvas, even with options set) and that **node options are not shown on the canvas** (`test_node_style_options_show_no_slot_labels`: a node-style component renders no option slot labels, while a path-style one still does). The **source-matches-render invariant** is pinned in `test_codegen.py` (`test_node_text_always_present_in_source`, parametrized over node-style kinds). The round-trip + legacy power-rail `l=`→`node_text` migration is in `test_io.py`. The inspector's **edit-loss guards** (§10.3) are pinned in `test_properties.py`: unbinding a section (or calling the panel-level `flush_pending_edits`) commits a pending debounced edit instead of dropping it; a programmatic reload does not clobber a focused field; a bipole `t=` label whose math contains commas (`$f(a,b)$`) survives extraction and round-trips; combo loads preserve hand-authored fill/line-style values that match no preset; and a Document-tab style change is undoable (`test_document_panel_change_is_undoable`). The **Document inspector's display options + diode scale** (§10.3) are covered in `test_properties.py`: `test_document_panel_display_and_diode_undoable` (the Mark-unconnected-pins / Draw-line-hops / **Mark-open-wire-ends** / **Draw-junction-dots** checkboxes and the Diode-scale spinbox push undoable `SetDocumentPropertiesCommand`s) and `test_document_panel_has_no_help_text` (the panel carries no `hintLabel`s); they round-trip in `test_io.test_display_and_diode_settings_roundtrip` and `test_io.test_mark_open_ends_and_junctions_roundtrip`, codegen reads the document's diode scale (`test_codegen.test_diode_scale_uses_document_value`), and the canvas reflects it (`test_scene.test_diode_body_scales_with_document_diode_scale`). The **open-end / junction toggles** suppress their dots in both the export (`test_codegen.test_mark_open_ends_off_suppresses_ocirc_nodes`, `…_test_mark_junctions_off_suppresses_circ_nodes`) and the canvas (`test_scene.test_set_mark_open_ends_toggles_ocircs`, `…_test_set_mark_junctions_toggles_dots`). **Which kinds count as diodes** (category-based, two-terminal) is pinned by `test_components_library.test_diode_kinds_golden` (a representative set of the library's `full`/`empty`/`stroke` diode kinds) and `…_test_diode_kinds_exclude_tripoles` (thyristor/triac stay out). The source panel mirrors the document's line-hops (`test_sourcepanel.test_source_panel_shows_line_hops_when_doc_on` / `…_omits_line_hops_when_doc_off`).
 
 ### 13.4 Acceptance Criteria
 
@@ -3236,7 +3397,7 @@ fallback. This is a "fast/offline mode," **not** a replacement for the LaTeX pat
 
 What already supports this (no new work):
 
-- **Symbols are already LaTeX-free at runtime.** `components/geometry.json` bakes
+- **Symbols are already LaTeX-free at runtime.** `components/generated/geometry.json` bakes
   each symbol's SVG path data at *build* time (the one-time generator needs
   `latex`+`dvisvgm`); the canvas renders it purely from that store via
   `app/canvas/svgsym.py` (§5.3). Wires, junction/open dots, and label *text

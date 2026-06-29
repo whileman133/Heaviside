@@ -57,45 +57,30 @@ def test_no_duplicate_kinds() -> None:
 # test_all_pins_on_quarter_grid
 # ---------------------------------------------------------------------------
 
-# Digital-block kinds whose native CircuiTikZ shape keeps *some* pins off the
-# grid even after the best-effort alignment rescale (a mux/demux's slanted select
-# pins; the ALU operands and the adder's pins). Those land off-grid by design and
-# connect via the pin magnet, like a scaled logic gate — so they are exempt from
-# the on-grid pin invariant below. (Flip-flops *do* align fully, so they are not
-# exempt — see test_flipflop_pins_are_grid_aligned.)
-_OFFGRID_PIN_KINDS = frozenset({
-    "mux", "demux", "ALU", "adder",
-    # Centre-placed shapes whose native anchors don't sit on the 0.25 grid; a wire
-    # connects via the pin magnet (like the digital blocks): the electron tubes and
-    # the fully-differential op-amp.
-    "triode", "diodetube", "pentode", "tetrode", "fd op amp",
-    # Thyristor/triac: the two axial terminals are on-grid, but the off-axis gate
-    # pin sits at the native CircuiTikZ gate anchor (off-grid, magnet-connected).
-    "thyristor", "triac",
-    # Centre-placed SPDT/rotary switches: the anisotropy cap forces a uniform
-    # scale (a non-uniform one would shear the blade, §4), so their asymmetric
-    # native throw anchors don't all land on the grid (magnet-connected).
-    "cute spdt up", "cute spdt down", "cute spdt mid", "rotaryswitch",
-    # Parametric logic gates are centre-placed (§4): the algorithm grids the
-    # (more numerous) inputs, leaving the single output off-grid at the scaled
-    # output anchor (magnet-connected). The base kind keyword carries no suffix.
-    "and", "or", "nand", "nor", "xor", "xnor",
-    "eand", "enand", "enor", "eor", "exnor", "exor",
-})
+def test_two_terminal_axial_pins_on_quarter_grid() -> None:
+    """Every two-terminal path device's two **axial** terminals lie on the 0.25 GU
+    grid (the canvas minor grid, SNAP_GU, spec §3.1), so a placed device connects
+    on-grid along its axis.
 
-
-def test_all_pins_on_quarter_grid() -> None:
-    """Every PinDef offset lies on a 0.25 GU boundary, except the digital-block
-    kinds whose pins sit at native-shape anchors (see ``_OFFGRID_PIN_KINDS``).
-
-    0.25 GU is the canvas minor grid (SNAP_GU, spec §3.1); pin offsets must be
-    multiples of it so a placed component's pins land on the grid. Existing pins
-    happen to be on the coarser 0.5 grid, which is a subset of 0.25.
+    (Retargeted from the curated-library ``test_all_pins_on_quarter_grid``: that
+    test asserted *every* pin of *every* kind lands on the grid except a short
+    enumerated exemption list. In the manual-scraped library most symbols keep
+    their native CircuiTikZ anchors, which are off the 0.25 grid by design and
+    connect via the pin magnet (§5.4/§6.4) — extra anchors like a thyristor gate,
+    a potentiometer wiper, a transformer centre tap, or a logic gate's scaled
+    terminals. The blanket grid invariant is a curated-library fact that no longer
+    holds; the surviving, meaningful guarantee is that a two-terminal device's two
+    *axial* terminals — ``pins[0]`` at the origin and ``pins[1]`` at the span — sit
+    on the grid. The codegen set is the authoritative two-terminal list.)
     """
-    for kind, defn in REGISTRY.items():
-        if kind in _OFFGRID_PIN_KINDS:
-            continue
-        for pin in defn.pins:
+    from app.codegen.circuitikz import _TWO_TERMINAL_KINDS as PATH_KINDS
+
+    checked = 0
+    for kind in PATH_KINDS:
+        defn = REGISTRY[kind]
+        if len(defn.pins) < 2:
+            continue  # degenerate annotations (open/short carry both axial pins)
+        for pin in defn.pins[:2]:               # the two axial terminals only
             dx, dy = pin.offset
             assert (dx * 4) == int(dx * 4), (
                 f"{kind}/{pin.name}: dx={dx} is not on a 0.25 GU boundary"
@@ -103,53 +88,27 @@ def test_all_pins_on_quarter_grid() -> None:
             assert (dy * 4) == int(dy * 4), (
                 f"{kind}/{pin.name}: dy={dy} is not on a 0.25 GU boundary"
             )
+        checked += 1
+    assert checked >= 50  # sanity: the two-terminal set is non-trivial
 
 
-def test_node_scale_within_anisotropy_cap() -> None:
-    """A multi-terminal node's per-axis scale may differ between axes only within
-    the configured anisotropy cap (§4). A strongly non-uniform node scale shears
-    the symbol's strokes anisotropically in the LaTeX output (e.g. a thick, slanted
-    switch blade), but the canvas re-strokes every path at a bucketed uniform width
-    — so it would silently desync from the rendered output. The cap keeps that
-    shear imperceptible (transistors ≈5-9%) and forces the switches/blocks uniform.
-    Pins land off-grid (magnet) rather than shearing past the cap."""
-    import json
-    from app.components.generate import SCALE_ANISOTROPY_MAX
-    from app.resources import resource_path
-
-    def _check(kind: str, scale) -> None:
-        sx, sy = scale
-        hi, lo = max(sx, sy), min(sx, sy)
-        assert lo > 0 and hi / lo <= SCALE_ANISOTROPY_MAX + 1e-6, (
-            f"{kind}: node scale {scale} exceeds the anisotropy cap "
-            f"{SCALE_ANISOTROPY_MAX} (would shear strokes in the output)"
-        )
-
-    comps = json.loads(
-        open(resource_path("components", "definitions.json"), encoding="utf-8").read()
-    )["components"]
-    for kind, e in comps.items():
-        if e.get("emission") != "node":
-            continue
-        if e.get("scale"):
-            _check(kind, e["scale"])
-        for combo in e.get("param", {}).get("n_data", {}).values():
-            if combo.get("scale"):
-                _check(f"{kind} (param)", combo["scale"])
-        for combo in e.get("n_data", {}).values():     # mux/demux
-            if combo.get("scale"):
-                _check(f"{kind} (combo)", combo["scale"])
+# NOTE: ``test_node_scale_within_anisotropy_cap`` was removed. It asserted that the
+# per-axis grid-alignment *scale* baked into every node entry stayed within the
+# anisotropy cap. The curated library baked such a scale into each centre-placed /
+# anchor-pinned node; the manual-scraped library bakes **no** ``scale`` anywhere
+# (symbols render at native size and connect off-grid via the pin magnet, §5.4), so
+# there is nothing to bound — the property it guarded no longer exists. (It also
+# read ``app.components.generate.SCALE_ANISOTROPY_MAX`` and the old
+# ``components/definitions.json`` path, neither of which is used by the alignment-
+# free manual pipeline.)
 
 
-def test_spdt_pins_centre_placed_and_gridded() -> None:
-    """The SPDT switch is a centre-placed scaled node (§4): its three terminals
-    sit at their scaled anchor positions, symmetric about the centre — `in` half a
-    GU left, the two throws half a GU right at ±0.25 GU. All on the 0.25 grid."""
-    defn = REGISTRY["spdt"]
-    offsets = {p.name: tuple(p.offset) for p in defn.pins}
-    assert offsets["in"] == (-0.5, 0.0)
-    assert offsets["out1"] == (0.5, -0.25)
-    assert offsets["out2"] == (0.5, 0.25)
+# NOTE: ``test_spdt_pins_centre_placed_and_gridded`` was removed. It pinned the
+# SPDT switch's three terminals to specific grid-aligned offsets
+# (in=(-0.5,0), out1/out2=(0.5,±0.25)) — the curated library's *scaled* anchors.
+# The manual ``spdt`` keeps its native CircuiTikZ anchors (in≈(-0.595,0),
+# out≈(0.595,±0.315)), off the 0.25 grid by design (magnet-connected, §5.4). The
+# baked grid-aligned offsets it asserted are a curated fact that no longer holds.
 
 
 # ---------------------------------------------------------------------------
@@ -202,29 +161,20 @@ def test_circle_registered_like_rect() -> None:
     assert circ.component_class is CircleComponent
 
 
-def test_power_mosfets_have_bulk_pin_and_body_diode() -> None:
-    """nfet/pfet are 4-terminal: gate/drain/source plus a bulk (body) pin, and a
-    body_diode variant that draws the intrinsic diode."""
-    from app.components import library
-
-    for kind in ("nfet", "pfet"):
-        names = [p.name for p in REGISTRY[kind].pins]
-        assert names == ["gate", "drain", "source", "bulk"]
-        assert "body_diode" in {v["name"] for v in library.variant_specs(kind)}
+# NOTE: ``test_power_mosfets_have_bulk_pin_and_body_diode`` was removed. It asserted
+# the curated ``nfet``/``pfet`` were 4-terminal with a ``bulk`` pin
+# (gate/drain/source/bulk) and a ``body_diode`` variant. The manual-scraped
+# ``nfet``/``pfet`` are the native 3-terminal symbols (pins G/D/S, no bulk anchor)
+# with a ``bodydiode`` variant; no manual kind exposes a ``bulk`` pin. The
+# 4-terminal-with-bulk structure it pinned is a curated fact that no longer exists.
 
 
-def test_display_order_is_a_preference_not_exhaustive() -> None:
-    """A kind absent from _DISPLAY_ORDER still appears in REGISTRY (after the
-    listed ones), so adding a component never requires editing the order list."""
-    import app.components.registry as reg
-
-    # Every kind the library/bespoke defs provide is present — nothing dropped.
-    assert set(reg.REGISTRY) == set(reg._ALL)
-    # Listed kinds keep their curated relative order.
-    listed = [k for k in reg.REGISTRY if k in reg._DISPLAY_ORDER]
-    assert listed == [k for k in reg._DISPLAY_ORDER if k in reg._ALL]
-    # An unlisted kind sorts after every listed kind.
-    assert reg._order_key("zzz_new_kind") > reg._order_key(reg._DISPLAY_ORDER[-1])
+# NOTE: ``test_display_order_is_a_preference_not_exhaustive`` was removed. It
+# asserted invariants over ``registry._DISPLAY_ORDER`` / ``_ALL`` / ``_order_key``
+# — the curated palette ordering machinery. Those names were deleted from
+# ``app/components/registry.py``: the registry is now the manual scrape order plus
+# the bespoke kinds appended (the palette groups/sorts within a category itself,
+# §5.4), so there is no curated display-order preference to test.
 
 
 def test_all_kinds_resolve_to_a_component_item() -> None:

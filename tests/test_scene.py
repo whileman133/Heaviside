@@ -90,10 +90,10 @@ def test_place_component_updates_model(scene: SchematicScene):
 
 
 def test_place_creates_graphics_item(scene: SchematicScene):
-    scene.place_component("V", (0.0, 0.0))
+    scene.place_component("american voltage source", (0.0, 0.0))
     items = [it for it in scene.items() if hasattr(it, "component")]
     kinds = {it.component.kind for it in items}
-    assert "V" in kinds
+    assert "american voltage source" in kinds
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +110,7 @@ def test_undo_place(scene: SchematicScene):
 
 
 def test_undo_redo_place(scene: SchematicScene):
-    comp = scene.place_component("C", (1.0, 1.0), rotation=90)
+    comp = scene.place_component("capacitor", (1.0, 1.0), rotation=90)
     scene.undo()
     assert scene.schematic.components == []
     scene.redo()
@@ -379,7 +379,7 @@ def test_view_fit_ignores_origin_helper_items(scene: SchematicScene):
     # A small cluster placed far from the origin, plus a wire (whose hidden
     # label editor sits at scene (0,0)).
     scene.place_component("R", (60.0, 60.0))
-    scene.place_component("C", (64.0, 60.0))
+    scene.place_component("capacitor", (64.0, 60.0))
     scene.add_wire([(62.0, 60.0), (64.0, 60.0)])
     view.fit_to_schematic()
     # The tight cluster fills the viewport at a healthy zoom; the origin-inflated
@@ -394,7 +394,7 @@ def test_view_placement_shortcuts(scene: SchematicScene, monkeypatch):
     from PySide6.QtGui import QKeyEvent
 
     view = SchematicView(scene)
-    view.set_placement_shortcuts({"r": "R", "c": "C", "v": "open", "i": "short"})
+    view.set_placement_shortcuts({"r": "R", "c": "capacitor", "v": "open", "i": "short"})
     started: list[str] = []
     monkeypatch.setattr(scene, "start_placement", lambda k: started.append(k))
 
@@ -405,7 +405,7 @@ def test_view_placement_shortcuts(scene: SchematicScene, monkeypatch):
     press(Qt.Key_C, "c")
     press(Qt.Key_V, "v")
     press(Qt.Key_I, "i")
-    assert started == ["R", "C", "open", "short"]
+    assert started == ["R", "capacitor", "open", "short"]
 
 
 def test_view_r_places_not_rotates(scene: SchematicScene, monkeypatch):
@@ -434,12 +434,12 @@ def test_view_placement_key_swaps_active_ghost(scene: SchematicScene):
     from PySide6.QtGui import QKeyEvent
 
     view = SchematicView(scene)
-    view.set_placement_shortcuts({"r": "R", "c": "C"})
+    view.set_placement_shortcuts({"r": "R", "c": "capacitor"})
     scene.start_placement("R")  # resistor ghost (real placement, not mocked)
     assert scene.mode == Mode.PLACE and scene._place_kind == "R"
 
     view.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
-    assert scene.mode == Mode.PLACE and scene._place_kind == "C"
+    assert scene.mode == Mode.PLACE and scene._place_kind == "capacitor"
 
 
 def test_view_placement_keys_inactive_while_wiring(scene: SchematicScene, monkeypatch):
@@ -448,7 +448,7 @@ def test_view_placement_keys_inactive_while_wiring(scene: SchematicScene, monkey
     from PySide6.QtGui import QKeyEvent
 
     view = SchematicView(scene)
-    view.set_placement_shortcuts({"c": "C"})
+    view.set_placement_shortcuts({"c": "capacitor"})
     scene.enter_wire_mode()
     placed: list[str] = []
     monkeypatch.setattr(scene, "start_placement", lambda k: placed.append(k))
@@ -540,7 +540,7 @@ def test_items_movable_only_in_select_mode(scene: SchematicScene):
     assert not _is_selectable(item)
 
     # PLACE mode: also locked.
-    scene.start_placement("C")
+    scene.start_placement("capacitor")
     item = scene._comp_items[comp.id]
     assert not _is_movable(item)
 
@@ -589,6 +589,259 @@ def test_wire_mode_press_does_not_move_component(scene: SchematicScene):
     assert not _is_movable(item)
     # Item pixel pos still matches the model.
     assert item.pos() == scene.gu_to_scene(5.0, 5.0)
+
+
+def test_terminal_marker_press_selects_instead_of_wiring(scene: SchematicScene, monkeypatch):
+    """A press on a single-point terminal marker selects/drags it rather than
+    auto-starting a wire (regression: a single-point marker *is* its pin, so it
+    was un-grabbable — it could never be moved or deleted). The curated test
+    library has no such markers, so a single-pin ground stands in for one."""
+    import app.canvas.scene as scene_mod
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    monkeypatch.setattr(scene_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
+    g = scene.place_component("ground", (5.0, 5.0))   # single pin at (5,5)
+
+    press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    press.setButton(Qt.LeftButton)
+    press.setScenePos(scene.gu_to_scene(5.0, 5.0))    # press the marker's pin
+    scene.mousePressEvent(press)
+
+    assert scene.mode == Mode.SELECT                  # did NOT auto-enter WIRE mode
+    assert scene._comp_items[g.id].isSelected()       # the marker got selected
+
+
+def test_normal_pin_press_still_auto_starts_wire(scene: SchematicScene):
+    """A press on an ordinary component's unconnected pin still auto-starts a wire
+    (the terminal-marker exception must not regress quick wiring)."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    scene.place_component("R", (5.0, 5.0))            # pins (5,5),(7,5)
+    press = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMousePress)
+    press.setButton(Qt.LeftButton)
+    press.setScenePos(scene.gu_to_scene(5.0, 5.0))    # the resistor's origin pin
+    scene.mousePressEvent(press)
+
+    assert scene.mode == Mode.WIRE
+
+
+def test_terminal_marker_placement_snaps_to_offgrid_pin(scene: SchematicScene, monkeypatch):
+    """Placing a terminal marker (a junction dot) snaps it onto a nearby component pin
+    even when that pin is off the 0.25 GU grid — so a dot can sit exactly on a scaled
+    gate's / manual-library symbol's terminal. The marker snaps to the union of the grid
+    and the connection points (nearest wins), so a cursor closest to the off-grid pin
+    lands on it. An ordinary kind always snaps to the grid. (The curated test library has
+    no Terminals kinds, so we treat 'ground' as one.)"""
+    import app.canvas.scene as scene_mod
+    import app.components.library as lib
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+    from PySide6.QtCore import QPointF
+
+    g = scene.place_component("american and port", (4.0, 4.0))   # off-grid 'out' pin
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not (coord_on_grid(out[0]) and coord_on_grid(out[1])), out  # sanity: off-grid
+
+    # Cursor essentially on the pin — closer to it than to any grid node.
+    sp = QPointF((out[0] + 0.02) * GRID_PX, out[1] * GRID_PX)
+
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda k: k == "ground")
+    scene._place_kind = "ground"                     # stands in for a junction dot
+    assert scene._place_target(sp) == pytest.approx(out)   # snapped onto the off-grid pin
+
+    scene._place_kind = "R"                           # ordinary kind → grid only
+    tx, ty = scene._place_target(sp)
+    assert coord_on_grid(tx) and coord_on_grid(ty), (tx, ty)
+
+    # Commit must KEEP the off-grid pin position — place_component grid-snaps every
+    # other kind, but a terminal marker stays exactly where it was placed.
+    dot = scene.place_component("ground", out)
+    assert dot.position == pytest.approx(out)
+    res = scene.place_component("R", out)
+    assert coord_on_grid(res.position[0]) and coord_on_grid(res.position[1])
+
+
+def test_terminal_marker_off_pin_snaps_to_grid(scene: SchematicScene, monkeypatch):
+    """A terminal marker snaps to the **union of the grid and the connection points**:
+    with no pin/wire near the cursor, the nearest target is a grid node, so it snaps to
+    the 0.25 GU grid (the snapping the marker keeps everywhere it isn't near a pin).
+    (Curated 'ground' stands in for a Terminals kind.)"""
+    import app.canvas.scene as scene_mod
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import coord_on_grid
+    from PySide6.QtCore import QPointF
+
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda k: k == "ground")
+    scene._place_kind = "ground"
+    free = (6.137, 7.231)                              # off-grid cursor, no pins near
+    sp = QPointF(free[0] * GRID_PX, free[1] * GRID_PX)
+    tgt = scene._place_target(sp)
+    assert coord_on_grid(tgt[0]) and coord_on_grid(tgt[1])    # snapped to the grid
+    assert tgt == pytest.approx((6.25, 7.25))                 # the nearest grid node
+
+
+def test_dragging_terminal_marker_does_not_magnet_to_own_pin(scene: SchematicScene, monkeypatch):
+    """A dragged terminal marker must not magnet onto its **own** pin. The schematic
+    still holds the marker at its pre-drag position during the gesture, so without the
+    self-exclusion a small move snaps straight back to where it started (the dot feels
+    glued in place / jitters near other pins). With it, a small move snaps to the grid
+    instead. (Curated 'ground' stands in for a Terminals kind.)"""
+    import app.canvas.scene as scene_mod
+    from app.schematic.model import coord_on_grid
+    monkeypatch.setattr(scene_mod, "is_terminal_marker", lambda o: (o if isinstance(o, str) else o.kind) == "ground")
+
+    own = (4.187, 4.231)
+    dot = scene.place_component("ground", own)         # off-grid, no other pins near
+    # A small drag, within the magnet radius of its own (off-grid) start position.
+    nudged = (4.237, 4.281)
+    res = scene._marker_drag_snap(dot, scene.gu_to_scene(*nudged))
+    assert res != pytest.approx(own)                   # did NOT snap back to its own pin
+    assert coord_on_grid(res[0]) and coord_on_grid(res[1])   # snapped to the grid instead
+
+
+def test_dragging_terminal_marker_off_pin_snaps_to_grid(scene: SchematicScene, monkeypatch):
+    """Dragging a lone terminal marker to empty canvas snaps it to the grid on commit
+    (the union's nearest target there is a grid node) — not to its own start position."""
+    import app.canvas.drag as drag_mod
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import coord_on_grid
+
+    monkeypatch.setattr(drag_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}
+    free = (6.137, 7.231)                              # off-grid, away from any pin
+    item.setPos(free[0] * GRID_PX, free[1] * GRID_PX)
+    scene._drag.commit_component_drag()
+    moved = next(c for c in scene.schematic.components if c.id == dot.id)
+    assert coord_on_grid(moved.position[0]) and coord_on_grid(moved.position[1])
+    assert moved.position == pytest.approx((6.25, 7.25))
+
+
+def test_inversion_bubble_placement_gets_default_side_on_body_anchor(scene: SchematicScene, monkeypatch):
+    """Placing an inversion bubble on a gate body anchor seeds a default ``node_side``
+    pointing away from the body (so it lands tangent); off a body anchor it stays
+    centred (""). It is only a default — the user can change it. (Curated 'ground'
+    stands in for a bubble kind.)"""
+    import app.canvas.scene as scene_mod
+
+    monkeypatch.setattr(scene_mod, "INVERSION_BUBBLE_KINDS", frozenset({"ground"}))
+    monkeypatch.setattr(scene_mod, "gate_body_anchor_side", lambda sch, pos: "left")
+    dot = scene.place_component("ground", (2.0, 2.0))
+    assert dot.node_side == "left"
+
+    monkeypatch.setattr(scene_mod, "gate_body_anchor_side", lambda sch, pos: "")
+    dot2 = scene.place_component("ground", (4.0, 0.0))
+    assert dot2.node_side == ""
+
+
+def test_node_side_offsets_canvas_symbol(scene: SchematicScene):
+    """A single-terminal node with a ``node_side`` draws its symbol shifted to that side
+    on the canvas (so an inversion bubble shows tangent), and its boundingRect grows to
+    cover the shift. No side → no offset."""
+    dot = scene.place_component("ground", (2.0, 2.0))
+    item = scene._comp_items[dot.id]
+    assert item._node_side_offset_px() == (0.0, 0.0)     # centred by default
+    base = item.boundingRect()
+
+    item._component.node_side = "left"
+    ox, oy = item._node_side_offset_px()
+    assert ox < 0 and oy == 0                             # symbol shifts left
+    item._component.node_side = "right"
+    ox2, _ = item._node_side_offset_px()
+    assert ox2 > 0                                        # …and right the other way
+    assert item.boundingRect().width() > base.width()    # rect covers the shift
+
+
+def test_diode_body_scales_with_document_diode_scale(scene: SchematicScene):
+    """A diode's canvas body scales by document.diode_scale / DIODE_SYMBOL_SCALE; when
+    the document scale equals the baked baseline (0.8) there is no scaling, and a
+    smaller scale shrinks the body. The new-document default (0.6) already shrinks it."""
+    from app.components import library
+    d = scene.place_component("full diode", (2.0, 2.0))
+    item = scene._comp_items[d.id]
+    # New-document default is 0.6 (≠ baked 0.8), so the body is already scaled down.
+    info = item._diode_body_scale()
+    assert info is not None
+    assert info[0] == pytest.approx(0.6 / library.DIODE_SYMBOL_SCALE)   # ratio < 1
+    # At the baked baseline there is no transform.
+    scene.schematic.diode_scale = library.DIODE_SYMBOL_SCALE             # 0.8
+    assert item._diode_body_scale() is None
+
+
+def test_dragging_terminal_marker_snaps_pin_to_offgrid_anchor(scene: SchematicScene, monkeypatch):
+    """Dragging a single terminal marker re-snaps its pin onto the nearest connection
+    point (off-grid OK) on release — not the grid — so a dot dragged to a manual-
+    library / scaled-gate terminal lands on it. (Curated 'ground' stands in.)"""
+    import app.canvas.drag as drag_mod
+    import app.components.library as lib
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+
+    g = scene.place_component("american and port", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not coord_on_grid(out[0])                  # off-grid anchor
+    monkeypatch.setattr(drag_mod, "is_terminal_marker",
+                        lambda obj: (obj if isinstance(obj, str) else obj.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}     # simulate a begun drag
+    item.setPos((out[0] + 0.04) * GRID_PX, (out[1] + 0.02) * GRID_PX)  # dragged near the pin
+    scene._drag.commit_component_drag()
+    moved = next(c for c in scene.schematic.components if c.id == dot.id)
+    assert moved.position == pytest.approx(out)
+
+
+def test_live_drag_marker_snaps_to_offgrid_pin(scene: SchematicScene, monkeypatch):
+    """During a drag (not just on release) a lone terminal marker magnet-snaps onto a
+    nearby off-grid pin — the move handler used to grid-snap every dragged item, so a
+    marker could never reach an off-grid terminal mid-drag. (Ground stands in.)"""
+    import app.canvas.scene as scene_mod
+    import app.components.library as lib
+    from app.canvas.scene import Mode
+    from app.canvas.style import GRID_PX
+    from app.schematic.model import component_pin_positions, coord_on_grid
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent
+
+    g = scene.place_component("american and port", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    assert not coord_on_grid(out[0])
+    monkeypatch.setattr(scene_mod, "is_terminal_marker",
+                        lambda o: (o if isinstance(o, str) else o.kind) == "ground")
+    dot = scene.place_component("ground", (8.0, 8.0))
+    item = scene._comp_items[dot.id]
+    scene._mode = Mode.SELECT
+    scene._drag.drag_start = {dot.id: (8.0, 8.0)}
+    item.setPos((out[0] + 0.04) * GRID_PX, (out[1] + 0.02) * GRID_PX)  # dragged near the pin
+    ev = QGraphicsSceneMouseEvent(QGraphicsSceneMouseEvent.GraphicsSceneMouseMove)
+    ev.setButton(Qt.NoButton)
+    ev.setScenePos(QPointF(0, 0))
+    scene.mouseMoveEvent(ev)
+    assert (item.pos().x() / GRID_PX, item.pos().y() / GRID_PX) == pytest.approx(out)
+
+
+def test_marker_drop_backs_out_pin_offset_for_tangency(scene: SchematicScene, monkeypatch):
+    """`_marker_drop_position` places the node CENTRE so the marker's *pin* (not its
+    centre) lands on the target — backing out the pin offset, so an edge-pinned marker
+    (the inversion dot) sits tangent rather than centred on the body edge."""
+    import app.components.library as lib
+    from app.schematic.model import component_pin_positions
+
+    g = scene.place_component("american and port", (4.0, 4.0))
+    out = dict(zip([p.name for p in lib.resolved_pins(g)],
+                   component_pin_positions(g)))["out"]
+    monkeypatch.setattr(scene, "_marker_pin_offset", lambda *a: (-0.0862, 0.0))
+    pin_gu = (scene.snap_gu(out[0]), scene.snap_gu(out[1]))
+    pos = scene._marker_drop_position("x", 0, False, pin_gu, out)
+    assert pos == pytest.approx((out[0] + 0.0862, out[1]))   # centre east → pin on `out`
 
 
 def test_multi_select_group_drag_moves_each_component(scene: SchematicScene):
@@ -711,7 +964,7 @@ def test_wire_item_refreshed_not_recreated(scene: SchematicScene):
     w = scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
     wire_item = scene._wire_items[w.id]
     # A later unrelated command must not recreate the existing wire item.
-    scene.place_component("C", (5.0, 0.0))
+    scene.place_component("capacitor", (5.0, 0.0))
     assert scene._wire_items[w.id] is wire_item
 
 
@@ -1078,7 +1331,7 @@ def test_move_wire_vertex_onto_offgrid_pin_keeps_it_offgrid(scene: SchematicScen
     Regression: move_wire_vertex used to snap every target to the grid, knocking a
     wire off an off-grid pin so it could never stay connected."""
     from app.schematic.model import component_pin_positions
-    scene.place_component("or", (20.0, 20.0))
+    scene.place_component("american or port", (20.0, 20.0))
     g = scene.schematic.components[0]
     scene.set_component_scale(g.id, 0.5)                  # 0.5 → off-grid inputs
     pin = component_pin_positions(g)[1]
@@ -1285,29 +1538,28 @@ def _wire_with_pin_endpoint(scene: SchematicScene):
 
 def test_logic_gate_placed_full_size(scene: SchematicScene):
     """A logic gate is placed at the full default scale (1.0), matching the digital
-    blocks (no scaled layout). Its inputs land on the 0.25-GU grid; the centre-
-    placed output sits at the scaled output anchor (off-grid, magnet-connected,
-    §4). A non-gate also keeps scale 1.0."""
+    blocks (no scaled layout). A non-gate also keeps scale 1.0. The manual-library
+    gate symbol carries its terminals at the true (off-grid) anchors the manual
+    bakes in — magnet-connected, §4."""
     from app.schematic.model import component_pin_positions
     from app.components import library
-    g = scene.place_component("and", (10.0, 10.0))   # 2 inputs by default
+    g = scene.place_component("american and port", (10.0, 10.0))   # 2 inputs by default
     r = scene.place_component("R", (2.0, 2.0))
     assert abs(g.scale - 1.0) < 1e-9
     assert abs(r.scale - 1.0) < 1e-9
     # At scale 1.0 there is no scaled layout — base pins are used directly.
     assert library.gate_layout(g) is None
-    # pins are [out, in1, in2]; the inputs are on grid, the output is not.
     pos = component_pin_positions(g)
 
     def _on_grid(p):
         return all(abs(round(v / 0.25) * 0.25 - v) < 1e-9 for v in p)
 
-    assert _on_grid(pos[1]) and _on_grid(pos[2])    # inputs gridded
-    assert not _on_grid(pos[0])                      # output at scaled anchor
+    # The manual gate's terminals sit at the symbol's true (off-grid) anchors.
+    assert all(not _on_grid(p) for p in pos)
 
 
 def test_set_component_scale_is_undoable(scene: SchematicScene):
-    g = scene.place_component("and", (10.0, 10.0))   # default 1.0
+    g = scene.place_component("american and port", (10.0, 10.0))   # default 1.0
     scene.set_component_scale(g.id, 0.5)
     assert abs(scene.schematic.components[0].scale - 0.5) < 1e-9
     scene.undo()
@@ -1323,7 +1575,7 @@ def test_scaling_a_gate_makes_connected_wires_follow_its_pins(scene: SchematicSc
     from app.components.model import Component
     from app.schematic.validate import validate
     import uuid
-    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
+    g = Component(id="or00aaaa", kind="american or port", position=(20.0, 20.0), rotation=0,
                   options="", scale=0.5, params={"inputs": 4})
     scene._schematic.components.append(g)
     scene._rebuild_items()
@@ -1355,19 +1607,20 @@ def test_changing_input_count_makes_connected_wires_follow(scene: SchematicScene
     from app.components.model import Component
     from app.schematic.validate import validate
     import uuid
-    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
+    g = Component(id="or00aaaa", kind="american or port", position=(20.0, 20.0), rotation=0,
                   options="", scale=0.5, params={"inputs": 4})
     scene._schematic.components.append(g)
     scene._rebuild_items()
-    pins = component_pin_positions(g)                     # out, in1..in4
-    # one wire on in2 (survives a shrink) and one on in4 (removed by a shrink)
+    pins = component_pin_positions(g)                     # 4-input gate pins
+    # one wire on a pin that survives a shrink to 3 inputs (index 2) and one on a
+    # pin that the shrink removes (the 4th input, index 8)
     w2 = Wire(id=str(uuid.uuid4()), points=[(16.0, 18.0), (pins[2][0], 18.0), pins[2]])
-    w4 = Wire(id=str(uuid.uuid4()), points=[(16.0, 22.0), (pins[4][0], 22.0), pins[4]])
+    w4 = Wire(id=str(uuid.uuid4()), points=[(16.0, 22.0), (pins[8][0], 22.0), pins[8]])
     scene._schematic.wires += [w2, w4]
     scene._rebuild_items()
     w2_orig, w4_orig = list(w2.points), list(w4.points)
 
-    scene.set_component_param(g.id, "inputs", 3)          # in4 removed; in1..3 move
+    scene.set_component_param(g.id, "inputs", 3)          # 4th input removed; others move
     new_in2 = component_pin_positions(scene.schematic.components[0])[2]
     assert scene._wire_by_id(w2.id).points[-1] == new_in2  # survives → follows
     assert scene._on_grid(scene._wire_by_id(w4.id).points[-1])  # removed → grid-snapped
@@ -1382,7 +1635,7 @@ def test_changing_input_count_makes_connected_wires_follow(scene: SchematicScene
 def test_placement_ghost_uses_default_scale(scene: SchematicScene):
     """The placement ghost previews a logic gate at its full default scale (1.0),
     so what you see before clicking matches what gets placed."""
-    scene.start_placement("and")
+    scene.start_placement("american and port")
     assert scene._ghost is not None
     assert abs(scene._ghost.component.scale - 1.0) < 1e-9
     scene.start_placement("R")
@@ -1475,7 +1728,7 @@ def test_vertex_drag_preview_and_commit_land_on_offgrid_pin(scene: SchematicScen
     preview* onto the pin (via the magnet), and the commit lands there too — so the
     wire can actually be connected to (and kept on) an off-grid pin by dragging."""
     from app.schematic.model import component_pin_positions
-    scene.place_component("or", (20.0, 20.0))
+    scene.place_component("american or port", (20.0, 20.0))
     g = scene.schematic.components[0]
     scene.set_component_scale(g.id, 0.5)                 # 0.5 → off-grid pin
     pin = component_pin_positions(g)[1]
@@ -1499,7 +1752,7 @@ def test_vertex_drag_slides_along_offgrid_pin_axis(scene: SchematicScene):
     axis snaps both coordinates to the grid as usual."""
     from app.schematic.model import component_pin_positions, Wire
     import uuid
-    scene.place_component("or", (20.0, 20.0))
+    scene.place_component("american or port", (20.0, 20.0))
     g = scene.schematic.components[0]
     pin = component_pin_positions(g)[1]                  # off-grid in y
     w = Wire(id=str(uuid.uuid4()),
@@ -1522,12 +1775,15 @@ def test_vertex_drag_can_land_between_two_offgrid_pins(scene: SchematicScene):
     from app.schematic.model import component_pin_positions, Wire
     from app.components.model import Component
     import uuid
-    g = Component(id="or00aaaa", kind="or", position=(20.0, 20.0), rotation=0,
-                  options="", scale=0.5, params={"inputs": 4})
+    # Position chosen so the two middle inputs share an on-grid x with an on-grid
+    # point midway between them (their y is off-grid), reproducing the curated
+    # geometry under the manual symbol's true anchors.
+    g = Component(id="or00aaaa", kind="american or port", position=(20.3465, 20.0),
+                  rotation=0, options="", scale=0.5, params={"inputs": 4})
     scene._schematic.components.append(g)
     scene._rebuild_items()
     pins = component_pin_positions(g)
-    in2, in3 = pins[2], pins[3]                          # adjacent off-grid inputs
+    in2, in3 = pins[6], pins[7]                          # adjacent off-grid inputs
     mid = (in2[0], (in2[1] + in3[1]) / 2.0)             # on-grid line between them
     assert scene._on_grid(mid)
     w = Wire(id=str(uuid.uuid4()), points=[(16.0, 18.0), (in2[0], 18.0), in2])
@@ -1541,6 +1797,70 @@ def test_vertex_drag_can_land_between_two_offgrid_pins(scene: SchematicScene):
                                      exclude_wire_id=w.id) == in3
     # Exactly on the wire's own pin: connects.
     assert scene._vertex_drag_target(ids, in2, exclude_wire_id=w.id) == in2
+
+
+def test_all_offgrid_pin_axes_collects_every_pin(scene: SchematicScene):
+    """``_all_offgrid_pin_axes`` exposes every component pin's off-grid x/y as an
+    alignment snap line ("an artificial grid line through each pin"), regardless of
+    whether any wire connects to it."""
+    from app.schematic.model import component_pin_positions
+    scene.place_component("american or port", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)                 # 0.5 → off-grid inputs
+    pins = component_pin_positions(g)
+    offgrid_ys = {round(p[1], 6) for p in pins if not scene._coord_on_grid(p[1])}
+    assert offgrid_ys                                    # the scaled inputs are off-grid in y
+    _xs, ys = scene._all_offgrid_pin_axes()
+    assert offgrid_ys <= ys
+
+
+def test_resolve_wire_end_aligns_to_foreign_pin_axis(scene: SchematicScene):
+    """A wire end collinear with *any* pin's off-grid axis snaps onto that line —
+    even when the wire does not connect to that pin — and reports a guide line. This
+    is the generalised "wire ends may sit off-grid when aligned with a pin" rule."""
+    from app.schematic.model import component_pin_positions
+    scene.place_component("american or port", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)
+    pin = next(p for p in component_pin_positions(g)
+               if not scene._coord_on_grid(p[1]))       # an off-grid (in y) input
+    # Cursor on the pin's y line but far from the pin in x: the magnet never fires,
+    # yet the y coordinate aligns to the off-grid pin line and a horizontal guide
+    # is reported. The x coordinate stays on the grid.
+    point, connectable, guides = scene._resolve_wire_end((5.0, pin[1]))
+    assert not connectable
+    assert point[1] == pin[1]                            # aligned to the foreign pin's y axis
+    assert scene._coord_on_grid(point[0])                # the other axis stays on-grid
+    assert guides == (None, pin[1])                      # only a horizontal guide
+
+
+def test_resolve_wire_end_on_grid_reports_no_guide(scene: SchematicScene):
+    """A wire end that resolves to a plain grid node reports no guide line."""
+    point, connectable, guides = scene._resolve_wire_end((3.0, 4.0))
+    assert point == (3.0, 4.0) and not connectable
+    assert guides == (None, None)
+
+
+def test_drawing_wire_snaps_endpoint_to_pin_axis_and_shows_guide(scene: SchematicScene):
+    """End-to-end: while routing a wire, moving the cursor near a (foreign) pin's
+    off-grid column carries that column into the previewed end and shows a faint
+    alignment guide; moving away from every pin axis removes the guide."""
+    from app.schematic.model import component_pin_positions
+    scene.place_component("american or port", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)
+    pin = next(p for p in component_pin_positions(g)
+               if not scene._coord_on_grid(p[1]))
+    scene.enter_wire_mode()
+    _wire_press(scene, (5.0, 5.0))                       # anchor the first vertex (on grid)
+    _wire_move(scene, (10.0, pin[1]))                    # cursor on the pin's y line
+    preview = scene._wire_preview
+    assert preview is not None and preview.cursor[1] == pin[1]   # previewed end aligned
+    assert scene._guide_item is not None
+    assert scene._guide_item.guide_y == pin[1] and scene._guide_item.guide_x is None
+    # Move off every pin axis → the guide is cleared.
+    _wire_move(scene, (10.0, 8.0))
+    assert scene._guide_item is None
 
 
 def test_open_endpoints_overrides_match_committed(scene: SchematicScene):
@@ -2501,7 +2821,7 @@ def test_voltage_and_label_slots_opposite_sides_when_rotated(scene: SchematicSce
     `l_` on the screen-left and `v^` on the screen-right. The voltage slot must
     use the same traversal-relative basis as the label, not a separate heuristic
     that collapses both onto the same side."""
-    comp = scene.place_component("C", (0.0, 0.0), rotation=90)
+    comp = scene.place_component("capacitor", (0.0, 0.0), rotation=90)
     scene.edit_component_options(comp.id, r"l_=$C$, v^=$V$")
     item = scene._comp_items[comp.id]
     visible = [s for s in item._slot_items if s.isVisible()]
@@ -2520,13 +2840,14 @@ def test_voltage_source_default_v_label_flips_side(scene: SchematicScene):
     """A voltage source's default `v=` label sits on the opposite side from a
     passive's — CircuiTikZ's source voltage convention (regression).
 
-    All three are vertical (pins (0,0)-(0,2), traversal down): a voltage source
-    (cV) puts plain `v` on the screen-right, while a current source (I) and a
-    passive default to the screen-left. The explicit `v^`/`v_` forms are not
-    flipped (component-independent)."""
-    cv = scene.place_component("cV", (0.0, 0.0))
+    Both are placed vertical (rotation 90 → pins (0,0)-(0,2), traversal down): a
+    voltage source puts plain `v` on the screen-right, while a current source (and
+    a passive) defaults to the screen-left. The explicit `v^`/`v_` forms are not
+    flipped (component-independent). Source detection is library-driven
+    (`_VOLTAGE_SOURCE_KINDS`: a Sources-category *voltage* symbol)."""
+    cv = scene.place_component("american voltage source", (0.0, 0.0), rotation=90)
     scene.edit_component_options(cv.id, "v=$V$")
-    i = scene.place_component("I", (4.0, 0.0))
+    i = scene.place_component("american current source", (4.0, 0.0), rotation=90)
     scene.edit_component_options(i.id, "v=$V$")
 
     def vdir(comp):
@@ -3159,7 +3480,8 @@ def test_label_side_is_traversal_relative(scene: SchematicScene):
     Regression: a controlled source whose lead axis points down had `l_` placed
     on the wrong (right) side; it must go left (right-of-traversal).
     """
-    comp = scene.place_component("cV", (3.0, 3.0))  # pins (0,0)->(0,2): axis down
+    comp = scene.place_component("american controlled voltage source", (3.0, 3.0),
+                                 rotation=90)  # lead axis points down
     scene.edit_component_options(comp.id, "l_=$O$")
     item = scene._comp_items[comp.id]
     geom = item._slot_geometry()
@@ -3295,7 +3617,7 @@ def test_group_rotate_then_delete_then_paint_does_not_crash(scene: SchematicScen
 
     # A 3-way junction: two stubs meeting a through-wire at (80, 79.5).
     scene.place_component("R", (78.0, 79.0))
-    scene.place_component("C", (78.0, 80.0))
+    scene.place_component("capacitor", (78.0, 80.0))
     scene.place_component("L", (80.5, 79.5))
     scene.add_wire([(80.0, 79.0), (80.0, 79.5)])
     scene.add_wire([(80.0, 80.0), (80.0, 79.5)])
@@ -3346,7 +3668,7 @@ def test_random_mutation_sequences_never_crash_paint():
 
     from PySide6.QtGui import QImage, QPainter, QPainterPath
 
-    KINDS = ["R", "C", "L", "D", "open", "ground"]
+    KINDS = ["R", "capacitor", "L", "full diode", "open", "ground"]
 
     def select_all_via_rubber_band(scene: SchematicScene) -> None:
         rect = scene.itemsBoundingRect()
@@ -3599,6 +3921,120 @@ def test_line_hops_populate_hopping_wire_item(scene: SchematicScene):
     assert scene._wire_items[v_id].hops
     assert scene._wire_items[v_id].hops[0].point == (2.0, 1.0)
     assert scene._wire_items[h_id].hops == []
+
+
+def test_rotate_action_steps_45_for_component_only_selection(scene: SchematicScene):
+    """Rotating a components-only selection steps 45° (components orient in 45°
+    increments); a connected wire follows and the schematic stays valid."""
+    from app.schematic.validate import validate
+    comp = scene.place_component("R", (4.0, 4.0))      # pins at (4,4) and (6,4)
+    scene.add_wire([(6.0, 4.0), (8.0, 4.0)])           # lead off the right pin
+    scene._comp_items[comp.id].setSelected(True)
+    scene.rotate_selected_cw()
+    assert scene._component_by_id(comp.id).rotation == 45
+    assert validate(scene.schematic) == []             # connected wire reshaped valid
+
+
+def test_rotate_action_steps_90_when_a_wire_is_selected(scene: SchematicScene):
+    """When a wire is part of the selection the rotate step falls back to 90° (free
+    wire vertices can't rotate validly off the right angles); the result is valid."""
+    from app.schematic.validate import validate
+    comp = scene.place_component("R", (4.0, 4.0))
+    w = scene.add_wire([(6.0, 4.0), (8.0, 4.0)])
+    scene._comp_items[comp.id].setSelected(True)
+    scene._wire_items[w.id].setSelected(True)
+    scene.rotate_selected_cw()
+    assert scene._component_by_id(comp.id).rotation == 90    # 90° step, not 45°
+    assert validate(scene.schematic) == []
+
+
+def test_scene_route_uses_active_wire_routing(scene: SchematicScene):
+    """`_route` (shared by the draw preview and the commit) honours the active routing
+    style: Manhattan gives an axis-only elbow, La Plata a 45° leg."""
+    assert scene.wire_routing == "manhattan"             # default
+    assert scene._route((0.0, 0.0), (4.0, 1.0)) == [(0.0, 0.0), (4.0, 0.0), (4.0, 1.0)]
+    scene.set_wire_routing("laplata")
+    assert scene.wire_routing == "laplata"
+    assert scene._route((0.0, 0.0), (4.0, 1.0)) == [(0.0, 0.0), (3.0, 0.0), (4.0, 1.0)]
+
+
+def test_laplata_drawing_commits_a_45_degree_wire(scene: SchematicScene):
+    """Drawing a wire in La Plata mode commits a valid wire carrying a 45° segment."""
+    from app.schematic.validate import validate
+    scene.set_wire_routing("laplata")
+    scene.enter_wire_mode()
+    _wire_press(scene, (0.0, 0.0))                        # anchor the first vertex
+    _dbl(scene, (4.0, 1.0))                               # double-click ends the wire
+    assert len(scene.schematic.wires) == 1
+    pts = scene.schematic.wires[0].points
+    assert any(abs(abs(x1 - x0) - abs(y1 - y0)) < 1e-9 and x0 != x1
+               for (x0, y0), (x1, y1) in zip(pts, pts[1:])), pts   # a 45° leg exists
+    assert validate(scene.schematic) == []
+
+
+def test_laplata_draws_off_an_offgrid_pin(scene: SchematicScene):
+    """A La Plata wire can be drawn **off an off-grid component pin** (a scaled gate):
+    it connects exactly to the pin, bridges onto the grid, turns 45°, and is valid."""
+    from app.schematic.model import component_pin_positions
+    from app.schematic.validate import validate
+    scene.place_component("american or port", (20.0, 20.0))
+    g = scene.schematic.components[0]
+    scene.set_component_scale(g.id, 0.5)                 # 0.5 → off-grid input pins
+    pin = next(p for p in component_pin_positions(g) if not scene._coord_on_grid(p[1]))
+    scene.set_wire_routing("laplata")
+    scene.enter_wire_mode()
+    _wire_press(scene, pin)                              # start on the off-grid pin
+    _dbl(scene, (10.0, 10.0))                            # finish on an on-grid point
+    assert len(scene.schematic.wires) == 1
+    pts = scene.schematic.wires[0].points
+    assert pts[0] == pin                                 # connected to the pin
+    assert validate(scene.schematic) == []
+    assert any(abs(abs(b[0] - a[0]) - abs(b[1] - a[1])) < 1e-6 and a[0] != b[0]
+               for a, b in zip(pts, pts[1:])), pts       # a 45° leg exists
+
+
+def test_laplata_draws_off_a_45_degree_rotated_component(scene: SchematicScene):
+    """A La Plata wire drawn off a **45°-rotated** component's pin leaves the pin on a
+    45° diagonal directly — no short Manhattan jog onto the grid — and stays valid."""
+    from app.schematic.model import component_pin_positions
+    from app.schematic.validate import validate
+    comp = scene.place_component("R", (4.0, 4.0))
+    scene.rotate_component(comp.id, 45)                  # pins now off-grid on a diagonal
+    pin = component_pin_positions(scene._component_by_id(comp.id))[1]
+    assert not scene._coord_on_grid(pin[0]) and not scene._coord_on_grid(pin[1])
+    scene.set_wire_routing("laplata")
+    scene.enter_wire_mode()
+    _wire_press(scene, pin)                              # start on the off-grid pin
+    _dbl(scene, (10.0, 6.0))                             # finish on an on-grid point
+    pts = scene.schematic.wires[-1].points
+    assert pts[0] == pin
+    # The FIRST leg off the pin is a real 45° diagonal (not a sub-grid jog).
+    a, b = pts[0], pts[1]
+    assert abs(abs(b[0] - a[0]) - abs(b[1] - a[1])) < 1e-6 and a[0] != b[0]
+    assert abs(b[0] - a[0]) > 0.25                       # a genuine diagonal, not a nub
+    assert validate(scene.schematic) == []
+
+
+def test_set_mark_junctions_toggles_dots(scene: SchematicScene):
+    """Toggling the document's mark_junctions adds/removes the canvas junction dots."""
+    scene.add_wire([(0.0, 0.0), (2.0, 0.0)])
+    scene.add_wire([(2.0, 0.0), (2.0, 2.0)])
+    scene.add_wire([(2.0, 0.0), (4.0, 0.0)])      # 3-way junction at (2,0)
+    assert scene._junction_items                  # a circ dot is shown by default
+    scene.set_mark_junctions(False)
+    assert scene._junction_items == {}            # suppressed
+    scene.set_mark_junctions(True)
+    assert scene._junction_items                  # restored
+
+
+def test_set_mark_open_ends_toggles_ocircs(scene: SchematicScene):
+    """Toggling the document's mark_open_ends adds/removes the open-circle terminals."""
+    scene.add_wire([(0.0, 0.0), (4.0, 0.0)])      # both ends free → two ocircs
+    assert scene._open_circle_items
+    scene.set_mark_open_ends(False)
+    assert scene._open_circle_items == {}
+    scene.set_mark_open_ends(True)
+    assert scene._open_circle_items
 
 
 def test_set_line_hops_toggles_bumps(scene: SchematicScene):
@@ -3990,18 +4426,27 @@ def test_shift_click_over_annotation_decoration_selects_element_beneath():
     non-selectable children that float *over* the elements it measures. A
     Shift-click on such an element (whose body sits under the annotation's
     decoration) must add **that element** to the selection — matching a plain
-    click — not the annotation. (Porous-electrode example: the cell-voltage
-    `open` arrow spans across the dependent source and the Zs bipole.)"""
+    click — not the annotation. (Mirrors the porous-electrode layout: a
+    cell-voltage `open` arrow spanning across a dependent source and a Zs
+    bipole.)"""
     from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QGraphicsSceneMouseEvent
 
     from app.canvas.items import _AnnotationDecoration
-    from app.schematic import io
+    from app.components.model import Component
+    from app.schematic.model import Schematic
 
-    sch = io.load("examples/Battery Models/Porous Electrode Interface.hv")
+    sch = Schematic(version="0.9", name="t", components=[
+        Component(id="cv1", kind="american controlled voltage source",
+                  position=(76.0, 81.0), rotation=270, options=""),
+        Component(id="zs1", kind="bipole", position=(78.0, 81.0), rotation=0,
+                  options="", span_override=(1.5, 0.0)),
+        Component(id="op1", kind="open", position=(76.0, 82.0), rotation=0,
+                  options="v=$V_s$", span_override=(4.0, 0.0)),
+    ])
     sc = SchematicScene(sch)
 
-    cv = next(c for c in sch.components if c.kind == "cV")
+    cv = next(c for c in sch.components if c.kind == "american controlled voltage source")
     zs = next(c for c in sch.components if c.kind == "bipole")
     open_item = sc._comp_items[
         next(c for c in sch.components if c.kind == "open").id

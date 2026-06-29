@@ -51,6 +51,19 @@ class Component:
     only when non-empty. A legacy power-rail's ``l=`` label is migrated into this
     field on load (the rail's name now renders from the ``{…}`` slot)."""
 
+    node_side: str = ""
+    """Placement keyword for a **single-terminal node**'s emitted
+    ``\\node[kind, <side>] at (x,y) {…}`` — one of ``""`` (centred on the
+    coordinate, the default), ``"left"``, ``"right"``, ``"above"``, ``"below"``.
+
+    A TikZ placement key sets the node's *anchor* to the opposite side, so the symbol
+    sits on the named side of its coordinate: ``left`` ⇒ ``anchor=east`` ⇒ the body
+    sits to the left, touching the point. This is how an inversion bubble (``ocirc``/
+    ``notcirc``) is made **tangent** to a gate's input/output — the user picks the side
+    explicitly (it is **not** inferred from gate context). Meaningful only for
+    single-terminal node kinds (the inspector exposes it for those); other kinds ignore
+    it. Persisted (``schematic/io.py``) only when non-empty."""
+
     label_offset: tuple[float, float] | None = None
     """Position of the options label in component-local pixel coordinates.
 
@@ -304,7 +317,7 @@ class ComponentDef:
     """(dx, dy) in GU (canvas y-down) from the node's centre to its CircuiTikZ
     ``text`` anchor — where the inline ``node[…] {…}`` text is **west-anchored**
     (its left edge sits here, extending right). Measured per multi-terminal kind
-    (``components/add_text_anchors.py``) so the on-canvas node text lands exactly
+    (``components/generate_library.py``) so the on-canvas node text lands exactly
     where the compiled figure places it (a transistor's label just right of the
     symbol, an op-amp's centred, a transformer's a unit above). ``(0, 0)`` for
     kinds without a measured anchor (single-terminal nodes keep their own rule)."""

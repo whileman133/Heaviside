@@ -47,16 +47,16 @@ def test_param_section_does_not_leak_labels_on_rebind(_app):
 
     sec = ParamSection()
     scene = SchematicScene()
-    comp = Component(id="g", kind="and", position=(0, 0), rotation=0, options="",
-                     params={"inputs": 2})
+    comp = Component(id="g", kind="american and port", position=(0, 0), rotation=0,
+                     options="", params={"inputs": 2})
 
-    for n in range(2, 12):                      # simulate ten spinner steps
+    for n in range(2, 9):                        # simulate spinner steps across the range
         comp.params["inputs"] = n
         sec.bind(comp, scene)                   # what the inspector does each change
 
     assert len(sec.findChildren(QLabel)) == 1   # exactly one "Inputs" label
     assert len(sec.findChildren(QSpinBox)) == 1
-    assert sec._spins["inputs"].value() == 11
+    assert sec._spins["inputs"].value() == 8
 
     # Selecting a non-parametric component removes the control entirely.
     sec._load(Component(id="r", kind="R", position=(0, 0), rotation=0, options=""))
@@ -64,15 +64,15 @@ def test_param_section_does_not_leak_labels_on_rebind(_app):
 
 
 def test_param_section_two_spinboxes_for_mux(_app):
-    """A multi-parameter kind (mux) shows one spinbox per parameter — Inputs and
-    Selects — both wired to its own param name."""
+    """A multi-parameter kind (muxdemux) shows one spinbox per parameter — Inputs
+    and Selects — both wired to its own param name."""
     from app.ui.properties import ParamSection
     from app.canvas.scene import SchematicScene
     from app.components.model import Component
 
     sec = ParamSection()
     scene = SchematicScene()
-    comp = Component(id="m", kind="mux", position=(0, 0), rotation=0, options="",
+    comp = Component(id="m", kind="muxdemux", position=(0, 0), rotation=0, options="",
                      params={"inputs": 4, "selects": 2})
     sec.bind(comp, scene)
     assert set(sec._spins) == {"inputs", "selects"}
@@ -86,7 +86,7 @@ def test_param_section_applies_only_to_parametric_kinds(_app):
     from app.components.model import Component
 
     sec = ParamSection()
-    assert sec.applies_to(Component(id="a", kind="and", position=(0, 0), rotation=0, options=""))
+    assert sec.applies_to(Component(id="a", kind="american and port", position=(0, 0), rotation=0, options=""))
     assert not sec.applies_to(Component(id="b", kind="R", position=(0, 0), rotation=0, options=""))
 
 
@@ -130,7 +130,7 @@ def test_multi_select_mixed_kinds_edits_shared_properties(_app):
 
     scene = SchematicScene()
     a = scene.place_component("R", (2.0, 0.0))
-    c = scene.place_component("C", (6.0, 0.0))
+    c = scene.place_component("capacitor", (6.0, 0.0))
     panel = PropertiesPanel()
     panel.set_scene(scene)
     panel.show_components([a.id, c.id])
@@ -160,6 +160,31 @@ def test_multi_select_mixed_kinds_edits_shared_properties(_app):
     assert all(comp.rotation == 90 for comp in scene.schematic.components)
     scene.undo()
     assert all(comp.rotation == 0 for comp in scene.schematic.components)
+
+
+def test_transform_section_offers_45_degree_rotations(_app):
+    """The inspector's Rotation control exposes all eight 45° orientations, and a
+    diagonal button rotates the component to that angle (undoably)."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import TransformSection, PropertiesPanel
+
+    scene = SchematicScene()
+    r = scene.place_component("R", (2.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(r.id)
+
+    transform = next(s for s in panel._sections if isinstance(s, TransformSection))
+    assert set(transform._rot_buttons) == {0, 45, 90, 135, 180, 225, 270, 315}
+
+    transform._on_rotate(135)
+    assert scene._component_by_id(r.id).rotation == 135
+    # The loaded state checks the active button.
+    transform._load(scene._component_by_id(r.id))
+    assert transform._rot_buttons[135].isChecked()
+    assert not transform._rot_buttons[90].isChecked()
+    scene.undo()
+    assert scene._component_by_id(r.id).rotation == 0
 
 
 def test_multi_select_symbol_and_block_share_stroke_width(_app):
@@ -202,30 +227,14 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
     assert all(abs(c.line_width - 0.4) < 1e-9 for c in scene.schematic.components)
 
 
-def test_scale_section_applies_to_gates_only_and_is_undoable(_app):
-    """The Size (scale) section shows for logic gates only; changing it sets the
-    gate's scale across the selection as one undo step."""
-    from app.canvas.scene import SchematicScene
-    from app.ui.properties import ScaleSection, PropertiesPanel
-    from app.components.model import Component
+def test_no_size_dropdown_section(_app):
+    """The discrete Size (scale) dropdown is gone — scalable gates/blocks resize by
+    the canvas corner-drag handle (§6.4), so no inspector section provides it."""
+    import app.ui.properties as props
 
-    sec = ScaleSection()
-    gate = Component(id="g", kind="and", position=(0.0, 0.0), rotation=0, options="")
-    res = Component(id="r", kind="R", position=(0.0, 0.0), rotation=0, options="")
-    assert sec.applies_to(gate) is True
-    assert sec.applies_to(res) is False
-
-    scene = SchematicScene()
-    a = scene.place_component("and", (10.0, 10.0))   # default scale 1.0
-    panel = PropertiesPanel()
-    panel.set_scene(scene)
-    panel.show_component(a.id)
-    s = next(x for x in panel._sections if isinstance(x, ScaleSection))
-    assert s._comp_ids == [a.id]
-    s._combo.setCurrentIndex(s._values.index(0.5))   # pick 50 %
-    assert abs(scene.schematic.components[0].scale - 0.5) < 1e-9
-    scene.undo()
-    assert abs(scene.schematic.components[0].scale - 1.0) < 1e-9
+    assert not hasattr(props, "ScaleSection")
+    panel = props.PropertiesPanel()
+    assert not any(type(s).__name__ == "ScaleSection" for s in panel._sections)
 
 
 def test_multi_wire_select_edits_all_as_one_undo_step(_app):
@@ -349,6 +358,88 @@ def test_node_text_section_edits_node_text_undoably(_app):
 
     scene.undo()
     assert scene._component_by_id(comp.id).node_text == ""
+
+
+def test_node_placement_section_applies_only_to_single_terminal_nodes(_app):
+    """NodePlacementSection shows for single-terminal node kinds (ground, vcc) and
+    hides for multi-terminal nodes (npn), path-style (R), and drawing annotations."""
+    from app.ui.properties import NodePlacementSection
+    from app.components.model import Component, TextNodeComponent
+
+    sec = NodePlacementSection()
+    gnd = Component(id="g", kind="ground", position=(0, 0), rotation=0, options="")
+    vcc = Component(id="v", kind="vcc", position=(0, 0), rotation=0, options="")
+    npn = Component(id="q", kind="npn", position=(0, 0), rotation=0, options="")
+    res = Component(id="r", kind="R", position=(0, 0), rotation=0, options="")
+    txt = TextNodeComponent(id="t", kind="text_node", position=(0, 0), rotation=0,
+                            options="hi")
+    assert sec.applies_to(gnd) and sec.applies_to(vcc)
+    assert not sec.applies_to(npn)               # multi-terminal node
+    assert not sec.applies_to(res)
+    assert not sec.applies_to(txt)
+
+
+def test_node_placement_section_edits_node_side_undoably(_app):
+    """Choosing a side in the Placement dropdown commits node_side via an undoable
+    command, and the combo loads the component's current side."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import NodePlacementSection, PropertiesPanel
+
+    scene = SchematicScene()
+    comp = scene.place_component("ground", (2.0, 2.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(comp.id)
+
+    sec = next(s for s in panel._sections if isinstance(s, NodePlacementSection))
+    assert sec._comp_ids == [comp.id]            # bound for a single-terminal node
+    sec._combo.setCurrentIndex(sec._VALUES.index("left"))
+    assert scene._component_by_id(comp.id).node_side == "left"
+
+    scene.undo()
+    assert scene._component_by_id(comp.id).node_side == ""
+
+
+def test_node_size_section_edits_height_width_as_factors(_app, monkeypatch):
+    """The Size section (manual gates with CircuiTikZ height/width keys) shows the key
+    values (default × factor) and writes them back as anisotropic resize factors via an
+    undoable command. ('muxdemux' — an anisotropic resizable node — stands in, with
+    its size keys monkeypatched in.)"""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import NodeSizeSection, PropertiesPanel
+    from app.components import library
+    from app.schematic.model import node_resize_factors
+
+    monkeypatch.setattr(library, "gate_size_keys",
+                        lambda k: {"path": "tripoles/x", "height": 0.8, "width": 1.1}
+                        if k == "muxdemux" else None)
+    scene = SchematicScene()
+    comp = scene.place_component("muxdemux", (2.0, 2.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(comp.id)
+
+    sec = next(s for s in panel._sections if isinstance(s, NodeSizeSection))
+    assert sec._comp_ids == [comp.id]                       # shown for a size-key kind
+    assert sec._height.value() == pytest.approx(0.8)        # defaults at natural size
+    assert sec._width.value() == pytest.approx(1.1)
+
+    sec._height.setValue(1.6)                               # 2 × default → hf = 2.0
+    panel.flush_pending_edits()
+    assert node_resize_factors(scene._component_by_id(comp.id)) == pytest.approx((1.0, 2.0))
+
+    scene.undo()
+    assert node_resize_factors(scene._component_by_id(comp.id)) is None
+
+
+def test_node_size_section_hidden_without_size_keys(_app):
+    """The Size section does not bind for a kind with no CircuiTikZ size keys."""
+    from app.ui.properties import NodeSizeSection
+    from app.components.model import Component
+
+    sec = NodeSizeSection()
+    assert not sec.applies_to(Component(id="r", kind="R", position=(0, 0), rotation=0, options=""))
+    assert not sec.applies_to(Component(id="m", kind="muxdemux", position=(0, 0), rotation=0, options=""))
 
 
 def test_options_section_relabels_for_node_style(_app):
@@ -567,6 +658,62 @@ def test_document_panel_change_is_undoable(_app):
 
     scene.redo()
     assert scene.schematic.voltage_style == "european"
+
+
+def test_document_panel_display_and_diode_undoable(_app):
+    """The Document tab's display options (mark unconnected pins, line-hops) and the
+    diode-scale spinbox push undoable commands; undo restores them."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import DocumentPropertiesPanel
+
+    scene = SchematicScene()
+    panel = DocumentPropertiesPanel()
+    panel.set_scene(scene)
+
+    assert scene.schematic.mark_unconnected_pins is False
+    panel._marks.setChecked(True)
+    assert scene.schematic.mark_unconnected_pins is True
+    scene.undo()
+    assert scene.schematic.mark_unconnected_pins is False
+
+    assert scene.schematic.line_hops is True
+    panel._hops.setChecked(False)
+    assert scene.schematic.line_hops is False
+    scene.undo()
+    assert scene.schematic.line_hops is True
+
+    assert scene.schematic.mark_open_ends is True
+    panel._open_ends.setChecked(False)
+    assert scene.schematic.mark_open_ends is False
+    scene.undo()
+    assert scene.schematic.mark_open_ends is True
+
+    assert scene.schematic.mark_junctions is True
+    panel._junctions.setChecked(False)
+    assert scene.schematic.mark_junctions is False
+    scene.undo()
+    assert scene.schematic.mark_junctions is True
+
+    assert scene.schematic.diode_scale == 0.6          # new-document default (§5)
+    panel._diode.setValue(0.5)
+    assert scene.schematic.diode_scale == 0.5
+    scene.undo()
+    assert scene.schematic.diode_scale == 0.6
+    panel.refresh()
+    assert panel._diode.value() == 0.6
+
+
+def test_document_panel_has_no_help_text(_app):
+    """The Document inspector carries no muted hint/help labels (they were removed —
+    the controls are self-explanatory)."""
+    from PySide6.QtWidgets import QLabel
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import DocumentPropertiesPanel
+
+    panel = DocumentPropertiesPanel()
+    panel.set_scene(SchematicScene())
+    assert not [lbl for lbl in panel.findChildren(QLabel)
+                if lbl.objectName() == "hintLabel"]
 
 
 def test_document_panel_preamble_settings_undoable(_app):

@@ -1,11 +1,15 @@
 {
-  "version": "0.5",
+  "version": "0.9",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
-    "siunitx": false,
-    "preamble": ""
+    "symbol_style": {},
+    "siunitx": true,
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "diode_scale": 0.8
   },
   "components": [
     {
@@ -21,7 +25,7 @@
     },
     {
       "id": "210deea0-962b-4944-b382-1b6b51c96b8e",
-      "kind": "C",
+      "kind": "capacitor",
       "position": [
         74.0,
         79.0
@@ -60,12 +64,12 @@
     },
     {
       "id": "945727cc-544b-45fa-a5c6-9225b7396c7e",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         72.0,
         78.5
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "l_=OCV$(z(t))$",
       "label_offset": [

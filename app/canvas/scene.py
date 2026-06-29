@@ -44,6 +44,7 @@ from app.canvas.commands import (
     Command,
     DeleteCommand,
     EditCommand,
+    EditNodeSideCommand,
     EditNodeTextCommand,
     GroupRotateCommand,
     MacroCommand,
@@ -63,6 +64,7 @@ from app.canvas.commands import (
     WireCommand,
 )
 from app.canvas.items import (
+    AlignmentGuideItem,
     ComponentItem,
     JunctionItem,
     LabelTextItem,
@@ -94,7 +96,10 @@ from app.schematic.model import (
     WIRE_MARKER_CYCLE,
     component_pin_positions as _component_pin_positions,
     coord_on_grid as _model_coord_on_grid,
+    INVERSION_BUBBLE_KINDS,
+    gate_body_anchor_side,
     is_box_kind,
+    is_terminal_marker,
     junction_points,
     open_endpoints,
     point_key,
@@ -203,11 +208,10 @@ class SchematicScene(QGraphicsScene):
         self._open_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
         # unconnected-pin coordinate (gu) -> open-circle item (display preference)
         self._pin_circle_items: dict[tuple[float, float], OpenCircleItem] = {}
-        # Whether to draw open circles at unconnected component pins (§10.8).
-        self._mark_unconnected_pins: bool = False
-        # Whether to draw line-hops where wires cross without connecting (§6.4).
-        # Default on (the schematic-drawing convention); a display preference.
-        self._line_hops: bool = True
+        # The "mark unconnected pins" (§10.8) and "line-hops" (§6.4) display options
+        # now live on the **document** (Schematic.mark_unconnected_pins / line_hops),
+        # read straight from self._schematic at render time so they travel with the
+        # file and undo/redo of a document-property change just works.
 
         # Placement state
         self._place_kind: str | None = None
@@ -232,7 +236,14 @@ class SchematicScene(QGraphicsScene):
 
         # Wire-routing state
         self._wire_pts: list[tuple[float, float]] = []
+        # Routing style for newly drawn wires: "manhattan" (axis-only) or "laplata"
+        # (45° legs, §6.4). Editor state, not persisted (it shapes the router, not
+        # stored geometry). Selected from the wiring quick-bar.
+        self._wire_routing: str = "manhattan"
         self._wire_preview: WirePreviewItem | None = None
+        # Faint guide line(s) shown when a wire end snaps onto a pin's off-grid
+        # x/y axis line (lazily created; see _show_guides / _clear_guides).
+        self._guide_item: AlignmentGuideItem | None = None
         # Cursor-heading memory for the in-progress wire (so the elbow follows the
         # path the cursor took; see _wire_vfirst / _update_wire_heading).
         self._wire_heading: str | None = None
@@ -514,10 +525,26 @@ class SchematicScene(QGraphicsScene):
         default_scale = library.default_scale(kind)
         if abs(default_scale - 1.0) > 1e-9:
             extra["scale"] = default_scale
+        # A terminal marker (junction dot) keeps the exact *position* it was placed
+        # at — snapped by ``_place_target`` to the union of the grid and the connection
+        # points, which may be off the grid (a manual-library / scaled-gate terminal).
+        # Every other kind is grid-snapped defensively so a caller can't drop it off-grid.
+        if is_terminal_marker(kind):
+            pos = (position[0], position[1])
+        else:
+            pos = (self.snap_gu(position[0]), self.snap_gu(position[1]))
+        # Smart default: an inversion bubble dropped on a logic-gate body anchor gets a
+        # default placement side pointing away from the body (so it lands tangent). It's
+        # only a default — the user can change it in the inspector. (ocirc/notcirc have a
+        # centred pin, so the pin position is the placement position.)
+        if kind in INVERSION_BUBBLE_KINDS:
+            side = gate_body_anchor_side(self._schematic, pos)
+            if side:
+                extra["node_side"] = side
         comp = cls(
             id=str(uuid.uuid4()),
             kind=kind,
-            position=(self.snap_gu(position[0]), self.snap_gu(position[1])),
+            position=pos,
             rotation=rotation,
             options=options,
             mirror=mirror,
@@ -874,6 +901,14 @@ class SchematicScene(QGraphicsScene):
             return
         self._push(EditNodeTextCommand(component_id, new_text))
 
+    def edit_component_node_side(self, component_id: str, new_side: str) -> None:
+        """Set the ``node_side`` (placement keyword) of a single-terminal node via an
+        undoable EditNodeSideCommand. No-op when unchanged or unknown."""
+        comp = self._component_by_id(component_id)
+        if comp is None or getattr(comp, "node_side", "") == new_side:
+            return
+        self._push(EditNodeSideCommand(component_id, new_side))
+
     def move_options_label(
         self, component_id: str, new_offset: tuple[float, float]
     ) -> None:
@@ -987,12 +1022,17 @@ class SchematicScene(QGraphicsScene):
         self._push(RotateCommand(component_id, new_rotation))
 
     def rotate_selected_cw(self) -> None:
-        """Rotate selected components and wires 90° CW around their group centroid."""
+        """Rotate the selection CW around its group centroid in **45° steps** (§6.x).
+
+        Components rotate by 45° (their pins land off-grid, reached by the wire
+        magnet / pin-axis alignment, §3.1); connected wires follow. **When wires are
+        explicitly selected the step falls back to 90°**, since rotating free wire
+        vertices by 45° would leave them off-grid on no pin axis (invalid)."""
         if self._mode == Mode.PLACE:
             # Span-placed annotations take their orientation from the two clicks,
             # so rotation does not apply during their placement.
             if self._place_kind not in _SPAN_PLACE_KINDS:
-                self._place_rotation = (self._place_rotation + 90) % 360
+                self._place_rotation = (self._place_rotation + 45) % 360
                 self._update_ghost_transform()
             return
         comp_ids = self.selected_component_ids()
@@ -1020,9 +1060,18 @@ class SchematicScene(QGraphicsScene):
             xs = [p[0] for p in pts]
             ys = [p[1] for p in pts]
 
-        cx = _snap((min(xs) + max(xs)) / 2)
-        cy = _snap((min(ys) + max(ys)) / 2)
-        self._push(GroupRotateCommand(comp_ids, wire_ids, (cx, cy)))
+        if len(comp_ids) == 1 and not wire_ids:
+            # A lone component spins in place at any angle: use its **exact** position
+            # as the pivot (no snap), so a 45° turn doesn't drift it off its spot.
+            only = next(c for c in self._schematic.components if c.id == comp_ids[0])
+            cx, cy = only.position
+        else:
+            cx = _snap((min(xs) + max(xs)) / 2)
+            cy = _snap((min(ys) + max(ys)) / 2)
+        # 45° for a components-only rotation; 90° when wires are selected (free wire
+        # vertices can't rotate validly off the right angles).
+        step = 90 if wire_ids else 45
+        self._push(GroupRotateCommand(comp_ids, wire_ids, (cx, cy), step=step))
 
     def mirror_component(self, component_id: str, new_mirror: bool) -> None:
         """Set the mirror state of a component via an undoable MirrorCommand."""
@@ -1062,6 +1111,24 @@ class SchematicScene(QGraphicsScene):
         if comp is None or abs(comp.scale - new_scale) < 1e-6:
             return
         self._push(SetComponentScaleCommand(component_id, new_scale, comp.scale))
+
+    def set_node_resize_factors(
+        self, component_id: str, wf: float, hf: float
+    ) -> None:
+        """Set an anisotropic node's ``(wf, hf)`` resize factors (``span_override``) via
+        an undoable ResizeNodeCommand — the inspector Size fields' write path, the same
+        command the corner-drag uses. Resizes about the origin (no position shift);
+        no-op when unchanged or not an anisotropic resizable node."""
+        from app.canvas.commands import ResizeNodeCommand
+        from app.schematic.model import is_resizable_node, node_resize_factors
+        comp = self._component_by_id(component_id)
+        if comp is None or not is_resizable_node(comp):
+            return
+        old = node_resize_factors(comp)            # (wf, hf) or None at natural size
+        new = (round(wf, 6), round(hf, 6))
+        if old is not None and abs(old[0] - new[0]) < 1e-9 and abs(old[1] - new[1]) < 1e-9:
+            return
+        self._push(ResizeNodeCommand(component_id, new, old))
 
     def set_line_style(self, component_id: str, new_style: str) -> None:
         """Set line_style on a StyledComponent (bipole or rect) via an undoable command."""
@@ -1549,7 +1616,7 @@ class SchematicScene(QGraphicsScene):
         # Default-mode wires hop only when the global preference is on; per-wire
         # hop_mode overrides ("always"/"never") apply either way, so always run.
         hops_by_wire: dict[str, list] = {}
-        for hop in wire_crossings(self._schematic, default_on=self._line_hops):
+        for hop in wire_crossings(self._schematic, default_on=self._schematic.line_hops):
             hops_by_wire.setdefault(hop.wire_id, []).append(hop)
         for wire in self._schematic.wires:
             item = self._wire_items.get(wire.id)
@@ -1574,7 +1641,9 @@ class SchematicScene(QGraphicsScene):
             }
 
         # --- junction dots (3+ wires, or pin + 2 wires) -------------------
-        wanted = junction_points(self._schematic)
+        # Suppressed document-wide when mark_junctions is off (§10.3).
+        wanted = (junction_points(self._schematic)
+                  if self._schematic.mark_junctions else set())
         for coord in list(self._junction_items):
             if coord not in wanted:
                 self._remove_item(self._junction_items.pop(coord))
@@ -1586,7 +1655,9 @@ class SchematicScene(QGraphicsScene):
                 self._junction_items[coord] = dot
 
         # --- open-circle nodes (wire endpoints not on any component pin) ---
-        wanted_oc = open_endpoints(self._schematic)
+        # Suppressed document-wide when mark_open_ends is off (§10.3).
+        wanted_oc = (open_endpoints(self._schematic)
+                     if self._schematic.mark_open_ends else set())
         for coord in list(self._open_circle_items):
             if coord not in wanted_oc:
                 self._remove_item(self._open_circle_items.pop(coord))
@@ -1600,7 +1671,7 @@ class SchematicScene(QGraphicsScene):
         # --- unconnected-pin circles (display preference, §10.8) -----------
         # Open circles at component pins nothing connects to.  Mirrors the
         # generator's mark_unconnected_pins option; same OpenCircleItem visual.
-        wanted_pc = unconnected_pins(self._schematic) if self._mark_unconnected_pins else set()
+        wanted_pc = unconnected_pins(self._schematic) if self._schematic.mark_unconnected_pins else set()
         for coord in list(self._pin_circle_items):
             if coord not in wanted_pc:
                 self._remove_item(self._pin_circle_items.pop(coord))
@@ -1677,6 +1748,89 @@ class SchematicScene(QGraphicsScene):
     def _move_ghost(self, gu: tuple[float, float]) -> None:
         if self._ghost is not None:
             self._ghost.setPos(self.gu_to_scene(*gu))
+
+    def _marker_pin_offset(self, kind: str, rotation: int,
+                           mirror: bool) -> tuple[float, float]:
+        """A single-point marker's pin offset in **world** frame (rotation+mirror
+        applied), backed out when magneting so the marker's *pin* (not its centre)
+        lands on the target. Zero for a dot whose pin is at its centre — the junction
+        dot and the inversion dot (``ocirc``/``notcirc``), which therefore sit centred
+        on the anchor on the canvas (the export still draws the bubble tangent via the
+        ``[ocirc, left]`` idiom — the canvas is a preview, not the exact rendering)."""
+        defn = REGISTRY.get(kind)
+        if defn is None or not defn.pins:
+            return (0.0, 0.0)
+        from app.canvas.geometry import local_span_to_world
+        return local_span_to_world(tuple(defn.pins[0].offset), rotation, mirror)
+
+    def _marker_drag_snap(self, comp: Component,
+                          item_scene_pos: QPointF) -> tuple[float, float]:
+        """New ``position`` for a dragged single-point marker whose item sits at
+        *item_scene_pos*: snap its pin to the nearest point in the union of the grid and
+        the connection points (off-grid pins OK). Used by both the live drag move and
+        the commit, so the marker snaps onto off-grid pins *during* the drag (like
+        placement), not just on release.
+
+        The marker's **own** pin is excluded from the magnet: the schematic still holds
+        it at its pre-drag position throughout the gesture, so without this it would
+        magnet back onto where it started (pinning small moves and making it jump
+        between its origin and an adjacent pin)."""
+        off = self._marker_pin_offset(comp.kind, comp.rotation, comp.mirror)
+        cx, cy = self.scene_to_gu(item_scene_pos)
+        pin_raw = (cx + off[0], cy + off[1])
+        pin_gu = (self.snap_gu(pin_raw[0]), self.snap_gu(pin_raw[1]))
+        return self._marker_drop_position(comp.kind, comp.rotation, comp.mirror,
+                                          pin_gu, pin_raw,
+                                          exclude_component_id=comp.id)
+
+    def _marker_drop_position(self, kind: str, rotation: int, mirror: bool,
+                              pin_gu: tuple[float, float],
+                              pin_raw: tuple[float, float],
+                              exclude_component_id: str | None = None,
+                              ) -> tuple[float, float]:
+        """Component ``position`` (node centre) that lands a single-point marker's
+        **pin** on the nearest point in the **union of the 0.25 GU grid and the
+        connection points** (component pins + wire vertices/segments, off-grid OK).
+        *pin_gu* is the grid-snapped intended pin location, *pin_raw* the unsnapped one
+        (so the magnet measures from where the cursor actually is). Backs the centre out
+        by the marker's pin offset.
+
+        The marker still snaps — both to grid nodes and to pins — but to whichever is
+        **nearer** the cursor, so it can land exactly on an **off-grid** pin (a scaled
+        gate / manual-library terminal) without the dense grid pull making that
+        impossible, while still snapping to the grid everywhere else. A pure grid snap
+        (off-grid pins unreachable) and a pure free-float (no grid help) were both
+        wrong; the union is the behaviour we want."""
+        exclude = (exclude_component_id,) if exclude_component_id else ()
+        target, connectable = self.wire_snap_target(
+            pin_gu, raw_gu=pin_raw, exclude_component_ids=exclude)
+        if connectable:
+            # Pin/wire candidate found (within the magnet radius). Snap to it unless the
+            # nearest grid node is strictly closer to the cursor — union, nearest wins
+            # (ties go to the pin, so an inversion bubble lands cleanly on its anchor).
+            d_pin = (target[0] - pin_raw[0]) ** 2 + (target[1] - pin_raw[1]) ** 2
+            d_grid = (pin_gu[0] - pin_raw[0]) ** 2 + (pin_gu[1] - pin_raw[1]) ** 2
+            if d_grid < d_pin:
+                target = pin_gu
+        else:
+            target = pin_gu          # no connection point in range → nearest grid node
+        off = self._marker_pin_offset(kind, rotation, mirror)
+        return (target[0] - off[0], target[1] - off[1])
+
+    def _place_target(self, scene_pos) -> tuple[float, float]:  # noqa: ANN001
+        """Where the single-kind ghost would drop. A **terminal marker** (a junction
+        dot / inversion dot — a single-point node meant to sit *on* a connection point)
+        snaps its **pin** to the nearest point in the union of the 0.25 GU grid and the
+        connection points (component pins + wires, off-grid OK), so it lands on a nearby
+        pin when the cursor is closer to one and on the grid otherwise; every other kind
+        snaps to the grid only (its origin is not a connection point, so a pin-magnet
+        would be wrong)."""
+        gu = self.snap_point_gu(scene_pos)
+        if self._place_kind and is_terminal_marker(self._place_kind):
+            return self._marker_drop_position(
+                self._place_kind, self._place_rotation, self._place_mirror,
+                gu, self.scene_to_gu(scene_pos))
+        return gu
 
     def _span_snap_target(self, scene_pos) -> tuple[float, float]:  # noqa: ANN001
         """Magnet-snap a span-placement endpoint onto a nearby component pin or
@@ -1757,8 +1911,10 @@ class SchematicScene(QGraphicsScene):
         gu: tuple[float, float],
         exclude_wire_id: str | None = None,
         raw_gu: tuple[float, float] | None = None,
+        exclude_component_ids: frozenset[str] | set[str] | tuple[str, ...] = (),
     ) -> tuple[tuple[float, float], bool]:
-        return self._wire_geom.wire_snap_target(gu, exclude_wire_id, raw_gu)
+        return self._wire_geom.wire_snap_target(
+            gu, exclude_wire_id, raw_gu, exclude_component_ids)
 
     def _wire_snap_point(self, scene_pt: QPointF) -> tuple[float, float] | None:
         return self._wire_geom.wire_snap_point(scene_pt)
@@ -1767,27 +1923,45 @@ class SchematicScene(QGraphicsScene):
         return self._wire_geom.unconnected_pin_at(scene_pt)
 
     def set_mark_unconnected_pins(self, enabled: bool) -> None:
-        """Toggle open-circle markers at unconnected component pins (§10.8).
-
-        No-op if unchanged; otherwise rebuilds canvas items so the markers
-        appear or disappear immediately.
+        """Toggle the document's open-circle markers at unconnected component pins
+        (§10.8) and rebuild so they appear/disappear immediately. No-op if unchanged.
+        Mutates the document directly (non-undoable); the inspector edits the same field
+        undoably via SetDocumentPropertiesCommand and rebuilds through the command path.
         """
         enabled = bool(enabled)
-        if enabled == self._mark_unconnected_pins:
+        if enabled == self._schematic.mark_unconnected_pins:
             return
-        self._mark_unconnected_pins = enabled
+        self._schematic.mark_unconnected_pins = enabled
         self._rebuild_items()
 
     def set_line_hops(self, enabled: bool) -> None:
-        """Toggle line-hop bumps where wires cross without connecting (§6.4).
-
-        No-op if unchanged; otherwise rebuilds canvas items so the bumps appear
-        or disappear immediately.
-        """
+        """Toggle the document's line-hop bumps where wires cross without connecting
+        (§6.4) and rebuild. No-op if unchanged. Mutates the document directly; the
+        inspector edits the same field undoably (see set_mark_unconnected_pins)."""
         enabled = bool(enabled)
-        if enabled == self._line_hops:
+        if enabled == self._schematic.line_hops:
             return
-        self._line_hops = enabled
+        self._schematic.line_hops = enabled
+        self._rebuild_items()
+
+    def set_mark_open_ends(self, enabled: bool) -> None:
+        """Toggle the document's open-circle (``ocirc``) markers at dangling wire ends
+        (§6.4) and rebuild. No-op if unchanged. Mutates the document directly; the
+        inspector edits the same field undoably (see set_mark_unconnected_pins)."""
+        enabled = bool(enabled)
+        if enabled == self._schematic.mark_open_ends:
+            return
+        self._schematic.mark_open_ends = enabled
+        self._rebuild_items()
+
+    def set_mark_junctions(self, enabled: bool) -> None:
+        """Toggle the document's solid junction dots (``circ``) where wires/pins are
+        tied (§6.4) and rebuild. No-op if unchanged. Mutates the document directly; the
+        inspector edits the same field undoably (see set_mark_unconnected_pins)."""
+        enabled = bool(enabled)
+        if enabled == self._schematic.mark_junctions:
+            return
+        self._schematic.mark_junctions = enabled
         self._rebuild_items()
 
     def _refresh_preview_hops(self, extra_wires: tuple = ()) -> dict:
@@ -1818,7 +1992,7 @@ class SchematicScene(QGraphicsScene):
             wires=eff,
         )
         grouped: dict[str, list] = {}
-        for hop in wire_crossings(snapshot, default_on=self._line_hops):
+        for hop in wire_crossings(snapshot, default_on=self._schematic.line_hops):
             grouped.setdefault(hop.wire_id, []).append(hop)
         for w in self._schematic.wires:
             item = self._wire_items.get(w.id)
@@ -1850,32 +2024,24 @@ class SchematicScene(QGraphicsScene):
     def _click_select_wire_id(self, scene_pt: QPointF, grabbed_id: str) -> str:
         return self._wire_geom.click_select_wire_id(scene_pt, grabbed_id)
 
-    def _wire_offgrid_pin_axes(
-        self, wire_ids: "set[str] | frozenset[str]"
-    ) -> tuple[set[float], set[float]]:
-        """The off-grid coordinate *lines* the given wires connect to.
+    def _all_offgrid_pin_axes(self) -> tuple[set[float], set[float]]:
+        """Every off-grid pin coordinate as an *axis snap line* (an "artificial grid
+        line" extending from a pin's x and y).
 
-        For each endpoint of *wire_ids* that rests on a component connection point
-        whose x (or y) is off the 0.25-GU grid (a scaled gate's terminal), that
-        coordinate becomes a snap line on its axis. Returns ``(xs, ys)`` — the
-        off-grid x-values and y-values a dragged vertex of those wires may snap
-        to, so it can slide *along the pin's axis* instead of being forced to the
-        grid (and so the segment into the pin stays straight)."""
-        pins = {point_key(p) for p in self._all_pin_positions()}
+        Scans **all** component connection points and returns ``(xs, ys)`` — the set
+        of off-grid x-values and off-grid y-values. A wire end may snap onto any of
+        these so it can sit off the 0.25-GU grid while staying *collinear with a
+        pin*; validation permits exactly such a coordinate (it must line up with some
+        pin's off-grid x or y — see :func:`app.schematic.validate.validate`). On-grid
+        pins add nothing (the grid already covers them), so only off-grid pins
+        contribute lines."""
         xs: set[float] = set()
         ys: set[float] = set()
-        by_id = {w.id: w for w in self._schematic.wires}
-        for wid in wire_ids:
-            w = by_id.get(wid)
-            if w is None or not w.points:
-                continue
-            for end in (w.points[0], w.points[-1]):
-                if point_key(end) not in pins:
-                    continue
-                if not self._coord_on_grid(end[0]):
-                    xs.add(round(end[0], 6))
-                if not self._coord_on_grid(end[1]):
-                    ys.add(round(end[1], 6))
+        for px, py in self._all_pin_positions():
+            if not self._coord_on_grid(px):
+                xs.add(round(px, 6))
+            if not self._coord_on_grid(py):
+                ys.add(round(py, 6))
         return xs, ys
 
     def _snap_coord(self, v: float, offgrid: set[float]) -> float:
@@ -1888,26 +2054,77 @@ class SchematicScene(QGraphicsScene):
                 best, best_d = c, d
         return best
 
+    def _axis_snap(
+        self, raw_gu: tuple[float, float], axes: tuple[set[float], set[float]]
+    ) -> tuple[tuple[float, float], tuple[float | None, float | None]]:
+        """Snap each axis of *raw_gu* to the nearer of the grid or a pin axis line.
+
+        Returns ``(point, guides)`` where *guides* is ``(gx, gy)`` — the pin axis
+        line each coordinate actually landed on (off-grid), or ``None`` where it
+        snapped to a plain grid node. The guides drive the on-screen alignment
+        guide lines (:meth:`_show_guides`)."""
+        xs, ys = axes
+        sx = self._snap_coord(raw_gu[0], xs)
+        sy = self._snap_coord(raw_gu[1], ys)
+        gx = sx if round(sx, 6) in xs else None
+        gy = sy if round(sy, 6) in ys else None
+        return (sx, sy), (gx, gy)
+
+    def _resolve_wire_end(
+        self,
+        raw_gu: tuple[float, float],
+        exclude_wire_id: str | None = None,
+        exclude_component_ids: "frozenset[str] | set[str] | tuple[str, ...]" = (),
+    ) -> tuple[tuple[float, float], bool, tuple[float | None, float | None]]:
+        """Resolve where a wire end should land, from the **raw** (unsnapped) cursor.
+
+        A nearby pin / wire vertex / wire segment may win (the magnet, so the end
+        connects); otherwise each axis snaps to the nearer of the 0.25-GU grid or a
+        pin axis line (:meth:`_all_offgrid_pin_axes`), so a wire end can sit off-grid
+        while staying *collinear with a pin*. Returns ``(point, is_connectable,
+        guides)``; *guides* is non-empty only when an off-grid pin line was used (the
+        magnet path reports no guides — it landed on a real connection point).
+
+        When the magnet *and* the per-axis snap both have a candidate, the one the
+        raw cursor is actually **closer** to wins (ties → the magnet). This keeps a
+        pin grabbable without letting it 'capture' a position the cursor is nearer to
+        — notably the on-grid line *between* two off-grid pins, which sits one
+        ``PIN_SNAP_GU`` from each pin and would otherwise always snap to a pin. Used
+        by both the live preview and the commit, so they agree."""
+        axis_pt, guides = self._axis_snap(raw_gu, self._all_offgrid_pin_axes())
+        gu = (self.snap_gu(raw_gu[0]), self.snap_gu(raw_gu[1]))
+        target, connectable = self.wire_snap_target(
+            gu, exclude_wire_id=exclude_wire_id, raw_gu=raw_gu,
+            exclude_component_ids=exclude_component_ids)
+        if connectable:
+            d_target = (raw_gu[0] - target[0]) ** 2 + (raw_gu[1] - target[1]) ** 2
+            d_axis = (raw_gu[0] - axis_pt[0]) ** 2 + (raw_gu[1] - axis_pt[1]) ** 2
+            if d_target <= d_axis:
+                return target, True, (None, None)
+        return axis_pt, False, guides
+
     def _snap_vertex_target(
         self,
         pt: tuple[float, float],
         wire_ids: "set[str] | frozenset[str] | None" = None,
     ) -> tuple[float, float]:
         """Snap a dragged-vertex target to the 0.25-GU grid, with two exceptions
-        for off-grid component pins (scaled gate terminals):
+        for off-grid component pins (scaled gate / manual-library terminals):
 
         * a target resting **exactly on a pin** is kept verbatim (connecting onto
           it — the magnet resolved it there);
-        * otherwise each axis may snap to an **off-grid pin axis line** of the
-          dragged wire (:meth:`_wire_offgrid_pin_axes`) as well as to the grid, so
-          a vertex collinear with an off-grid pin slides along that pin's axis and
-          the segment into the pin stays straight, instead of jogging onto the grid.
-        """
+        * otherwise each axis may snap to any **off-grid pin axis line**
+          (:meth:`_all_offgrid_pin_axes`) as well as to the grid, so a vertex
+          collinear with a pin slides along that pin's axis and the segment into it
+          stays straight, instead of jogging onto the grid.
+
+        *wire_ids* is accepted for backward compatibility but no longer narrows the
+        axis set — alignment is global (every pin's axis line is a snap target)."""
         key = point_key(pt)
         for pin in self._all_pin_positions():
             if point_key(pin) == key:
                 return pt
-        xs, ys = self._wire_offgrid_pin_axes(wire_ids) if wire_ids else (set(), set())
+        xs, ys = self._all_offgrid_pin_axes()
         return (self._snap_coord(pt[0], xs), self._snap_coord(pt[1], ys))
 
     def _vertex_drag_target(
@@ -1916,28 +2133,33 @@ class SchematicScene(QGraphicsScene):
         raw_gu: tuple[float, float],
         exclude_wire_id: str | None = None,
     ) -> tuple[float, float]:
-        """Resolve where a dragged wire vertex should land, from the **raw**
-        (unsnapped) cursor. A nearby pin / wire vertex / wire segment may win (the
-        magnet, so the vertex can connect); otherwise the cursor snaps per axis to
-        the grid or to one of the dragged wires' off-grid pin axis lines — so the
-        vertex can be moved *along* an off-grid pin's axis. Used by both the live
-        preview and the commit, so they agree.
+        """Where a dragged wire vertex should land (point only).
 
-        When the magnet *and* the per-axis snap both have a candidate, the one the
-        raw cursor is actually **closer** to wins (ties → the magnet). This keeps a
-        pin grabbable without letting it 'capture' a position the cursor is nearer
-        to — notably the on-grid line *between* two off-grid pins, which sits one
-        ``PIN_SNAP_GU`` from each pin and would otherwise always snap to a pin."""
-        xs, ys = self._wire_offgrid_pin_axes(wire_ids)
-        axis_pt = (self._snap_coord(raw_gu[0], xs), self._snap_coord(raw_gu[1], ys))
-        gu = (self.snap_gu(raw_gu[0]), self.snap_gu(raw_gu[1]))
-        target, connectable = self.wire_snap_target(
-            gu, exclude_wire_id=exclude_wire_id, raw_gu=raw_gu)
-        if not connectable:
-            return axis_pt
-        d_target = (raw_gu[0] - target[0]) ** 2 + (raw_gu[1] - target[1]) ** 2
-        d_axis = (raw_gu[0] - axis_pt[0]) ** 2 + (raw_gu[1] - axis_pt[1]) ** 2
-        return target if d_target <= d_axis else axis_pt
+        Thin wrapper over :meth:`_resolve_wire_end` (which carries the shared
+        magnet-vs-axis logic and the guide info); *wire_ids* is accepted for
+        backward compatibility but no longer narrows the axis set."""
+        pt, _connectable, _guides = self._resolve_wire_end(
+            raw_gu, exclude_wire_id=exclude_wire_id)
+        return pt
+
+    # -- pin-alignment guide overlay -------------------------------------
+
+    def _show_guides(self, gx: float | None, gy: float | None) -> None:
+        """Show (or hide) the faint pin-alignment guide line(s). Both ``None``
+        removes the overlay; otherwise a vertical line at *gx* and/or a horizontal
+        line at *gy* marks the pin axis a wire end has snapped onto."""
+        if gx is None and gy is None:
+            self._clear_guides()
+            return
+        if self._guide_item is None:
+            self._guide_item = AlignmentGuideItem()
+            self.addItem(self._guide_item)
+        self._guide_item.set_guides(gx, gy)
+
+    def _clear_guides(self) -> None:
+        if self._guide_item is not None:
+            self._remove_item(self._guide_item)
+            self._guide_item = None
 
     def move_wire_vertex(
         self, wire_id: str, index: int, new_point: tuple[float, float]
@@ -1985,30 +2207,43 @@ class SchematicScene(QGraphicsScene):
         else:
             self._push(move_cmd)
 
+    def set_wire_routing(self, style: str) -> None:
+        """Select the wire routing style for newly drawn wires (spec §6.4):
+        ``"manhattan"`` (axis-only elbow) or ``"laplata"`` (a 45° leg). Editor
+        state only — it shapes the router, not stored geometry, so it is not
+        persisted. Unknown values are ignored."""
+        from app.schematic.model import ROUTING_STYLES
+        if style in ROUTING_STYLES:
+            self._wire_routing = style
+
+    @property
+    def wire_routing(self) -> str:
+        return self._wire_routing
+
     def _route(
         self,
         a: tuple[float, float],
         b: tuple[float, float],
         vfirst: bool | None = None,
     ) -> list[tuple[float, float]]:
-        """Manhattan route from a to b (spec §6.4).
+        """Route from a to b in the active wire style (spec §6.4).
 
-        *vfirst* is an optional corner-orientation preference (``None`` =
-        dominant-axis default); while drawing, the scene passes the cursor's
-        heading so the elbow traces the path the cursor took (:meth:`_wire_vfirst`).
-        The preview and the committed wire both call this, so they agree.
+        In **Manhattan** style the elbow is axis-only; in **La Plata** style it adds
+        a 45° leg (:func:`route_diagonal`). *vfirst* is the Manhattan corner-orientation
+        preference (``None`` = dominant-axis default); while drawing, the scene passes
+        the cursor's heading so the elbow traces the path the cursor took
+        (:meth:`_wire_vfirst`). The preview and the committed wire both call this, so
+        they agree.
 
         When an endpoint is an **off-grid component pin** (a scaled logic gate's
-        terminal), the leg adjacent to it is oriented to **keep the pin's off-grid
-        coordinate** — so the wire extends from the pin along its own (off-grid)
-        lead line and only *then* elbows onto the grid, instead of jumping to the
-        grid immediately. The corner inherits the pin's off-grid coordinate
-        (validation permits a wire coordinate that lines up with a pin, spec §3.1).
-        With neither endpoint off-grid the corner is kept on the grid as usual.
-        Delegates to the shared :func:`route_pin_aware` so the canvas router and
-        component-follow re-routing agree.
+        terminal), the leg adjacent to it keeps the pin's off-grid coordinate — so the
+        wire extends from the pin along its own lead line and only *then* elbows onto
+        the grid (the corner inherits the pin's off-grid coordinate, which validation
+        permits, §3.1); a La Plata wire falls back to this Manhattan lead routing into
+        an off-grid pin. Delegates to the shared :func:`route_pin_aware` so the canvas
+        router and component-follow re-routing agree.
         """
-        return route_pin_aware(a, b, vfirst)
+        return route_pin_aware(a, b, vfirst, style=self._wire_routing)
 
     #: How far (GU) the cursor must travel from the leg's start before its
     #: out-direction is locked, so a tiny initial jitter doesn't pick the axis.
@@ -2114,6 +2349,7 @@ class SchematicScene(QGraphicsScene):
         self._wire_pts = []
         self._reset_wire_heading()
         self._cancel_wire_preview()
+        self._clear_guides()
         # Clear any bumps other wires were showing for the (now-gone) preview wire.
         self._refresh_preview_hops()
 
@@ -2137,15 +2373,17 @@ class SchematicScene(QGraphicsScene):
                         self._place_start_gu, self._span_snap_target(event.scenePos())
                     )
             else:
-                self._move_ghost(gu)
+                self._move_ghost(self._place_target(event.scenePos()))
             event.accept()
             return
 
-        if self._mode == Mode.WIRE and self._wire_pts:
-            self._update_wire_heading(gu)
-            target, is_connectable = self.wire_snap_target(
-                gu, raw_gu=self.scene_to_gu(event.scenePos()))
-            self._refresh_wire_preview(target, is_connectable)
+        if self._mode == Mode.WIRE:
+            target, is_connectable, guides = self._resolve_wire_end(
+                self.scene_to_gu(event.scenePos()))
+            self._show_guides(*guides)
+            if self._wire_pts:
+                self._update_wire_heading(gu)
+                self._refresh_wire_preview(target, is_connectable)
             event.accept()
             return
 
@@ -2162,12 +2400,11 @@ class SchematicScene(QGraphicsScene):
         if self._drag.vertex_drag is not None:
             # Resolve the same target the commit will use, so the ghost matches:
             # the magnet snaps onto a pin (incl. off-grid), else the vertex slides
-            # along the grid or one of the dragged wire's off-grid pin axis lines.
+            # along the grid or any pin's off-grid axis line (with a guide line).
             wire_id = self._drag.vertex_drag[0]
-            group = self._drag.vertex_drag_group or [(wire_id, self._drag.vertex_drag[1])]
-            wire_ids = {wid for wid, _ in group}
-            target = self._vertex_drag_target(
-                wire_ids, self.scene_to_gu(event.scenePos()), exclude_wire_id=wire_id)
+            target, _connectable, guides = self._resolve_wire_end(
+                self.scene_to_gu(event.scenePos()), exclude_wire_id=wire_id)
+            self._show_guides(*guides)
             self._drag.preview_vertex_drag(target)
             self._refresh_preview_hops()      # bumps track the reshaped wire(s)
             event.accept()
@@ -2175,6 +2412,12 @@ class SchematicScene(QGraphicsScene):
 
         if self._drag.endpoint_drag is not None:
             self._drag.preview_endpoint_drag(gu)
+            self._refresh_preview_hops()
+            event.accept()
+            return
+
+        if self._drag.resize_drag is not None:
+            self._drag.preview_resize(gu)
             self._refresh_preview_hops()
             event.accept()
             return
@@ -2187,15 +2430,22 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
-        # Let Qt move any dragged component items, then snap them to the grid
-        # and ghost their connected wires.
+        # Let Qt move any dragged component items, then snap them and ghost their
+        # connected wires. A lone terminal marker magnet-snaps onto a nearby pin
+        # (off-grid OK, like placement); everything else snaps to the 0.25 GU grid.
         super().mouseMoveEvent(event)
         if self._mode == Mode.SELECT and self._drag.drag_start:
+            solo = len(self._drag.drag_start) == 1
             for cid in self._drag.drag_start:
                 item = self._comp_items.get(cid)
-                if item is not None:
-                    snapped = self.snap_point_gu(item.pos())
-                    item.setPos(self.gu_to_scene(*snapped))
+                if item is None:
+                    continue
+                comp = self._component_by_id(cid)
+                if solo and comp is not None and is_terminal_marker(comp):
+                    new = self._marker_drag_snap(comp, item.pos())
+                else:
+                    new = self.snap_point_gu(item.pos())
+                item.setPos(self.gu_to_scene(*new))
             self._drag.preview_component_drag()
             self._refresh_preview_hops()
 
@@ -2218,6 +2468,24 @@ class SchematicScene(QGraphicsScene):
                     and it.flags() & QGraphicsItem.ItemIsSelectable):
                 return it
         return None
+
+    def _pin_belongs_to_terminal_marker(self, pin: tuple[float, float]) -> bool:
+        """True when *pin* is a pin of a single-point **terminal marker** (a Terminals
+        dot/pole or a marker kind like the inversion dot — ``is_terminal_marker``,
+        whose symbol coincides with its pin).
+        Such a marker would otherwise be un-grabbable: a press on it always lands on
+        its pin, so the wire-auto-start would fire and it could never be selected,
+        moved or deleted. Checked by coordinate (not exact shape hit) so the small
+        dot is reliably grabbable within the pin snap radius."""
+        from app.schematic.model import component_pin_positions, point_key
+
+        key = point_key(pin)
+        for comp in self._schematic.components:
+            if not is_terminal_marker(comp):
+                continue
+            if any(point_key(p) == key for p in component_pin_positions(comp)):
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Right-click context menu (components & wires)
@@ -2348,7 +2616,7 @@ class SchematicScene(QGraphicsScene):
                     self._place_span_click(self._span_snap_target(event.scenePos()))
                 else:
                     self.place_component(
-                        self._place_kind, gu,
+                        self._place_kind, self._place_target(event.scenePos()),
                         rotation=self._place_rotation,
                         mirror=self._place_mirror,
                     )
@@ -2358,8 +2626,9 @@ class SchematicScene(QGraphicsScene):
 
         if self._mode == Mode.WIRE:
             if event.button() == Qt.LeftButton:
-                target, is_connectable = self.wire_snap_target(
-                    gu, raw_gu=self.scene_to_gu(event.scenePos()))
+                target, is_connectable, guides = self._resolve_wire_end(
+                    self.scene_to_gu(event.scenePos()))
+                self._show_guides(*guides)
                 if not self._wire_pts:
                     # Begin the wire — anchor the first vertex (pin or node).
                     self._wire_pts = [target]
@@ -2421,6 +2690,19 @@ class SchematicScene(QGraphicsScene):
                     event.accept()
                     return
 
+        # SELECT mode: a press on a resizable item's corner handle starts a
+        # drag-resize (muxdemux anisotropic; scalable gates/blocks uniform).
+        if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
+            nid = self._drag.resize_handle_at(event.scenePos())
+            if nid is not None:
+                item = self._comp_items.get(nid)
+                if item is not None:
+                    self._drag.resize_drag = (nid, item.resize_value())
+                    self.clearSelection()
+                    item.setSelected(True)
+                    event.accept()
+                    return
+
         # SELECT mode: a press on a wire's mid-label starts dragging it along the
         # wire (takes priority over vertex drag / selection).
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
@@ -2460,9 +2742,14 @@ class SchematicScene(QGraphicsScene):
 
         # SELECT mode: clicking an UNCONNECTED pin auto-enters WIRE mode and
         # begins a wire there. Connected pins fall through to normal selection.
+        # Exception: a single-point **terminal marker** (a Terminals-category
+        # connection dot — circ/ocirc/…) *is* its own pin, so a press would always
+        # auto-start a wire and the dot could never be selected, moved or deleted.
+        # Such a press falls through to normal selection/drag; wire from it in WIRE
+        # mode instead.
         if self._mode == Mode.SELECT and event.button() == Qt.LeftButton:
             pin = self.unconnected_pin_at(event.scenePos())
-            if pin is not None:
+            if pin is not None and not self._pin_belongs_to_terminal_marker(pin):
                 self.clearSelection()
                 self._mode = Mode.WIRE
                 self._apply_item_flags()
@@ -2544,6 +2831,16 @@ class SchematicScene(QGraphicsScene):
             event.accept()
             return
 
+        # Commit a drag-resize if one is active.
+        if self._drag.resize_drag is not None and event.button() == Qt.LeftButton:
+            gu = self.snap_point_gu(event.scenePos())
+            for wire_item in self._wire_items.values():
+                wire_item.clear_preview_points()
+            self._drag.commit_resize(gu)
+            self._refresh_preview_hops()
+            event.accept()
+            return
+
         # Commit a mid-label drag if one is active.
         if self._mid_label_drag is not None and event.button() == Qt.LeftButton:
             wid, _press_pos = self._mid_label_drag
@@ -2574,6 +2871,7 @@ class SchematicScene(QGraphicsScene):
                 if it is not None:
                     it.clear_preview_points()
             self._drag.clear_junction_preview()  # remove the highlighted dot
+            self._clear_guides()                 # drop any pin-alignment guides
             # Distinguish a click from a drag by whether the *cursor* moved — NOT
             # by comparing the snap target to the vertex's old position. A vertex
             # can be grabbed from up to VERTEX_HIT_GU away, so a stationary click
@@ -2633,9 +2931,8 @@ class SchematicScene(QGraphicsScene):
 
     def mouseDoubleClickEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         if self._mode == Mode.WIRE and self._wire_pts:
-            gu = self.snap_point_gu(event.scenePos())
-            target, _ = self.wire_snap_target(
-                gu, raw_gu=self.scene_to_gu(event.scenePos()))
+            target, _conn, _guides = self._resolve_wire_end(
+                self.scene_to_gu(event.scenePos()))
             if target != self._wire_pts[-1]:
                 legs = self._route(self._wire_pts[-1], target, self._wire_vfirst())
                 self._wire_pts.extend(legs[1:])

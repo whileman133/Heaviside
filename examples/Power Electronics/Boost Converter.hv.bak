@@ -1,17 +1,23 @@
 {
-  "version": "0.3",
+  "version": "0.9",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
-    "current_style": "american"
+    "current_style": "american",
+    "symbol_style": {},
+    "siunitx": true,
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "diode_scale": 0.8
   },
   "components": [
     {
       "id": "43dee1b5-ac87-44e1-8f92-d92ebda2bf59",
       "kind": "nigfete",
       "position": [
-        78.0,
-        78.25
+        79.0,
+        78.0
       ],
       "rotation": 0,
       "mirror": false,
@@ -44,7 +50,7 @@
     },
     {
       "id": "a216dd94-bf77-4175-8187-68162c919006",
-      "kind": "sD",
+      "kind": "full Schottky diode",
       "position": [
         79.5,
         76.5
@@ -55,12 +61,12 @@
     },
     {
       "id": "f14f70ec-ced9-4184-ab71-25c6d4074a6d",
-      "kind": "V",
+      "kind": "american voltage source",
       "position": [
         76.0,
         77.0
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "l=$V_\\mathrm{in}$",
       "label_offset": [
@@ -70,7 +76,7 @@
     },
     {
       "id": "5f667cd1-1fd9-483f-9b3a-caa13b355e5c",
-      "kind": "C",
+      "kind": "capacitor",
       "position": [
         82.0,
         77.0
@@ -138,12 +144,8 @@
       "id": "e4f71c36-71dc-4393-b4b6-b4daf9bb3649",
       "points": [
         [
-          78.0,
-          79.0
-        ],
-        [
-          78.0,
-          79.5
+          79.0,
+          78.75
         ],
         [
           79.0,
@@ -246,12 +248,8 @@
       "id": "fb4aec2e-8710-4a58-bf0f-5b1a1b75cee7",
       "points": [
         [
-          78.0,
-          77.5
-        ],
-        [
-          78.0,
-          76.5
+          79.0,
+          77.25
         ],
         [
           79.0,
@@ -297,20 +295,16 @@
       "id": "4412c006-ef4a-46fe-a018-716a4e5e942d",
       "points": [
         [
-          77.5,
-          80.5
+          77.25,
+          80.25
         ],
         [
-          77.5,
+          77.25,
           78.25
         ],
         [
-          77.5,
-          78.5
-        ],
-        [
-          77.0,
-          78.5
+          78.0,
+          78.25
         ]
       ]
     }

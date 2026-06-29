@@ -47,7 +47,9 @@ from app.schematic.model import (
     component_pin_positions as _component_pin_positions,
     coord_on_grid,
     is_box_kind,
+    is_terminal_marker,
     point_key,
+    rotate_vector,
     route_pin_aware,
     simplify_points,
     snap_point,
@@ -455,11 +457,30 @@ class MoveCommand(Command):
         # junction (keeps the component connected — see _reshape_wires). Computed
         # once at the first do() (stable ids), re-added on redo, removed on undo.
         self._created_leads: list[Wire] | None = None
+        # Terminal markers (junction dots/poles) sitting on a moving component's pin
+        # follow it by the same delta — computed once (pre-move) so undo reverses it.
+        self._followed_marker_ids: list[str] | None = None
 
     # -- component motion -------------------------------------------------
 
+    def _compute_followed_markers(self, schematic: Schematic) -> list[str]:
+        """Ids of terminal-marker components (not themselves moving) whose pin
+        coincides with a moving component's pin — they ride along with the move so a
+        dot placed on a transformer/op-amp anchor tracks the symbol."""
+        moving = set(self._component_ids)
+        pins = self._connected_pin_set(schematic)
+        if not pins:
+            return []
+        out: list[str] = []
+        for comp in schematic.components:
+            if comp.id in moving or not is_terminal_marker(comp):
+                continue
+            if any(point_key(p) in pins for p in _component_connection_points(comp)):
+                out.append(comp.id)
+        return out
+
     def _shift_components(self, schematic: Schematic, sign: float) -> None:
-        ids = set(self._component_ids)
+        ids = set(self._component_ids) | set(self._followed_marker_ids or [])
         for comp in schematic.components:
             if comp.id in ids:
                 x, y = comp.position
@@ -541,6 +562,9 @@ class MoveCommand(Command):
     # -- Command API ------------------------------------------------------
 
     def do(self, schematic: Schematic) -> None:
+        # Compute the followed markers from the pre-move state (once; reused on redo).
+        if self._followed_marker_ids is None:
+            self._followed_marker_ids = self._compute_followed_markers(schematic)
         # Reshape wires using pin positions BEFORE moving the components.
         self._reshape_wires(schematic)
         self._shift_components(schematic, +1.0)
@@ -728,6 +752,64 @@ class ResizeCommand(Command):
         dx = new_pin[0] - old_pin[0]
         dy = new_pin[1] - old_pin[1]
         self._reshape_wires(schematic, old_pin, dx, dy)
+
+
+class ResizeNodeCommand(Command):
+    """2D-resize a multi-terminal node (gates, blocks, muxdemux): set
+    ``Component.span_override`` to the ``(wf, hf)`` factors and re-route every wire
+    connected to a relocated pin. Like :class:`SetComponentScaleCommand`, the moves
+    are applied as **one simultaneous** ``old→new`` map (`_follow_pins`), not pin by
+    pin — densely-spaced pins (a many-input gate) can have one pin's new position
+    coincide with another's old position, so a sequential pass would mis-assign
+    wires. ``old_factors`` may be ``None`` (an unresized node); undo then clears the
+    override back to the natural size."""
+
+    label = "Resize"
+
+    def __init__(self, component_id: str, new_factors, old_factors,  # noqa: ANN001
+                 new_position=None, old_position=None) -> None:
+        self._component_id = component_id
+        self._new = new_factors
+        self._old = old_factors
+        # An anchored corner resize also shifts the origin to hold the opposite
+        # corner fixed. The shift is stored **exactly** (not grid-snapped) so the
+        # body stays exactly where the live preview showed it — a snap here would jolt
+        # the component on release. The origin may land off-grid, which is fine: its
+        # pins become off-grid pins that wires connect to via the magnet, like a
+        # scaled gate's. ``None`` → the legacy size-only resize that leaves position
+        # untouched.
+        self._new_pos = new_position
+        self._old_pos = old_position
+        self._orig_wires: dict[str, Wire] = {}
+
+    def _pins(self, schematic: Schematic, span, pos):  # noqa: ANN001
+        """World positions of every pin given a chosen ``span_override`` (and, when
+        provided, origin ``pos``)."""
+        comp = _find_component(schematic, self._component_id)
+        orig_span, orig_pos = comp.span_override, comp.position
+        comp.span_override = span
+        if pos is not None:
+            comp.position = pos
+        pins = _component_pin_positions(comp)
+        comp.span_override, comp.position = orig_span, orig_pos
+        return pins
+
+    def do(self, schematic: Schematic) -> None:
+        old_pins = self._pins(schematic, self._old, self._old_pos)
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._new
+        if self._new_pos is not None:
+            comp.position = self._new_pos
+        new_pins = self._pins(schematic, self._new, self._new_pos)
+        old_to_new = {point_key(o): n for o, n in zip(old_pins, new_pins)}
+        _follow_pins(schematic, old_to_new, self._orig_wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.span_override = self._old
+        if self._old_pos is not None:
+            comp.position = self._old_pos
+        _restore_followed_wires(schematic, self._orig_wires)
 
 
 class MoveEndpointCommand(ResizeCommand):
@@ -1321,6 +1403,37 @@ class EditNodeTextCommand(Command):
         comp.node_text = self._old_text or ""
 
 
+class EditNodeSideCommand(Command):
+    """Set the ``node_side`` (placement keyword: left/right/above/below, or "" for
+    centred) of a single single-terminal node component.
+
+    Inverse: restore the previous side.
+    """
+
+    label = "Edit Placement"
+
+    def __init__(
+        self,
+        component_id: str,
+        new_side: str,
+        old_side: str | None = None,
+    ) -> None:
+        self._component_id = component_id
+        self._new_side = new_side
+        # If old_side is not supplied, it is captured on first do().
+        self._old_side: str | None = old_side
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        if self._old_side is None:
+            self._old_side = comp.node_side
+        comp.node_side = self._new_side
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.node_side = self._old_side or ""
+
+
 class MoveOptionsLabelCommand(Command):
     """Set (or clear) the label_offset of a single component's options label.
 
@@ -1353,7 +1466,7 @@ class MoveOptionsLabelCommand(Command):
 
 
 class RotateCommand(Command):
-    """Change the rotation of a single component by a multiple of 90°.
+    """Change the rotation of a single component to a 45° multiple (0..315).
 
     Inverse: restore the previous rotation value.
     """
@@ -1361,7 +1474,7 @@ class RotateCommand(Command):
     label = "Rotate"
 
     def __init__(self, component_id: str, new_rotation: int, old_rotation: int | None = None) -> None:
-        if new_rotation not in (0, 90, 180, 270):
+        if new_rotation % 45 != 0 or not 0 <= new_rotation < 360:
             raise ValueError(f"Invalid rotation {new_rotation!r}")
         self._component_id = component_id
         self._new_rotation = new_rotation
@@ -1603,30 +1716,44 @@ class SetComponentScaleCommand(Command):
 
     label = "Set Scale"
 
-    def __init__(self, component_id: str, new_scale: float, old_scale: float) -> None:
+    def __init__(self, component_id: str, new_scale: float, old_scale: float,
+                 new_position=None, old_position=None) -> None:
         self._component_id = component_id
         self._new_scale = new_scale
         self._old_scale = old_scale
+        # An anchored corner resize also shifts the origin to hold the opposite corner
+        # fixed; stored exactly (not grid-snapped) so the body stays where the preview
+        # showed it. ``None`` → a size-only change leaving the position alone.
+        self._new_pos = new_position
+        self._old_pos = old_position
         self._orig_wires: dict[str, Wire] = {}
 
-    def _pin_positions(self, schematic: Schematic, scale: float) -> list[tuple[float, float]]:
+    def _pin_positions(self, schematic: Schematic, scale: float,
+                       pos=None) -> list[tuple[float, float]]:
         comp = _typed_component(schematic, self._component_id, Component)
-        orig = comp.scale
+        orig_scale, orig_pos = comp.scale, comp.position
         comp.scale = scale
+        if pos is not None:
+            comp.position = pos
         pins = _component_pin_positions(comp)
-        comp.scale = orig
+        comp.scale, comp.position = orig_scale, orig_pos
         return pins
 
     def do(self, schematic: Schematic) -> None:
-        old_pins = self._pin_positions(schematic, self._old_scale)
+        old_pins = self._pin_positions(schematic, self._old_scale, self._old_pos)
         comp = _typed_component(schematic, self._component_id, Component)
         comp.scale = self._new_scale
-        new_pins = self._pin_positions(schematic, self._new_scale)
+        if self._new_pos is not None:
+            comp.position = self._new_pos
+        new_pins = self._pin_positions(schematic, self._new_scale, self._new_pos)
         old_to_new = {point_key(o): n for o, n in zip(old_pins, new_pins)}
         _follow_pins(schematic, old_to_new, self._orig_wires)
 
     def undo(self, schematic: Schematic) -> None:
-        _typed_component(schematic, self._component_id, Component).scale = self._old_scale
+        comp = _typed_component(schematic, self._component_id, Component)
+        comp.scale = self._old_scale
+        if self._old_pos is not None:
+            comp.position = self._old_pos
         _restore_followed_wires(schematic, self._orig_wires)
 
 
@@ -1913,10 +2040,16 @@ class GroupRotateCommand(Command):
         component_ids: list[str],
         wire_ids: list[str],
         centroid: tuple[float, float],
+        step: int = 90,
     ) -> None:
         self._component_ids = list(component_ids)
         self._wire_ids = list(wire_ids)
         self._cx, self._cy = centroid
+        # CW step in degrees (a 45° multiple). 90° (the default) rotates wire
+        # geometry exactly on-grid; a 45° step is used only for components +
+        # their connected wires (the caller forces 90° when wires are selected,
+        # since rotating free wire vertices 45° would leave them off-grid).
+        self._step = step % 360
         # Captured at first do() — never overwritten on redo.
         self._orig_comp: dict[str, tuple] = {}
         self._orig_wire: dict[str, list] = {}
@@ -1942,6 +2075,13 @@ class GroupRotateCommand(Command):
         dx, dy = x - cx, y - cy
         return (cx - dy, cy + dx)
 
+    def _rot(self, x: float, y: float) -> tuple[float, float]:
+        """Rotate (x, y) by ``self._step`` around the centroid, in the same
+        canvas convention as :func:`model.rotate_vector` / pin positions (so a
+        rotated position lands exactly on the new pin location)."""
+        rx, ry = rotate_vector(x - self._cx, y - self._cy, self._step)
+        return (self._cx + rx, self._cy + ry)
+
     def _build_pin_motion(
         self,
         schematic: Schematic,
@@ -1954,9 +2094,7 @@ class GroupRotateCommand(Command):
             if comp.id not in comp_id_set:
                 continue
             for pin_pos in _component_pin_positions(comp):
-                mapping[point_key(pin_pos)] = self._rot90cw(
-                    pin_pos[0], pin_pos[1], self._cx, self._cy
-                )
+                mapping[point_key(pin_pos)] = self._rot(pin_pos[0], pin_pos[1])
         return mapping
 
     def do(self, schematic: Schematic) -> None:
@@ -2000,17 +2138,14 @@ class GroupRotateCommand(Command):
         for comp in schematic.components:
             if comp.id not in comp_id_set:
                 continue
-            nx, ny = self._rot90cw(
-                comp.position[0], comp.position[1], self._cx, self._cy
-            )
-            comp.position = (nx, ny)
+            comp.position = self._rot(comp.position[0], comp.position[1])
             # Mirror is a global Flip-X applied OUTERMOST (after the stored
-            # rotation), so a visual 90° CW turn corresponds to rotation−90 for
-            # a mirrored component (R90·M·R(r) = M·R(r−90)). Using +90 would
-            # send the pins to the mirror-image of where _rot90cw moved the
-            # component and its wires, detaching every connection.
-            step = -90 if comp.mirror else 90
-            comp.rotation = (comp.rotation + step) % 360
+            # rotation), so a visual CW turn corresponds to rotation−step for a
+            # mirrored component (R·M·R(r) = M·R(r−step)). Using +step would send
+            # the pins to the mirror-image of where _rot moved the component and
+            # its wires, detaching every connection.
+            delta = -self._step if comp.mirror else self._step
+            comp.rotation = (comp.rotation + delta) % 360
             comp.label_offset = None
 
         # Rotate selected + internal wire vertices.
@@ -2018,9 +2153,20 @@ class GroupRotateCommand(Command):
             if wire.id not in wire_id_set and wire.id not in fully_rotate_extra:
                 continue
             orig = self._orig_wire.get(wire.id, wire.points)
-            wire.points = [
-                self._rot90cw(x, y, self._cx, self._cy) for x, y in orig
-            ]
+            if self._step % 90 == 0:
+                # Exact on-grid rotation of every vertex (the common 90° case).
+                wire.points = [self._rot(x, y) for x, y in orig]
+            else:
+                # 45°: rotating the Manhattan vertices would leave them off-grid
+                # on no pin axis (invalid). An *internal* wire (both ends on moving
+                # pins) is re-routed between the new pin positions instead — its
+                # corner lands on the pins' axes, which validation permits (§3.1).
+                # (A free selected wire can't rotate validly at 45°; the caller
+                # forces a 90° step whenever wires are selected, so we never hit it.)
+                ns = pin_motion.get(point_key(orig[0]))
+                ne = pin_motion.get(point_key(orig[-1]))
+                if ns is not None and ne is not None:
+                    wire.points = route_pin_aware(ns, ne)
 
         # Reshape boundary wires.
         collapsed: list[str] = []
@@ -2104,6 +2250,18 @@ class SetDocumentPropertiesCommand(Command):
         old_siunitx: bool | None = None,
         new_preamble: str | None = None,
         old_preamble: str | None = None,
+        new_symbol_style: dict | None = None,
+        old_symbol_style: dict | None = None,
+        new_mark_unconnected_pins: bool | None = None,
+        old_mark_unconnected_pins: bool | None = None,
+        new_line_hops: bool | None = None,
+        old_line_hops: bool | None = None,
+        new_mark_open_ends: bool | None = None,
+        old_mark_open_ends: bool | None = None,
+        new_mark_junctions: bool | None = None,
+        old_mark_junctions: bool | None = None,
+        new_diode_scale: float | None = None,
+        old_diode_scale: float | None = None,
     ) -> None:
         self._new_voltage = new_voltage
         self._new_current = new_current
@@ -2113,6 +2271,18 @@ class SetDocumentPropertiesCommand(Command):
         self._old_siunitx = old_siunitx
         self._new_preamble = new_preamble
         self._old_preamble = old_preamble
+        self._new_symbol_style = new_symbol_style
+        self._old_symbol_style = old_symbol_style
+        self._new_marks = new_mark_unconnected_pins
+        self._old_marks = old_mark_unconnected_pins
+        self._new_hops = new_line_hops
+        self._old_hops = old_line_hops
+        self._new_open_ends = new_mark_open_ends
+        self._old_open_ends = old_mark_open_ends
+        self._new_junctions = new_mark_junctions
+        self._old_junctions = old_mark_junctions
+        self._new_diode = new_diode_scale
+        self._old_diode = old_diode_scale
 
     def do(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2123,6 +2293,18 @@ class SetDocumentPropertiesCommand(Command):
             schematic.siunitx = self._new_siunitx
         if self._new_preamble is not None and self._new_preamble != self._old_preamble:
             schematic.preamble = self._new_preamble
+        if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
+            schematic.symbol_style = dict(self._new_symbol_style)
+        if self._new_marks is not None and self._new_marks != self._old_marks:
+            schematic.mark_unconnected_pins = self._new_marks
+        if self._new_hops is not None and self._new_hops != self._old_hops:
+            schematic.line_hops = self._new_hops
+        if self._new_open_ends is not None and self._new_open_ends != self._old_open_ends:
+            schematic.mark_open_ends = self._new_open_ends
+        if self._new_junctions is not None and self._new_junctions != self._old_junctions:
+            schematic.mark_junctions = self._new_junctions
+        if self._new_diode is not None and self._new_diode != self._old_diode:
+            schematic.diode_scale = self._new_diode
 
     def undo(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2133,6 +2315,18 @@ class SetDocumentPropertiesCommand(Command):
             schematic.siunitx = self._old_siunitx
         if self._new_preamble is not None and self._new_preamble != self._old_preamble:
             schematic.preamble = self._old_preamble
+        if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
+            schematic.symbol_style = dict(self._old_symbol_style)
+        if self._new_marks is not None and self._new_marks != self._old_marks:
+            schematic.mark_unconnected_pins = self._old_marks
+        if self._new_hops is not None and self._new_hops != self._old_hops:
+            schematic.line_hops = self._old_hops
+        if self._new_open_ends is not None and self._new_open_ends != self._old_open_ends:
+            schematic.mark_open_ends = self._old_open_ends
+        if self._new_junctions is not None and self._new_junctions != self._old_junctions:
+            schematic.mark_junctions = self._old_junctions
+        if self._new_diode is not None and self._new_diode != self._old_diode:
+            schematic.diode_scale = self._old_diode
 
 
 class MacroCommand(Command):

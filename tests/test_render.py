@@ -85,6 +85,35 @@ def test_parse_geometry_captures_rect_as_glyph():
     assert g["d"].count("L") == 3                            # 4 corners
 
 
+def test_parse_geometry_captures_clip_path():
+    """A path clipped via ``clip-path='url(#id)'`` (dvisvgm clips e.g. the RF
+    antenna's full-circle wavefronts to a wedge so only the arcs show) carries the
+    clip region's ``d`` so the canvas can reproduce it. Pure parse, no toolchain."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+        "<defs><clipPath id='clip1'><path d='M0 0L5 0L5 5Z'/></clipPath></defs>"
+        "<g>"
+        "<path d='M1 1L2 2' stroke='#000' fill='none' clip-path='url(#clip1)'/>"
+        "<path d='M3 3L4 4' stroke='#000' fill='none'/>"
+        "</g></svg>"
+    )
+    geo = render.parse_geometry(svg)
+    assert geo["paths"][0]["clip"] == "M0 0L5 0L5 5Z"   # clipped path carries the wedge
+    assert "clip" not in geo["paths"][1]                # unclipped path has none
+
+
+def test_parse_geometry_clip_inherited_from_group():
+    """A ``clip-path`` set on an ancestor ``<g>`` applies to its child paths."""
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>"
+        "<defs><clipPath id='c'><path d='M0 0L9 0L9 9Z'/></clipPath></defs>"
+        "<g clip-path='url(#c)'><path d='M1 1L2 2' stroke='#000' fill='none'/></g>"
+        "</svg>"
+    )
+    geo = render.parse_geometry(svg)
+    assert geo["paths"][0]["clip"] == "M0 0L9 0L9 9Z"
+
+
 def test_render_is_deterministic():
     svg1, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)
     svg2, _ = render.render_svg(r"\draw (0,0) to[R] (2,0);", border_pt=2)

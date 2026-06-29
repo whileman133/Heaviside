@@ -1,11 +1,17 @@
 {
-  "version": "0.6",
+  "version": "0.10",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
+    "symbol_style": {},
     "siunitx": true,
-    "preamble": ""
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "mark_open_ends": true,
+    "mark_junctions": true,
+    "diode_scale": 0.8
   },
   "components": [
     {

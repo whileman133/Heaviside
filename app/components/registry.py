@@ -13,18 +13,17 @@ assembled from two sources:
   drawing primitives ``bipole``/``rect``/``circle``/``text_node``) are defined as
   literals below — they are not derived from a CircuiTikZ command.
 
-``_DISPLAY_ORDER`` is a *preference* for the within-category palette order
-(§5.4) — kinds not named in it still appear (after the named ones), so it never
-needs editing to add a component.
+The library kinds are kept in the data file's scrape order (the manual's own
+component sequence); the bespoke annotation/drawing kinds follow them. The
+palette groups by category and sorts within a category itself (§5.4).
 
 To add a plain CircuiTikZ component: measure it (``app/components/render.py``) and
-add an entry to ``components/definitions.json`` (``components/generate_components.py``).
-That's it — the registry, codegen, and canvas all derive from the data, and the
-canvas item falls back to the generic ``ComponentItem``.  Only a component that
-needs special item behaviour (a custom ``boundingRect``, hit-testing, or resize)
-also needs a ``ComponentItem`` subclass + an ``ITEM_CLASSES`` row in
-``app/canvas/items.py``; an unusual palette position can optionally be set in
-``_DISPLAY_ORDER``.
+add an entry to ``components/generated/definitions.json``
+(``components/generate_library.py``). That's it — the registry, codegen, and canvas
+all derive from the data, and the canvas item falls back to the generic
+``ComponentItem``.  Only a component that needs special item behaviour (a custom
+``boundingRect``, hit-testing, or resize) also needs a ``ComponentItem`` subclass +
+an ``ITEM_CLASSES`` row in ``app/canvas/items.py``.
 """
 
 from __future__ import annotations
@@ -46,7 +45,10 @@ from app.components.model import (
 _OPEN = ComponentDef(
     kind="open",
     display_name="Voltage Annotation",
-    category="Annotations",
+    # The CircuiTikZ manual documents `open`/`short` under "Resistive bipoles", so
+    # they live in the **Resistors** category rather than an invented "Annotations"
+    # group with no manual counterpart.
+    category="Resistors",
     bbox=(0.0, -0.4, 2.0, 0.4),
     pins=[
         PinDef(name="in", offset=(0.0, 0.0)),
@@ -61,7 +63,7 @@ _OPEN = ComponentDef(
 _SHORT = ComponentDef(
     kind="short",
     display_name="Current Annotation",
-    category="Annotations",
+    category="Resistors",   # manual section "Resistive bipoles" — see _OPEN above
     bbox=(0.0, -0.4, 2.0, 0.4),
     pins=[
         PinDef(name="in", offset=(0.0, 0.0)),
@@ -140,90 +142,30 @@ _BESPOKE: dict[str, ComponentDef] = {
 # Registry assembly
 # ---------------------------------------------------------------------------
 
-# Within-category palette display order (§5.4): the per-category sequence is the
-# order here.  Engineer-facing groups (Resistors/Capacitors/…/Transistors) rather
-# than the CircuiTikZ bipole/tripole classification.
-_DISPLAY_ORDER: list[str] = [
-    # Resistors / Capacitors / Inductors
-    "R", "vR", "thermistor", "thermistor ntc", "thermistor ptc",
-    "photoresistor", "varistor", "memristor",
-    "C", "eC", "pC", "vC", "feC", "cC", "sC", "varcap", "piezoelectric", "cpe",
-    # Inductors group: inductors, then transformers, then the choke.
-    "L", "cuteL", "eL", "vL", "sL",
-    "transformer", "transformer core",
-    "cute transformer", "cute transformer core",
-    "european transformer", "european transformer core",
-    "choke",
-    # Diodes (incl. the two-terminal thyristors)
-    "D", "zD", "sD", "tD", "zzD", "leD", "photodiode", "thyristor", "triac",
-    # Transistors
-    "npn", "pnp",
-    "nigfete", "nigfetd", "pigfete", "pigfetd",
-    "nfet", "pfet", "nmos", "pmos", "nmosd", "pmosd",
-    "njfet", "pjfet",
-    "nigbt", "pigbt", "isfet",
-    # Tubes
-    "triode", "diodetube", "tetrode", "pentode",
-    # Logic — gates, then flip-flops, multiplexers, ALU/adder
-    "not", "buffer", "and", "nand", "or", "nor", "xor", "xnor",
-    "enot", "ebuffer", "eand", "enand", "eor", "enor", "exor", "exnor",
-    "flipflop D", "flipflop T", "flipflop SR", "flipflop JK",
-    "mux", "demux", "ALU", "adder",
-    # Amplifiers
-    "op amp", "fd op amp", "gmamp", "instamp", "schmitt", "invschmitt",
-    # Blocks (signal-processing / RF)
-    "amp", "adc", "dac",
-    "lowpass", "highpass", "bandpass", "allpass", "phaseshifter", "detector",
-    "vco", "gyrator",
-    # Sources
-    "V", "I", "vsourcesin", "isourcesin", "vsourcesquare", "vsourcetri",
-    "vsourceN", "dcvsource", "dcisource", "cV", "cI", "battery1",
-    # Instruments
-    "ammeter", "voltmeter", "ohmmeter", "oscope", "rmeter",
-    # Switches
-    "nos", "ncs", "closing", "opening", "spst", "pushbutton", "spdt",
-    "cute open switch", "cute closed switch",
-    "cute spdt up", "cute spdt down", "cute spdt mid", "rotaryswitch",
-    "reed", "toggle switch",
-    # Grounds
-    "ground", "rground", "sground", "nground", "pground", "cground", "eground",
-    # Supplies
-    "vcc", "vdd", "vee", "vss",
-    # Transducers
-    "loudspeaker", "mic", "buzzer",
-    # Antennas
-    "antenna",
-    # Misc
-    "fuse", "afuse", "lamp", "bulb", "squid", "jumper", "tline", "bipole",
-    # Annotations
-    "open", "short",
-    # Drawing
-    "text_node", "rect", "circle",
-]
+_LIB: dict[str, ComponentDef] = library_component_defs()
 
-_ALL: dict[str, ComponentDef] = {**_BESPOKE, **library_component_defs()}
+# A bespoke kind with no library entry but that the manual documents **next to** a
+# library kind is placed right after that sibling, so it keeps the manual's order
+# within its category (``open`` follows ``short`` in "Resistive bipoles").
+_BESPOKE_AFTER: dict[str, str] = {"open": "short"}
 
-# ``_DISPLAY_ORDER`` is a *preference*, not an exhaustive list.  Kinds named in
-# it are ordered as listed; any kind present in the data but not named falls in
-# after them (then alphabetically).  The palette groups by category, so a new
-# definitions.json entry simply appears at the end of its category — adding a
-# component needs no edit here, while the curated order of known kinds is kept.
-def _order_key(kind: str) -> tuple[int, str]:
-    return (_DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else len(_DISPLAY_ORDER),
-            kind)
-
-
-def display_rank(kind: str) -> int | None:
-    """The kind's position in the preferred display order, or ``None`` if it is
-    not explicitly listed. The palette uses this so an explicit order (e.g. the
-    Inductors group's inductors → transformers → choke) wins over its heuristic
-    american-then-european grouping, which then applies only to unlisted kinds."""
-    return _DISPLAY_ORDER.index(kind) if kind in _DISPLAY_ORDER else None
-
-
-REGISTRY: dict[str, ComponentDef] = {
-    kind: _ALL[kind] for kind in sorted(_ALL, key=_order_key)
-}
+# The library's ``definitions.json`` is written in manual order (`generate_library`
+# sorts by source position) and is the authoritative sequence, so we preserve it. A
+# bespoke kind (resizable annotations + drawing primitives) **wins over** any same-named
+# library kind; crucially it takes that library kind's **position** (an in-place
+# override) instead of being appended — so ``short`` stays where the manual lists it
+# (front of Resistors) rather than drifting to the end. ``open`` (no library entry) is
+# anchored right after ``short`` via ``_BESPOKE_AFTER``; the remaining purely-bespoke
+# kinds (the Drawing primitives, the Misc bipole) append at the end, forming their own
+# trailing categories.
+REGISTRY: dict[str, ComponentDef] = {}
+for _k, _v in _LIB.items():
+    REGISTRY[_k] = _BESPOKE.get(_k, _v)          # in-place override (e.g. short)
+    for _bk, _anchor in _BESPOKE_AFTER.items():
+        if _anchor == _k and _bk in _BESPOKE:
+            REGISTRY[_bk] = _BESPOKE[_bk]         # open, right after short
+for _k, _v in _BESPOKE.items():                   # rect/circle/text_node/bipole, …
+    REGISTRY.setdefault(_k, _v)
 
 # ---------------------------------------------------------------------------
 # ITEM_CLASSES — populated by app/canvas/items.py at import time.

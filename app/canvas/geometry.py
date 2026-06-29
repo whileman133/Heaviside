@@ -13,6 +13,8 @@ Two coordinate systems are in play (see :mod:`app.canvas.scene`):
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QPointF
 
 from app.canvas.style import GRID_PX
@@ -82,7 +84,8 @@ def world_delta_to_local(dx_w: float, dy_w: float, rotation: int) -> tuple[float
     """Map a world-space delta back into a component's local span axes.
 
     The inverse rotation of :func:`local_span_to_world` (mirror not applied —
-    the drag math handles mirror separately).
+    the drag math handles mirror separately). Right-angle multiples stay exact;
+    45° multiples use the trig inverse (rotation by −θ).
     """
     r = rotation % 360
     if r == 90:
@@ -91,7 +94,11 @@ def world_delta_to_local(dx_w: float, dy_w: float, rotation: int) -> tuple[float
         return (-dx_w, -dy_w)
     if r == 270:
         return (-dy_w, dx_w)
-    return (dx_w, dy_w)
+    if r == 0:
+        return (dx_w, dy_w)
+    rad = math.radians(r)
+    cos, sin = math.cos(rad), math.sin(rad)
+    return (dx_w * cos + dy_w * sin, -dx_w * sin + dy_w * cos)
 
 
 def local_span_to_world(
@@ -114,11 +121,40 @@ def local_span_to_world(
         rx, ry = (-sdx, -sdy)
     elif r == 270:
         rx, ry = (sdy, -sdx)
-    else:
+    elif r == 0:
         rx, ry = (sdx, sdy)
+    else:
+        rad = math.radians(r)
+        cos, sin = math.cos(rad), math.sin(rad)
+        rx, ry = (sdx * cos - sdy * sin, sdx * sin + sdy * cos)
     if mirror:
         rx = -rx
     return (rx, ry)
+
+
+def anchored_resize_factors(
+    cursor_local: tuple[float, float],
+    grabbed_corner: tuple[float, float],
+    opposite_corner: tuple[float, float],
+    start_factors: tuple[float, float],
+) -> tuple[float, float]:
+    """New ``(wf, hf)`` resize factors that move the **grabbed** body corner to the
+    cursor while holding the diagonally-**opposite** corner fixed (spec §6.4).
+
+    All coordinates are in the component's local frame relative to its *original*
+    origin. ``grabbed_corner``/``opposite_corner`` are the *unscaled* body-corner
+    offsets (GU); ``start_factors`` are the factors at drag start. Because the model
+    scales every offset about the origin, holding the opposite corner fixed makes the
+    factor the ratio of the new corner-to-anchor span over the old — so the grabbed
+    corner tracks the cursor at the *same* rate from whichever corner you grab (the
+    origin's position within the body no longer matters)."""
+    cx, cy = cursor_local
+    gx, gy = grabbed_corner
+    ax, ay = opposite_corner
+    wf0, hf0 = start_factors
+    wf = (cx - wf0 * ax) / (gx - ax) if abs(gx - ax) > 1e-9 else wf0
+    hf = (cy - hf0 * ay) / (gy - ay) if abs(gy - ay) > 1e-9 else hf0
+    return wf, hf
 
 
 def world_span_to_local(

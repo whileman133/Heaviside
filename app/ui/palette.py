@@ -1,13 +1,16 @@
 """
 Component palette panel (spec §10.2).
 
-A left panel for picking components, organised as three collapsible sections:
+A left panel for picking components, organised as collapsible sections:
 
   * **In use in document** — quick access to the distinct kinds already placed
     (updates as the schematic changes); hidden when the document is empty.
-  * **Categories** — a 3-column grid of category cards; clicking one makes it the
-    *active* category.
-  * **<active category>** — the components in the active category.
+  * **CircuiTikZ** — a 3-column grid of cards for the CircuiTikZ component
+    categories; clicking one makes it the *active* category.
+  * **TikZ** — the same, for our own (vanilla-TikZ) drawing primitives (rectangle,
+    circle, text — see ``_VANILLA_CATEGORIES``).
+  * **<active category>** — the components in the active category (from either
+    section above).
 
 Components are shown as icon-only tiles (a thumbnail rendered from the component's
 own ``ComponentItem``); the display name + kind appear as a hover tooltip rather
@@ -21,11 +24,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QIcon, QKeySequence, QPainter, QPixmap, QShortcut,
+    QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -40,7 +45,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
-from app.components.registry import REGISTRY, display_rank
+from app.components.registry import REGISTRY
 from app.ui import theme
 
 # Preview glyph + tile sizes — enlarged so the symbols read clearly. The tile
@@ -58,97 +63,133 @@ _IN_USE_MAX_H = 232
 # used to size the pinned panel deterministically from its tile-grid geometry.
 _IN_USE_HEADER_H = 26
 
-# Preferred category order (spec §5.4) — engineer-facing groups, not the
-# CircuiTikZ bipole/tripole classification. The palette splits the raw "Logic"
-# and "Sources" registry categories into finer groups (see _palette_category).
-# Listed row-by-row to match the 3-column card grid (_build_categories fills it
-# left-to-right), so each triple below is one row of the palette.
-_CATEGORY_ORDER = [
-    "Resistors", "Inductors", "Capacitors",
-    "Diodes", "Transistors", "Switches",
-    "Sources", "Supplies", "Grounds",
-    "Annotations", "Amplifiers", "Instruments",
-    "Gates (Am)", "Gates (Eu)", "Logic",
-    "Blocks", "Tubes", "Antennas",
-    "Transducers", "Misc", "Drawing",
-]
+# Palette categories that are NOT CircuiTikZ symbols but our own **vanilla-TikZ**
+# drawing primitives (plain ``\draw`` rectangles/circles and ``\node`` text). They
+# get their own top-level palette section, separate from the CircuiTikZ component
+# categories; everything not listed here is treated as CircuiTikZ. Add any future
+# custom drawing category here.
+_VANILLA_CATEGORIES: frozenset[str] = frozenset({"Drawing"})
 
-# Raw-"Logic" kinds that are *blocks* rather than gates (flip-flops, mux/demux,
-# ALU, adder). These split into their own palette "Logic" category; the boolean
-# gates split into the style-grouped "Gates (Am)" / "Gates (Eu)" (see
-# _palette_category). Keyed on the CircuiTikZ shape keyword so it tracks the data.
-_LOGIC_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
+# ---------------------------------------------------------------------------
+# Online-manual documentation links (spec §10.2)
+# ---------------------------------------------------------------------------
 
-# Power-supply kinds (rails + batteries) split out of the raw "Sources" registry
-# category into the palette-only "Supplies" group; the actual sources stay put.
-_SUPPLY_KINDS = frozenset({"vcc", "vdd", "vee", "vss", "battery", "battery1"})
+# The CircuiTikZ component reference is the "The components: list" page of the
+# multi-page online manual; each category subsection carries a stable semantic
+# ``#sec:<label>`` anchor (the LaTeX ``\label``), which we link to directly.
+_MANUAL_BASE_URL = "https://rmano.github.io/circuitikz/node-The-components-list.html"
 
-
-def _is_logic_block(kind: str) -> bool:
-    """True for a raw-"Logic" kind that is a *block* (flip-flop, mux/demux, ALU,
-    adder) rather than a boolean gate — so the palette can give the blocks their
-    own "Logic" category and keep the gates in "Gates (Am)" / "Gates (Eu)"."""
-    return REGISTRY[kind].tikz_keyword.startswith(_LOGIC_BLOCK_TIKZ)
-
-
-def _palette_category(kind: str, raw: str) -> str:
-    """Refine a component's registry category into its palette group: split the raw
-    Logic category into the boolean **Gates** (by american/european style) and the
-    **Logic** blocks (flip-flops, mux/demux, ALU, adder), and move the supply
-    rails/batteries into Supplies. (Category is a palette-grouping concern, §5.4,
-    so this stays UI-side.)"""
-    if raw == "Logic":
-        if _is_logic_block(kind):
-            return "Logic"
-        return "Gates (Eu)" if _is_european_style(kind) else "Gates (Am)"
-    if raw == "Sources" and kind in _SUPPLY_KINDS:
-        return "Supplies"
-    return raw
-
-
-# A representative component **kind** per category. Its actual symbol is rendered
-# as the category-card icon (see _category_pixmap), so the icons always match the
-# components — no decorative stand-ins that don't fit.
-_CATEGORY_REP = {
-    "Resistors": "R",
-    "Capacitors": "C",
-    "Inductors": "L",
-    "Diodes": "D",
-    "Transistors": "npn",
-    "Tubes": "triode",
-    "Amplifiers": "op amp",
-    "Blocks": "amp",
-    "Gates (Am)": "and",
-    "Gates (Eu)": "eand",
-    "Logic": "ALU",
-    "Switches": "nos",
-    "Sources": "V",
-    "Supplies": "battery",
-    "Instruments": "voltmeter",
-    "Grounds": "ground",
-    "Transducers": "loudspeaker",
-    "Antennas": "antenna",
-    "Misc": "lamp",
-    "Annotations": "open",
-    "Drawing": "rect",
+# Palette category -> (full manual subsection title, ``sec:`` fragment anchor).
+# Keyed by the category name; the title is the manual's own (long) subsection
+# heading, used as the link tooltip.  Keys are the short manual categories (see
+# components/generate_library.py ``_CATEGORY_MAP``).
+#
+# The ``sec:`` anchors are the manual's own LaTeX labels (stable across builds),
+# read from the category-level (``4.x``) subsection headings of the components
+# page.  Refresh from ``_MANUAL_BASE_URL`` (grep ``id="sec:`` on the page) if the
+# manual ever renames a label.
+_CATEGORY_DOC: dict[str, tuple[str, str]] = {
+    # short manual categories
+    "Grounds":      ("Grounds and supply voltages", "sec:grounds-and-supply"),
+    "Resistors":    ("Resistive bipoles", "sec:resistive-bipoles"),
+    "Cap/Ind":      ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Diodes":       ("Diodes and such", "sec:diodes-and-such"),
+    "Sources":      ("Sources and generators", "sec:sources-and-generators"),
+    "Instruments":  ("Instruments", "sec:instruments"),
+    "Mechanical":   ("Mechanical Analogy", "sec:mechanical-analogy"),
+    "Misc":         ("Miscellaneous bipoles and symbols", "sec:miscellaneous-bipoles-and"),
+    "Buses":        ("Multiple wires (buses)", "sec:multiple-wires-buses"),
+    "Crossings":    ("Crossings", "sec:crossings"),
+    "Arrows":       ("Arrows (fake and real)", "sec:arrows"),
+    "Terminals":    ("Terminal shapes", "sec:terminals"),
+    "Connectors":   ("Connectors", "sec:connectors"),
+    "Blocks":       ("Block diagram components", "sec:block-diagram-components"),
+    "Transistors":  ("Transistors", "sec:transistors"),
+    "Tubes":        ("Electronic Tubes", "sec:electronic-tubes"),
+    "RF":           ("RF components", "sec:RF"),
+    "Electromech":  ("Electro-Mechanical Devices", "sec:electro-mechanical-devices"),
+    "Transformers": ("Double bipoles (transformers)", "sec:transformers"),
+    "Amplifiers":   ("Amplifiers", "sec:amplifiers"),
+    "Switches":     ("Switches, buttons and jumpers", "sec:switches-buttons-and"),
+    "Logic":        ("Logic gates", "sec:logic-gates"),
+    "Flip-flops":   ("Flip-flops", "sec:flipflops"),
+    "Mux/Demux":    ("Multiplexer and de-multiplexer", "sec:muxdemuxes"),
+    "Chips":        ("Chips (integrated circuits)", "sec:chips"),
+    "Displays":     ("Seven segment displays", "sec:seven-segment-displays"),
+    # curated-library category aliases (same manual sections)
+    "Capacitors":   ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Inductors":    ("Capacitors and inductors: dynamical bipoles", "sec:capacitors-and-inductors"),
+    "Gates (Am)":   ("Logic gates", "sec:logic-gates"),
+    "Gates (Eu)":   ("Logic gates", "sec:logic-gates"),
+    "Supplies":     ("Grounds and supply voltages", "sec:grounds-and-supply"),
+    "Antennas":     ("RF components", "sec:RF"),
 }
+
+
+def _category_doc(category: str) -> tuple[str, str] | None:
+    """Return ``(full_title, url)`` for *category*'s manual section, or ``None``
+    if the category has no documented section."""
+    entry = _CATEGORY_DOC.get(category)
+    if entry is None:
+        return None
+    title, anchor = entry
+    return title, f"{_MANUAL_BASE_URL}#{anchor}"
+
+
+def _doc_link_icon(size: int = 14) -> QPixmap:
+    """A small themed 'external link' glyph (a page with an arrow leaving its
+    top-right corner) signalling a link out to the online manual."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.2, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # page (lower-left rounded box)
+    p.drawRoundedRect(QRectF(s * 0.10, s * 0.34, s * 0.52, s * 0.52),
+                      s * 0.10, s * 0.10)
+    # arrow leaving the top-right
+    p.drawLine(QPointF(s * 0.46, s * 0.54), QPointF(s * 0.86, s * 0.14))
+    p.drawLine(QPointF(s * 0.86, s * 0.14), QPointF(s * 0.60, s * 0.14))
+    p.drawLine(QPointF(s * 0.86, s * 0.14), QPointF(s * 0.86, s * 0.40))
+    p.end()
+    return pix
 
 
 # ---------------------------------------------------------------------------
 # Thumbnail rendering (cached)
 # ---------------------------------------------------------------------------
 
-_thumb_cache: dict[str, QPixmap] = {}
+_thumb_cache: dict[tuple, QPixmap] = {}
+
+# Active document symbol style for thumbnails (§5.4). The palette updates this so its
+# tiles/category icons render in the document's american/european/cute style; cached
+# per (kind, value) so styles coexist without re-rendering.
+_thumb_style: dict[str, str] = {}
+
+
+def _thumb_style_value(kind: str) -> str:
+    """The thumbnail style value for *kind* (the value on its style axis, or ``""`` if
+    the kind doesn't vary with style — so unstyled tiles share one cache entry)."""
+    from app.components import library
+    axis = library.style_axis(kind)
+    return library.style_value(axis, _thumb_style) if axis else ""
 
 
 def _render_thumbnail(kind: str, size: int = _THUMB_SIZE) -> QPixmap:
-    """Render a *size*×*size* thumbnail for *kind* from its ``ComponentItem``."""
+    """Render a *size*×*size* thumbnail for *kind* from its ``ComponentItem``, in the
+    active document symbol style (``_thumb_style``)."""
     defn = REGISTRY[kind]
     comp = defn.component_class(
         id="__thumb__", kind=kind, position=(0.0, 0.0),
         rotation=0, mirror=False, options="",
     )
     item = ITEM_CLASSES.get(kind, ComponentItem)(comp)
+    item._style_override = _thumb_style   # thumbnail has no scene → carry the style
     brect = item.boundingRect()
     w = max(brect.width(), 1.0)
     h = max(brect.height(), 1.0)
@@ -170,19 +211,26 @@ def _render_thumbnail(kind: str, size: int = _THUMB_SIZE) -> QPixmap:
 
 
 def _thumbnail(kind: str) -> QPixmap:
-    if kind not in _thumb_cache:
+    key = (kind, _thumb_style_value(kind))
+    if key not in _thumb_cache:
         try:
-            _thumb_cache[kind] = _render_thumbnail(kind)
+            _thumb_cache[key] = _render_thumbnail(kind)
         except Exception:  # noqa: BLE001 - never let a bad symbol break the panel
-            _thumb_cache[kind] = QPixmap(_THUMB_SIZE, _THUMB_SIZE)
-            _thumb_cache[kind].fill(QColor(0, 0, 0, 0))
-    return _thumb_cache[kind]
+            _thumb_cache[key] = QPixmap(_THUMB_SIZE, _THUMB_SIZE)
+            _thumb_cache[key].fill(QColor(0, 0, 0, 0))
+    return _thumb_cache[key]
 
 
-def _category_pixmap(category: str, size: int) -> QPixmap:
-    """Render the category's representative component symbol as a *size*×*size*
-    icon (Retina-crisp). Falls back to an empty pixmap if the kind is unknown."""
-    kind = _CATEGORY_REP.get(category)
+def _category_rep(category: str, kinds: list[str]) -> str | None:
+    """The component kind whose symbol illustrates *category*: the first member of the
+    category in manual order (the manual's lead component for the section), so every
+    category gets an icon instead of a blank card."""
+    return kinds[0] if kinds else None
+
+
+def _category_pixmap(kind: str | None, size: int) -> QPixmap:
+    """Render *kind*'s symbol as a *size*×*size* category icon (Retina-crisp), or an
+    empty pixmap if there's no usable kind."""
     if not (kind and kind in REGISTRY):
         return QPixmap()
     try:
@@ -193,29 +241,29 @@ def _category_pixmap(category: str, size: int) -> QPixmap:
         return QPixmap()
 
 
-def _is_european_style(kind: str) -> bool:
-    """True for a european-style component, so the palette can group american
-    symbols together (first) and european ones after. Derived from the CircuiTikZ
-    keyword (every european kind uses an ``european …`` shape keyword)."""
-    return "european" in REGISTRY[kind].tikz_keyword.lower()
-
-
-def _within_category_key(kind: str):
-    """Sort key for the order of kinds *within* a palette category: kinds in the
-    explicit display order come first, in that order; the rest fall after,
-    american-style before european (then alphabetically)."""
-    rank = display_rank(kind)
-    if rank is not None:
-        return (0, rank, "")
-    return (1, _is_european_style(kind), kind.lower())
-
-
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
 
+class _ClickableLabel(QLabel):
+    """A QLabel that emits ``clicked`` on a left press (so a wrapping section title
+    can collapse its section like the arrow toggle does)."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: ANN001
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
 class _CollapsibleSection(QWidget):
-    """A titled section whose body can be collapsed by clicking the header."""
+    """A titled section whose body can be collapsed by clicking the header. The
+    title is a **word-wrapping** label so long manual section names (the active
+    category shows the full name) wrap within the palette pane instead of clipping."""
+
+    _TITLE_QSS = ("QLabel { font-weight: bold; color: %s; font-size: 11px; "
+                  "padding: 4px 2px; }")
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -223,20 +271,48 @@ class _CollapsibleSection(QWidget):
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(2)
 
+        # Arrow toggle (collapse control) kept beside a separate title label so the
+        # title can wrap; the arrow stays a single line, top-aligned with the text.
         self._toggle = QToolButton()
         self._toggle.setCheckable(True)
         self._toggle.setChecked(True)
-        self._toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
         self._toggle.setArrowType(Qt.DownArrow)
-        self._toggle.setText(title)
         self._toggle.setAutoRaise(True)
-        self._toggle.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        self._toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; color: %s; "
-            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
-        )
+        self._toggle.setCursor(Qt.PointingHandCursor)
+        self._toggle.setFocusPolicy(Qt.NoFocus)
+        self._toggle.setStyleSheet("QToolButton { border: none; padding: 4px 0; }")
         self._toggle.toggled.connect(self._on_toggled)
-        self._layout.addWidget(self._toggle)
+
+        self._title = _ClickableLabel(title)
+        self._title.setWordWrap(True)
+        self._title.setCursor(Qt.PointingHandCursor)
+        self._title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._title.setStyleSheet(self._TITLE_QSS % theme.ICON)
+        self._title.clicked.connect(self._toggle.toggle)
+
+        # Header row: arrow + wrapping title + an optional trailing documentation-
+        # link button (shown for sections that map to a CircuiTikZ manual section;
+        # see ``set_doc_link``). The arrow and link stay top-aligned as the title wraps.
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(0)
+        header.addWidget(self._toggle, 0, Qt.AlignTop)
+        header.addWidget(self._title, 1)
+        self._doc_url: str | None = None
+        self._doc_btn = QToolButton()
+        self._doc_btn.setAutoRaise(True)
+        self._doc_btn.setCursor(Qt.PointingHandCursor)
+        self._doc_btn.setFocusPolicy(Qt.NoFocus)
+        self._doc_btn.setIconSize(QSize(14, 14))
+        self._doc_btn.setIcon(QIcon(_doc_link_icon(14)))
+        self._doc_btn.setStyleSheet(
+            "QToolButton { border: none; padding: 4px 4px; }"
+            "QToolButton:hover { background: %s; border-radius: 4px; }" % theme.HOVER
+        )
+        self._doc_btn.setVisible(False)
+        self._doc_btn.clicked.connect(self._open_doc_link)
+        header.addWidget(self._doc_btn, 0, Qt.AlignTop)
+        self._layout.addLayout(header)
 
         self._body = QWidget()
         self._body_layout = QVBoxLayout(self._body)
@@ -245,7 +321,25 @@ class _CollapsibleSection(QWidget):
         self._layout.addWidget(self._body)
 
     def set_title(self, title: str) -> None:
-        self._toggle.setText(title)
+        self._title.setText(title)
+
+    def title(self) -> str:
+        return self._title.text()
+
+    def set_doc_link(self, title: str | None, url: str | None) -> None:
+        """Show (or hide, when *url* is falsy) the documentation-link button next
+        to the title. *title* becomes the button's tooltip (the full manual
+        section name)."""
+        self._doc_url = url or None
+        if self._doc_url is None:
+            self._doc_btn.setVisible(False)
+            return
+        self._doc_btn.setToolTip(f"Open “{title}” in the CircuiTikZ manual")
+        self._doc_btn.setVisible(True)
+
+    def _open_doc_link(self) -> None:
+        if self._doc_url:
+            QDesktopServices.openUrl(QUrl(self._doc_url))
 
     def body_layout(self) -> QVBoxLayout:
         return self._body_layout
@@ -255,9 +349,11 @@ class _CollapsibleSection(QWidget):
         self._body.setVisible(expanded)
 
     def apply_theme(self) -> None:
-        self._toggle.setStyleSheet(
-            "QToolButton { border: none; font-weight: bold; color: %s; "
-            "font-size: 11px; padding: 4px 2px; text-align: left; }" % theme.ICON
+        self._title.setStyleSheet(self._TITLE_QSS % theme.ICON)
+        self._doc_btn.setIcon(QIcon(_doc_link_icon(14)))
+        self._doc_btn.setStyleSheet(
+            "QToolButton { border: none; padding: 4px 4px; }"
+            "QToolButton:hover { background: %s; border-radius: 4px; }" % theme.HOVER
         )
 
 
@@ -265,12 +361,13 @@ class _ComponentTile(QToolButton):
     """Icon-only, clickable component tile; the name is a hover tooltip."""
 
     def __init__(self, kind: str, place,  # noqa: ANN001
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 tile_size: int = _TILE_SIZE, thumb_size: int = _THUMB_SIZE) -> None:
         super().__init__(parent)
         defn = REGISTRY[kind]
         self.setIcon(QIcon(_thumbnail(kind)))
-        self.setIconSize(QSize(_THUMB_SIZE, _THUMB_SIZE))
-        self.setFixedSize(_TILE_SIZE, _TILE_SIZE)
+        self.setIconSize(QSize(thumb_size, thumb_size))
+        self.setFixedSize(tile_size, tile_size)
         self.setAutoRaise(True)
         self.setCursor(Qt.PointingHandCursor)
         self.setToolTip(f"{defn.display_name} ({kind})")
@@ -282,10 +379,215 @@ class _ComponentTile(QToolButton):
         self.clicked.connect(lambda: place(kind))
 
 
+# The canvas-side quick bar holds the **Terminals** category — the junction-dot /
+# pole connection markers (circ/ocirc, diamondpole/…, squarepole/…). Sourced by
+# category so it tracks the library: empty (and hidden) where there is none.
+WIRING_CATEGORY = "Terminals"
+# Compact tiles for the quick bar (the markers are tiny — no need for full palette
+# tile size): a snug icon with minimal padding.
+_WIRING_TILE = 30
+_WIRING_THUMB = 26
+
+
+# The annotation kinds offered in the quick bar, with the single-letter glyph that
+# denotes each: ``short`` is the **current** annotation (i), ``open`` the **voltage**
+# annotation (v) — the same i/v mnemonics as their placement keys.
+_ANNOTATION_QUICK: tuple[tuple[str, str], ...] = (("short", "i"), ("open", "v"))
+
+
+def _wire_quick_pixmap(size: int) -> QPixmap:
+    """A small Manhattan-wire glyph (an orthogonal stepped line) for the quick bar's
+    wire-tool tile."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.6, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # A two-corner orthogonal step: ╴┐_╶ from lower-left up to upper-right.
+    p.drawPolyline([QPointF(s * 0.16, s * 0.72), QPointF(s * 0.5, s * 0.72),
+                    QPointF(s * 0.5, s * 0.28), QPointF(s * 0.84, s * 0.28)])
+    p.end()
+    return pix
+
+
+def _laplata_quick_pixmap(size: int) -> QPixmap:
+    """A small La Plata-wire glyph (a horizontal leg, a 45° diagonal, a horizontal
+    leg) for the quick bar's diagonal-routing tile."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.6, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # ╴╱╶ : in low-left, a 45° rise, out high-right.
+    p.drawPolyline([QPointF(s * 0.16, s * 0.72), QPointF(s * 0.4, s * 0.72),
+                    QPointF(s * 0.6, s * 0.28), QPointF(s * 0.84, s * 0.28)])
+    p.end()
+    return pix
+
+
+def _letter_pixmap(letter: str, size: int) -> QPixmap:
+    """A small italic-serif letter glyph (``i``/``v``) for the annotation tiles — the
+    math-italic look of a CircuiTikZ current/voltage label."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.TextAntialiasing)
+    font = QFont("Georgia, Times New Roman, serif")
+    font.setItalic(True)
+    font.setPixelSize(int(size * 0.72))
+    p.setFont(font)
+    p.setPen(QColor(theme.ICON))
+    p.drawText(pix.rect(), Qt.AlignCenter, letter)
+    p.end()
+    return pix
+
+
+class WiringQuickBar(QWidget):
+    """A slim vertical strip docked at the right edge of the canvas for the most
+    common wiring gestures, a single click away without a trip to the category
+    palette: the **Manhattan wire** tool at the top, then the **current** (``short``,
+    *i*) and **voltage** (``open``, *v*) annotations, then the **Terminals**
+    connection markers (sourced from the active library by category)."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._scene: SchematicScene | None = None
+        self._kinds = [k for k, d in REGISTRY.items() if d.category == WIRING_CATEGORY]
+        # Annotation tiles for kinds the active library actually carries (bespoke
+        # open/short are always present, but stay defensive).
+        self._annotations = [(k, g) for k, g in _ANNOTATION_QUICK if k in REGISTRY]
+        # Selected wire routing style (the active tool indicated in the bar). The bar
+        # owns the selection and pushes it to the scene; rebuilt views restore it.
+        self._routing = "manhattan"
+        self._mode_btns: dict[str, QToolButton] = {}
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(2, 4, 2, 4)
+        self._layout.setSpacing(2)
+        self.setFixedWidth(_WIRING_TILE + 4)
+        self._rebuild()   # always shown: it always has the wire + annotation tools
+
+    def set_scene(self, scene: SchematicScene) -> None:
+        self._scene = scene
+        scene.set_wire_routing(self._routing)   # keep the scene in sync with the bar
+
+    def _place(self, kind: str) -> None:
+        if self._scene is not None:
+            self._scene.start_placement(kind)
+
+    def _select_routing(self, style: str) -> None:
+        """Pick a routing style (Manhattan / La Plata): mark it active in the bar, set
+        it on the scene, and enter Wire mode so the next drag draws in that style."""
+        self._routing = style
+        for s, b in self._mode_btns.items():
+            b.setChecked(s == style)
+        if self._scene is not None:
+            self._scene.set_wire_routing(style)
+            self._scene.enter_wire_mode()
+
+    def _tool_tile(self, icon: QPixmap, tooltip: str, on_click) -> QToolButton:  # noqa: ANN001
+        """A quick-bar tile carrying a hand-drawn *icon* (not a component thumbnail),
+        matching the component tiles' look but invoking an arbitrary action."""
+        b = QToolButton()
+        b.setIcon(QIcon(icon))
+        b.setIconSize(QSize(_WIRING_THUMB, _WIRING_THUMB))
+        b.setFixedSize(_WIRING_TILE, _WIRING_TILE)
+        b.setAutoRaise(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setStyleSheet(
+            "QToolButton { border: 1px solid transparent; border-radius: 6px; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            % (theme.HOVER, theme.HOVER_BORDER)
+        )
+        b.clicked.connect(on_click)
+        return b
+
+    def _mode_tile(self, icon: QPixmap, tooltip: str, style: str) -> QToolButton:
+        """A **checkable** routing-mode tile (Manhattan / La Plata). The active mode is
+        shown checked (accent fill + border); clicking selects it and enters Wire mode."""
+        b = QToolButton()
+        b.setIcon(QIcon(icon))
+        b.setIconSize(QSize(_WIRING_THUMB, _WIRING_THUMB))
+        b.setFixedSize(_WIRING_TILE, _WIRING_TILE)
+        b.setCheckable(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setStyleSheet(
+            "QToolButton { border: 1px solid transparent; border-radius: 6px; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            "QToolButton:checked { background: %s; border-color: %s; }"
+            % (theme.HOVER, theme.HOVER_BORDER, theme.HOVER, theme.ACCENT)
+        )
+        b.clicked.connect(lambda _=False, s=style: self._select_routing(s))
+        return b
+
+    def _divider(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
+        return line
+
+    def _rebuild(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+        # Wire routing modes (top): Manhattan (axis-only) and La Plata (45°), a
+        # mutually-exclusive pair whose checked tile marks the active routing style.
+        self._mode_btns = {}
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        for style, icon, tip in (
+            ("manhattan", _wire_quick_pixmap(_WIRING_THUMB), "Manhattan wire (90°)  [W]"),
+            ("laplata", _laplata_quick_pixmap(_WIRING_THUMB), "La Plata wire (45°)"),
+        ):
+            b = self._mode_tile(icon, tip, style)
+            b.setChecked(style == self._routing)
+            self._mode_btns[style] = b
+            self._mode_group.addButton(b)
+            self._layout.addWidget(b)
+        self._layout.addWidget(self._divider())
+        # Current/voltage annotations (short → i, open → v).
+        for kind, glyph in self._annotations:
+            self._layout.addWidget(self._tool_tile(
+                _letter_pixmap(glyph, _WIRING_THUMB),
+                f"{REGISTRY[kind].display_name} ({kind})",
+                lambda _=False, k=kind: self._place(k)))
+        # Terminals connection markers (library-sourced), below a divider.
+        if self._kinds:
+            self._layout.addWidget(self._divider())
+            for kind in self._kinds:
+                self._layout.addWidget(
+                    _ComponentTile(kind, self._place,
+                                   tile_size=_WIRING_TILE, thumb_size=_WIRING_THUMB))
+        self._layout.addStretch(1)
+        self.setStyleSheet(
+            "WiringQuickBar { background: %s; border-left: 1px solid %s; }"
+            % (theme.SURFACE, theme.BORDER_SOFT)
+        )
+
+    def apply_theme(self) -> None:
+        self._rebuild()
+
+
 class _CategoryCard(QFrame):
     """A clickable category card: icon + name + component count."""
 
-    def __init__(self, category: str, count: int, select, parent=None) -> None:  # noqa: ANN001
+    def __init__(self, category: str, count: int, select,  # noqa: ANN001
+                 rep_kind: str | None = None, parent=None) -> None:
         super().__init__(parent)
         self._category = category
         self._select = select
@@ -300,7 +602,7 @@ class _CategoryCard(QFrame):
         icon = QLabel()
         icon.setFixedSize(20, 20)
         icon.setAlignment(Qt.AlignCenter)
-        icon.setPixmap(_category_pixmap(category, 20))
+        icon.setPixmap(_category_pixmap(rep_kind, 20))
         # Transparent so the card's own fill shows through (a stylesheet'd QLabel
         # would otherwise paint an opaque palette box behind the glyph/text).
         icon.setStyleSheet("background: transparent; border: none;")
@@ -363,17 +665,29 @@ class ComponentPalette(QWidget):
 
         self._scene: SchematicScene | None = None
         self._by_cat: dict[str, list[str]] = defaultdict(list)
+        # Within each category the kinds keep their **manual order**: REGISTRY is built
+        # in the CircuiTikZ manual's scrape sequence, so iterating it and appending
+        # per-category preserves, within each category, the order the components appear
+        # in the manual — no re-sort.
         for kind, defn in REGISTRY.items():
-            self._by_cat[_palette_category(kind, defn.category)].append(kind)
-        # Within each category, an explicit display order wins (so the Inductors
-        # group reads inductors → transformers → choke); kinds *not* in the order
-        # fall after, american-style first then european, instead of jumbled.
-        for kinds in self._by_cat.values():
-            kinds.sort(key=_within_category_key)
-        self._ordered_cats = [c for c in _CATEGORY_ORDER if c in self._by_cat] + [
-            c for c in self._by_cat if c not in _CATEGORY_ORDER
+            self._by_cat[defn.category].append(kind)
+        # Categories follow the manual's own section sequence — registry/
+        # definitions.json order is not the manual order, so we sort by
+        # ``_CATEGORY_DOC`` (authored in manual order); a bespoke category with no
+        # manual section (Drawing) falls after.
+        order = list(_CATEGORY_DOC)
+        self._ordered_cats = [c for c in order if c in self._by_cat] + [
+            c for c in self._by_cat if c not in order
         ]
-        self._active_cat = self._ordered_cats[0] if self._ordered_cats else ""
+        # Split into the two top-level palette sections (each preserves the order
+        # above): CircuiTikZ symbols vs our vanilla-TikZ drawing primitives.
+        self._circuitikz_cats = [c for c in self._ordered_cats
+                                 if c not in _VANILLA_CATEGORIES]
+        self._vanilla_cats = [c for c in self._ordered_cats
+                              if c in _VANILLA_CATEGORIES]
+        # Open a CircuiTikZ category first (the common case), not a drawing one.
+        first = self._circuitikz_cats or self._ordered_cats
+        self._active_cat = first[0] if first else ""
         self._cards: dict[str, _CategoryCard] = {}
 
         outer = QVBoxLayout(self)
@@ -416,10 +730,11 @@ class ComponentPalette(QWidget):
         self._content.setSpacing(4)
         scroll.setWidget(content)
 
-        self._categories = _CollapsibleSection("CATEGORIES")
+        self._circuitikz = _CollapsibleSection("CIRCUITIKZ")
+        self._vanilla = _CollapsibleSection("TIKZ")
         self._active = _CollapsibleSection(self._active_cat.upper())
         self._results = _CollapsibleSection("SEARCH RESULTS")
-        for sec in (self._categories, self._active, self._results):
+        for sec in (self._circuitikz, self._vanilla, self._active, self._results):
             self._content.addWidget(sec)
         self._content.addStretch(1)
 
@@ -471,7 +786,23 @@ class ComponentPalette(QWidget):
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
         scene.schematic_changed.connect(self._refresh_in_use)
+        # Track the document symbol style across load/new/undo (no-op when unchanged).
+        scene.schematic_changed.connect(
+            lambda: self.set_symbol_style(
+                getattr(self._scene.schematic, "symbol_style", {}) or {}))
+        self.set_symbol_style(getattr(scene.schematic, "symbol_style", {}) or {})
         self._refresh_in_use()
+
+    def set_symbol_style(self, style: dict) -> None:
+        """Render the palette tiles/icons in the document's symbol style (§5.4). Sets
+        the thumbnail style and rebuilds the visible grids; a no-op if unchanged."""
+        global _thumb_style
+        if dict(style) == _thumb_style:
+            return
+        _thumb_style = dict(style)
+        self._build_categories()      # category icons may be styled
+        self._rebuild_active()
+        self._on_search(self._search.text())   # active/results/in-use grids
 
     # -- placement -------------------------------------------------------
 
@@ -489,15 +820,24 @@ class ComponentPalette(QWidget):
                 w.deleteLater()
 
     def _build_categories(self) -> None:
-        body = self._categories.body_layout()
-        self._clear(body)
         self._cards = {}
+        self._build_category_grid(self._circuitikz, self._circuitikz_cats)
+        self._build_category_grid(self._vanilla, self._vanilla_cats)
+        # A section with no categories (e.g. no drawing primitives) stays hidden.
+        self._vanilla.setVisible(bool(self._vanilla_cats))
+
+    def _build_category_grid(self, section: "_CollapsibleSection",
+                             cats: list[str]) -> None:
+        """Fill *section* with a 3-column grid of *cats*' cards (left-to-right)."""
+        body = section.body_layout()
+        self._clear(body)
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setSpacing(3)
-        for i, cat in enumerate(self._ordered_cats):
-            card = _CategoryCard(cat, len(self._by_cat[cat]), self._select_category)
+        for i, cat in enumerate(cats):
+            card = _CategoryCard(cat, len(self._by_cat[cat]), self._select_category,
+                                 _category_rep(cat, self._by_cat[cat]))
             card.set_active(cat == self._active_cat)
             self._cards[cat] = card
             grid.addWidget(card, i // 3, i % 3)
@@ -514,7 +854,11 @@ class ComponentPalette(QWidget):
         self._rebuild_active()
 
     def _rebuild_active(self) -> None:
-        self._active.set_title(self._active_cat.upper())
+        # Title with the manual's full section name where one exists (the cards use
+        # short names to fit the grid; the open category has room for the full one).
+        doc = _category_doc(self._active_cat)
+        self._active.set_title((doc[0] if doc else self._active_cat).upper())
+        self._active.set_doc_link(*(doc if doc else (None, None)))
         body = self._active.body_layout()
         self._clear(body)
         body.addWidget(_grid(self._by_cat.get(self._active_cat, []), self._place))
@@ -557,7 +901,8 @@ class ComponentPalette(QWidget):
         q = text.strip().lower()
         searching = bool(q)
         # Category/active/in-use views give way to a flat results grid on search.
-        self._categories.setVisible(not searching)
+        self._circuitikz.setVisible(not searching)
+        self._vanilla.setVisible(not searching and bool(self._vanilla_cats))
         self._active.setVisible(not searching)
         self._refresh_in_use()  # also re-evaluates its own visibility
         self._results.setVisible(searching)
@@ -594,7 +939,8 @@ class ComponentPalette(QWidget):
             "QWidget#in_use_content { background-color: %s; }" % theme.SURFACE
         )
         self._in_use_divider.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
-        for sec in (self._in_use, self._categories, self._active, self._results):
+        for sec in (self._in_use, self._circuitikz, self._vanilla,
+                    self._active, self._results):
             sec.apply_theme()
         self._build_categories()
         self._rebuild_active()

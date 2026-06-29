@@ -41,7 +41,7 @@ sys.path.insert(0, str(_ROOT))
 # these example shots show off dark mode. Referenced by README.md — keep the file
 # names in sync with the screenshot table there.
 SHOTS: list[tuple[str, bool, str]] = [
-    ("examples/Logic Circuits/4-1 MUX.hv", True, "mux-4-1-dark.png"),
+    ("examples/Power Electronics/Boost Converter.hv", True, "boost-converter-dark.png"),
     ("examples/Battery Models/Porous Electrode Interface.hv", True, "porous-electrode-dark.png"),
 ]
 

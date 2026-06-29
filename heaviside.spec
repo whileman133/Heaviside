@@ -60,14 +60,15 @@ else:
 # app/resources.py expects.
 datas = [
     ("assets/icon.png", "assets"),
+    # The component library is generated from the CircuiTikZ manual by
+    # components/generate_library.py and lives in components/generated/.
     # The geometry is self-contained — it bakes in all symbol geometry including
-    # resolved +/- glyph marks (see components/generate_components.py), so
-    # svgsym.py reads ONLY the geometry at runtime.
-    ("components/geometry.json", "components"),
+    # resolved +/- glyph marks — so svgsym.py reads ONLY the geometry at runtime.
+    ("components/generated/geometry.json", "components/generated"),
     # Per-component registry/codegen data (pins, bbox, alignment, metadata) for
     # every CircuiTikZ symbol — read at runtime by app/components/library.py to
-    # build REGISTRY and the codegen tables (see spec/component-editor.md).
-    ("components/definitions.json", "components"),
+    # build REGISTRY and the codegen tables.
+    ("components/generated/definitions.json", "components/generated"),
     # The runtime version source: app/version.py reads this via resource_path.
     # PyInstaller does not bundle the package's dist-info metadata, so inside the
     # frozen app importlib.metadata.version("heaviside") raises PackageNotFoundError

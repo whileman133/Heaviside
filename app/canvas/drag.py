@@ -66,7 +66,9 @@ from app.schematic.model import (
     component_connection_points,
     component_pin_positions,
     is_box_kind,
+    is_terminal_marker,
     junction_points,
+    node_resize_factors,
     open_endpoints,
     point_key,
     unconnected_pins,
@@ -115,6 +117,11 @@ class DragPreviewController:
         self.endpoint_drag: tuple[str, int, tuple[float, float]] | None = None
         self.endpoint_press_gu: tuple[float, float] | None = None
 
+        # Drag-resize of a resizable item: (comp_id, old_value). ``old_value`` is
+        # the item's resize value before the drag (muxdemux: span_override (wf,hf) or
+        # None; scalable gate/block: the float Component.scale).
+        self.resize_drag: tuple[str, object] | None = None
+
         # Wire ids currently showing a drag-preview (during a component drag),
         # so they can be cleared precisely on release.
         self.previewed_wire_ids: set[str] = set()
@@ -123,6 +130,10 @@ class DragPreviewController:
         # off a multi-wire junction (mirrors MoveCommand so the preview matches the
         # committed result). Transient; cleared when the drag preview is cleared.
         self._restretch_ghosts: list[WireItem] = []
+
+        # Terminal-marker components following the current component drag (their
+        # items are moved live; restored to their model position on preview clear).
+        self._followed_marker_ids: list[str] = []
 
     # ------------------------------------------------------------------
     # Gesture status
@@ -134,6 +145,7 @@ class DragPreviewController:
             bool(self.drag_start)
             or self.vertex_drag is not None
             or self.endpoint_drag is not None
+            or self.resize_drag is not None
         )
 
     def reset_preview_tracking(self) -> None:
@@ -394,6 +406,100 @@ class DragPreviewController:
         )
 
     # ------------------------------------------------------------------
+    # Drag-resize (item-driven): muxdemux (anisotropic) + scalable gates/blocks
+    # (uniform). The resizable item supplies the value type, preview, command and
+    # handle hit-test via a small protocol, so this controller is kind-agnostic.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_resizable_item(item) -> bool:
+        return hasattr(item, "resize_handle_at") and hasattr(item, "resize_from_local")
+
+    def resize_handle_at(self, scene_pos: QPointF) -> str | None:
+        """Return the component id whose drag-resize handle is under *scene_pos*
+        (selected items first), or None."""
+        scene = self._scene
+        selected = scene.selectedItems()
+        candidates = list(selected) + [
+            it for it in scene._comp_items.values()
+            if self._is_resizable_item(it) and it not in selected
+        ]
+        for item in candidates:
+            if self._is_resizable_item(item) and item.resize_handle_at(
+                item.mapFromScene(scene_pos)
+            ):
+                return item.component.id
+        return None
+
+    def _resize_value(self, comp_id: str, gu: tuple[float, float]):
+        """Ask the item for the resize value from the drag target *gu*, mapped into
+        the component's local frame (undoing rotation/mirror, like an endpoint drag)."""
+        item = self._scene._comp_items.get(comp_id)
+        if item is None or not self._is_resizable_item(item):
+            return None
+        comp = item.component
+        # Measure the cursor against the *original* origin captured at grab time: an
+        # anchored resize shifts the (previewed) origin to hold the opposite corner,
+        # so reading the live position here would feed the shift back in and drift.
+        ox, oy = getattr(item, "_resize_start_pos", None) or comp.position
+        wdx, wdy = gu[0] - ox, gu[1] - oy
+        if comp.mirror:
+            wdx = -wdx
+        ldx, ldy = world_delta_to_local(wdx, wdy, comp.rotation)
+        return item.resize_from_local(ldx, ldy)
+
+    def preview_resize(self, gu: tuple[float, float]) -> None:
+        """Live visual update while dragging a resize handle (model untouched);
+        connected wires follow each relocated pin as ghosts."""
+        if self.resize_drag is None:
+            return
+        comp_id, _old = self.resize_drag
+        item = self._scene._comp_items.get(comp_id)
+        value = self._resize_value(comp_id, gu)
+        if value is None or item is None:
+            return
+        model = self._scene._component_by_id(comp_id)
+        old_pins = component_pin_positions(model) if model is not None else []
+        item.apply_resize_preview(value)
+        new_pins = component_pin_positions(item.component)
+        for (oxp, oyp), (nxp, nyp) in zip(old_pins, new_pins):
+            if (oxp, oyp) == (nxp, nyp):
+                continue
+            result = compute_pin_drag_reshape(
+                self._scene._schematic.wires, old_pin=(oxp, oyp),
+                dx=nxp - oxp, dy=nyp - oyp,
+            )
+            for wid, pts in result.new_points.items():
+                wi = self._scene._wire_items.get(wid)
+                if wi is not None and len(pts) >= 2:
+                    wi.set_preview_points(pts)
+
+    def restore_resize_preview(self, comp_id: str) -> None:
+        """Drop a resize preview, re-aliasing the item to the live model (and undoing
+        any preview origin shift the anchored resize applied)."""
+        comp = self._scene._component_by_id(comp_id)
+        item = self._scene._comp_items.get(comp_id)
+        if comp is not None and item is not None and self._is_resizable_item(item):
+            item.component = comp
+            item.setPos(self._scene.gu_to_scene(*comp.position))
+            item.prepareGeometryChange()
+            item.update()
+
+    def commit_resize(self, gu: tuple[float, float]) -> None:
+        """Commit a resize: push the item's resize command, or restore the preview
+        when the size is unchanged."""
+        if self.resize_drag is None:
+            return
+        comp_id, old_value = self.resize_drag
+        self.resize_drag = None
+        item = self._scene._comp_items.get(comp_id)
+        value = self._resize_value(comp_id, gu)
+        if value is None or item is None or value == old_value:
+            self.restore_resize_preview(comp_id)
+            return
+        self._scene._push(item.resize_command(value, old_value))
+
+    # ------------------------------------------------------------------
     # Wire-vertex drag
     # ------------------------------------------------------------------
 
@@ -588,6 +694,36 @@ class DragPreviewController:
             [list(path) for path in result.lead_paths]
         )
 
+        # Terminal markers sitting on a moving pin follow the drag live (their items
+        # are moved here; the committed MoveCommand moves the model on release).
+        self._preview_followed_markers(start_pins, dx, dy)
+
+    def _preview_followed_markers(
+        self, start_pins: set[tuple[float, float]], dx: float, dy: float
+    ) -> None:
+        """Move terminal-marker items sitting on a moving pin by the live drag delta;
+        restore any that stopped following. The committed MoveCommand moves the model
+        (and the rebuild repositions the items) on release."""
+        scene = self._scene
+        following: list[str] = []
+        for comp in scene._schematic.components:
+            if comp.id in self.drag_start or not is_terminal_marker(comp):
+                continue
+            if any(point_key(p) in start_pins
+                   for p in component_connection_points(comp)):
+                item = scene._comp_items.get(comp.id)
+                if item is not None:
+                    item.setPos(gu_to_scene(comp.position[0] + dx,
+                                            comp.position[1] + dy))
+                    following.append(comp.id)
+        # Restore any marker that followed last frame but no longer does.
+        for cid in set(self._followed_marker_ids) - set(following):
+            comp = self._scene._component_by_id(cid)
+            item = scene._comp_items.get(cid)
+            if comp is not None and item is not None:
+                item.setPos(gu_to_scene(*comp.position))
+        self._followed_marker_ids = following
+
     def _update_restretch_preview(
         self, paths: list[list[tuple[float, float]]]
     ) -> None:
@@ -633,7 +769,15 @@ class DragPreviewController:
             if point_key(raw) == point_key(start):
                 item.setPos(gu_to_scene(*start))  # guard against float drift
                 continue
-            new_gu = snap_point_gu(item.pos())
+            comp = scene._component_by_id(cid)
+            if (comp is not None and is_terminal_marker(comp)
+                    and len(self.drag_start) == 1):
+                # A lone dragged terminal marker magnet-snaps its pin onto the nearest
+                # connection point (off-grid OK), like placement and the live move — so
+                # it re-lands on an anchor, not the grid. (Group drags keep the grid.)
+                new_gu = scene._marker_drag_snap(comp, item.pos())
+            else:
+                new_gu = snap_point_gu(item.pos())
             # Reset the item to its model position; the command moves it.
             item.setPos(gu_to_scene(*start))
             d = (new_gu[0] - start[0], new_gu[1] - start[1])
@@ -668,6 +812,14 @@ class DragPreviewController:
                 item.clear_preview_points()
         self.previewed_wire_ids = set()
         self._clear_restretch_preview()
+        # Reset any followed terminal markers to their model position; the committed
+        # MoveCommand (if any) then moves them via the model rebuild.
+        for cid in self._followed_marker_ids:
+            comp = self._scene._component_by_id(cid)
+            item = self._scene._comp_items.get(cid)
+            if comp is not None and item is not None:
+                item.setPos(gu_to_scene(*comp.position))
+        self._followed_marker_ids = []
 
     # ------------------------------------------------------------------
     # Whole-wire drag (move selected wires; junction taps follow)
@@ -814,7 +966,7 @@ class DragPreviewController:
         markers. No-op unless the display preference is enabled.
         """
         scene = self._scene
-        if not scene._mark_unconnected_pins:
+        if not scene._schematic.mark_unconnected_pins:
             return
 
         desired = unconnected_pins(
