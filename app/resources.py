@@ -15,7 +15,6 @@ pass parts relative to the project root, matching the layout declared in
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -40,33 +39,16 @@ def resource_path(*parts: str) -> Path:
     return _base_dir().joinpath(*parts)
 
 
-# Active component library selector. The curated, hand-tuned library lives in
-# ``components/`` and is the default/fallback; an expanded library generated from
-# the CircuiTikZ manual (``components/generate_library.py``) lives side by side in
-# ``components/generated/`` and is switched in with HEAVISIDE_COMPONENT_LIB=manual.
-# Keeping both on disk means the curated set is always the safe fallback.
-COMPONENT_LIB_ENV = "HEAVISIDE_COMPONENT_LIB"
-
-
+# The component library is generated from the CircuiTikZ manual by
+# ``components/generate_library.py`` and lives in ``components/generated/``
+# (``definitions.json`` + ``geometry.json``).
 def component_lib_dir() -> Path:
-    """Directory of the active component library (its ``definitions.json`` +
-    ``geometry.json``). ``curated`` (default) → ``components/``; ``manual`` →
-    ``components/generated/``."""
-    choice = os.environ.get(COMPONENT_LIB_ENV, "curated").strip().lower()
-    if choice == "manual":
-        return resource_path("components", "generated")
-    return resource_path("components")
-
-
-def component_lib() -> str:
-    """Name of the active component library: ``"manual"`` when
-    ``HEAVISIDE_COMPONENT_LIB=manual``, else ``"curated"`` (the default)."""
-    return ("manual"
-            if os.environ.get(COMPONENT_LIB_ENV, "curated").strip().lower() == "manual"
-            else "curated")
+    """Directory of the component library (its ``definitions.json`` +
+    ``geometry.json``): ``components/generated/``."""
+    return resource_path("components", "generated")
 
 
 def component_data_path(name: str) -> Path:
-    """Path to a data file (``definitions.json`` / ``geometry.json``) in the active
+    """Path to a data file (``definitions.json`` / ``geometry.json``) in the
     component library."""
     return component_lib_dir() / name

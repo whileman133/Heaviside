@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 r"""Scrape the CircuiTikZ manual into a structured component database.
 
-*** PROTOTYPE — parse only, no rendering. Reports/serialises, never mutates the
-component data files. ***
-
 The CircuiTikZ manual (``circuitikzmanual.tex``) is the authoritative, hand-curated
 description of every component, anchor and option. This tool treats it as the source
 of truth and scrapes it into one JSON record per component:
@@ -409,6 +406,11 @@ def scrape(manual: str) -> dict:
         if r is None:
             r = components[base] = {
                 "keyword": base, "type": type_,
+                # Source position in the manual, used to order components within a
+                # category in the **manual's own sequence** (the node vs. path scrape
+                # passes otherwise interleave them). Updated to the reference-list
+                # (authoritative) position below, so it reflects the catalog order.
+                "pos": pos,
                 "section": sect, "category": cat,
                 "description": "", "aliases": "", "shape": "",
                 "anchors": [], "subnode_anchors": [],
@@ -422,8 +424,10 @@ def scrape(manual: str) -> dict:
             }
         elif in_list and not r["_cat_authoritative"]:
             # A component is often demonstrated in a usage/tutorial section before
-            # its reference entry; the reference list section gives the real category.
+            # its reference entry; the reference list section gives the real category
+            # *and* the catalog-order position.
             r["section"], r["category"], r["_cat_authoritative"] = sect, cat, True
+            r["pos"] = pos
         return r
 
     def merge(dst: list, src: list) -> None:

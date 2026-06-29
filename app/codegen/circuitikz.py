@@ -50,7 +50,7 @@ These placement/alignment tables (``_MULTI_TERMINAL_KINDS``,
 are **derived** from ``components/definitions.json`` via
 ``app.components.library.build_codegen_tables`` — they are not hand-maintained.
 The canvas (``app/canvas/svgsym.py``) draws the same scaled symbol (baked into the
-geometry by ``components/generate_components.py``), so the canvas and the LaTeX agree.
+geometry by ``components/generate_library.py``), so the canvas and the LaTeX agree.
 See ``spec/component-pipeline.md``.
 
 Named anchor references
@@ -61,6 +61,16 @@ multi-terminal pin are rendered as named anchor references (e.g.
 readable LaTeX and makes the connection explicit. The lookup is built in
 generate() as pin_coord_to_ref and threaded through _wire_line and
 _two_terminal_line.
+
+A **path bipole's extra terminals** (a thyristor ``gate``, a potentiometer
+``wiper``, an inductor ``midtap``, the centre-tapped source/transformer windings —
+pins[2:], whose pin name IS the CircuiTikZ anchor) are referenced the same way: when
+a wire lands on one, the device is given a ``name=node_…`` and the wire emits
+``(node_….<anchor>)``. Its two **axial** terminals stay literal ``to[…]``
+coordinates — CircuiTikZ's ``.left``/``.right`` are the body edges, not the wire
+ends, so there is no clean named anchor for them (and the coordinate is already
+explicit in the path). The ``name=`` is added only when a wire actually references
+an extra terminal (``named_path_devices``), so unconnected taps add no noise.
 """
 
 from __future__ import annotations
@@ -91,6 +101,7 @@ from app.schematic.model import (
     component_pin_positions,
     junction_points,
     open_endpoints,
+    rotate_vector as _rotate_vector,
     unconnected_pins,
     simplify_points,
     wire_crossings,
@@ -171,7 +182,7 @@ _TWO_TERMINAL_KINDS: frozenset[str] = frozenset(
 # Diode-family bipoles.  CircuiTikZ's default diode body is visually large
 # relative to the other bipoles, so it is scaled down by DIODE_SYMBOL_SCALE via
 # a picture-scoped ``\ctikzset{diodes/scale=…}``.  The canvas SVG assets are
-# exported at the same scale (see components/generate_components.py) so the canvas
+# exported at the same scale (see components/generate_library.py) so the canvas
 # and the rendered output stay in sync (§5.3 / §7.2).
 _DIODE_KINDS: frozenset[str] = frozenset(_CODEGEN_TABLES["diode_kinds"])
 
@@ -264,12 +275,14 @@ def generate(
     lines: list[str] = []
     lines.append(r"\begin{circuitikz}")
 
-    # Shrink the (visually large) default diode body to better match the other
-    # bipoles, scoped to this picture so it never leaks into the user's other
-    # figures.  Emitted only when a diode is present; the canvas SVGs are
-    # exported at the same scale so the two stay in sync (§5.3 / §7.2).
+    # Shrink the (visually large) default diode body, scoped to this picture so it
+    # never leaks into the user's other figures. The factor is the document's
+    # ``diode_scale`` (§5; the inspector control, new-document default 0.6); the canvas draws diode
+    # bodies at the same scale so the two stay in sync. Emitted only when a diode is
+    # present.
+    diode_scale = float(getattr(schematic, "diode_scale", DIODE_SYMBOL_SCALE))
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
-        lines.append(rf"  \ctikzset{{diodes/scale={DIODE_SYMBOL_SCALE:g}}}")
+        lines.append(rf"  \ctikzset{{diodes/scale={diode_scale:g}}}")
 
     # Document symbol style (§5.4): switch a whole family at once (european resistors,
     # cute/european inductors). Emitted as a picture-scoped `\ctikzset` per axis, but
@@ -320,6 +333,26 @@ def generate(
     # can use named anchors too. Keys use pre-flip (canvas) coordinates.
     pin_coord_to_ref: dict[tuple[float, float], str] = {}
     all_pin_refs: dict[tuple[float, float], list[str]] = {}
+    # Coordinates that can *consume* a named reference: default/foreground-layer wire
+    # endpoints (background wires emit absolute coords, see _wire_layer_line) and the
+    # standalone single-terminal nodes (terminal markers like circ/ocirc, grounds,
+    # rails) emitted as ``\node … at`` after the shared ``\draw`` (z_order == 0; layered
+    # ones carry no ref). Used to decide whether to **name** a path bipole so its extra
+    # terminal's anchor can be referenced — we add the ``name=`` (and emit the named
+    # ref) only when something actually lands on that terminal, so unused devices stay
+    # name-free. A marker/wire on a *multi-terminal* node anchor needs no trigger here:
+    # those anchors are always in ``pin_coord_to_ref``.
+    _ref_endpoints: set[tuple[float, float]] = set()
+    for _w in schematic.wires:
+        if _w.z_order >= 0 and len(_w.points) >= 2:
+            for _p in (_w.points[0], _w.points[-1]):
+                _ref_endpoints.add((round(_p[0], 6), round(_p[1], 6)))
+    for _c in schematic.components:
+        if _c.z_order == 0 and _c.kind in _NODE_KINDS:
+            _pp = component_pin_positions(_c)
+            if _pp:
+                _ref_endpoints.add((round(_pp[0][0], 6), round(_pp[0][1], 6)))
+    named_path_devices: set[str] = set()
     for comp in schematic.components:
         # Only default-layer (z_order == 0) components define named anchors. A
         # re-layered component is emitted in its own \draw before/after the main
@@ -333,6 +366,12 @@ def generate(
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
         anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(comp.kind)
+        # A path bipole's two axial terminals (pins[0]/pins[1]) are the literal
+        # ``to[…]`` endpoints — already explicit coordinates, with no clean named
+        # anchor (CircuiTikZ's ``.left``/``.right`` are the body edges, not the wire
+        # ends). Its **extra** terminals (pins[2:] — ``gate``/``wiper``/``midtap``/…)
+        # DO have named anchors equal to the pin name; reference those by name.
+        is_path = comp.kind in _TWO_TERMINAL_KINDS
         # A scaled logic gate's pins sit at the true scaled node anchor (no lead
         # stub), so a connecting wire's endpoint — snapped onto that pin by the
         # magnet — is exactly the node anchor and maps to `(node.anchor)` like any
@@ -355,6 +394,12 @@ def generate(
                 ref = (f"({node_id}{a})" if a.startswith("-") and "." in a
                        else f"({node_id}.{a})")
                 pin_coord_to_ref[coord] = ref
+            elif is_path and i >= 2 and coord in _ref_endpoints:
+                # Extra terminal of a path bipole reached by a wire: name the device
+                # and reference the terminal's CircuiTikZ anchor (= the pin name).
+                ref = f"({node_id}.{pin.name})"
+                pin_coord_to_ref[coord] = ref
+                named_path_devices.add(comp.id)
             else:
                 ref = f"({_fmt(px)},{_fmt(_y(py))})"
             all_pin_refs.setdefault(coord, []).append(ref)
@@ -430,11 +475,12 @@ def generate(
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
         if comp.kind in _NODE_KINDS:
-            node_command_lines.append(rf"  {_node_command(comp, _y, _annotation_style_opts(comp, voltage_european, current_european))}")
+            node_command_lines.append(rf"  {_node_command(comp, _y, _annotation_style_opts(comp, voltage_european, current_european), pin_coord_to_ref)}")
             continue
         draw_lines.extend(_component_lines(
             comp, pin_coord_to_ref, _y, _rot,
             voltage_european=voltage_european, current_european=current_european,
+            named_path_devices=named_path_devices,
         ))
 
     # Wires at the default layer (z_order == 0) share the main \draw path;
@@ -489,13 +535,16 @@ def generate(
     # Single-terminal nodes (grounds, supplies, terminal dots) as standalone commands.
     lines.extend(node_command_lines)
 
-    # Connection dots at junctions.
-    for x, y in sorted(junction_points(schematic)):
-        lines.append(rf"  \node[circ] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
+    # Connection dots at junctions (document option, default on).
+    if schematic.mark_junctions:
+        for x, y in sorted(junction_points(schematic)):
+            lines.append(rf"  \node[circ] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
 
-    # Open-circle nodes at wire endpoints not connected to any component pin.
-    for x, y in sorted(open_endpoints(schematic)):
-        lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
+    # Open-circle nodes at wire endpoints not connected to any component pin
+    # (document option, default on).
+    if schematic.mark_open_ends:
+        for x, y in sorted(open_endpoints(schematic)):
+            lines.append(rf"  \node[ocirc] at ({_fmt(x)},{_fmt(_y(y))}) {{}};")
 
     # Optionally, open-circle nodes at component pins that nothing connects to.
     if mark_unconnected_pins:
@@ -545,11 +594,13 @@ def _component_lines(
     *,
     voltage_european: bool = False,
     current_european: bool = False,
+    named_path_devices: "set[str] | frozenset[str]" = frozenset(),
 ) -> list[str]:
     kind = comp.kind
     style = _annotation_style_opts(comp, voltage_european, current_european)
     if kind in _TWO_TERMINAL_KINDS:
-        return [_two_terminal_line(comp, pin_coord_to_ref, y_fn, style)]
+        return [_two_terminal_line(comp, pin_coord_to_ref, y_fn, style,
+                                   named=comp.id in named_path_devices)]
     elif kind in _MULTI_TERMINAL_KINDS:
         return [_multi_terminal_line(comp, y_fn, rot_fn, style)]
     elif kind in _NODE_KINDS:
@@ -604,12 +655,16 @@ def _two_terminal_line(
     pin_coord_to_ref: dict[tuple[float, float], str] | None = None,
     y_fn=lambda y: y,
     style: list[str] = (),
+    *,
+    named: bool = False,
 ) -> str:
     """Render a two-terminal component as: (x0,y0) to[KIND, LABELS] (x1,y1)
 
     If *pin_coord_to_ref* is provided, either endpoint that coincides with a
-    multi-terminal component pin is rendered as a named anchor reference.
-    *y_fn* is applied to all emitted Y coordinates (used for Y-flip).
+    multi-terminal component pin is rendered as a named anchor reference. *named*
+    adds a ``name=node_…`` so a wire elsewhere can reference an extra terminal's
+    CircuiTikZ anchor (e.g. ``(node_xxxx.gate)``). *y_fn* is applied to all emitted
+    Y coordinates (used for Y-flip).
     """
     defn = REGISTRY[comp.kind]
     x0, y0 = comp.position
@@ -646,6 +701,8 @@ def _two_terminal_line(
     # reflection, so off-axis features (an LED's emission arrows, a voltage
     # label's side) land where the canvas Flip-X puts them at every rotation.
     opts = [tikz_kind]
+    if named:
+        opts.append(f"name=node_{comp.id[:8]}")
     lw = _line_width_opt(comp)
     if lw:
         opts.append(lw)
@@ -675,11 +732,36 @@ def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
     return None
 
 
+def _gate_size_setting(comp: Component) -> list[str] | None:
+    """``\\ctikzset`` ``height``/``width`` settings for a manual-library gate sized via
+    the CircuiTikZ body keys (the recommended, stroke-preserving way — §5.6), else
+    ``None``. The size is the gate's default key value × the anisotropic resize factors
+    (so it matches the canvas, whose pins scale by the same factors): a corner drag (or
+    the inspector Size fields) sets ``height = height_default × hf`` and
+    ``width = width_default × wf``. Omitted entirely at the natural size (no factors), so
+    an unresized gate carries no size override and uses CircuiTikZ's defaults."""
+    keys = _library.gate_size_keys(comp.kind)
+    if keys is None:
+        return None
+    from app.schematic.model import node_resize_factors
+    nf = node_resize_factors(comp)
+    if nf is None:
+        return None                             # natural size → CircuiTikZ defaults
+    wf, hf = nf
+    path = keys["path"]
+    return [f"{path}/height={keys['height'] * hf:g}",
+            f"{path}/width={keys['width'] * wf:g}"]
+
+
 def _node_group_ctikzset(comp: Component) -> list[str]:
     """The ``\\ctikzset`` settings a node must be wrapped in its own group with (so
-    they revert after) — a parametric gate's body height, or a kind's static
-    ``ctikzset`` (a cute/european transformer's ``inductor=…`` shape). Empty when
-    the node needs no group (emitted in the main path)."""
+    they revert after) — a manual gate's body height/width, a curated parametric gate's
+    body height, or a kind's static ``ctikzset`` (a cute/european transformer's
+    ``inductor=…`` shape). Empty when the node needs no group (emitted in the main
+    path)."""
+    size = _gate_size_setting(comp)
+    if size is not None:
+        return size
     height = _gate_height_setting(comp)
     if height is not None:
         return [f"{height[0]}={height[1]:g}"]   # full precision (grid alignment)
@@ -727,11 +809,17 @@ def _multi_terminal_line(
     _param = _library.param_spec(comp.kind)
     if _param is not None:
         kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
-        _nd = _library.param_n_data(comp)
-        _scale = list(_nd["scale"]) if (_nd and _nd.get("scale")) else [1.0, 1.0]
-        if _nf is not None:                  # anisotropic drag-resize
-            _scale = [_scale[0] * _nf[0], _scale[1] * _nf[1]]
-        extra_opts = _library._scale_opts(_scale)
+        if _library.gate_size_keys(comp.kind) is not None:
+            # Manual gate sized via the CircuiTikZ body height/width keys (in the local
+            # \ctikzset group around the node — see _gate_size_setting). No node-level
+            # xscale/yscale: the keys redraw the shape at native stroke width.
+            extra_opts = ""
+        else:
+            _nd = _library.param_n_data(comp)
+            _scale = list(_nd["scale"]) if (_nd and _nd.get("scale")) else [1.0, 1.0]
+            if _nf is not None:              # anisotropic drag-resize
+                _scale = [_scale[0] * _nf[0], _scale[1] * _nf[1]]
+            extra_opts = _library._scale_opts(_scale)
         # A *uniform* (height) gate sets its body height in a local group around the
         # node (see _gate_height_setting / generate) so the inversion bubble stays
         # round; the per-instance size for those is folded in below.
@@ -868,7 +956,8 @@ _validate_codegen_tables()
 _POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
 
 
-def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> str:
+def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
+                  pin_coord_to_ref: dict[tuple[float, float], str] | None = None) -> str:
     """Render a single-terminal node as the **standalone** command
     ``\\node[kind, options] at (x,y) {node_text};``.
 
@@ -876,6 +965,12 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> s
     (it carries no named anchor), so it needs no place in the shared ``\\draw`` path;
     emitting it as its own ``\\node at`` statement matches the junction/open-circle/
     inversion-bubble dots (all standalone ``\\node`` commands) and reads clearly.
+
+    If the node sits on another component's named anchor (a terminal marker dropped on
+    a transformer winding, an op-amp pin, a path device's centre tap, …), *its* ``at``
+    coordinate is emitted as that anchor reference — ``\\node[circ] at (node_xxxx.A1){}``
+    — via *pin_coord_to_ref*, the same map wires use. The marker is emitted after the
+    shared ``\\draw`` where those nodes are defined, so the reference resolves.
 
     The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into the
     trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a ground's
@@ -901,7 +996,10 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = ()) -> s
         args += f", {user}"
     for s in style:   # local voltage=european / current=european (per annotation)
         args += f", {s}"
-    return rf"\node[{args}] at ({_fmt(x)},{_fmt(y_fn(y))}) {{{_node_text_arg(comp)}}};"
+    at = pin_coord_to_ref.get((round(x, 6), round(y, 6))) if pin_coord_to_ref else None
+    if at is None:
+        at = f"({_fmt(x)},{_fmt(y_fn(y))})"
+    return rf"\node[{args}] at {at} {{{_node_text_arg(comp)}}};"
 
 
 # ---------------------------------------------------------------------------
@@ -1423,26 +1521,18 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
 
 def _rotate(span: tuple[float, float], rotation: int) -> tuple[float, float]:
     """
-    Apply a clockwise rotation of *rotation* degrees to vector *span*,
-    in Qt's Y-down coordinate system.
+    Apply a clockwise rotation of *rotation* degrees to vector *span*, in Qt's
+    Y-down coordinate system — the **same** transform as
+    ``model.rotate_vector`` / ``component_pin_positions`` (90° multiples exact;
+    45° multiples via trig), so the emitted bipole span and the canvas pins agree.
 
-    In Y-down space, CW rotation maps:
+    In Y-down space, CW rotation maps e.g.:
       0°:   (dx, dy)  →  ( dx,  dy)
-      90°:  (dx, dy)  →  (-dy,  dx)   ← matches component_pin_positions
+      90°:  (dx, dy)  →  (-dy,  dx)
       180°: (dx, dy)  →  (-dx, -dy)
       270°: (dx, dy)  →  ( dy, -dx)
     """
-    dx, dy = span
-    if rotation == 0:
-        return (dx, dy)
-    elif rotation == 90:
-        return (-dy, dx)
-    elif rotation == 180:
-        return (-dx, -dy)
-    elif rotation == 270:
-        return (dy, -dx)
-    else:
-        raise ValueError(f"Invalid rotation {rotation!r}")
+    return _rotate_vector(span[0], span[1], rotation)
 
 
 def _node_text_arg(comp: Component) -> str:

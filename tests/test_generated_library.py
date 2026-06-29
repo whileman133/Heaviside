@@ -104,11 +104,62 @@ def test_inversion_dot_is_a_centered_bubble_kind():
     assert len(pins) == 1 and pins[0]["offset"] == [0.0, 0.0]
 
 
+def test_logic_gates_carry_ctikzset_size_keys():
+    """american/european and-family gates bake the CircuiTikZ body ``height``/``width``
+    ``\\ctikzset`` keys (the recommended sizing) with their defaults; not/buffer and the
+    ieeestd family don't (the keys don't size them — they fall back to xscale/yscale)."""
+    for kw in ("american and port", "american or port", "american nand port",
+               "european and port"):
+        sk = _COMPONENTS[kw].get("size_keys")
+        assert sk and sk["path"] == f"tripoles/{kw}"
+        assert sk["height"] > 0 and sk["width"] > 0
+    assert _COMPONENTS["american and port"]["size_keys"]["height"] == 0.8
+    assert _COMPONENTS["american and port"]["size_keys"]["width"] == 1.1
+    for kw in ("american not port", "american buffer port", "ieeestd and port"):
+        assert "size_keys" not in _COMPONENTS[kw], kw
+
+
 def test_flipflop_keeps_documented_border_anchors():
     """The flip-flop's documented border/edge anchors survive (they were being
     stripped as if they were chips' redundant probe anchors)."""
     pins = set(_pin_names("flipflop"))
     assert {"bpin 1", "bpin 6"} <= pins
+
+
+def test_flipflop_jk_exposes_documented_body_anchors():
+    """``flipflop JK`` is the manual's fully-documented flip-flop; its body/border
+    anchors (``bpin N``/``bup``/``bdown``) are now exposed verbatim from the manual's
+    anchor list (merged in via ``extract_doc_anchors.extract``)."""
+    pins = set(_pin_names("flipflop JK"))
+    assert {"bpin 1", "bpin 6", "bup", "bdown"} <= pins
+
+
+def test_seven_segment_exposes_segment_terminals():
+    """The seven-segment display exposes its documented segment terminals (``a``–``g``
+    and the decimal ``dot``) rather than a single placeholder origin pin — these come
+    from the manual's anchor list, which the bare scrape missed."""
+    pins = set(_pin_names("bare7seg"))
+    assert {"a", "b", "c", "d", "f", "g", "dot"} <= pins
+    assert "in" not in pins        # the placeholder origin pin is gone
+
+
+def test_documented_geometric_anchors_exposed():
+    """Geometric anchors the manual documents become wireable pins — on a shape that
+    also has real terminals. A BNC documents left/right/center beside hot/zero/shield,
+    so its geometric anchors join the connector terminals (the policy is to expose
+    every documented anchor, geometric included)."""
+    pins = set(_pin_names("bnc"))
+    assert {"hot", "zero", "shield"} <= pins         # the connector terminals
+    assert pins & {"left", "right", "center"}        # ≥1 documented geometric anchor
+
+
+def test_single_point_symbols_are_not_promoted_by_geometric_anchors():
+    """A node whose documented anchors are ALL geographic (ground, supply rail) stays a
+    single-point symbol — its compass is not exposed, so its standalone ``\\node at``
+    emission (node-side placement, node text) is preserved instead of being turned into
+    a multi-terminal node with a compass rose of pins."""
+    for kind in ("ground", "vcc"):
+        assert _pin_names(kind) == ["in"]
 
 
 def test_chip_border_anchors_still_stripped():

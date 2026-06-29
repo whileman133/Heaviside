@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QCheckBox,
@@ -211,27 +212,32 @@ def _reink_themed_labels(widget: QWidget) -> None:
 
 def _make_rotation_row(
     owner: QWidget, on_rotate: Callable[[int], None]
-) -> tuple[QHBoxLayout, dict[int, QPushButton]]:
-    """Build the exclusive 0/90/180/270° rotation button row.
+) -> tuple[QGridLayout, dict[int, QPushButton]]:
+    """Build the exclusive 45°-increment rotation buttons (0, 45, …, 315°).
 
-    Returns the row layout and the ``{angle: button}`` map. *on_rotate* is
-    invoked with the angle when a button is clicked. *owner* parents the
-    QButtonGroup so it stays alive.
+    Eight angles are laid out as a **2×4 grid** (right angles on the top row, the
+    diagonals on the bottom) so the row doesn't overflow the inspector width.
+    Returns the grid layout and the ``{angle: button}`` map. *on_rotate* is invoked
+    with the angle when a button is clicked. *owner* parents the QButtonGroup so it
+    stays alive.
     """
-    row = QHBoxLayout()
-    row.setSpacing(4)
+    grid = QGridLayout()
+    grid.setSpacing(4)
     buttons: dict[int, QPushButton] = {}
     group = QButtonGroup(owner)
     group.setExclusive(True)
-    for angle in (0, 90, 180, 270):
+    # Top row: the four right angles; bottom row: the four 45° diagonals.
+    layout_order = [(0, 0, 0), (0, 1, 90), (0, 2, 180), (0, 3, 270),
+                    (1, 0, 45), (1, 1, 135), (1, 2, 225), (1, 3, 315)]
+    for r, c, angle in layout_order:
         btn = QPushButton(f"{angle}°")
         btn.setCheckable(True)
         btn.setFixedWidth(_ROT_BTN_WIDTH)
         group.addButton(btn)
         buttons[angle] = btn
         btn.clicked.connect(lambda checked, a=angle: on_rotate(a))
-        row.addWidget(btn)
-    return row, buttons
+        grid.addWidget(btn, r, c)
+    return grid, buttons
 
 
 def _make_combo_row(
@@ -728,6 +734,61 @@ class NodePlacementSection(InspectorSection):
     def _on_change(self, idx: int) -> None:
         side = self._VALUES[idx] if 0 <= idx < len(self._VALUES) else ""
         self._apply("Placement", lambda s, cid: s.edit_component_node_side(cid, side))
+
+
+class NodeSizeSection(InspectorSection):
+    """Body **Height**/**Width** for a manual-library logic gate sized via the CircuiTikZ
+    ``\\ctikzset{tripoles/<kw>/height=…, …/width=…}`` keys (the recommended way — it
+    redraws the symbol at native stroke width instead of stretching it). The fields show
+    the CircuiTikZ key values (default × the resize factors); editing them, like dragging
+    a corner handle, writes the ``(wf, hf)`` factors back through ResizeNodeCommand. Only
+    shown for gates that support the keys (american/european and/or/nand/nor/xnor; not the
+    fixed not/buffer or the ieeestd family)."""
+
+    title = "Size"
+
+    def _build(self) -> None:
+        h_row, self._height = _make_double_spin_row(
+            "Height", 0.1, 20.0, 0.1, 2, 0.8, lambda _v: self._timer.start())
+        w_row, self._width = _make_double_spin_row(
+            "Width", 0.1, 20.0, 0.1, 2, 1.1, lambda _v: self._timer.start())
+        self.body.addLayout(h_row)
+        self.body.addLayout(w_row)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(_DEBOUNCE_MS)
+        self._timer.timeout.connect(self._commit)
+
+    def _defaults(self, comp: Component) -> dict | None:
+        from app.components import library
+        return library.gate_size_keys(comp.kind)
+
+    def applies_to(self, comp: Component) -> bool:
+        return self._defaults(comp) is not None
+
+    def _load(self, comp: Component) -> None:
+        from app.schematic.model import node_resize_factors
+        keys = self._defaults(comp) or {"height": 1.0, "width": 1.0}
+        nf = node_resize_factors(comp) or (1.0, 1.0)
+        for spin, val in ((self._height, keys["height"] * nf[1]),
+                          (self._width, keys["width"] * nf[0])):
+            if not spin.hasFocus():
+                spin.blockSignals(True)
+                spin.setValue(val)
+                spin.blockSignals(False)
+
+    def _commit(self) -> None:
+        target = self._target()
+        if target is None:
+            return
+        scene, cid = target
+        comp = scene._component_by_id(cid)
+        keys = self._defaults(comp) if comp is not None else None
+        if keys is None:
+            return
+        wf = self._width.value() / keys["width"]
+        hf = self._height.value() / keys["height"]
+        self._apply("Size", lambda s, c: s.set_node_resize_factors(c, wf, hf))
 
 
 class TextContentSection(InspectorSection):
@@ -1498,9 +1559,9 @@ class DocumentPropertiesPanel(QWidget):
         outer.addWidget(self._header)
         outer.addWidget(_make_separator())
 
-        # The body scrolls (like PropertiesPanel) so the word-wrapped hint labels
-        # and the preamble editor never overlap when the content is taller than
-        # the panel. Same transparency/scrollbar handling — see _apply_scroll_style.
+        # The body scrolls (like PropertiesPanel) so the controls and the preamble
+        # editor never overlap when the content is taller than the panel. Same
+        # transparency/scrollbar handling — see _apply_scroll_style.
         scroll = QScrollArea()
         self._scroll = scroll
         scroll.setWidgetResizable(True)
@@ -1521,23 +1582,23 @@ class DocumentPropertiesPanel(QWidget):
         form.setSpacing(8)
         self._voltage = self._style_combo()
         self._current = self._style_combo()
+        self._diode = QDoubleSpinBox()
+        self._diode.setRange(0.1, 2.0)
+        self._diode.setSingleStep(0.1)
+        self._diode.setDecimals(2)
+        self._diode.setValue(0.6)   # new-document default; refresh() reloads from the doc
         form.addRow("Voltage labels", self._voltage)
         form.addRow("Current labels", self._current)
+        form.addRow("Diode scale", self._diode)
         body.addLayout(form)
 
-        body.addWidget(self._hint(
-            "Arrow style for <tt>v=</tt> / <tt>i=</tt> labels. Applies to the "
-            "whole figure; saved in the file."
-        ))
-
-        # --- Symbol style (manual library) ----------------------------------
+        # --- Symbol style ---------------------------------------------------
         # Switches a whole CircuiTikZ family at once (american/european resistors,
-        # cute/american/european inductors). Only shown for the manual library, which
-        # carries the per-style geometry; the curated library uses distinct kinds.
+        # cute/american/european inductors). The library carries the per-style
+        # geometry on a style axis per family.
         from app.components import library as _lib
-        from app.resources import component_lib
         self._style_combos: dict[str, QComboBox] = {}
-        if component_lib() == "manual" and _lib.STYLE_AXES:
+        if _lib.STYLE_AXES:
             body.addWidget(_make_separator())
             body.addWidget(_make_section_label("Symbol style"))
             sform = QFormLayout()
@@ -1549,10 +1610,18 @@ class DocumentPropertiesPanel(QWidget):
                 self._style_combos[axis] = combo
                 sform.addRow(axis.capitalize(), combo)
             body.addLayout(sform)
-            body.addWidget(self._hint(
-                "Symbol convention for a whole family (resistors, inductors). "
-                "Applies to the figure; saved in the file."
-            ))
+
+        # --- Display options (moved here from app Preferences) --------------
+        body.addWidget(_make_separator())
+        body.addWidget(_make_section_label("Display"))
+        self._marks = QCheckBox("Mark unconnected pins")
+        self._hops = QCheckBox("Draw line-hops")
+        self._open_ends = QCheckBox("Mark open wire ends")
+        self._junctions = QCheckBox("Draw junction dots")
+        body.addWidget(self._marks)
+        body.addWidget(self._hops)
+        body.addWidget(self._open_ends)
+        body.addWidget(self._junctions)
 
         # --- Preamble settings (LaTeX packages / macros) --------------------
         body.addWidget(_make_separator())
@@ -1560,9 +1629,6 @@ class DocumentPropertiesPanel(QWidget):
 
         self._siunitx = QCheckBox("SI units (siunitx)")
         body.addWidget(self._siunitx)
-        body.addWidget(self._hint(
-            "Unit macros in labels, e.g. <tt>\\qty{10}{\\ohm}</tt>."
-        ))
 
         body.addWidget(_make_section_label("Custom preamble"))
         self._preamble = _PreambleEdit()
@@ -1571,10 +1637,6 @@ class DocumentPropertiesPanel(QWidget):
         )
         self._preamble.setFixedHeight(96)
         body.addWidget(self._preamble)
-        body.addWidget(self._hint(
-            "Extra LaTeX for packages, macros, or <tt>\\ctikzset</tt>, inserted "
-            "before <tt>\\begin{document}</tt>."
-        ))
 
         body.addStretch(1)
         scroll.setWidget(content)
@@ -1582,21 +1644,17 @@ class DocumentPropertiesPanel(QWidget):
 
         self._voltage.currentIndexChanged.connect(self._on_change)
         self._current.currentIndexChanged.connect(self._on_change)
+        self._diode.valueChanged.connect(self._on_change)
         for combo in self._style_combos.values():
             combo.currentIndexChanged.connect(self._on_change)
         self._siunitx.toggled.connect(self._on_change)
+        self._marks.toggled.connect(self._on_change)
+        self._hops.toggled.connect(self._on_change)
+        self._open_ends.toggled.connect(self._on_change)
+        self._junctions.toggled.connect(self._on_change)
         # Commit free-form preamble edits when focus leaves the editor, like the
         # other text fields in the inspector (avoids an undo step per keystroke).
         self._preamble.committed.connect(self._on_change)
-
-    @staticmethod
-    def _hint(text: str) -> QLabel:
-        """A muted, word-wrapped help label (the panel's small-print style)."""
-        label = QLabel(text)
-        label.setObjectName("hintLabel")
-        label.setStyleSheet(f"color: {theme.ICON_MUTED}; font-size: 10px;")
-        label.setWordWrap(True)
-        return label
 
     def _apply_scroll_style(self) -> None:
         """Transparent body + themed scrollbar, mirroring PropertiesPanel (no
@@ -1631,6 +1689,16 @@ class DocumentPropertiesPanel(QWidget):
         self._siunitx.blockSignals(True)
         self._siunitx.setChecked(sch.siunitx)
         self._siunitx.blockSignals(False)
+        for chk, val in ((self._marks, sch.mark_unconnected_pins),
+                         (self._hops, sch.line_hops),
+                         (self._open_ends, sch.mark_open_ends),
+                         (self._junctions, sch.mark_junctions)):
+            chk.blockSignals(True)
+            chk.setChecked(val)
+            chk.blockSignals(False)
+        self._diode.blockSignals(True)
+        self._diode.setValue(sch.diode_scale)
+        self._diode.blockSignals(False)
         if self._style_combos:
             from app.components import library as _lib
             for axis, combo in self._style_combos.items():
@@ -1656,13 +1724,22 @@ class DocumentPropertiesPanel(QWidget):
         current = self._current.currentData()
         siunitx = self._siunitx.isChecked()
         preamble = self._preamble.toPlainText()
+        marks = self._marks.isChecked()
+        hops = self._hops.isChecked()
+        open_ends = self._open_ends.isChecked()
+        junctions = self._junctions.isChecked()
+        diode = round(self._diode.value(), 6)
         # Non-default values only (a value == its axis default is dropped), so an
         # all-american document keeps an empty map — matching the stored convention.
         symbol_style = {axis: v for axis, combo in self._style_combos.items()
                         if (v := combo.currentData()) != _lib.STYLE_DEFAULT.get(axis)}
         if (voltage == sch.voltage_style and current == sch.current_style
                 and siunitx == sch.siunitx and preamble == sch.preamble
-                and symbol_style == sch.symbol_style):
+                and symbol_style == sch.symbol_style
+                and marks == sch.mark_unconnected_pins and hops == sch.line_hops
+                and open_ends == sch.mark_open_ends
+                and junctions == sch.mark_junctions
+                and diode == round(sch.diode_scale, 6)):
             return
         # Undoable, like every other edit: route through the scene's stack (so
         # Ctrl+Z reverts it and the modified-state tracking sees it) instead of
@@ -1678,6 +1755,16 @@ class DocumentPropertiesPanel(QWidget):
             old_preamble=sch.preamble,
             new_symbol_style=symbol_style,
             old_symbol_style=dict(sch.symbol_style),
+            new_mark_unconnected_pins=marks,
+            old_mark_unconnected_pins=sch.mark_unconnected_pins,
+            new_line_hops=hops,
+            old_line_hops=sch.line_hops,
+            new_mark_open_ends=open_ends,
+            old_mark_open_ends=sch.mark_open_ends,
+            new_mark_junctions=junctions,
+            old_mark_junctions=sch.mark_junctions,
+            new_diode_scale=diode,
+            old_diode_scale=sch.diode_scale,
         ))
         self.document_changed.emit()
 
@@ -1749,6 +1836,7 @@ class PropertiesPanel(QWidget):
             OptionsSection(),
             NodeTextSection(),
             NodePlacementSection(),
+            NodeSizeSection(),
             TextContentSection(),
             BipoleLabelSection(),
             VariantSection(),

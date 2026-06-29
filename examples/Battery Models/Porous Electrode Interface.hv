@@ -1,12 +1,17 @@
 {
-  "version": "0.8",
+  "version": "0.10",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
     "symbol_style": {},
     "siunitx": true,
-    "preamble": ""
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "mark_open_ends": true,
+    "mark_junctions": true,
+    "diode_scale": 0.8
   },
   "components": [
     {
@@ -26,12 +31,12 @@
     },
     {
       "id": "3547f287-6f9b-4bbf-a327-3c8086f77403",
-      "kind": "cV",
+      "kind": "american controlled voltage source",
       "position": [
         76.0,
         81.0
       ],
-      "rotation": 270,
+      "rotation": 0,
       "mirror": false,
       "options": "l=$U_\\mathrm{ocp}(\\theta_\\mathrm{s,0})$",
       "label_offset": [

@@ -341,8 +341,8 @@ class MainWindow(QMainWindow):
         # Apply configured external-tool paths before any discovery (dependency
         # check, preview, math-label engine) so they honour the user's settings.
         tools.set_tool_paths(self._prefs.tool_paths)
-        self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
-        self._scene.set_line_hops(self._prefs.line_hops)
+        # "Mark unconnected pins" and "line-hops" are now **document** options (§10.3):
+        # the scene renders them straight off its schematic, so nothing to apply here.
         self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
         mathrender.set_force_ziamath(self._prefs.force_ziamath)
 
@@ -1193,8 +1193,8 @@ class MainWindow(QMainWindow):
             return
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:  # noqa: BLE001 — keep the preview alive, but visible
             self._status_compile.setText(f"Preview update failed: {exc}")
             return
@@ -1209,8 +1209,8 @@ class MainWindow(QMainWindow):
             return
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             self._status_compile.setText(f"Error: {exc}")
             return
@@ -1466,8 +1466,8 @@ class MainWindow(QMainWindow):
         # Snapshot on the UI thread — the worker never touches the live model.
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                              mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                              mark_line_hops=self._prefs.line_hops)
+                              mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                              mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:  # noqa: BLE001 — never block the save
             self._status_compile.setText(f"Auto-export failed ({exc})")
             return
@@ -1526,8 +1526,7 @@ class MainWindow(QMainWindow):
         display change (e.g. marking unconnected pins) is reflected immediately.
         """
         if PreferencesDialog(self._prefs, self).exec() == QDialog.Accepted:
-            self._scene.set_mark_unconnected_pins(self._prefs.mark_unconnected_pins)
-            self._scene.set_line_hops(self._prefs.line_hops)
+            # (Unconnected-pin marks / line-hops are document options now, §10.3.)
             self._view.set_placement_shortcuts(self._prefs.component_shortcuts)
             # Apply configured tool paths first so the engine choice, re-typeset,
             # and recompile below all see the updated discovery (§8.7 / §10.8).
@@ -1550,8 +1549,8 @@ class MainWindow(QMainWindow):
         self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")
             return
@@ -1586,8 +1585,8 @@ class MainWindow(QMainWindow):
         self._flush_inspector_edits()
         try:
             source = generate(self._scene.schematic, y_flip=True,
-                            mark_unconnected_pins=self._prefs.mark_unconnected_pins,
-                            mark_line_hops=self._prefs.line_hops)
+                            mark_unconnected_pins=self._scene.schematic.mark_unconnected_pins,
+                            mark_line_hops=self._scene.schematic.line_hops)
         except Exception as exc:
             if not quiet:
                 QMessageBox.critical(self, "Export Error", f"Cannot generate source:\n{exc}")

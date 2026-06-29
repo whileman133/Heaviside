@@ -14,7 +14,7 @@ developer-tool dependency, not a shipped-app one):
 * :func:`measure_anchors` — read ``\pgfpointanchor`` dumps -> ``{name: (gu_x, gu_y)}``
   as a **GU offset** (Qt y-down), directly comparable to a pin position.
 
-This is the single renderer/parser: ``components/generate_components.py`` drives it to
+This is the single renderer/parser: ``components/generate_library.py`` drives it to
 produce both the symbol geometry and the component data file.
 """
 

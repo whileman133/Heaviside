@@ -81,7 +81,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))      # so the optional --probe path can import ``app``
-DEFINITIONS = Path(__file__).with_name("definitions.json")
+DEFINITIONS = Path(__file__).with_name("generated") / "definitions.json"
 
 # Generic geometric / housekeeping anchor *directions* — not the component-specific
 # anchors this tool is meant to surface. These are the pgf compass anchors and their
@@ -262,11 +262,13 @@ def _first_token(nodespec: str) -> str:
     return s.strip()
 
 
-def extract(manual: str) -> dict[str, list[str]]:
-    """Map ``keyword/shape → [special anchor names]`` from the manual source.
+def extract(manual: str, *, keep_geo: bool = False) -> dict[str, list[str]]:
+    """Map ``keyword/shape → [anchor names]`` from the manual source.
 
     Merges anchors when the same keyword appears in several entries (american /
-    european variants, ``\\showanchors`` demos)."""
+    european variants, ``\\showanchors`` demos). With *keep_geo* the geographical
+    anchors (``north``/``center``/``left``/…) are kept too, for callers that want
+    **every** documented anchor rather than only the "special" ones."""
     found: dict[str, list[str]] = {}
 
     def add(key: str, anchors: list[str]) -> None:
@@ -277,14 +279,16 @@ def extract(manual: str) -> dict[str, list[str]]:
             if a not in bucket:
                 bucket.append(a)
 
+    def names(spec: str | None) -> list[str]:
+        return _anchor_names(spec, keep_geo=keep_geo)
+
     # \circuitdesc{s O{1} m m m d() d[]}  — node components.
     for m in re.finditer(r"\\circuitdesc(?![a-zA-Z])", manual):
         parsed = _parse_args(manual, m.end(), ["s", "o", "m", "m", "m", "p", "q"])
         if not parsed:
             continue
         args, _ = parsed
-        add(args.get(2, "").strip(),
-            _anchor_names(args.get(5)) + _anchor_names(args.get(6)))
+        add(args.get(2, "").strip(), names(args.get(5)) + names(args.get(6)))
 
     # \circuitdescbip{s o m d<> m m d() d[]}  — path-style bipoles.
     for m in re.finditer(r"\\circuitdescbip\*?", manual):
@@ -293,8 +297,7 @@ def extract(manual: str) -> dict[str, list[str]]:
         if not parsed:
             continue
         args, _ = parsed
-        add(args.get(1, "").strip(),
-            _anchor_names(args.get(5)) + _anchor_names(args.get(6)))
+        add(args.get(1, "").strip(), names(args.get(5)) + names(args.get(6)))
 
     # \showanchors[O{}]{nodespec}{text}d()  — bare shape demos.
     for m in re.finditer(r"\\showanchors(?![a-zA-Z])", manual):
@@ -302,7 +305,7 @@ def extract(manual: str) -> dict[str, list[str]]:
         if not parsed:
             continue
         args, _ = parsed
-        add(_first_token(args.get(1, "")), _anchor_names(args.get(3)))
+        add(_first_token(args.get(1, "")), names(args.get(3)))
 
     return {k: v for k, v in found.items() if v}
 

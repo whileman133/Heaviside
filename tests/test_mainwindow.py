@@ -471,12 +471,12 @@ def test_placement_shortcuts_are_window_wide(tmp_path, monkeypatch):
     monkeypatch.setattr(win._scene, "start_placement", lambda k: started.append(k))
 
     win.keyPressEvent(QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.NoModifier, "c"))
-    assert started == ["C"]
+    assert started == ["capacitor"]
     # A Ctrl-chord (e.g. Ctrl+C copy) is never hijacked as a placement key.
     win.keyPressEvent(
         QKeyEvent(QKeyEvent.KeyPress, Qt.Key_C, Qt.ControlModifier, "c")
     )
-    assert started == ["C"]
+    assert started == ["capacitor"]
 
 
 def test_placement_shortcuts_skip_text_inputs(tmp_path, monkeypatch):
@@ -507,13 +507,14 @@ def test_rotate_shortcut_is_ctrl_r(tmp_path):
 
 
 def test_ctrl_r_rotates_selection(tmp_path):
-    """Activating the rotate shortcut turns the selected component 90° CW."""
+    """Activating the rotate shortcut turns the selected component 45° CW (§6.x —
+    components orient in 45° increments)."""
     win = _win(tmp_path)
     comp = win._scene.place_component("R", (5.0, 5.0))
     win._scene._comp_items[comp.id].setSelected(True)
     before = win._scene._component_by_id(comp.id).rotation
     win._rotate_shortcut.activated.emit()  # simulate the Ctrl+R press
-    assert win._scene._component_by_id(comp.id).rotation == (before + 90) % 360
+    assert win._scene._component_by_id(comp.id).rotation == (before + 45) % 360
 
 
 def test_export_png_renders_at_dpi(tmp_path, monkeypatch):

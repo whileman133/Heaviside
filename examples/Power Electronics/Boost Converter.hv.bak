@@ -1,1 +1,313 @@
-{"version": "0.8", "name": "untitled", "config": {"voltage_style": "american", "current_style": "american", "symbol_style": {}, "siunitx": true, "preamble": ""}, "components": [{"id": "43dee1b5-ac87-44e1-8f92-d92ebda2bf59", "kind": "nigfete", "position": [79.0, 78.0], "rotation": 0, "mirror": false, "options": "", "variants": {"body_diode": true}}, {"id": "c1850080-08ff-46cf-8d8c-eca107701127", "kind": "ground", "position": [76.0, 79.5], "rotation": 0, "mirror": false, "options": ""}, {"id": "6a04e3bf-b6ec-43a9-97e5-3673b94c5598", "kind": "L", "position": [76.5, 76.5], "rotation": 0, "mirror": false, "options": "l=$L$, i=$i_\\mathrm{L}$"}, {"id": "a216dd94-bf77-4175-8187-68162c919006", "kind": "sD", "position": [79.5, 76.5], "rotation": 0, "mirror": false, "options": "l=$D$"}, {"id": "f14f70ec-ced9-4184-ab71-25c6d4074a6d", "kind": "V", "position": [76.0, 77.0], "rotation": 0, "mirror": false, "options": "l=$V_\\mathrm{in}$", "label_offset": [-211.140625, 43.5]}, {"id": "5f667cd1-1fd9-483f-9b3a-caa13b355e5c", "kind": "C", "position": [82.0, 77.0], "rotation": 90, "mirror": false, "options": "l_=$C$"}, {"id": "da4774f7-e9a2-42a0-a17a-26350f419732", "kind": "text_node", "position": [79.75, 78.0], "rotation": 0, "mirror": false, "options": "$Q$", "font_size": 10.0}, {"id": "55946299-6bd6-4889-ae94-ed77430da478", "kind": "R", "position": [84.0, 77.0], "rotation": 90, "mirror": false, "options": "l_=$R_\\mathrm{L}$, v^=$V_\\mathrm{out}$"}], "wires": [{"id": "68fc3306-99c0-4dc1-a81c-ae32af18a8a4", "points": [[76.5, 76.5], [76.0, 76.5], [76.0, 77.0]]}, {"id": "27acae95-b9a8-4b9d-b578-74603a13d797", "points": [[76.0, 79.0], [76.0, 79.5]]}, {"id": "e4f71c36-71dc-4393-b4b6-b4daf9bb3649", "points": [[79.0, 78.75], [79.0, 79.5]]}, {"id": "01acd739-3497-45c1-b9c3-b52628ac84f1", "points": [[79.0, 79.5], [76.0, 79.5]]}, {"id": "92587d7e-334b-489f-be21-3f7e2dbddee9", "points": [[81.5, 76.5], [82.0, 76.5]]}, {"id": "125bd631-3949-4d6d-94d2-af5bd6b27b60", "points": [[82.0, 76.5], [82.0, 77.0]]}, {"id": "24396e69-2239-4048-ae15-904afe675f51", "points": [[82.0, 79.0], [82.0, 79.5]]}, {"id": "efeacdbe-6d06-4d23-87ec-46e2beed296f", "points": [[82.0, 79.5], [79.0, 79.5]]}, {"id": "254198a0-0569-452d-8bda-ddd34715f1c6", "points": [[78.5, 76.5], [79.0, 76.5]]}, {"id": "85d91bd3-458a-4d1c-b514-bfb01b45bc29", "points": [[79.0, 76.5], [79.5, 76.5]]}, {"id": "fb4aec2e-8710-4a58-bf0f-5b1a1b75cee7", "points": [[79.0, 77.25], [79.0, 76.5]]}, {"id": "93aa48e2-b557-4576-8011-f016bbcdc194", "points": [[84.0, 77.0], [84.0, 76.5], [82.0, 76.5]]}, {"id": "873f068c-4962-4ba5-99e7-f17eacdeb4d3", "points": [[84.0, 79.0], [84.0, 79.5], [82.0, 79.5]]}, {"id": "4412c006-ef4a-46fe-a018-716a4e5e942d", "points": [[77.25, 80.25], [77.25, 78.25], [78.0, 78.25]]}], "metadata": {}}
+{
+  "version": "0.9",
+  "name": "untitled",
+  "config": {
+    "voltage_style": "american",
+    "current_style": "american",
+    "symbol_style": {},
+    "siunitx": true,
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "diode_scale": 0.8
+  },
+  "components": [
+    {
+      "id": "43dee1b5-ac87-44e1-8f92-d92ebda2bf59",
+      "kind": "nigfete",
+      "position": [
+        79.0,
+        78.0
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "",
+      "variants": {
+        "body_diode": true
+      }
+    },
+    {
+      "id": "c1850080-08ff-46cf-8d8c-eca107701127",
+      "kind": "ground",
+      "position": [
+        76.0,
+        79.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": ""
+    },
+    {
+      "id": "6a04e3bf-b6ec-43a9-97e5-3673b94c5598",
+      "kind": "L",
+      "position": [
+        76.5,
+        76.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$L$, i=$i_\\mathrm{L}$"
+    },
+    {
+      "id": "a216dd94-bf77-4175-8187-68162c919006",
+      "kind": "full Schottky diode",
+      "position": [
+        79.5,
+        76.5
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$D$"
+    },
+    {
+      "id": "f14f70ec-ced9-4184-ab71-25c6d4074a6d",
+      "kind": "american voltage source",
+      "position": [
+        76.0,
+        77.0
+      ],
+      "rotation": 90,
+      "mirror": false,
+      "options": "l=$V_\\mathrm{in}$",
+      "label_offset": [
+        -211.140625,
+        43.5
+      ]
+    },
+    {
+      "id": "5f667cd1-1fd9-483f-9b3a-caa13b355e5c",
+      "kind": "capacitor",
+      "position": [
+        82.0,
+        77.0
+      ],
+      "rotation": 90,
+      "mirror": false,
+      "options": "l_=$C$"
+    },
+    {
+      "id": "da4774f7-e9a2-42a0-a17a-26350f419732",
+      "kind": "text_node",
+      "position": [
+        79.75,
+        78.0
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "$Q$",
+      "font_size": 10.0
+    },
+    {
+      "id": "55946299-6bd6-4889-ae94-ed77430da478",
+      "kind": "R",
+      "position": [
+        84.0,
+        77.0
+      ],
+      "rotation": 90,
+      "mirror": false,
+      "options": "l_=$R_\\mathrm{L}$, v^=$V_\\mathrm{out}$"
+    }
+  ],
+  "wires": [
+    {
+      "id": "68fc3306-99c0-4dc1-a81c-ae32af18a8a4",
+      "points": [
+        [
+          76.5,
+          76.5
+        ],
+        [
+          76.0,
+          76.5
+        ],
+        [
+          76.0,
+          77.0
+        ]
+      ]
+    },
+    {
+      "id": "27acae95-b9a8-4b9d-b578-74603a13d797",
+      "points": [
+        [
+          76.0,
+          79.0
+        ],
+        [
+          76.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "e4f71c36-71dc-4393-b4b6-b4daf9bb3649",
+      "points": [
+        [
+          79.0,
+          78.75
+        ],
+        [
+          79.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "01acd739-3497-45c1-b9c3-b52628ac84f1",
+      "points": [
+        [
+          79.0,
+          79.5
+        ],
+        [
+          76.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "92587d7e-334b-489f-be21-3f7e2dbddee9",
+      "points": [
+        [
+          81.5,
+          76.5
+        ],
+        [
+          82.0,
+          76.5
+        ]
+      ]
+    },
+    {
+      "id": "125bd631-3949-4d6d-94d2-af5bd6b27b60",
+      "points": [
+        [
+          82.0,
+          76.5
+        ],
+        [
+          82.0,
+          77.0
+        ]
+      ]
+    },
+    {
+      "id": "24396e69-2239-4048-ae15-904afe675f51",
+      "points": [
+        [
+          82.0,
+          79.0
+        ],
+        [
+          82.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "efeacdbe-6d06-4d23-87ec-46e2beed296f",
+      "points": [
+        [
+          82.0,
+          79.5
+        ],
+        [
+          79.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "254198a0-0569-452d-8bda-ddd34715f1c6",
+      "points": [
+        [
+          78.5,
+          76.5
+        ],
+        [
+          79.0,
+          76.5
+        ]
+      ]
+    },
+    {
+      "id": "85d91bd3-458a-4d1c-b514-bfb01b45bc29",
+      "points": [
+        [
+          79.0,
+          76.5
+        ],
+        [
+          79.5,
+          76.5
+        ]
+      ]
+    },
+    {
+      "id": "fb4aec2e-8710-4a58-bf0f-5b1a1b75cee7",
+      "points": [
+        [
+          79.0,
+          77.25
+        ],
+        [
+          79.0,
+          76.5
+        ]
+      ]
+    },
+    {
+      "id": "93aa48e2-b557-4576-8011-f016bbcdc194",
+      "points": [
+        [
+          84.0,
+          77.0
+        ],
+        [
+          84.0,
+          76.5
+        ],
+        [
+          82.0,
+          76.5
+        ]
+      ]
+    },
+    {
+      "id": "873f068c-4962-4ba5-99e7-f17eacdeb4d3",
+      "points": [
+        [
+          84.0,
+          79.0
+        ],
+        [
+          84.0,
+          79.5
+        ],
+        [
+          82.0,
+          79.5
+        ]
+      ]
+    },
+    {
+      "id": "4412c006-ef4a-46fe-a018-716a4e5e942d",
+      "points": [
+        [
+          77.25,
+          80.25
+        ],
+        [
+          77.25,
+          78.25
+        ],
+        [
+          78.0,
+          78.25
+        ]
+      ]
+    }
+  ],
+  "metadata": {}
+}

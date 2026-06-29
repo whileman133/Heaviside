@@ -49,6 +49,7 @@ from app.schematic.model import (
     is_box_kind,
     is_terminal_marker,
     point_key,
+    rotate_vector,
     route_pin_aware,
     simplify_points,
     snap_point,
@@ -1465,7 +1466,7 @@ class MoveOptionsLabelCommand(Command):
 
 
 class RotateCommand(Command):
-    """Change the rotation of a single component by a multiple of 90°.
+    """Change the rotation of a single component to a 45° multiple (0..315).
 
     Inverse: restore the previous rotation value.
     """
@@ -1473,7 +1474,7 @@ class RotateCommand(Command):
     label = "Rotate"
 
     def __init__(self, component_id: str, new_rotation: int, old_rotation: int | None = None) -> None:
-        if new_rotation not in (0, 90, 180, 270):
+        if new_rotation % 45 != 0 or not 0 <= new_rotation < 360:
             raise ValueError(f"Invalid rotation {new_rotation!r}")
         self._component_id = component_id
         self._new_rotation = new_rotation
@@ -2039,10 +2040,16 @@ class GroupRotateCommand(Command):
         component_ids: list[str],
         wire_ids: list[str],
         centroid: tuple[float, float],
+        step: int = 90,
     ) -> None:
         self._component_ids = list(component_ids)
         self._wire_ids = list(wire_ids)
         self._cx, self._cy = centroid
+        # CW step in degrees (a 45° multiple). 90° (the default) rotates wire
+        # geometry exactly on-grid; a 45° step is used only for components +
+        # their connected wires (the caller forces 90° when wires are selected,
+        # since rotating free wire vertices 45° would leave them off-grid).
+        self._step = step % 360
         # Captured at first do() — never overwritten on redo.
         self._orig_comp: dict[str, tuple] = {}
         self._orig_wire: dict[str, list] = {}
@@ -2068,6 +2075,13 @@ class GroupRotateCommand(Command):
         dx, dy = x - cx, y - cy
         return (cx - dy, cy + dx)
 
+    def _rot(self, x: float, y: float) -> tuple[float, float]:
+        """Rotate (x, y) by ``self._step`` around the centroid, in the same
+        canvas convention as :func:`model.rotate_vector` / pin positions (so a
+        rotated position lands exactly on the new pin location)."""
+        rx, ry = rotate_vector(x - self._cx, y - self._cy, self._step)
+        return (self._cx + rx, self._cy + ry)
+
     def _build_pin_motion(
         self,
         schematic: Schematic,
@@ -2080,9 +2094,7 @@ class GroupRotateCommand(Command):
             if comp.id not in comp_id_set:
                 continue
             for pin_pos in _component_pin_positions(comp):
-                mapping[point_key(pin_pos)] = self._rot90cw(
-                    pin_pos[0], pin_pos[1], self._cx, self._cy
-                )
+                mapping[point_key(pin_pos)] = self._rot(pin_pos[0], pin_pos[1])
         return mapping
 
     def do(self, schematic: Schematic) -> None:
@@ -2126,17 +2138,14 @@ class GroupRotateCommand(Command):
         for comp in schematic.components:
             if comp.id not in comp_id_set:
                 continue
-            nx, ny = self._rot90cw(
-                comp.position[0], comp.position[1], self._cx, self._cy
-            )
-            comp.position = (nx, ny)
+            comp.position = self._rot(comp.position[0], comp.position[1])
             # Mirror is a global Flip-X applied OUTERMOST (after the stored
-            # rotation), so a visual 90° CW turn corresponds to rotation−90 for
-            # a mirrored component (R90·M·R(r) = M·R(r−90)). Using +90 would
-            # send the pins to the mirror-image of where _rot90cw moved the
-            # component and its wires, detaching every connection.
-            step = -90 if comp.mirror else 90
-            comp.rotation = (comp.rotation + step) % 360
+            # rotation), so a visual CW turn corresponds to rotation−step for a
+            # mirrored component (R·M·R(r) = M·R(r−step)). Using +step would send
+            # the pins to the mirror-image of where _rot moved the component and
+            # its wires, detaching every connection.
+            delta = -self._step if comp.mirror else self._step
+            comp.rotation = (comp.rotation + delta) % 360
             comp.label_offset = None
 
         # Rotate selected + internal wire vertices.
@@ -2144,9 +2153,20 @@ class GroupRotateCommand(Command):
             if wire.id not in wire_id_set and wire.id not in fully_rotate_extra:
                 continue
             orig = self._orig_wire.get(wire.id, wire.points)
-            wire.points = [
-                self._rot90cw(x, y, self._cx, self._cy) for x, y in orig
-            ]
+            if self._step % 90 == 0:
+                # Exact on-grid rotation of every vertex (the common 90° case).
+                wire.points = [self._rot(x, y) for x, y in orig]
+            else:
+                # 45°: rotating the Manhattan vertices would leave them off-grid
+                # on no pin axis (invalid). An *internal* wire (both ends on moving
+                # pins) is re-routed between the new pin positions instead — its
+                # corner lands on the pins' axes, which validation permits (§3.1).
+                # (A free selected wire can't rotate validly at 45°; the caller
+                # forces a 90° step whenever wires are selected, so we never hit it.)
+                ns = pin_motion.get(point_key(orig[0]))
+                ne = pin_motion.get(point_key(orig[-1]))
+                if ns is not None and ne is not None:
+                    wire.points = route_pin_aware(ns, ne)
 
         # Reshape boundary wires.
         collapsed: list[str] = []
@@ -2232,6 +2252,16 @@ class SetDocumentPropertiesCommand(Command):
         old_preamble: str | None = None,
         new_symbol_style: dict | None = None,
         old_symbol_style: dict | None = None,
+        new_mark_unconnected_pins: bool | None = None,
+        old_mark_unconnected_pins: bool | None = None,
+        new_line_hops: bool | None = None,
+        old_line_hops: bool | None = None,
+        new_mark_open_ends: bool | None = None,
+        old_mark_open_ends: bool | None = None,
+        new_mark_junctions: bool | None = None,
+        old_mark_junctions: bool | None = None,
+        new_diode_scale: float | None = None,
+        old_diode_scale: float | None = None,
     ) -> None:
         self._new_voltage = new_voltage
         self._new_current = new_current
@@ -2243,6 +2273,16 @@ class SetDocumentPropertiesCommand(Command):
         self._old_preamble = old_preamble
         self._new_symbol_style = new_symbol_style
         self._old_symbol_style = old_symbol_style
+        self._new_marks = new_mark_unconnected_pins
+        self._old_marks = old_mark_unconnected_pins
+        self._new_hops = new_line_hops
+        self._old_hops = old_line_hops
+        self._new_open_ends = new_mark_open_ends
+        self._old_open_ends = old_mark_open_ends
+        self._new_junctions = new_mark_junctions
+        self._old_junctions = old_mark_junctions
+        self._new_diode = new_diode_scale
+        self._old_diode = old_diode_scale
 
     def do(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2255,6 +2295,16 @@ class SetDocumentPropertiesCommand(Command):
             schematic.preamble = self._new_preamble
         if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
             schematic.symbol_style = dict(self._new_symbol_style)
+        if self._new_marks is not None and self._new_marks != self._old_marks:
+            schematic.mark_unconnected_pins = self._new_marks
+        if self._new_hops is not None and self._new_hops != self._old_hops:
+            schematic.line_hops = self._new_hops
+        if self._new_open_ends is not None and self._new_open_ends != self._old_open_ends:
+            schematic.mark_open_ends = self._new_open_ends
+        if self._new_junctions is not None and self._new_junctions != self._old_junctions:
+            schematic.mark_junctions = self._new_junctions
+        if self._new_diode is not None and self._new_diode != self._old_diode:
+            schematic.diode_scale = self._new_diode
 
     def undo(self, schematic: Schematic) -> None:
         if self._new_voltage != self._old_voltage:
@@ -2267,6 +2317,16 @@ class SetDocumentPropertiesCommand(Command):
             schematic.preamble = self._old_preamble
         if self._new_symbol_style is not None and self._new_symbol_style != self._old_symbol_style:
             schematic.symbol_style = dict(self._old_symbol_style)
+        if self._new_marks is not None and self._new_marks != self._old_marks:
+            schematic.mark_unconnected_pins = self._old_marks
+        if self._new_hops is not None and self._new_hops != self._old_hops:
+            schematic.line_hops = self._old_hops
+        if self._new_open_ends is not None and self._new_open_ends != self._old_open_ends:
+            schematic.mark_open_ends = self._old_open_ends
+        if self._new_junctions is not None and self._new_junctions != self._old_junctions:
+            schematic.mark_junctions = self._old_junctions
+        if self._new_diode is not None and self._new_diode != self._old_diode:
+            schematic.diode_scale = self._old_diode
 
 
 class MacroCommand(Command):

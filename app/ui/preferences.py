@@ -55,8 +55,6 @@ _DEFAULT_PNG_DPI = 300
 #: Valid PNG DPI range (matches the Preferences dialog's spinbox bounds).
 _PNG_DPI_MIN = 72
 _PNG_DPI_MAX = 1200
-_KEY_MARK_OPEN_PINS = "display/mark_unconnected_pins"
-_KEY_LINE_HOPS = "display/line_hops"
 _KEY_DARK_OVERRIDE = "display/dark_override"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
 _KEY_CHECK_UPDATES = "updates/check_on_startup"
@@ -72,7 +70,7 @@ RESERVED_SHORTCUT_KEYS = frozenset({"s", "w", "p"})
 #: the Select tool starts placing that component; user-overridable in Preferences.
 #: ``v``/``i`` map to the voltage/current annotations (kinds ``open``/``short``).
 DEFAULT_COMPONENT_SHORTCUTS: dict[str, str] = {
-    "r": "R", "c": "C", "l": "L", "d": "D",
+    "r": "R", "c": "capacitor", "l": "L", "d": "full diode",
     "g": "ground", "t": "npn", "v": "open", "i": "short",
 }
 
@@ -201,25 +199,8 @@ class Preferences:
     def png_dpi(self, value: int) -> None:
         self._settings.setValue(_KEY_PNG_DPI, int(value))
 
-    # -- Display -------------------------------------------------------------
-
-    @property
-    def mark_unconnected_pins(self) -> bool:
-        return _to_bool(self._settings.value(_KEY_MARK_OPEN_PINS), default=False)
-
-    @mark_unconnected_pins.setter
-    def mark_unconnected_pins(self, value: bool) -> None:
-        self._settings.setValue(_KEY_MARK_OPEN_PINS, bool(value))
-
-    @property
-    def line_hops(self) -> bool:
-        # Defaults on: drawing a hop at a non-connecting crossing is the
-        # schematic-drawing convention (spec §6.4).
-        return _to_bool(self._settings.value(_KEY_LINE_HOPS), default=True)
-
-    @line_hops.setter
-    def line_hops(self, value: bool) -> None:
-        self._settings.setValue(_KEY_LINE_HOPS, bool(value))
+    # "Mark unconnected pins" and "line-hops" moved to the document (§10.3); they are
+    # no longer app preferences.
 
     @property
     def dark_override(self) -> bool | None:
@@ -398,34 +379,8 @@ class PreferencesDialog(QDialog):
         hint.setStyleSheet(_hint_qss())
         group_layout.addWidget(hint)
 
-        display_group = QGroupBox("Display")
-        display_layout = QVBoxLayout(display_group)
-        display_layout.setSpacing(6)
-
-        self._chk_open_pins = QCheckBox("Mark unconnected component pins with open circles")
-        self._chk_open_pins.setChecked(prefs.mark_unconnected_pins)
-        display_layout.addWidget(self._chk_open_pins)
-
-        pins_hint = QLabel(
-            "Draws a small open circle (ocirc) at every component terminal that "
-            "has no wire attached, in the preview, source, and exports."
-        )
-        pins_hint.setWordWrap(True)
-        pins_hint.setStyleSheet(_hint_qss())
-        display_layout.addWidget(pins_hint)
-
-        self._chk_line_hops = QCheckBox("Draw line-hops where wires cross without connecting")
-        self._chk_line_hops.setChecked(prefs.line_hops)
-        display_layout.addWidget(self._chk_line_hops)
-
-        hops_hint = QLabel(
-            "Draws a small semicircular bump on one wire where two wires cross "
-            "but do not connect, so the crossing reads unambiguously. The wire "
-            "with the higher z-order hops over the other."
-        )
-        hops_hint.setWordWrap(True)
-        hops_hint.setStyleSheet(_hint_qss())
-        display_layout.addWidget(hops_hint)
+        # "Mark unconnected pins" and "Draw line-hops" moved to the Document inspector
+        # (§10.3) — they belong with the figure and travel with the .hv file.
 
         render_group = QGroupBox("Rendering")
         render_layout = QVBoxLayout(render_group)
@@ -501,7 +456,7 @@ class PreferencesDialog(QDialog):
             self._update_tool_status(name)
 
         tabs.addTab(_page(group), "Export")
-        tabs.addTab(_page(display_group, render_group), "Appearance")
+        tabs.addTab(_page(render_group), "Appearance")
         tabs.addTab(self._build_shortcuts_tab(), "Shortcuts")
         tabs.addTab(_page(tools_group), "Tools")
         tabs.addTab(_page(self._chk_check_updates, updates_hint), "Updates")
@@ -660,8 +615,6 @@ class PreferencesDialog(QDialog):
         self._prefs.auto_export_svg = self._chk_svg.isChecked()
         self._prefs.auto_export_png = self._chk_png.isChecked()
         self._prefs.png_dpi = self._spin_dpi.value()
-        self._prefs.mark_unconnected_pins = self._chk_open_pins.isChecked()
-        self._prefs.line_hops = self._chk_line_hops.isChecked()
         self._prefs.force_ziamath = self._chk_force_ziamath.isChecked()
         self._prefs.check_updates_on_startup = self._chk_check_updates.isChecked()
         for name, edit in self._tool_edits.items():

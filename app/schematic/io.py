@@ -82,10 +82,22 @@ from app.schematic.validate import validate
 #: gate-context inference). A 0.7 build would silently strip it on save, so the bump
 #: refuses the newer file; 0.1–0.7 files load unchanged (absent node_side defaults to
 #: empty = centred).
-_FORMAT_VERSION: str = "0.8"
+#: 0.9 adds three document fields to ``config``: ``mark_unconnected_pins`` and
+#: ``line_hops`` (the display options moved out of app Preferences) and ``diode_scale``
+#: (the CircuiTikZ ``diodes/scale`` body size). A 0.8 build would silently strip them on
+#: save, so the bump refuses the newer file; 0.1–0.8 files load unchanged (defaults:
+#: mark_unconnected_pins off, line_hops on, diode_scale 0.8).
+#: 0.10 adds two document fields to ``config``: ``mark_open_ends`` (draw open-circle
+#: ``ocirc`` terminals at dangling wire ends) and ``mark_junctions`` (draw solid
+#: ``circ`` dots at wire junctions), both defaulting **on**. A 0.9 build would silently
+#: strip them on save, so the bump refuses the newer file; 0.1–0.9 files load unchanged
+#: (both default on, preserving the prior always-draw behaviour).
+_FORMAT_VERSION: str = "0.10"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
-_KNOWN_VERSIONS: set[str] = {"0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8"}
+_KNOWN_VERSIONS: set[str] = {
+    "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
+}
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
 # at most). Checked via stat() before the file is read into memory.
@@ -252,6 +264,11 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
             "symbol_style": dict(s.symbol_style),
             "siunitx": s.siunitx,
             "preamble": s.preamble,
+            "mark_unconnected_pins": s.mark_unconnected_pins,
+            "line_hops": s.line_hops,
+            "mark_open_ends": s.mark_open_ends,
+            "mark_junctions": s.mark_junctions,
+            "diode_scale": s.diode_scale,
         },
         "components": [_component_to_dict(c) for c in s.components],
         "wires": [_wire_to_dict(w) for w in s.wires],
@@ -435,6 +452,21 @@ def _dict_to_schematic(data: dict) -> Schematic:
     symbol_style = ({str(k): str(v) for k, v in raw_symbol.items()}
                     if isinstance(raw_symbol, dict) else {})
 
+    # Display options + diode scale (added in 0.9; moved out of app Preferences).
+    # Defaults match the prior preference defaults / the diode constant, so a pre-0.9
+    # file opens unchanged: marks off, line-hops on, diode scale 0.8. (0.8 is the baked
+    # baseline a pre-field file was effectively drawn at — preserving its look — distinct
+    # from the **new-document** default of 0.6, the manual's recommendation, set on the
+    # Schematic dataclass.) Values are coerced rather than failing the load.
+    mark_unconnected_pins = bool(config.get("mark_unconnected_pins", False))
+    line_hops = bool(config.get("line_hops", True))
+    mark_open_ends = bool(config.get("mark_open_ends", True))
+    mark_junctions = bool(config.get("mark_junctions", True))
+    try:
+        diode_scale = float(config.get("diode_scale", 0.8))
+    except (TypeError, ValueError):
+        diode_scale = 0.8
+
     return Schematic(
         version=version,
         name=name,
@@ -446,6 +478,11 @@ def _dict_to_schematic(data: dict) -> Schematic:
         symbol_style=symbol_style,
         siunitx=siunitx,
         preamble=preamble,
+        mark_unconnected_pins=mark_unconnected_pins,
+        line_hops=line_hops,
+        mark_open_ends=mark_open_ends,
+        mark_junctions=mark_junctions,
+        diode_scale=diode_scale,
     )
 
 

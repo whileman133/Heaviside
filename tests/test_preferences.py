@@ -110,20 +110,8 @@ def test_persists_across_instances(tmp_path) -> None:
     assert reloaded.auto_export_eps is True
 
 
-def test_mark_unconnected_pins_default_and_roundtrip(prefs: Preferences) -> None:
-    """The display preference defaults off and round-trips."""
-    assert prefs.mark_unconnected_pins is False
-    prefs.mark_unconnected_pins = True
-    assert prefs.mark_unconnected_pins is True
-
-
-def test_line_hops_default_on_and_roundtrip(prefs: Preferences) -> None:
-    """Line-hops default ON (drawing convention) and round-trip."""
-    assert prefs.line_hops is True
-    prefs.line_hops = False
-    assert prefs.line_hops is False
-    prefs.line_hops = True
-    assert prefs.line_hops is True
+# "Mark unconnected pins" and "line-hops" are no longer app preferences — they moved
+# to the Document inspector (§10.3) and are covered by the document/io tests.
 
 
 def test_check_updates_default_on_and_roundtrip(prefs: Preferences) -> None:
@@ -155,8 +143,6 @@ def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     dlg._chk_pdf.setChecked(True)
     dlg._chk_eps.setChecked(True)
     dlg._chk_svg.setChecked(True)
-    dlg._chk_open_pins.setChecked(True)
-    dlg._chk_line_hops.setChecked(False)
     dlg._chk_force_ziamath.setChecked(True)
     dlg._tool_edits["pdflatex"].setText("/opt/tex/pdflatex")
     dlg._on_accept()
@@ -166,8 +152,6 @@ def test_dialog_accept_writes_values(prefs: Preferences) -> None:
     assert prefs.auto_export_svg is True
     assert prefs.force_ziamath is True
     assert prefs.tool_path("pdflatex") == "/opt/tex/pdflatex"
-    assert prefs.mark_unconnected_pins is True
-    assert prefs.line_hops is False
 
 
 def test_dialog_cancel_discards(prefs: Preferences) -> None:
@@ -230,8 +214,8 @@ def test_component_shortcuts_default_and_roundtrip(prefs: Preferences) -> None:
     assert prefs.component_shortcuts == DEFAULT_COMPONENT_SHORTCUTS
     assert prefs.component_shortcuts["v"] == "open"
     assert prefs.component_shortcuts["i"] == "short"
-    prefs.component_shortcuts = {"q": "R", "x": "C"}
-    assert prefs.component_shortcuts == {"q": "R", "x": "C"}
+    prefs.component_shortcuts = {"q": "R", "x": "capacitor"}
+    assert prefs.component_shortcuts == {"q": "R", "x": "capacitor"}
 
 
 def test_component_shortcuts_sanitized(prefs: Preferences) -> None:
@@ -239,7 +223,7 @@ def test_component_shortcuts_sanitized(prefs: Preferences) -> None:
     multi-char keys, and unknown component kinds."""
     prefs.component_shortcuts = {
         "s": "R",          # reserved tool key → dropped
-        "ab": "C",         # multi-char key → dropped
+        "ab": "capacitor", # multi-char key → dropped
         "1": "L",          # non-letter → dropped
         "z": "NOTAKIND",   # unknown kind → dropped
         "q": "R",          # valid → kept
@@ -266,9 +250,9 @@ def test_shortcuts_tab_builds_and_restores_defaults(prefs: Preferences) -> None:
 def test_dialog_accept_persists_shortcuts(prefs: Preferences) -> None:
     """Accepting writes the edited shortcut table to Preferences."""
     dlg = PreferencesDialog(prefs)
-    dlg._populate_shortcuts({"q": "R", "x": "C"})
+    dlg._populate_shortcuts({"q": "R", "x": "capacitor"})
     dlg._on_accept()
-    assert prefs.component_shortcuts == {"q": "R", "x": "C"}
+    assert prefs.component_shortcuts == {"q": "R", "x": "capacitor"}
 
 
 def test_dialog_rejects_invalid_shortcut(prefs: Preferences, monkeypatch) -> None:
@@ -276,7 +260,7 @@ def test_dialog_rejects_invalid_shortcut(prefs: Preferences, monkeypatch) -> Non
     monkeypatch.setattr(
         "app.ui.preferences.QMessageBox.warning", lambda *a, **k: None
     )
-    for rows in ([("q", "R"), ("q", "C")],   # duplicate key
+    for rows in ([("q", "R"), ("q", "capacitor")],   # duplicate key
                  [("s", "R")]):              # reserved tool key
         dlg = PreferencesDialog(prefs)
         dlg._shortcut_table.setRowCount(0)

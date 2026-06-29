@@ -1,1 +1,118 @@
-{"version": "0.8", "name": "untitled", "config": {"voltage_style": "american", "current_style": "american", "symbol_style": {}, "siunitx": true, "preamble": ""}, "components": [{"id": "4c9e3a8c-8878-423d-b192-4533975c37ff", "kind": "vC", "position": [76.75, 84.5], "rotation": 270, "mirror": true, "options": "l_=$\\bar{C}_\\mathrm{s}(\\theta_\\mathrm{s,avg}(t))$"}, {"id": "257b19ac-989e-4db3-9f8a-39fe1873e30a", "kind": "vR", "position": [74.5, 82.25], "rotation": 0, "mirror": false, "options": "l=$\\bar{R}_\\mathrm{dc}(\\theta_\\mathrm{s,avg}(t))$"}, {"id": "41e51871-95cc-450d-b001-fbc8ac16516b", "kind": "open", "position": [73.25, 82.25], "rotation": 0, "mirror": false, "options": "v=$v_\\mathrm{cell}$", "span_override": [0.0, 2.5]}, {"id": "34e069a8-1909-4db7-8115-98ac6be71588", "kind": "short", "position": [73.25, 82.25], "rotation": 0, "mirror": false, "options": "i=$i_\\mathrm{app}$", "span_override": [1.0, 0.0]}], "wires": [{"id": "7a4805c8-a212-44f0-9306-a0af52c1b045", "points": [[76.75, 82.5], [76.75, 82.25], [76.5, 82.25]]}, {"id": "faaafc46-977e-4bbb-b758-4b9b69be943c", "points": [[76.75, 84.5], [76.75, 84.75], [73.25, 84.75]]}, {"id": "6c1cd7b4-3885-407a-ab95-d14510bf9fdd", "points": [[74.5, 82.25], [74.25, 82.25]]}], "metadata": {}}
+{
+  "version": "0.9",
+  "name": "untitled",
+  "config": {
+    "voltage_style": "american",
+    "current_style": "american",
+    "symbol_style": {},
+    "siunitx": true,
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "diode_scale": 0.8
+  },
+  "components": [
+    {
+      "id": "4c9e3a8c-8878-423d-b192-4533975c37ff",
+      "kind": "variable capacitor",
+      "position": [
+        76.75,
+        84.5
+      ],
+      "rotation": 270,
+      "mirror": true,
+      "options": "l_=$\\bar{C}_\\mathrm{s}(\\theta_\\mathrm{s,avg}(t))$"
+    },
+    {
+      "id": "257b19ac-989e-4db3-9f8a-39fe1873e30a",
+      "kind": "vR",
+      "position": [
+        74.5,
+        82.25
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "l=$\\bar{R}_\\mathrm{dc}(\\theta_\\mathrm{s,avg}(t))$"
+    },
+    {
+      "id": "41e51871-95cc-450d-b001-fbc8ac16516b",
+      "kind": "open",
+      "position": [
+        73.25,
+        82.25
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "v=$v_\\mathrm{cell}$",
+      "span_override": [
+        0.0,
+        2.5
+      ]
+    },
+    {
+      "id": "34e069a8-1909-4db7-8115-98ac6be71588",
+      "kind": "short",
+      "position": [
+        73.25,
+        82.25
+      ],
+      "rotation": 0,
+      "mirror": false,
+      "options": "i=$i_\\mathrm{app}$",
+      "span_override": [
+        1.0,
+        0.0
+      ]
+    }
+  ],
+  "wires": [
+    {
+      "id": "7a4805c8-a212-44f0-9306-a0af52c1b045",
+      "points": [
+        [
+          76.75,
+          82.5
+        ],
+        [
+          76.75,
+          82.25
+        ],
+        [
+          76.5,
+          82.25
+        ]
+      ]
+    },
+    {
+      "id": "faaafc46-977e-4bbb-b758-4b9b69be943c",
+      "points": [
+        [
+          76.75,
+          84.5
+        ],
+        [
+          76.75,
+          84.75
+        ],
+        [
+          73.25,
+          84.75
+        ]
+      ]
+    },
+    {
+      "id": "6c1cd7b4-3885-407a-ab95-d14510bf9fdd",
+      "points": [
+        [
+          74.5,
+          82.25
+        ],
+        [
+          74.25,
+          82.25
+        ]
+      ]
+    }
+  ],
+  "metadata": {}
+}

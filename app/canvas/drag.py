@@ -966,7 +966,7 @@ class DragPreviewController:
         markers. No-op unless the display preference is enabled.
         """
         scene = self._scene
-        if not scene._mark_unconnected_pins:
+        if not scene._schematic.mark_unconnected_pins:
             return
 
         desired = unconnected_pins(

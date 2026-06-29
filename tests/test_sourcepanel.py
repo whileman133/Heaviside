@@ -24,8 +24,9 @@ def _app():
     return QApplication.instance() or QApplication([])
 
 
-def _crossing_scene():
-    """A scene with a horizontal wire (z=1, hops) crossing a vertical one (z=0)."""
+def _crossing_scene(line_hops: bool = True):
+    """A scene with a horizontal wire (z=1, hops) crossing a vertical one (z=0).
+    *line_hops* sets the document's line-hops option (now a document property)."""
     from app.canvas.scene import SchematicScene
     from app.schematic.model import Schematic, Wire
 
@@ -33,30 +34,30 @@ def _crossing_scene():
         Wire(id="h", points=[(0.0, 1.0), (4.0, 1.0)], z_order=1),
         Wire(id="v", points=[(2.0, 0.0), (2.0, 3.0)], z_order=0),
     ])
+    sch.line_hops = line_hops
     scene = SchematicScene()
     scene.set_schematic(sch)
     return scene
 
 
-def _panel(line_hops: bool):
+def _panel():
     from app.ui.sourcepanel import SourcePanel
-    return SourcePanel(preferences=SimpleNamespace(
-        mark_unconnected_pins=False, line_hops=line_hops))
+    return SourcePanel()
 
 
-def test_source_panel_shows_line_hops_when_pref_on(_app):
-    """With line-hops on (the default), the displayed source contains the
-    `jump crossing` node — matching the compiled .tex."""
-    panel = _panel(line_hops=True)
-    panel.set_scene(_crossing_scene())
+def test_source_panel_shows_line_hops_when_doc_on(_app):
+    """With the document's line-hops on (the default), the displayed source contains
+    the `jump crossing` node — matching the compiled .tex."""
+    panel = _panel()
+    panel.set_scene(_crossing_scene(line_hops=True))
     assert "jump crossing" in panel._text.toPlainText()
 
 
-def test_source_panel_omits_line_hops_when_pref_off(_app):
-    """With the preference off, the crossing is a plain straight wire — the
+def test_source_panel_omits_line_hops_when_doc_off(_app):
+    """With the document's line-hops off, the crossing is a plain straight wire — the
     panel still mirrors the (now hop-free) compiled output."""
-    panel = _panel(line_hops=False)
-    panel.set_scene(_crossing_scene())
+    panel = _panel()
+    panel.set_scene(_crossing_scene(line_hops=False))
     text = panel._text.toPlainText()
     assert "jump crossing" not in text
     assert "(0,1) -- (4,1)" in text
@@ -68,7 +69,7 @@ def test_source_panel_shows_node_text(_app):
     changes."""
     from app.canvas.scene import SchematicScene
 
-    panel = _panel(line_hops=True)
+    panel = _panel()
     scene = SchematicScene()
     panel.set_scene(scene)
     comp = scene.place_component("npn", (5.0, 5.0))
@@ -82,5 +83,5 @@ def test_source_panel_soft_wraps(_app):
     width so nothing the source contains scrolls off the right edge unseen."""
     from PySide6.QtWidgets import QPlainTextEdit
 
-    panel = _panel(line_hops=True)
+    panel = _panel()
     assert panel._text.lineWrapMode() == QPlainTextEdit.WidgetWidth

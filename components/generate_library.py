@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-r"""Generate an expanded Heaviside component library from the CircuiTikZ manual.
+r"""Generate the Heaviside component library from the CircuiTikZ manual.
 
-*** WORK IN PROGRESS — probe-driven generation. ***
-
-Goal: a fully *regenerable* component library covering the components the CircuiTikZ
-manual documents, by combining the manual scrape (:mod:`scrape_manual` — categories,
-descriptions) with **render probes** of the actual shapes for the geometry that
-matters (pins/anchors), reusing the same pipeline the curated library uses
-(``app.components.generate``).
+This is the sole, fully *regenerable* component library: it covers the components
+the CircuiTikZ manual documents by combining the manual scrape (:mod:`scrape_manual`
+— categories, descriptions) with **render probes** of the actual shapes for the
+geometry that matters (pins/anchors), via the shared render/measure pipeline in
+``app.components.generate``.
 
 Pins use CircuiTikZ anchor names verbatim. Terminals are discovered by *probing the
 engine*, not by the manual's anchor lists — the manual under-documents anchors (e.g.
@@ -21,13 +19,8 @@ miss most pins. For each component we:
   pins carry their anchor name (named-anchor connection);
 * node with no terminals → a single-point node (ground / supply rail).
 
-Output goes **side by side** with the curated library, into
-``components/generated/{definitions,geometry}.json`` — it never touches the curated
-``components/{definitions,geometry}.json``. Switch the app onto it with::
-
-    HEAVISIDE_COMPONENT_LIB=manual python main.py
-
-so the curated set always remains the fallback (see ``app.resources``).
+Output is written to ``components/generated/{definitions,geometry}.json`` — the
+files the running app loads at startup (see ``app.resources``).
 
     python components/generate_library.py             # generate (slow: renders each)
     python components/generate_library.py --summary    # scope counts only
@@ -116,23 +109,33 @@ def _category(c: dict) -> str:
     titles are too long for the palette's category buttons)."""
     return _CATEGORY_MAP.get(c["category"], c["category"])
 
-# Anchors that are not electrical terminals: positioning aids (label/tip/text),
-# polarity-dot marks (``inner dot A1``…), the styling ``arrows`` anchor, the generic
-# path-body endpoints ``a``/``b`` (the zigzag ends, not the wire terminals — the
-# terminals are the path endpoints in/out), and the option-state markers ``nobase``/
-# ``nogate``/… (the connection point *when that part is hidden*, not a primary
-# terminal — note ``notgate``, a real transmission-gate terminal, is NOT one of these).
-_NON_TERMINAL_EXACT = {"label", "tip", "text", "arrows", "a", "b",
-                       "nobase", "nogate", "nobulk", "nocathode", "centergap",
-                       "geocenter"}
+# Anchor names that are not *connection points* but where a label/decoration is
+# drawn: the node-text positions (``label``/``text``, already measured separately into
+# ``text_anchor``) and the decoration positions (``tip``/``arrows``). Never exposed.
+_NON_TERMINAL_EXACT = {"label", "text", "tip", "arrows"}
+
+
+def _is_doc_anchor(name: str) -> bool:
+    """Whether a **manual-documented** anchor should be exposed as a wireable pin.
+    Permissive — keeps everything the manual lists (electrical terminals, body-border
+    anchors, polarity-dot marks, the geometric anchors ``north``/``center``/``left``/…,
+    internal centres and body-diode/circle taps, option-state ``no…`` anchors) except
+    the label/decoration draw-positions above and the non-referenceable
+    ``<anchor>.<direction>`` compass sub-anchors (``out.n``; genuine internal sub-nodes
+    like ``L1.midtap`` come through :func:`_extra_subnode_anchors`). Coincident anchors
+    collapse later via :func:`_dedupe_by_position`."""
+    return name not in _NON_TERMINAL_EXACT and "." not in name
 
 
 def _is_terminal(name: str) -> bool:
-    """Whether *name* is an electrical terminal or a connection point a user might
-    wire to (vs a geometric/positioning anchor). The transformer polarity-dot
-    anchors (``inner dot A1``…) ARE exposed — they're not auto-drawn, so making the
-    anchors available lets the user place dots themselves."""
-    return name not in _NON_TERMINAL_EXACT and not eda._is_geo(name)
+    """Whether a **render-probed** anchor is a terminal. Stricter than
+    :func:`_is_doc_anchor`: the engine reports *every* anchor a shape defines —
+    including the generic geographical set every node carries — so for the probe
+    fallback (shapes the manual under-documents) we additionally drop the geographical
+    anchors (`eda._is_geo`). Geometric anchors reach the library only when the manual
+    **explicitly** documents them (the :func:`_is_doc_anchor` path), never as probe
+    noise on every shape."""
+    return _is_doc_anchor(name) and not eda._is_geo(name)
 
 
 def _strip_border_anchors(names: list[str], present: set[str]) -> list[str]:
@@ -193,22 +196,35 @@ def _dedupe_by_position(names: list[str],
 
 
 def _bipole_extras(c: dict, pool: list[str], conditional: set[str]) -> list[tuple[str, tuple]]:
-    """Off-axis extra terminals of a path bipole (``gate``/``wiper``…), as
+    """Extra terminals of a path bipole beyond its two axial endpoints, as
     ``[(name, offset)]``. Candidates are the *base* (option-independent) documented
     anchors, or — when it documents none (e.g. the ``empty``/``full`` fill-variants
     inherit the base's gate) — a render probe with the option-*conditional* anchors
-    filtered out. The two main terminals are the path endpoints, so any on-axis anchor
-    (``anode``/``cathode``) is dropped; only off-axis ones are extra."""
-    candidates = [a for a in c["base_anchors"] if _is_terminal(a)]
+    filtered out. Every documented anchor that is **not** at one of the two endpoints
+    (``in`` = (0,0), ``out`` = (2,0)) is an extra terminal: an off-axis ``gate``/
+    ``wiper``, an on-axis ``midtap``, or a geometric anchor (``left``/``right``/
+    ``center`` = the body edges/centre). Anchors coincident with an endpoint
+    (``anode``/``cathode``) fold into in/out; further coincidences collapse by
+    position (so a fallback-to-centre name doesn't add a duplicate)."""
+    candidates = [a for a in c["base_anchors"] if _is_doc_anchor(a)]
     if not candidates:
         candidates = [a for a in (eda.probe_anchors(c["keyword"], "path", pool) or [])
                       if _is_terminal(a) and a not in conditional]
     if not candidates:
         return []
     measured = _measure_bipole(c["keyword"], candidates)
-    off_axis = [a for a in candidates
-                if a in measured and abs(measured[a][1]) > _AXIS_TOL]
-    return [(n, measured[n]) for n in _dedupe_by_position(off_axis, measured)]
+    seen: set[tuple[float, float]] = {(0.0, 0.0), (2.0, 0.0)}   # the two endpoints
+    extras: list[tuple[str, tuple]] = []
+    for n in candidates:
+        p = measured.get(n)
+        if p is None:
+            continue
+        key = (round(p[0], 3), round(p[1], 3))
+        if key in seen:
+            continue
+        seen.add(key)
+        extras.append((n, p))
+    return extras
 
 
 def _bipole_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
@@ -226,29 +242,47 @@ def _bipole_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
 
 
 def _node_terminals(c: dict, pool: list[str], conditional: set[str]) -> list[str]:
-    """Terminal anchor names for a node: the *base* (option-independent) documented
-    anchors when it has any, else a render probe with the option-*conditional*
-    anchors filtered out — the manual under-documents some nodes (gates inherit their
-    inputs; ``pnp`` documents anchors only on its option variants), so we fall back
-    to the engine but keep only anchors that exist on some base shape."""
-    documented = [a for a in c["base_anchors"] if _is_terminal(a)]
-    if documented:
-        # Expose every documented anchor verbatim — including the body anchors the
-        # manual explicitly calls out (a gate's ``bin``/``bout`` for inversion
-        # bubbles, a flip-flop's ``bpin``/``bup``/``bdown``). These are genuinely
-        # useful connection/marker points; only the *probe* fallback below strips
-        # the engine's redundant border anchors (chips' ``bpin N``, which the manual
-        # never documents). Coincident anchors collapse via ``_dedupe_by_position``.
-        return documented
+    """Terminal anchor names for a node. Exposes **every documented anchor** the
+    manual lists for the shape (electrical terminals, body-border anchors, the
+    geometric ``center``/``left``/… — see :func:`_is_doc_anchor`), and unions in the
+    engine's real terminals when the manual's list lacks them (the manual under-
+    documents some nodes — gates inherit their inputs, ``pnp`` documents anchors only
+    on its body-diode *variant*, so its base ``B``/``C``/``E`` come from the probe).
+    The probe is geographic-/border-filtered (:func:`_is_terminal`,
+    :func:`_strip_border_anchors`) so it adds only real terminals, never the engine's
+    generic compass set. Coincident anchors collapse via :func:`_dedupe_by_position`."""
+    documented = [a for a in c["base_anchors"] if _is_doc_anchor(a)]
+    # A node whose documented anchors are **all geographic** has no real terminal — it
+    # is a single-point symbol (ground/supply/terminal-marker). Keep it single-point
+    # rather than promote it to a multi-terminal node: that would break its standalone
+    # ``\node[…] at`` emission (node-side placement, node text — §7) and scatter a
+    # compass rose of pins. (Geometric anchors are additive only on a node that ALSO
+    # carries a real terminal, e.g. a BNC's left/right/center beside hot/zero/shield.)
+    if documented and all(eda._is_geo(a) for a in documented):
+        documented = []
+    # When two anchors coincide they collapse to the first by :func:`_dedupe_by_position`,
+    # so order **named terminals before geometric** ones: a 7-seg's middle segment ``g``
+    # (at the body centre) then wins over ``center``, a BNC's ``hot`` over a coincident
+    # geo anchor, etc. (stable — relative order within each group is preserved).
+    def _terminals_first(anchors: list[str]) -> list[str]:
+        return sorted(anchors, key=eda._is_geo)
+
+    # Trust the manual's list as-is when it names at least one *base* (option-
+    # independent) terminal. Otherwise — no documented anchors, or they are all option-
+    # conditional (``pnp`` lists only its body-diode anchors) — probe the engine and
+    # union, so the base terminals (B/C/E) are not lost behind a variant-only doc list.
+    if documented and not all(a in conditional for a in documented):
+        return _terminals_first(documented)
     probed = [a for a in (eda.probe_anchors(c["keyword"], "node", pool) or [])
-              if _is_terminal(a) and a not in conditional]
-    return _strip_border_anchors(probed, set(probed))
+              if _is_terminal(a) and a not in conditional and a not in ("a", "b")]
+    probed = _strip_border_anchors(probed, set(probed))
+    return _terminals_first(documented + [a for a in probed if a not in documented])
 
 
 def _text_anchor(measured: dict, scale: tuple[float, float]) -> list[float] | None:
     """Where a node's inline ``{…}`` text sits, as ``(text − center)`` in GU, scaled
     by the node's baked scale — matching what the canvas needs to place node text
-    (cf. ``components/add_text_anchors.py``)."""
+    (measured by the generator)."""
     if "text" not in measured or "center" not in measured:
         return None
     tx, ty = measured["text"]
@@ -265,6 +299,19 @@ def _variant_candidates(c: dict, pin_names: set[str]) -> list[str]:
             continue
         out.append(o)
     return out
+
+
+def _extra_subnode_anchors(c: dict) -> list[str]:
+    """Documented sub-node anchors the manual lists on a *constituent* shape but not
+    on the composite's own anchor list. A transformer is two coupled inductors —
+    sub-nodes ``L1`` (primary) and ``L2`` (secondary) — each of which inherits the
+    inductor ``midtap`` centre tap (the manual documents ``midtap`` on ``L``). They
+    are reached via the ``-L1.midtap`` / ``-L2.midtap`` sub-node refs. Self-validating:
+    :func:`_measure_subnode` returns ``None`` for a kind without the sub-node, so a
+    non-coil ``transformer``-named shape silently gains nothing."""
+    if c["type"] == "node" and "transformer" in c["keyword"]:
+        return ["L1.midtap", "L2.midtap"]
+    return []
 
 
 def _node_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
@@ -291,10 +338,11 @@ def _node_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
              "offset": [gen._grid_offset(measured[a][0]),
                         gen._grid_offset(measured[a][1])]}
             for a in canon]
-    # documented sub-node terminals (e.g. double-bipole L.south) → ``-L.south`` ref
-    for sa in c["base_subnode_anchors"]:
+    # documented sub-node terminals (e.g. double-bipole L.south, transformer coil
+    # centre taps L1.midtap/L2.midtap) → ``-L.south`` ref
+    for sa in c["base_subnode_anchors"] + _extra_subnode_anchors(c):
         sub, _, anch = sa.partition(".")
-        if not anch or not _is_terminal(anch):
+        if not anch or not _is_doc_anchor(anch):
             continue
         m = _measure_subnode(c["keyword"], sub, anch)
         if m is not None:
@@ -340,6 +388,33 @@ def _measure_node_with_option(keyword: str, option: str,
         out[m.group(1).strip()] = (round(float(m.group(2)) / render.TEXPT_PER_GU, 4),
                                    round(-float(m.group(3)) / render.TEXPT_PER_GU, 4))
     return out
+
+
+def _gate_size_keys(kw: str) -> dict | None:
+    """If a logic-gate shape supports the CircuiTikZ body ``height``/``width`` ctikzset
+    keys, return ``{"path": "tripoles/<kw>", "height": <default>, "width": <default>}``,
+    else ``None``. The american and/or/nand/nor (and xor/xnor) families do; not/buffer
+    do not (fixed size — they fall back to the node xscale/yscale transform). Probed
+    from the live shape so the defaults track the installed CircuiTikZ."""
+    path = f"tripoles/{kw}"
+    out: dict[str, float] = {}
+    for key in ("height", "width"):
+        body = (r"\makeatletter"
+                rf"\pgfkeysgetvalue{{/tikz/circuitikz/{path}/{key}}}{{\hv@v}}"
+                rf"\typeout{{HVKEY {key} = \hv@v}}\makeatother"
+                rf"\node[{kw}] (X) at (0,0){{}};")
+        try:
+            log = render.compile_log(body, border_pt=6, node_id="X", anchors=[])
+        except render.RenderError:
+            return None
+        m = re.search(rf"HVKEY {key} = (.*)", log)
+        if not m:
+            return None
+        try:
+            out[key] = float(m.group(1).strip())   # ".8" → 0.8
+        except ValueError:
+            return None                            # \hv@v unexpanded → key undefined
+    return {"path": path, **out}
 
 
 def _gate_param_entry(c: dict, pool: list[str], conditional: set[str],
@@ -402,6 +477,9 @@ def _gate_param_entry(c: dict, pool: list[str], conditional: set[str],
                     "n_data": n_data}}
     if text_anchor:
         de["text_anchor"] = text_anchor
+    size_keys = _gate_size_keys(kw)
+    if size_keys:
+        de["size_keys"] = size_keys                # sized via \ctikzset height/width
     return de, geometry
 
 
@@ -723,10 +801,16 @@ def main() -> int:
     if not manual_path or not manual_path.is_file():
         print("could not locate circuitikzmanual.tex (pass --manual PATH)", file=sys.stderr)
         return 1
-    db = sm.scrape(manual_path.read_text(encoding="utf-8", errors="replace"))
+    manual_text = manual_path.read_text(encoding="utf-8", errors="replace")
+    db = sm.scrape(manual_text)
+    # The probe pool and the option-conditional set drive only the *probe fallback*
+    # (for shapes the manual under-documents). They are computed from the **original
+    # scrape**, BEFORE the doc-anchor merge below — otherwise an anchor documented for
+    # one shape (the 7-seg ``dot``) would enter the shared pool and probe-resolve on an
+    # unrelated shape (a flip-flop's bubble ``dot``), leaking a spurious pin.
     pool = sm._anchor_pool(db)
-    # The manual documents only the first few numbered IC pins; extend the probe pool
-    # so multi-pin shapes (flip-flops, chips, mux-family) surface ALL their pins.
+    # The manual documents only the first few numbered IC pins; extend the pool so
+    # multi-pin shapes (flip-flops, chips, mux-family) surface ALL their pins.
     pool = list(dict.fromkeys(
         pool + [f"{p} {i}" for p in ("pin", "lpin", "rpin", "tpin", "bpin")
                 for i in range(1, 17)]))
@@ -736,8 +820,26 @@ def main() -> int:
     base_all = {a for c in db["components"].values() for a in c["base_anchors"]}
     conditional = {a for c in db["components"].values() for a in c["anchors"]
                    if a not in base_all}
+    # The manual scrape under-reports anchors for some shapes (flip-flops, the
+    # seven-segment display, …). ``extract_doc_anchors.extract`` parses the manual's
+    # ``\anchor`` macros more completely, so merge its per-keyword list into each
+    # shape's documented ``base_anchors`` — the source of truth for "every anchor the
+    # manual mentions". ``keep_geo=True`` keeps the **geometric** anchors too
+    # (``north``/``center``/``left``/…): the policy is to surface every documented
+    # anchor (§5.4), since CircuiTikZ documents them because they're useful to wire to
+    # or align with. A shape with documented anchors takes the verbatim documented
+    # path (no probe); the terminal filter (:func:`_is_terminal`) drops only the
+    # label/decoration draw-positions and the non-referenceable ``.``-compound names.
+    doc_anchors = eda.extract(manual_text, keep_geo=True)
+    for kw, c in db["components"].items():
+        seen = set(c["base_anchors"])
+        c["base_anchors"] += [a for a in doc_anchors.get(kw, []) if a not in seen]
 
+    # Order by the manual's source position so each category lists its components in
+    # the manual's own sequence (the scrape's node-pass-then-path-pass otherwise
+    # interleaves them); the palette groups by category, preserving this order.
     comps = [c for c in db["components"].values() if c["keyword"] not in _EXCLUDE]
+    comps.sort(key=lambda c: c.get("pos", 0))
     if args.only:
         want = {k.strip() for k in args.only.split(",")}
         comps = [c for c in comps if c["keyword"] in want]

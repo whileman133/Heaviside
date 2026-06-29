@@ -8,6 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Rotate components in 45° increments.** `Ctrl+R` now turns the selection in 45°
+  steps (was 90°), so a symbol can sit diagonally — handy alongside La Plata wires. The
+  inspector's Rotation control offers all eight orientations (0–315°). A
+  45° orientation puts the pins off the grid, reached by the existing wire magnet /
+  pin-axis alignment. The step falls back to 90° when a wire is part of the selection
+  (rotating free wire vertices 45° would leave them off-grid and invalid); a
+  components-only rotation reshapes connected wires to follow.
+- **La Plata wire routing (45° wires).** The wiring quick-bar now leads with two
+  mutually-exclusive routing-mode tiles — **Manhattan** (90°, the default) and **La
+  Plata** (45°) — with the active mode shown checked. La Plata adds a diagonal leg
+  (octilinear routing) for the angled connections the CircuiTikZ manual uses in places.
+  No new grid is needed: a 45° leg between two 0.25 GU points threads grid nodes, so it
+  stays grid-valid. La Plata also routes **off off-grid pins** — scaled gates and
+  **45°-rotated components** — with the 45° leg coming straight off the pin (no jog):
+  the pin's 45° diagonal acts as an artificial grid line that the lead and its corner
+  ride. The routing style is an editor setting (not saved); a diagonal
+  segment is self-describing in the wire geometry. v1 limitations: line-hops are not
+  drawn on diagonal segments, and mid-segment T-junctions onto a diagonal are not
+  offered as a snap target (diagonal wires connect at their vertices).
+- **Toggle auto-drawn open-circle terminals and junction dots per document.** The
+  Document inspector's **Display** group gains two checkboxes: **Mark open wire ends**
+  (the `ocirc` open circles at dangling wire ends) and **Draw junction dots** (the solid
+  `circ` dots where wires/pins are tied). Both default on (the schematic-drawing
+  convention) and apply to the canvas and the LaTeX export alike; turning one off
+  suppresses that whole class of dots document-wide. (`.hv` format → 0.10.)
+- **Wire ends may sit off-grid when aligned with a pin.** Every component pin's x and y
+  now act as an *artificial grid line* extending across the canvas, so a wire end (while
+  drawing, or while dragging a wire vertex/junction) can snap off the 0.25 GU grid to
+  stay **collinear with any pin** — not just the pin it connects to. Each axis snaps to
+  whichever is nearer, the grid or a pin's axis line, while the pin/wire magnet still
+  wins when the cursor is closer to an actual connection point. When an end snaps to a
+  pin line, a faint dashed **alignment guide** is drawn through that pin so it's clear
+  why the end went off-grid; it clears when the cursor leaves every pin axis. This makes
+  it easy to route clean Manhattan wires into the manual library's off-grid native
+  anchors (scaled gates, transistors, BNC / seven-segment geometric anchors, …).
+- **Wiring quick-bar gains wire + annotation tools.** The slim strip on the right edge
+  of the canvas now leads with a **Manhattan wire** tool (click to enter Wire mode) and
+  the **current** / **voltage** annotations (`short` / `open`, shown with italic *i* /
+  *v* glyphs), above the existing Terminals connection markers — so the everyday wiring
+  gestures are one click from the canvas.
+- **Expose every anchor the CircuiTikZ manual documents — including geometric.** The
+  component generator merges the manual's full per-keyword anchor list (via
+  `extract_doc_anchors.extract(keep_geo=True)`) into each symbol, so every documented
+  anchor becomes a wireable pin: electrical terminals, body-border anchors
+  (`bpin`/`bout`/…), the **geometric** anchors (`north`/`center`/`left`/`right`/…, plus
+  the `circle …`/`tube …` variants), internal centres, body-diode/circle taps, and the
+  option-state `no…` anchors — e.g. a BNC's `left`/`right`/`center`, the seven-segment
+  display's segments (`a`–`g`, `dot`), an `npn`'s body-diode and circle anchors. Only
+  the label/decoration *draw-positions* (`label`/`text`/`tip`/`arrows`) and the
+  non-referenceable `<anchor>.<direction>` compass sub-anchors are skipped. Single-point
+  symbols (grounds, supplies, terminal markers) stay single-point — their compass isn't
+  exposed, since that would break their `\node at` emission. Coincident anchors collapse
+  (named terminals win over geometric aliases), so no duplicate pins appear. The
+  parametric `muxdemux`'s body-border anchors remain the one known gap. Audit coverage
+  with `components/extract_doc_anchors.py`.
+- **Centre-tap terminals from the manual.** Components the CircuiTikZ manual documents
+  with an on-axis centre tap now expose it as a wireable pin: the **inductor `midtap`**,
+  the centre-tapped source windings (`ioosource`/`voosource`/`oosourcetrans` →
+  `centerprim`/`centersec`; `tacdc`/`tdcac`/`tacac` → `ac mid in`/`ac mid out`), and the
+  **transformer** primary/secondary centre taps (`L1.midtap`/`L2.midtap`, reached via the
+  CircuiTikZ coil sub-node anchors).
+- **Document-level diode scale.** The Document inspector gains a **Diode scale** field
+  (the CircuiTikZ `diodes/scale` body size, default 0.8) — the manual recommends
+  shrinking the large default body. The export emits `\ctikzset{diodes/scale=<value>}`
+  and the canvas reflects it live (the diode body scales about its centre, leaving the
+  leads). Replaces the former hard-coded constant.
 - **Expanded component library generated from the manual (experimental, opt-in).**
   `components/generate_library.py` builds a component library covering the CircuiTikZ
   manual's components by combining the manual scrape with the existing render/geometry
@@ -117,7 +183,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   palette. It lists only the kinds the active library defines, so it adapts to the
   curated/manual switch.
 
+### Removed
+- **The curated component library is gone; the manual-scraped library is now the only
+  one.** The hand-curated set in `components/{definitions,geometry}.json` and its
+  authoring scripts (`add_library.py`, `add_digital.py`, `add_transformers.py`,
+  `add_text_anchors.py`, `generate_components.py`, `import_family.py`, `_probe.py`) have
+  been removed. The app always loads the manual-scraped library from
+  `components/generated/` — the `HEAVISIDE_COMPONENT_LIB` environment variable, the
+  `--manual` flag, and the `run-manual.sh` launcher are removed (plain `python main.py`
+  now starts the full library). The palette no longer splits the registry's categories
+  into the curated-only **Gates (Am)/(Eu)** / **Supplies** groups or applies a curated
+  display order; it shows the manual library's own categories in the manual's section
+  order. American/european/cute symbols remain available via the per-document symbol
+  **style** axis (Document inspector), which now applies to every document.
+
 ### Changed
+- **Palette lists components in manual order within each category.** Within a category
+  the symbols now appear in the order the CircuiTikZ manual presents them (sorted by
+  manual source position), instead of american-before-european then alphabetical — so
+  the palette mirrors the manual section by section. The bespoke `short`/`open`
+  annotations sit at the front of Resistors where the manual lists them, rather than
+  trailing after the library kinds.
+- **New documents default the diode body scale to 0.6** (the CircuiTikZ manual's
+  recommended `diodes/scale`), down from 0.8. Existing files keep their saved value, and
+  a pre-0.9 file that predates the field still loads at 0.8 so its diodes are unchanged;
+  only new documents pick up 0.6 (adjustable any time via the Document inspector).
+- **Dropped the invented "Annotations" palette category.** The `open`/`short` voltage
+  and current annotations now live in the **Resistors** category — the section the
+  CircuiTikZ manual documents them in ("Resistive bipoles") — instead of an
+  "Annotations" group with no manual counterpart. Their behaviour (translucent line,
+  span-drawn, i/v labels) is unchanged.
+- **Generated LaTeX references component terminals by anchor name.** A connection to a
+  path device's extra terminal — a thyristor `gate`, a potentiometer `wiper`, an
+  inductor/transformer/source centre tap — now emits a named-anchor reference
+  (`to[L, name=node_xxxx] …` then `(node_xxxx.midtap) -- …`) instead of an opaque raw
+  coordinate, matching how multi-terminal nodes (op-amp/transistor pins) are already
+  referenced. This also applies to **terminal markers placed on an anchor**: a `circ`
+  dropped on a transformer winding or an inductor centre tap now emits
+  `\node[circ] at (node_xxxx.A1) {};` rather than a bare coordinate. This makes the
+  exported code more readable and truer to the CircuiTikZ manual's idiom. A device is
+  named only when something actually references such a terminal (no noise on unconnected
+  taps); the two axial `to[…]` endpoints stay literal coordinates (CircuiTikZ has no
+  clean named anchor for them).
+- **Document inspector consolidated; display options moved out of Preferences.** The
+  Document tab's help text is gone (the controls are self-explanatory). The
+  **Mark unconnected pins** and **Draw line-hops** options moved from Preferences →
+  Appearance into the Document inspector, so they travel with the `.hv` file instead of
+  being a per-machine app setting. Adds `.hv` format **0.9** (`mark_unconnected_pins`,
+  `line_hops`, `diode_scale` in `config`); older files load unchanged.
+- **American/European logic gates scale via CircuiTikZ body `height`/`width` keys.**
+  Resizing one of these gates (corner drag or the new inspector **Size** fields) now
+  emits `\ctikzset{tripoles/<kw>/height=…, …/width=…}` instead of node `xscale`/`yscale`
+  — the CircuiTikZ-recommended way, which redraws the symbol at native stroke width
+  rather than stretching the strokes. The inspector gains numeric **Height** and
+  **Width** fields (the key values) for these gates. Gates that don't expose the keys
+  (not/buffer, the ieeestd family) keep `xscale`/`yscale`. Pins move identically either
+  way, so the canvas and export stay in sync. The generated library bakes each gate's
+  default height/width (american 0.8/1.1, european 0.65/1.4).
 - **Inversion-bubble side is a user-set property, no longer inferred.** A single-
   terminal node now carries a **Placement** property (`node_side`: Center/Left/Right/
   Above/Below), set in the inspector and emitted as a TikZ placement key —
@@ -168,6 +290,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the connection point, omit the marker entirely (the pin still exists for wiring).
 
 ### Fixed
+- **Diode scale now works under the manual library (and for `photodiode`).** Diode
+  detection was keyed off a `filled` variant name that only the curated diodes carry,
+  so the manual-scraped diodes (whose fill lives in distinct `empty`/`full`/`stroke`
+  *kinds*) were never recognised: the canvas body never rescaled and the export never
+  emitted `\ctikzset{diodes/scale=…}`. Detection is now category-based (a two-terminal
+  member of the `Diodes` family — the set CircuiTikZ's `diodes/scale` actually resizes),
+  in both the runtime (`library.is_diode`) and the geometry generator
+  (`generate.is_diode`); both libraries were re-baked so every diode body sits at the
+  0.8 baseline. Tripoles in the family (thyristor/triac/GTO/PUT) are excluded — their
+  gate anchor moves with the scale and would desync the canvas pin from the export.
 - **Inversion bubbles (`ocirc`/`notcirc`) on gate body anchors, matching the manual.**
   An open circle (or `notcirc`) dropped on a logic gate's `bin N`/`bout` body anchor
   now forms a NAND/NOR/inverted-input bubble: it shows no red pin marker, is

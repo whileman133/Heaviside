@@ -317,7 +317,7 @@ class ComponentDef:
     """(dx, dy) in GU (canvas y-down) from the node's centre to its CircuiTikZ
     ``text`` anchor — where the inline ``node[…] {…}`` text is **west-anchored**
     (its left edge sits here, extending right). Measured per multi-terminal kind
-    (``components/add_text_anchors.py``) so the on-canvas node text lands exactly
+    (``components/generate_library.py``) so the on-canvas node text lands exactly
     where the compiled figure places it (a transistor's label just right of the
     symbol, an op-amp's centred, a transformer's a unit above). ``(0, 0)`` for
     kinds without a measured anchor (single-terminal nodes keep their own rule)."""

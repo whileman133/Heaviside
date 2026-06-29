@@ -13,6 +13,8 @@ Two coordinate systems are in play (see :mod:`app.canvas.scene`):
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QPointF
 
 from app.canvas.style import GRID_PX
@@ -82,7 +84,8 @@ def world_delta_to_local(dx_w: float, dy_w: float, rotation: int) -> tuple[float
     """Map a world-space delta back into a component's local span axes.
 
     The inverse rotation of :func:`local_span_to_world` (mirror not applied —
-    the drag math handles mirror separately).
+    the drag math handles mirror separately). Right-angle multiples stay exact;
+    45° multiples use the trig inverse (rotation by −θ).
     """
     r = rotation % 360
     if r == 90:
@@ -91,7 +94,11 @@ def world_delta_to_local(dx_w: float, dy_w: float, rotation: int) -> tuple[float
         return (-dx_w, -dy_w)
     if r == 270:
         return (-dy_w, dx_w)
-    return (dx_w, dy_w)
+    if r == 0:
+        return (dx_w, dy_w)
+    rad = math.radians(r)
+    cos, sin = math.cos(rad), math.sin(rad)
+    return (dx_w * cos + dy_w * sin, -dx_w * sin + dy_w * cos)
 
 
 def local_span_to_world(
@@ -114,8 +121,12 @@ def local_span_to_world(
         rx, ry = (-sdx, -sdy)
     elif r == 270:
         rx, ry = (sdy, -sdx)
-    else:
+    elif r == 0:
         rx, ry = (sdx, sdy)
+    else:
+        rad = math.radians(r)
+        cos, sin = math.cos(rad), math.sin(rad)
+        rx, ry = (sdx * cos - sdy * sin, sdx * sin + sdy * cos)
     if mirror:
         rx = -rx
     return (rx, ry)

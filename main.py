@@ -10,7 +10,6 @@ file association (and a shell "open with") starts the app, passing the file as
 from __future__ import annotations
 
 import datetime
-import os
 import sys
 import tempfile
 import threading
@@ -21,18 +20,9 @@ from PySide6.QtCore import QEvent, QObject, QStandardPaths
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
-from app.resources import COMPONENT_LIB_ENV, resource_path
+from app.resources import resource_path
 
-# ``--manual`` selects the expanded, manual-scraped component library (the
-# convenience launcher ``run-manual.sh`` passes it). This MUST be resolved before
-# importing any other ``app.*`` module: the component registry is built from the
-# active library at import time, so the env var has to be set first. An explicit
-# flag wins over any inherited env value. ``app.resources`` is stdlib-only and does
-# not build the registry, so importing it above is safe.
-if "--manual" in sys.argv[1:]:
-    os.environ[COMPONENT_LIB_ENV] = "manual"
-
-from app.ui.mainwindow import MainWindow  # noqa: E402  (after the lib selection above)
+from app.ui.mainwindow import MainWindow
 
 
 def _crash_log_path() -> Path:

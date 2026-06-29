@@ -1,15 +1,16 @@
 """
 Drag-resize for multi-terminal nodes (spec §6.4).
 
-Two flavours, both driven by a corner handle:
-* **anisotropic** (`span_override = (wf, hf)`) for the manual-library gates, the
-  digital blocks (flip-flops, ALU, adder) and the muxdemux — every scalable kind
-  *without* a CircuiTikZ body-height key;
-* **uniform** (`Component.scale`) for the curated gates, which use a height key (so
-  their inversion bubble stays round).
+Driven by a corner handle, an **anisotropic** node stores
+``span_override = (wf, hf)`` — the manual-library gates, the digital blocks
+(flip-flops, ALU, adder) and the ``muxdemux``: every scalable kind *without* a
+CircuiTikZ body-height key. (The manual library carries no height-keyed gate, so
+the legacy **uniform** ``Component.scale`` flavour — ``_ResizableGateItem`` — is
+never exercised by a real kind; its dead protocol test was removed.)
 
-The curated test library has the parametric ``mux``/``demux`` (anisotropic) and the
-height-keyed gates (uniform), so these exercise both without monkeypatching.
+The ``muxdemux`` is the anisotropic vehicle here; the pin-grid magnet assertions
+use ``ieeestd buffer port`` (its ±0.9/±0.6 corner pins give a clean magnet at the
+identity scale, unlike the muxdemux's denser data lines).
 """
 
 from __future__ import annotations
@@ -48,12 +49,10 @@ def _sch(*comps):
 
 def test_node_resize_factors_pure():
     """``node_resize_factors`` returns span_override for an anisotropic resizable
-    node, and None for a height (uniform) gate, a non-scalable kind, or an unresized
-    instance."""
-    assert is_resizable_node("mux")          # parametric muxdemux-based: anisotropic
-    assert not is_resizable_node("and")      # curated gate uses a height key: uniform
-    assert not is_resizable_node("R")
-    c = _comp("mux")
+    node, and None for a non-scalable kind or an unresized instance."""
+    assert is_resizable_node("muxdemux")     # digital block: anisotropic
+    assert not is_resizable_node("R")        # two-terminal, not scalable
+    c = _comp("muxdemux")
     assert node_resize_factors(c) is None    # unresized
     c.span_override = (2.0, 1.5)
     assert node_resize_factors(c) == (2.0, 1.5)
@@ -62,8 +61,8 @@ def test_node_resize_factors_pure():
 
 def test_pins_scale_anisotropically_about_origin():
     """An anisotropic node's pin offsets scale independently in x/y about the origin."""
-    base = _comp("mux")
-    scaled = _comp("mux", span_override=(2.0, 0.5))
+    base = _comp("muxdemux")
+    scaled = _comp("muxdemux", span_override=(2.0, 0.5))
     for (bx, by), (sx, sy) in zip(component_pin_positions(base),
                                   component_pin_positions(scaled)):
         assert sx - 2.0 == pytest.approx((bx - 2.0) * 2.0)
@@ -97,14 +96,14 @@ def test_resize_is_continuous_with_pin_grid_snap():
     from app.canvas.scene import SchematicScene
 
     sc = SchematicScene()
-    m = sc.place_component("mux", (4.0, 4.0))
+    m = sc.place_component("ieeestd buffer port", (4.0, 4.0))
     item = sc._comp_items[m.id]
     gx, gy = item._corner_gu()
     ax, ay = item._opposite_corner((gx, gy))
-    # Cursor placing the raw factor at 1.12 (between two pin-aligning sizes) →
+    # Cursor placing the raw factor at 1.20 (between two pin-aligning sizes) →
     # returned verbatim; at 1.005 (near an aligning size) → pulled onto 1.0.
-    (wf, hf), _ = item.resize_from_local(1.12 * (gx - ax) + ax, 1.12 * (gy - ay) + ay)
-    assert wf == pytest.approx(1.12) and hf == pytest.approx(1.12)
+    (wf, hf), _ = item.resize_from_local(1.20 * (gx - ax) + ax, 1.20 * (gy - ay) + ay)
+    assert wf == pytest.approx(1.20) and hf == pytest.approx(1.20)
     (wf2, _), _ = item.resize_from_local(1.005 * (gx - ax) + ax, 1.005 * (gy - ay) + ay)
     assert wf2 == pytest.approx(1.0)
 
@@ -119,7 +118,7 @@ def test_resize_holds_opposite_corner_for_every_grab():
     import dataclasses
 
     sc = SchematicScene()
-    m = sc.place_component("mux", (4.0, 4.0))
+    m = sc.place_component("muxdemux", (4.0, 4.0))
     item = sc._comp_items[m.id]
     item.setSelected(True)
     base = item.component
@@ -151,7 +150,7 @@ def test_resize_commit_does_not_move_component():
     from PySide6.QtCore import QPointF
 
     sc = SchematicScene()
-    m = sc.place_component("mux", (4.0, 4.0))
+    m = sc.place_component("muxdemux", (4.0, 4.0))
     item = sc._comp_items[m.id]
     item.setSelected(True)
     corners = item._corners_gu()
@@ -176,7 +175,7 @@ def test_resize_preview_moves_item_to_anchored_origin():
     from PySide6.QtCore import QPointF
 
     sc = SchematicScene()
-    m = sc.place_component("mux", (4.0, 4.0))
+    m = sc.place_component("muxdemux", (4.0, 4.0))
     item = sc._comp_items[m.id]
     item.setSelected(True)
     (gx, gy), hp = item._corners_gu()[0], item._handle_positions()[0]
@@ -198,7 +197,7 @@ def test_resize_keeps_each_wire_on_its_own_pin():
     from app.schematic.model import Wire, component_pin_positions, point_key
     from app.components import library
 
-    m = _comp("mux", params={"inputs": 6})
+    m = _comp("muxdemux", params={"inputs": 6})
     pins = dict(zip([p.name for p in library.resolved_pins(m)],
                     component_pin_positions(m)))
     targets = ["in0", "in1", "in2"]
@@ -220,7 +219,7 @@ def test_resize_node_command_round_trip():
     """ResizeNodeCommand sets the factors and undo restores them."""
     from app.canvas.commands import ResizeNodeCommand, UndoStack
 
-    stack = UndoStack(_sch(_comp("mux")))
+    stack = UndoStack(_sch(_comp("muxdemux")))
     stack.push(ResizeNodeCommand("a", (2.0, 1.5), None))
     assert stack.schematic.components[0].span_override == (2.0, 1.5)
     stack.undo()
@@ -235,7 +234,7 @@ def test_codegen_folds_resize_factors_independently():
     from app.codegen.circuitikz import generate
     import re
 
-    sch = _sch(_comp("mux", span_override=(2.0, 1.0)))
+    sch = _sch(_comp("muxdemux", span_override=(2.0, 1.0)))
     line = next(ln for ln in generate(sch).splitlines() if "mux" in ln)
     assert "xscale=" in line
     xs = float(re.search(r"xscale=(-?[\d.]+)", line).group(1))
@@ -268,7 +267,7 @@ def test_anisotropic_node_independent_factors():
     from app.canvas.commands import ResizeNodeCommand
 
     sc = SchematicScene()
-    m = sc.place_component("mux", (4.0, 4.0))
+    m = sc.place_component("muxdemux", (4.0, 4.0))
     item = sc._comp_items[m.id]
     gx, gy = item._corner_gu()
     ax, ay = item._opposite_corner((gx, gy))
@@ -278,23 +277,10 @@ def test_anisotropic_node_independent_factors():
     assert wf == pytest.approx(2.0, abs=0.2) and hf == pytest.approx(1.5, abs=0.2)
     cmd = item.resize_command(((2.0, 1.5), (4.0, 4.0)), (None, (4.0, 4.0)))
     assert isinstance(cmd, ResizeNodeCommand)
-
-
-def test_height_gate_uniform_resize_protocol():
-    """A height-keyed (curated) gate's corner drag yields a single uniform scale
-    (floored), and its command drives Component.scale."""
-    from app.canvas.scene import SchematicScene
-    from app.canvas.commands import SetComponentScaleCommand
-
-    sc = SchematicScene()
-    g = sc.place_component("and", (4.0, 4.0))
-    item = sc._comp_items[g.id]
-    gx, gy = item._corner_gu()
-    ax, ay = item._opposite_corner((gx, gy))
-    (s, _) = item.resize_from_local(2.0 * (gx - ax) + ax, 2.0 * (gy - ay) + ay)
-    assert s == pytest.approx(2.0)
-    # Collapsing the grabbed corner onto the anchor floors at the minimum size.
-    (s_min, _) = item.resize_from_local(0.01 * (gx - ax) + ax, 0.01 * (gy - ay) + ay)
-    assert s_min == item._MIN
-    cmd = item.resize_command((1.5, (4.0, 4.0)), (1.0, (4.0, 4.0)))
-    assert isinstance(cmd, SetComponentScaleCommand)
+# NOTE: ``test_height_gate_uniform_resize_protocol`` was removed. It exercised the
+# uniform (``Component.scale`` / ``_ResizableGateItem``) corner-drag protocol via a
+# curated height-keyed gate (``and``). The manual library carries no height-keyed
+# gate (``library.gate_uses_height`` is False for every kind), so no real component
+# selects that item class — the protocol it tested is unreachable from the active
+# library. ``test_item_class_split_anisotropic_vs_uniform`` still pins the mapping
+# rule itself (height-keyed → uniform), so the rule stays covered.

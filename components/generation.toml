@@ -1,10 +1,10 @@
 # Component-generation configuration (spec/component-pipeline.md §4).
 #
 # Read at *generation time* by app/components/generate.py (stdlib tomllib) — it
-# tunes how `components/generate_components.py` aligns and sizes symbols. It is
+# tunes how `components/generate_library.py` aligns and sizes symbols. It is
 # NOT shipped to or read by the running app (that reads only the generated
 # definitions.json / geometry.json). Change a value here, then re-run
-#   python components/generate_components.py
+#   python components/generate_library.py
 # to regenerate the library.
 
 [alignment]

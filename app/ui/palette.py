@@ -26,9 +26,11 @@ from collections import defaultdict
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
 from PySide6.QtGui import (
-    QColor, QDesktopServices, QIcon, QKeySequence, QPainter, QPen, QPixmap, QShortcut,
+    QColor, QDesktopServices, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap,
+    QShortcut,
 )
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -43,8 +45,7 @@ from PySide6.QtWidgets import (
 
 from app.canvas.items import ITEM_CLASSES, ComponentItem
 from app.canvas.scene import SchematicScene
-from app.components.registry import REGISTRY, display_rank
-from app.resources import component_lib
+from app.components.registry import REGISTRY
 from app.ui import theme
 
 # Preview glyph + tile sizes — enlarged so the symbols read clearly. The tile
@@ -62,97 +63,12 @@ _IN_USE_MAX_H = 232
 # used to size the pinned panel deterministically from its tile-grid geometry.
 _IN_USE_HEADER_H = 26
 
-# Preferred category order (spec §5.4) — engineer-facing groups, not the
-# CircuiTikZ bipole/tripole classification. The palette splits the raw "Logic"
-# and "Sources" registry categories into finer groups (see _palette_category).
-# Listed row-by-row to match the 3-column card grid (_build_categories fills it
-# left-to-right), so each triple below is one row of the palette.
-_CATEGORY_ORDER = [
-    "Resistors", "Inductors", "Capacitors",
-    "Diodes", "Transistors", "Switches",
-    "Sources", "Supplies", "Grounds",
-    "Annotations", "Amplifiers", "Instruments",
-    "Gates (Am)", "Gates (Eu)", "Logic",
-    "Blocks", "Tubes", "Antennas",
-    "Transducers", "Misc", "Drawing",
-]
-
 # Palette categories that are NOT CircuiTikZ symbols but our own **vanilla-TikZ**
 # drawing primitives (plain ``\draw`` rectangles/circles and ``\node`` text). They
 # get their own top-level palette section, separate from the CircuiTikZ component
 # categories; everything not listed here is treated as CircuiTikZ. Add any future
 # custom drawing category here.
 _VANILLA_CATEGORIES: frozenset[str] = frozenset({"Drawing"})
-
-# Raw-"Logic" kinds that are *blocks* rather than gates (flip-flops, mux/demux,
-# ALU, adder). These split into their own palette "Logic" category; the boolean
-# gates split into the style-grouped "Gates (Am)" / "Gates (Eu)" (see
-# _palette_category). Keyed on the CircuiTikZ shape keyword so it tracks the data.
-_LOGIC_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
-
-# Power-supply kinds (rails + batteries) split out of the raw "Sources" registry
-# category into the palette-only "Supplies" group; the actual sources stay put.
-_SUPPLY_KINDS = frozenset({"vcc", "vdd", "vee", "vss", "battery", "battery1"})
-
-
-def _is_logic_block(kind: str) -> bool:
-    """True for a raw-"Logic" kind that is a *block* (flip-flop, mux/demux, ALU,
-    adder) rather than a boolean gate — so the palette can give the blocks their
-    own "Logic" category and keep the gates in "Gates (Am)" / "Gates (Eu)"."""
-    return REGISTRY[kind].tikz_keyword.startswith(_LOGIC_BLOCK_TIKZ)
-
-
-def _palette_category(kind: str, raw: str) -> str:
-    """Refine a component's registry category into its palette group: split the raw
-    Logic category into the boolean **Gates** (by american/european style) and the
-    **Logic** blocks (flip-flops, mux/demux, ALU, adder), and move the supply
-    rails/batteries into Supplies. (Category is a palette-grouping concern, §5.4,
-    so this stays UI-side.)
-
-    These refinements are tuned to the *curated* library's kinds. The manual-generated
-    library carries the manual's own categories verbatim (only shortened for display),
-    so we use them as-is there and don't introduce extra palette-only groups."""
-    if component_lib() != "curated":
-        return raw
-    if raw == "Logic":
-        if _is_logic_block(kind):
-            return "Logic"
-        return "Gates (Eu)" if _is_european_style(kind) else "Gates (Am)"
-    if raw == "Sources" and kind in _SUPPLY_KINDS:
-        return "Supplies"
-    return raw
-
-
-# A curated representative component **kind** per category. Its actual symbol is
-# rendered as the category-card icon (see _category_pixmap), so the icons match the
-# components — no decorative stand-ins that don't fit. This is only a *preference*:
-# any category not listed (e.g. one introduced by the manual-generated library) falls
-# back to its first member automatically (see _category_rep), so new categories never
-# show a blank icon.
-_CATEGORY_REP = {
-    "Resistors": "R",
-    "Capacitors": "C",
-    "Inductors": "L",
-    "Diodes": "D",
-    "Transistors": "npn",
-    "Tubes": "triode",
-    "Amplifiers": "op amp",
-    "Blocks": "amp",
-    "Gates (Am)": "and",
-    "Gates (Eu)": "eand",
-    "Logic": "ALU",
-    "Switches": "nos",
-    "Sources": "V",
-    "Supplies": "battery",
-    "Instruments": "voltmeter",
-    "Grounds": "ground",
-    "Transducers": "loudspeaker",
-    "Antennas": "antenna",
-    "Misc": "lamp",
-    "Annotations": "open",
-    "Drawing": "rect",
-}
-
 
 # ---------------------------------------------------------------------------
 # Online-manual documentation links (spec §10.2)
@@ -164,11 +80,9 @@ _CATEGORY_REP = {
 _MANUAL_BASE_URL = "https://rmano.github.io/circuitikz/node-The-components-list.html"
 
 # Palette category -> (full manual subsection title, ``sec:`` fragment anchor).
-# Keyed by the *palette* category name; the title is the manual's own (long)
-# subsection heading, used as the link tooltip.  Most keys are the short manual
-# categories (see components/generate_library.py ``_CATEGORY_MAP``); a few
-# curated-library names (Capacitors/Inductors, the gate groups, Supplies,
-# Antennas) alias the same section so the curated palette links too.
+# Keyed by the category name; the title is the manual's own (long) subsection
+# heading, used as the link tooltip.  Keys are the short manual categories (see
+# components/generate_library.py ``_CATEGORY_MAP``).
 #
 # The ``sec:`` anchors are the manual's own LaTeX labels (stable across builds),
 # read from the category-level (``4.x``) subsection headings of the components
@@ -308,16 +222,9 @@ def _thumbnail(kind: str) -> QPixmap:
 
 
 def _category_rep(category: str, kinds: list[str]) -> str | None:
-    """The component kind whose symbol illustrates *category*: the curated pick from
-    ``_CATEGORY_REP`` when it's set and present in the active registry, otherwise the
-    first (most canonical, since *kinds* is pre-sorted) member of the category.
-
-    Auto-deriving the fallback means a category the curated map doesn't know about —
-    e.g. one added by the manual-generated library, or after the curated map drifts —
-    always gets an icon instead of a blank card."""
-    rep = _CATEGORY_REP.get(category)
-    if rep and rep in REGISTRY:
-        return rep
+    """The component kind whose symbol illustrates *category*: the first member of the
+    category in manual order (the manual's lead component for the section), so every
+    category gets an icon instead of a blank card."""
     return kinds[0] if kinds else None
 
 
@@ -332,23 +239,6 @@ def _category_pixmap(kind: str | None, size: int) -> QPixmap:
         return pm
     except Exception:  # noqa: BLE001 - never let a bad symbol break the panel
         return QPixmap()
-
-
-def _is_european_style(kind: str) -> bool:
-    """True for a european-style component, so the palette can group american
-    symbols together (first) and european ones after. Derived from the CircuiTikZ
-    keyword (every european kind uses an ``european …`` shape keyword)."""
-    return "european" in REGISTRY[kind].tikz_keyword.lower()
-
-
-def _within_category_key(kind: str):
-    """Sort key for the order of kinds *within* a palette category: kinds in the
-    explicit display order come first, in that order; the rest fall after,
-    american-style before european (then alphabetically)."""
-    rank = display_rank(kind)
-    if rank is not None:
-        return (0, rank, "")
-    return (1, _is_european_style(kind), kind.lower())
 
 
 # ---------------------------------------------------------------------------
@@ -499,38 +389,190 @@ _WIRING_TILE = 30
 _WIRING_THUMB = 26
 
 
+# The annotation kinds offered in the quick bar, with the single-letter glyph that
+# denotes each: ``short`` is the **current** annotation (i), ``open`` the **voltage**
+# annotation (v) — the same i/v mnemonics as their placement keys.
+_ANNOTATION_QUICK: tuple[tuple[str, str], ...] = (("short", "i"), ("open", "v"))
+
+
+def _wire_quick_pixmap(size: int) -> QPixmap:
+    """A small Manhattan-wire glyph (an orthogonal stepped line) for the quick bar's
+    wire-tool tile."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.6, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # A two-corner orthogonal step: ╴┐_╶ from lower-left up to upper-right.
+    p.drawPolyline([QPointF(s * 0.16, s * 0.72), QPointF(s * 0.5, s * 0.72),
+                    QPointF(s * 0.5, s * 0.28), QPointF(s * 0.84, s * 0.28)])
+    p.end()
+    return pix
+
+
+def _laplata_quick_pixmap(size: int) -> QPixmap:
+    """A small La Plata-wire glyph (a horizontal leg, a 45° diagonal, a horizontal
+    leg) for the quick bar's diagonal-routing tile."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(theme.ICON))
+    pen.setWidthF(max(1.6, size / 11.0))
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    s = float(size)
+    # ╴╱╶ : in low-left, a 45° rise, out high-right.
+    p.drawPolyline([QPointF(s * 0.16, s * 0.72), QPointF(s * 0.4, s * 0.72),
+                    QPointF(s * 0.6, s * 0.28), QPointF(s * 0.84, s * 0.28)])
+    p.end()
+    return pix
+
+
+def _letter_pixmap(letter: str, size: int) -> QPixmap:
+    """A small italic-serif letter glyph (``i``/``v``) for the annotation tiles — the
+    math-italic look of a CircuiTikZ current/voltage label."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.TextAntialiasing)
+    font = QFont("Georgia, Times New Roman, serif")
+    font.setItalic(True)
+    font.setPixelSize(int(size * 0.72))
+    p.setFont(font)
+    p.setPen(QColor(theme.ICON))
+    p.drawText(pix.rect(), Qt.AlignCenter, letter)
+    p.end()
+    return pix
+
+
 class WiringQuickBar(QWidget):
-    """A slim vertical strip of the **Terminals** connection markers docked at the
-    right edge of the canvas, so they're a single click away without a trip to the
-    category palette. Sourced from the active library by category."""
+    """A slim vertical strip docked at the right edge of the canvas for the most
+    common wiring gestures, a single click away without a trip to the category
+    palette: the **Manhattan wire** tool at the top, then the **current** (``short``,
+    *i*) and **voltage** (``open``, *v*) annotations, then the **Terminals**
+    connection markers (sourced from the active library by category)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._scene: SchematicScene | None = None
         self._kinds = [k for k, d in REGISTRY.items() if d.category == WIRING_CATEGORY]
+        # Annotation tiles for kinds the active library actually carries (bespoke
+        # open/short are always present, but stay defensive).
+        self._annotations = [(k, g) for k, g in _ANNOTATION_QUICK if k in REGISTRY]
+        # Selected wire routing style (the active tool indicated in the bar). The bar
+        # owns the selection and pushes it to the scene; rebuilt views restore it.
+        self._routing = "manhattan"
+        self._mode_btns: dict[str, QToolButton] = {}
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(2, 4, 2, 4)
         self._layout.setSpacing(2)
         self.setFixedWidth(_WIRING_TILE + 4)
-        self.setVisible(bool(self._kinds))
-        self._rebuild()
+        self._rebuild()   # always shown: it always has the wire + annotation tools
 
     def set_scene(self, scene: SchematicScene) -> None:
         self._scene = scene
+        scene.set_wire_routing(self._routing)   # keep the scene in sync with the bar
 
     def _place(self, kind: str) -> None:
         if self._scene is not None:
             self._scene.start_placement(kind)
 
+    def _select_routing(self, style: str) -> None:
+        """Pick a routing style (Manhattan / La Plata): mark it active in the bar, set
+        it on the scene, and enter Wire mode so the next drag draws in that style."""
+        self._routing = style
+        for s, b in self._mode_btns.items():
+            b.setChecked(s == style)
+        if self._scene is not None:
+            self._scene.set_wire_routing(style)
+            self._scene.enter_wire_mode()
+
+    def _tool_tile(self, icon: QPixmap, tooltip: str, on_click) -> QToolButton:  # noqa: ANN001
+        """A quick-bar tile carrying a hand-drawn *icon* (not a component thumbnail),
+        matching the component tiles' look but invoking an arbitrary action."""
+        b = QToolButton()
+        b.setIcon(QIcon(icon))
+        b.setIconSize(QSize(_WIRING_THUMB, _WIRING_THUMB))
+        b.setFixedSize(_WIRING_TILE, _WIRING_TILE)
+        b.setAutoRaise(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setStyleSheet(
+            "QToolButton { border: 1px solid transparent; border-radius: 6px; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            % (theme.HOVER, theme.HOVER_BORDER)
+        )
+        b.clicked.connect(on_click)
+        return b
+
+    def _mode_tile(self, icon: QPixmap, tooltip: str, style: str) -> QToolButton:
+        """A **checkable** routing-mode tile (Manhattan / La Plata). The active mode is
+        shown checked (accent fill + border); clicking selects it and enters Wire mode."""
+        b = QToolButton()
+        b.setIcon(QIcon(icon))
+        b.setIconSize(QSize(_WIRING_THUMB, _WIRING_THUMB))
+        b.setFixedSize(_WIRING_TILE, _WIRING_TILE)
+        b.setCheckable(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setToolTip(tooltip)
+        b.setStyleSheet(
+            "QToolButton { border: 1px solid transparent; border-radius: 6px; }"
+            "QToolButton:hover { background: %s; border-color: %s; }"
+            "QToolButton:checked { background: %s; border-color: %s; }"
+            % (theme.HOVER, theme.HOVER_BORDER, theme.HOVER, theme.ACCENT)
+        )
+        b.clicked.connect(lambda _=False, s=style: self._select_routing(s))
+        return b
+
+    def _divider(self) -> QFrame:
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFixedHeight(1)
+        line.setStyleSheet("background-color: %s; border: none;" % theme.DIVIDER)
+        return line
+
     def _rebuild(self) -> None:
         while self._layout.count():
-            w = self._layout.takeAt(0).widget()
+            item = self._layout.takeAt(0)
+            w = item.widget()
             if w is not None:
                 w.deleteLater()
-        for kind in self._kinds:
-            self._layout.addWidget(
-                _ComponentTile(kind, self._place,
-                               tile_size=_WIRING_TILE, thumb_size=_WIRING_THUMB))
+        # Wire routing modes (top): Manhattan (axis-only) and La Plata (45°), a
+        # mutually-exclusive pair whose checked tile marks the active routing style.
+        self._mode_btns = {}
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        for style, icon, tip in (
+            ("manhattan", _wire_quick_pixmap(_WIRING_THUMB), "Manhattan wire (90°)  [W]"),
+            ("laplata", _laplata_quick_pixmap(_WIRING_THUMB), "La Plata wire (45°)"),
+        ):
+            b = self._mode_tile(icon, tip, style)
+            b.setChecked(style == self._routing)
+            self._mode_btns[style] = b
+            self._mode_group.addButton(b)
+            self._layout.addWidget(b)
+        self._layout.addWidget(self._divider())
+        # Current/voltage annotations (short → i, open → v).
+        for kind, glyph in self._annotations:
+            self._layout.addWidget(self._tool_tile(
+                _letter_pixmap(glyph, _WIRING_THUMB),
+                f"{REGISTRY[kind].display_name} ({kind})",
+                lambda _=False, k=kind: self._place(k)))
+        # Terminals connection markers (library-sourced), below a divider.
+        if self._kinds:
+            self._layout.addWidget(self._divider())
+            for kind in self._kinds:
+                self._layout.addWidget(
+                    _ComponentTile(kind, self._place,
+                                   tile_size=_WIRING_TILE, thumb_size=_WIRING_THUMB))
         self._layout.addStretch(1)
         self.setStyleSheet(
             "WiringQuickBar { background: %s; border-left: 1px solid %s; }"
@@ -623,21 +665,17 @@ class ComponentPalette(QWidget):
 
         self._scene: SchematicScene | None = None
         self._by_cat: dict[str, list[str]] = defaultdict(list)
+        # Within each category the kinds keep their **manual order**: REGISTRY is built
+        # in the CircuiTikZ manual's scrape sequence, so iterating it and appending
+        # per-category preserves, within each category, the order the components appear
+        # in the manual — no re-sort.
         for kind, defn in REGISTRY.items():
-            self._by_cat[_palette_category(kind, defn.category)].append(kind)
-        # Within each category, an explicit display order wins (so the Inductors
-        # group reads inductors → transformers → choke); kinds *not* in the order
-        # fall after, american-style first then european, instead of jumbled.
-        for kinds in self._by_cat.values():
-            kinds.sort(key=_within_category_key)
-        # Curated: the spec §5.4 engineer-facing order. Manual: the manual's own
-        # section sequence — registry/definitions.json order is not the manual order,
-        # so we sort by ``_CATEGORY_DOC`` (authored in manual order); bespoke
-        # categories with no manual section (Annotations, Drawing) fall after.
-        if component_lib() == "curated":
-            order = _CATEGORY_ORDER
-        else:
-            order = list(_CATEGORY_DOC)
+            self._by_cat[defn.category].append(kind)
+        # Categories follow the manual's own section sequence — registry/
+        # definitions.json order is not the manual order, so we sort by
+        # ``_CATEGORY_DOC`` (authored in manual order); a bespoke category with no
+        # manual section (Drawing) falls after.
+        order = list(_CATEGORY_DOC)
         self._ordered_cats = [c for c in order if c in self._by_cat] + [
             c for c in self._by_cat if c not in order
         ]

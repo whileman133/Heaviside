@@ -1,12 +1,17 @@
 {
-  "version": "0.8",
+  "version": "0.10",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
     "current_style": "american",
     "symbol_style": {},
     "siunitx": true,
-    "preamble": ""
+    "preamble": "",
+    "mark_unconnected_pins": false,
+    "line_hops": true,
+    "mark_open_ends": true,
+    "mark_junctions": true,
+    "diode_scale": 0.8
   },
   "components": [
     {
@@ -47,7 +52,7 @@
     },
     {
       "id": "a216dd94-bf77-4175-8187-68162c919006",
-      "kind": "sD",
+      "kind": "full Schottky diode",
       "position": [
         79.5,
         76.5
@@ -58,12 +63,12 @@
     },
     {
       "id": "f14f70ec-ced9-4184-ab71-25c6d4074a6d",
-      "kind": "V",
+      "kind": "american voltage source",
       "position": [
         76.0,
         77.0
       ],
-      "rotation": 0,
+      "rotation": 90,
       "mirror": false,
       "options": "l=$V_\\mathrm{in}$",
       "label_offset": [
@@ -73,7 +78,7 @@
     },
     {
       "id": "5f667cd1-1fd9-483f-9b3a-caa13b355e5c",
-      "kind": "C",
+      "kind": "capacitor",
       "position": [
         82.0,
         77.0

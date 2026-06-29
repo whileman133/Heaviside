@@ -1,22 +1,19 @@
 """
-Render/save core for component definitions (Qt-free).
+Render/measure core for component definitions (Qt-free).
 
 Renders a CircuiTikZ symbol in the fixed-bounding-box / origin-at-zero /
-lead-to-grid scheme (spec ``spec/component-pipeline.md`` §2–§4) and writes the
-two data files: the geometry ``geometry.json`` and the registry/codegen
-``definitions.json`` (plus the single ``origin_svg`` constant and the
-``circuitikz_version`` generation stamp).
+lead-to-grid scheme (spec ``spec/component-pipeline.md`` §2–§4) and derives its
+geometry, data entry, and grid alignment from measurement.
 
-``components/generate_components.py`` (batch: re-render everything) is the
-main driver; the ``components/`` authoring scripts use the incremental
-``save_component`` / ``save_muxdemux``. (Formerly ``app/componenteditor/
-renderer.py`` — the GUI editor it served was removed once the automated
-measurement/alignment pipeline made manual fix-ups redundant.)
+``components/generate_library.py`` (the manual-scraped library generator) is the
+driver: it imports these shared render/measure helpers and owns its own write
+path. (Formerly ``app/componenteditor/renderer.py`` — the GUI editor it served
+was removed once the automated measurement/alignment pipeline made manual fix-ups
+redundant.)
 """
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import tomllib
@@ -32,9 +29,6 @@ from app.resources import resource_path
 BBOX = 3.0
 DIODE_SCALE = library.DIODE_SYMBOL_SCALE
 BORDER_PT = 2
-
-DEFINITIONS_PATH = Path(resource_path("components", "definitions.json"))
-GEOMETRY_PATH = Path(resource_path("components", "geometry.json"))
 
 # ---------------------------------------------------------------------------
 # Generation-time configuration (spec/component-pipeline.md §4). Read once, at
@@ -71,7 +65,21 @@ geometry_key = library.geometry_key
 
 
 def is_diode(entry: dict) -> bool:
-    return any(v["name"] == "filled" for v in entry.get("variants", []))
+    """A two-terminal member of the ``Diodes`` family — the set CircuiTikZ's
+    ``diodes/scale`` key actually resizes, so the set whose body must be baked at
+    :data:`DIODE_SCALE`.
+
+    Keyed off ``category``/``emission``/pin-count rather than a ``"filled"`` variant
+    name: the curated diodes carry that variant but the manual-scraped ones do not
+    (their fill is encoded in distinct ``empty``/``full``/``stroke`` *kinds*), so the
+    old variant test silently baked every manual diode — and curated ``photodiode`` —
+    at CircuiTikZ's default 1.0 instead of :data:`DIODE_SCALE`.  Tripoles in the family
+    (thyristor/triac/GTO/PUT) are excluded: their *gate* anchor moves with the scale,
+    which would desync the canvas pin from the export.  This must stay in lock-step with
+    :func:`app.components.library.is_diode`, the runtime counterpart."""
+    return (entry.get("category") == "Diodes"
+            and entry.get("emission") == "path"
+            and len(entry.get("pins", [])) == 2)
 
 
 def ctikzset(entry: dict) -> list[str]:
@@ -347,8 +355,8 @@ def data_entry(kind: str, entry: dict) -> dict:
         "emission": entry["emission"],
         "tikz": entry["tikz"],
         "labels": list(entry.get("labels", [])),
-        # Placeholder; render_store/save_component overwrite this with the
-        # bbox computed from the rendered ink extent (compute_bbox).
+        # Placeholder; the generator overwrites this with the bbox computed from
+        # the rendered ink extent (compute_bbox).
         "bbox": list(entry.get("bbox", [0.0, 0.0, 0.0, 0.0])),
         "pins": [
             {"name": p["name"], "offset": list(p["offset"]), "anchor": p.get("anchor")}
@@ -482,94 +490,6 @@ def render_parametric(kind: str, entry: dict, origin) -> tuple[dict, dict]:
     return geoms, de
 
 
-def render_store(authored: dict[str, dict]) -> tuple[dict, dict, tuple[float, float]]:
-    """Render every component: returns (geometry, components_data, origin_svg).
-
-    The ``scale`` and pin offsets are re-derived per multi-terminal component
-    (``best_alignment``, §4), so the output reflects the current CircuiTikZ
-    library, not the stored values."""
-    origin = measure_origin(authored["R"]) if "R" in authored else measure_origin(
-        next(iter(authored.values()))
-    )
-    geometry: dict[str, dict] = {}
-    components: dict[str, dict] = {}
-    for kind in sorted(authored):
-        if "muxdemux" in authored[kind]:
-            # Two-parameter mux/demux: every (data, select) combo is rendered
-            # and measured. Regression guard: routed as a plain node, these
-            # would silently lose params/n_data and every kind:data:select
-            # geometry combo.
-            geoms, de = render_muxdemux(kind, authored[kind], origin)
-            geometry.update(geoms)
-            components[kind] = de
-            continue
-        if is_parametric(authored[kind]):
-            geoms, de = render_parametric(kind, authored[kind], origin)
-            geometry.update(geoms)
-            components[kind] = de
-            continue
-        entry = realigned(authored[kind])
-        mes = geometry_entries(kind, entry)
-        geometry.update(mes)
-        de = data_entry(kind, entry)
-        de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
-        components[kind] = de
-    return geometry, components, origin
-
-
-# ---------------------------------------------------------------------------
-# Persistence
-# ---------------------------------------------------------------------------
-
-def load_authored() -> dict[str, dict]:
-    """The authored component records from definitions.json (new or old format)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    return data.get("components", data)
-
-
-def measure_circuitikz_version() -> str | None:
-    """The installed CircuiTikZ version, from a minimal probe compile.
-
-    ``None`` when the package reports no version. Used by the batch generator
-    to stamp ``definitions.json`` with the version the library was rendered
-    against, so symbol/anchor drift is diagnosable later."""
-    _svg, log = render.render_svg(r"\draw (0,0) -- (0.25,0);", border_pt=BORDER_PT)
-    return render.circuitikz_version(log)
-
-
-def write_store(geometry: dict, components: dict, origin: tuple[float, float],
-                circuitikz_version: str | None = None) -> None:
-    """Write both data files. *circuitikz_version* stamps definitions.json with
-    the version the library was generated against (omitted when unknown)."""
-    GEOMETRY_PATH.write_text(json.dumps(geometry, indent=2) + "\n", encoding="utf-8")
-    data: dict = {"origin_svg": list(origin)}
-    if circuitikz_version:
-        data["circuitikz_version"] = circuitikz_version
-    data["components"] = components
-    DEFINITIONS_PATH.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-
-
-def save_component(kind: str, entry: dict) -> None:
-    """Add/replace one component: merge its geometry into geometry.json and its
-    record into definitions.json (re-using the existing origin_svg and the
-    batch-generation circuitikz_version stamp)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    components = data.get("components", data)
-    origin = tuple(data["origin_svg"]) if "origin_svg" in data else measure_origin(entry)
-    geometry = json.loads(GEOMETRY_PATH.read_text(encoding="utf-8"))
-
-    mes = geometry_entries(kind, entry)
-    geometry.update(mes)
-    de = data_entry(kind, entry)
-    de["bbox"] = compute_bbox(mes[geometry_key(kind)], origin, entry["pins"])
-    components[kind] = de
-    write_store(geometry, components, origin,
-                circuitikz_version=data.get("circuitikz_version"))
-
-
 # ---------------------------------------------------------------------------
 # Multi-parameter mux/demux (CircuiTikZ ``muxdemux`` shape).
 #
@@ -663,25 +583,11 @@ def render_muxdemux(kind: str, entry: dict, origin, *, align: bool = True) -> tu
         "display_name": entry["display_name"], "category": entry["category"],
         "emission": "node", "tikz": "muxdemux", "labels": [],
         "pins": default["pins"], "bbox": default["bbox"],
-        # The authoring rec is persisted so the batch generator (render_store)
-        # can re-render the combos from definitions.json alone.
+        # The authoring rec is persisted so the generator can re-render the
+        # combos from its source definitions alone.
         "params": entry["params"], "muxdemux": rec, "n_data": n_data,
     }
     return geoms, de
-
-
-def save_muxdemux(kind: str, entry: dict) -> None:
-    """Render and merge a parametric mux/demux into the data files (incremental —
-    does not re-render the rest of the library)."""
-    data = json.loads(DEFINITIONS_PATH.read_text(encoding="utf-8"))
-    components = data["components"]
-    origin = tuple(data["origin_svg"])
-    geometry = json.loads(GEOMETRY_PATH.read_text(encoding="utf-8"))
-    geoms, de = render_muxdemux(kind, entry, origin)
-    geometry.update(geoms)
-    components[kind] = de
-    write_store(geometry, components, origin,
-                circuitikz_version=data.get("circuitikz_version"))
 
 
 # ---------------------------------------------------------------------------

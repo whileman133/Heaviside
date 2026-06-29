@@ -26,6 +26,8 @@ from app.schematic.model import (
     rect_perimeter_points,
     unconnected_pins,
     route,
+    route_diagonal,
+    route_pin_aware,
     simplify_points,
     wire_contained_by_others,
     wire_crossings,
@@ -222,10 +224,48 @@ def test_component_invalid_kind() -> None:
 # ---------------------------------------------------------------------------
 
 def test_component_invalid_rotation() -> None:
-    """A Component with rotation=45 produces a validation error."""
-    comp = _resistor(rotation=45)
+    """A Component whose rotation is not a 45° multiple produces a validation error.
+    (45° is now valid — components orient in 45° increments — so use 30°.)"""
+    comp = _resistor(rotation=30)
     errors = validate(_make_schematic(comp))
     assert any("rotation" in e for e in errors), errors
+
+
+def test_component_45_degree_rotation_is_valid() -> None:
+    """A 45° (and other 45°-multiple) component orientation passes validation."""
+    for r in (45, 135, 225, 315):
+        assert validate(_make_schematic(_resistor(rotation=r))) == [], r
+
+
+def test_rotate_vector_right_angles_are_exact() -> None:
+    """Right-angle rotations stay exact (no float noise) so an on-grid pin lands
+    exactly on the grid."""
+    from app.schematic.model import rotate_vector
+    assert rotate_vector(2.0, 0.0, 0) == (2.0, 0.0)
+    assert rotate_vector(2.0, 0.0, 90) == (0.0, 2.0)
+    assert rotate_vector(2.0, 0.0, 180) == (-2.0, 0.0)
+    assert rotate_vector(2.0, 0.0, 270) == (0.0, -2.0)
+
+
+def test_rotate_vector_45_uses_trig() -> None:
+    from app.schematic.model import rotate_vector
+    import math
+    rx, ry = rotate_vector(2.0, 0.0, 45)
+    assert rx == pytest.approx(2.0 * math.cos(math.radians(45)))
+    assert ry == pytest.approx(2.0 * math.sin(math.radians(45)))
+
+
+def test_component_pin_positions_at_45() -> None:
+    """A two-terminal component at 45° puts its far terminal on the 45° diagonal
+    (off-grid), reached by the wire magnet / pin-axis alignment (§3.1)."""
+    import math
+    r = _resistor(rotation=45)             # default span (2,0); origin at its position
+    pins = component_pin_positions(r)
+    ox, oy = r.position
+    d = 2.0 * math.cos(math.radians(45))
+    assert pins[0] == (ox, oy)
+    assert pins[1][0] == pytest.approx(ox + d)
+    assert pins[1][1] == pytest.approx(oy + d)
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +301,11 @@ def test_wire_on_quarter_grid_is_valid() -> None:
 def test_wire_endpoint_on_offgrid_gate_pin_is_valid() -> None:
     """A scaled logic gate's input pin sits off the 0.25-GU grid; a wire endpoint
     resting exactly on it validates (the principled exception to invariant 3)."""
-    g = Component(id=_uid(), kind="or", position=(5.0, 5.0), rotation=0, options="",
+    g = Component(id=_uid(), kind="american or port", position=(5.0, 5.0), rotation=0, options="",
                   scale=0.5, params={"inputs": 4})
-    in1 = component_pin_positions(g)[1]               # off-grid (y = 5.125)
+    in1 = component_pin_positions(g)[1]               # off-grid
     assert abs(round(in1[1] / 0.25) * 0.25 - in1[1]) > 1e-9
-    # Approach vertically at the on-grid x; only the pin endpoint is off-grid.
+    # Approach vertically at the pin's x; the corner shares the pin's coordinate.
     wire = _wire([(in1[0], 5.0), in1])
     assert validate(_make_schematic(g, wires=[wire])) == []
 
@@ -281,8 +321,8 @@ def test_wire_offgrid_vertex_not_on_a_pin_is_invalid() -> None:
 def test_wire_corner_aligned_with_offgrid_pin_is_valid() -> None:
     """When a pin is off-grid in both axes, the Manhattan corner that carries the
     pin's off-grid coordinate validates (it lines up with that pin's coordinate)."""
-    # OR at 0.75 → input x = -1.125 and y off-grid too (both axes off-grid).
-    g = Component(id=_uid(), kind="or", position=(5.0, 5.0), rotation=0, options="",
+    # OR at 0.75 → input x and y both off-grid (both axes off-grid).
+    g = Component(id=_uid(), kind="american or port", position=(5.0, 5.0), rotation=0, options="",
                   scale=0.75, params={"inputs": 4})
     in1 = component_pin_positions(g)[1]
     assert abs(round(in1[0] / 0.25) * 0.25 - in1[0]) > 1e-9   # x off-grid
@@ -290,6 +330,33 @@ def test_wire_corner_aligned_with_offgrid_pin_is_valid() -> None:
     corner = (in1[0], 5.0)                            # off-grid x, on-grid y
     wire = _wire([(3.0, 5.0), corner, in1])
     assert validate(_make_schematic(g, wires=[wire])) == []
+
+
+def test_wire_corner_on_offgrid_pin_diagonal_is_valid() -> None:
+    """A La Plata lead off an off-grid pin elbows on the pin's **45° line**: a corner
+    whose ``x − y`` (or ``x + y``) equals the pin's validates, even off-grid on both
+    axes (§3.1 diagonal exemption)."""
+    import uuid
+    r = Component(id=_uid(), kind="R", position=(4.0, 4.0), rotation=45, options="")
+    pin = component_pin_positions(r)[1]               # off-grid in both axes
+    out = route_pin_aware(pin, (10.0, 6.0), style="laplata")
+    corner = out[1]
+    assert round(corner[0] - corner[1], 6) == round(pin[0] - pin[1], 6) \
+        or round(corner[0] + corner[1], 6) == round(pin[0] + pin[1], 6)
+    assert validate(_make_schematic(r, wires=[Wire(id=str(uuid.uuid4()), points=out)])) == []
+
+
+def test_wire_offgrid_vertex_off_every_pin_line_is_invalid() -> None:
+    """The diagonal exemption is pin-specific: an off-grid vertex on neither a pin
+    axis nor a pin diagonal is still an error, even with a 45°-rotated pin present."""
+    import uuid
+    r = Component(id=_uid(), kind="R", position=(4.0, 4.0), rotation=45, options="")
+    pin = component_pin_positions(r)[1]
+    # A stray off-grid vertex not on the pin's axes or diagonals.
+    stray = (pin[0] + 0.1, pin[1] - 0.37)
+    wire = Wire(id=str(uuid.uuid4()), points=[pin, stray, (10.0, 6.0)])
+    assert any("0.25 GU boundary" in e
+               for e in validate(_make_schematic(r, wires=[wire]))), "stray must be invalid"
 
 
 # ---------------------------------------------------------------------------
@@ -324,11 +391,19 @@ def test_mirror_after_rotation_horizontal_bipole_reverses() -> None:
 # test_wire_diagonal
 # ---------------------------------------------------------------------------
 
-def test_wire_diagonal() -> None:
-    """A Wire with a diagonal segment produces a validation error."""
+def test_wire_45_degree_is_valid() -> None:
+    """A Wire with an exactly-45° segment (La Plata routing, §6.4) passes validation
+    — a slope-±1 leg threads grid nodes, so it stays grid-valid."""
     wire = _wire([(0.0, 0.0), (1.0, 1.0)])
+    assert validate(_make_schematic(wires=[wire])) == []
+
+
+def test_wire_non_45_diagonal_is_invalid() -> None:
+    """A Wire with a non-45° slant is still a validation error (only horizontal,
+    vertical, and 45° segments are allowed)."""
+    wire = _wire([(0.0, 0.0), (2.0, 1.0)])
     errors = validate(_make_schematic(wires=[wire]))
-    assert any("diagonal" in e or "Manhattan" in e for e in errors), errors
+    assert any("45" in e or "horizontal" in e for e in errors), errors
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +466,95 @@ def test_route_explicit_orientation_overrides_dominant_axis() -> None:
 def test_route_corner_slice_is_single_point_or_empty() -> None:
     assert route((0.0, 0.0), (2.0, 3.0))[1:-1] == [(0.0, 3.0)]
     assert route((0.0, 0.0), (3.0, 0.0))[1:-1] == []
+
+
+# ---------------------------------------------------------------------------
+# route_diagonal — the La Plata (45°) routing primitive (spec §6.4)
+# ---------------------------------------------------------------------------
+
+def test_route_diagonal_axis_run_is_two_points() -> None:
+    assert route_diagonal((0.0, 0.0), (3.0, 0.0)) == [(0.0, 0.0), (3.0, 0.0)]
+    assert route_diagonal((1.0, 1.0), (1.0, 4.0)) == [(1.0, 1.0), (1.0, 4.0)]
+
+
+def test_route_diagonal_pure_diagonal_is_two_points() -> None:
+    # |dx| == |dy| → a single 45° segment, no corner.
+    assert route_diagonal((0.0, 0.0), (2.0, 2.0)) == [(0.0, 0.0), (2.0, 2.0)]
+    assert route_diagonal((0.0, 0.0), (3.0, -3.0)) == [(0.0, 0.0), (3.0, -3.0)]
+
+
+def test_route_diagonal_elbow_is_axis_first() -> None:
+    # |dx| > |dy|: a horizontal leg from a, then a 45° leg of length |dy| into b.
+    assert route_diagonal((0.0, 0.0), (4.0, 1.0)) == [(0.0, 0.0), (3.0, 0.0), (4.0, 1.0)]
+    # |dy| > |dx|: a vertical leg from a, then a 45° leg of length |dx| into b.
+    assert route_diagonal((0.0, 0.0), (1.0, 4.0)) == [(0.0, 0.0), (0.0, 3.0), (1.0, 4.0)]
+    # Sign handling (down-left).
+    assert route_diagonal((0.0, 0.0), (-4.0, -1.0)) == [
+        (0.0, 0.0), (-3.0, 0.0), (-4.0, -1.0)]
+
+
+def test_route_diagonal_corner_and_segments_are_valid() -> None:
+    """Every La Plata leg is axis-aligned or exactly 45°, and a 45° elbow between
+    on-grid points keeps the corner on-grid — so the wire validates."""
+    pts = route_diagonal((0.0, 0.0), (4.0, 1.0))
+    assert validate(_make_schematic(wires=[_wire(pts)])) == []
+
+
+def test_route_pin_aware_laplata_uses_diagonal_between_grid_points() -> None:
+    assert route_pin_aware((0.0, 0.0), (4.0, 1.0), style="laplata") == [
+        (0.0, 0.0), (3.0, 0.0), (4.0, 1.0)]
+    # Manhattan (default) is unchanged.
+    assert route_pin_aware((0.0, 0.0), (4.0, 1.0)) == [
+        (0.0, 0.0), (4.0, 0.0), (4.0, 1.0)]
+
+
+def _seg_is_axis_or_45(a, b) -> bool:
+    (x0, y0), (x1, y1) = a, b
+    return x0 == x1 or y0 == y1 or abs(abs(x1 - x0) - abs(y1 - y0)) < 1e-6
+
+
+def _offgrid_on_pin_line(out, pin) -> bool:
+    """Every off-grid vertex lies on one of the pin's lines — its axis (same off-grid
+    x or y) or its 45° diagonal (same ``x − y`` or ``x + y``) — mirroring the §3.1
+    validation exemption (so the path validates when that pin is present; full
+    validation with a real component is in test_scene)."""
+    from app.schematic.model import coord_on_grid
+    px, py = pin
+    for x, y in out:
+        if coord_on_grid(x) and coord_on_grid(y):
+            continue
+        on_axis = round(x, 6) == round(px, 6) or round(y, 6) == round(py, 6)
+        on_diag = (round(x - y, 6) == round(px - py, 6)
+                   or round(x + y, 6) == round(px + py, 6))
+        if not (on_axis or on_diag):
+            return False
+    return True
+
+
+def test_route_pin_aware_laplata_off_one_axis_offgrid_pin() -> None:
+    """La Plata routing **off** an off-grid pin (off-grid in y only) sends the 45° leg
+    straight off the pin (no Manhattan jog onto the grid): it connects exactly to the
+    pin, has a real diagonal leg, and every off-grid vertex sits on one of the pin's
+    lines (so it validates when the pin is present)."""
+    pin = (4.0, 3.13)                                   # x on-grid, y off-grid
+    out = route_pin_aware(pin, (8.0, 8.0), style="laplata")
+    assert out[0] == pin                                # connects exactly to the pin
+    assert all(_seg_is_axis_or_45(a, b) for a, b in zip(out, out[1:])), out
+    assert abs(abs(out[1][0] - out[0][0]) - abs(out[1][1] - out[0][1])) < 1e-6 \
+        and out[1][0] != out[0][0], out                 # the FIRST leg off the pin is 45°
+    assert _offgrid_on_pin_line(out, pin), out
+
+
+def test_route_pin_aware_laplata_off_both_axes_offgrid_pin() -> None:
+    """La Plata off a pin off-grid in **both** axes (e.g. a 45°-rotated component): the
+    45° leg comes straight off the pin (corner on the pin's diagonal), no jog."""
+    pin = (4.13, 3.13)
+    out = route_pin_aware(pin, (8.0, 8.0), style="laplata")
+    assert out[0] == pin
+    assert all(_seg_is_axis_or_45(a, b) for a, b in zip(out, out[1:])), out
+    assert abs(abs(out[1][0] - out[0][0]) - abs(out[1][1] - out[0][1])) < 1e-6 \
+        and out[1][0] != out[0][0], out                 # first leg off the pin is 45°
+    assert _offgrid_on_pin_line(out, pin), out
 
 
 # ---------------------------------------------------------------------------

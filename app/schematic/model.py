@@ -260,6 +260,33 @@ class Schematic:
     siunitx: bool = True
     preamble: str = ""
 
+    # Document-level **display** options (§10.3), moved from the app Preferences so
+    # they travel with the figure (they affect the rendered/exported drawing, not just
+    # the live canvas). ``mark_unconnected_pins`` draws an open circle at every
+    # component pin with no wire (default off); ``line_hops`` draws a hop bump where
+    # wires cross without connecting (default **on** — the schematic-drawing
+    # convention, §6.4). Both are emitted into the figure (canvas + LaTeX export).
+    mark_unconnected_pins: bool = False
+    line_hops: bool = True
+
+    # ``mark_open_ends`` draws an open circle (``ocirc``) at every wire endpoint that
+    # is not on a component pin (a dangling/free end, §6.4); ``mark_junctions`` draws
+    # a solid connection dot (``circ``) where wires/pins are electrically tied and a
+    # junction must be marked (the degree rule, §6.4). Both default **on** (the
+    # schematic-drawing convention) and are emitted into the figure (canvas + LaTeX
+    # export); turning one off suppresses that whole class of auto dots document-wide.
+    mark_open_ends: bool = True
+    mark_junctions: bool = True
+
+    # Document-level **diode body scale** (§5) — the CircuiTikZ ``diodes/scale`` key.
+    # The package default body is large next to the other bipoles; the manual
+    # recommends shrinking it (Romano suggests ~0.6), so a **new document defaults to
+    # 0.6**. (A pre-0.9 file that predates this field still loads at 0.8 — the baked
+    # ``DIODE_SYMBOL_SCALE`` baseline — so its appearance is preserved; see io.load.)
+    # Applied to the canvas (the diode body is drawn scaled about its centre) and the
+    # export (``\ctikzset{diodes/scale=…}``). Travels with the .hv file.
+    diode_scale: float = 0.6
+
 
 #: Accepted values for the document voltage/current label styles.
 LABEL_STYLES: tuple[str, ...] = ("american", "european")
@@ -668,10 +695,82 @@ def route(
 _on_quarter_grid = coord_on_grid
 
 
+#: Wire routing styles (spec §6.4). ``"manhattan"`` is the classic axis-only elbow;
+#: ``"laplata"`` adds a 45° leg (octilinear routing), keeping the city theme.
+ROUTING_STYLES: tuple[str, ...] = ("manhattan", "laplata")
+
+
+def route_diagonal(
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """Two-segment **45°** ("La Plata") path from *a* to *b* (spec §6.4).
+
+    Returns ``[a, b]`` when the points already share an x or y coordinate (a plain
+    axis run) or sit on a 45° line (``|dx| == |dy|`` → a single diagonal), otherwise
+    ``[a, corner, b]`` with an **axis-first** corner: a straight axis leg leaves *a*
+    along the longer axis, then a 45° leg arrives into *b* (the diagonal sits at the
+    cursor/target end, matching the manual's "run straight, then angle in" figures).
+
+    Because the diagonal has slope ±1, when *a* and *b* lie on the 0.25 GU lattice the
+    corner does too (the diagonal threads grid nodes every 0.25 step) — so no new grid
+    is needed, only this leg shape. Pure function: inputs are not modified."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    if ax == bx or ay == by or abs(abs(dx) - abs(dy)) < KEY_EPS:
+        return [a, b]                       # axis run or a clean single diagonal
+    sx = 1.0 if dx > 0 else -1.0
+    sy = 1.0 if dy > 0 else -1.0
+    d = min(abs(dx), abs(dy))               # diagonal extent (each axis)
+    corner = (bx - sx * d, by - sy * d)     # straight axis leg from a, then 45° into b
+    return [a, corner, b]
+
+
+def _route_diagonal_first(
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """La Plata path with the 45° leg **first** (off *a*), then an axis leg into *b* —
+    the mirror of :func:`route_diagonal`. Used when *a* is an off-grid pin, so the
+    diagonal comes straight off the pin (its corner lands on the pin's 45° line, which
+    validation permits, §3.1)."""
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    if ax == bx or ay == by or abs(abs(dx) - abs(dy)) < KEY_EPS:
+        return [a, b]
+    sx = 1.0 if dx > 0 else -1.0
+    sy = 1.0 if dy > 0 else -1.0
+    d = min(abs(dx), abs(dy))               # diagonal extent (each axis)
+    corner = (ax + sx * d, ay + sy * d)     # 45° leaves a, then a straight leg to b
+    return [a, corner, b]
+
+
+def _route_diagonal_pin_aware(
+    a: tuple[float, float],
+    b: tuple[float, float],
+) -> list[tuple[float, float]]:
+    """La Plata route when one (or both) endpoints is an **off-grid pin** (§6.4).
+
+    The 45° leg runs straight off the off-grid pin (no Manhattan jog onto the grid):
+    drawing **from** an off-grid pin *a* uses a diagonal-first elbow (the diagonal
+    touches *a*); ending **on** an off-grid pin *b* uses the diagonal-last
+    :func:`route_diagonal` (the diagonal touches *b*). Either way the elbow corner
+    lands on the off-grid pin's 45° line (``x − y`` / ``x + y`` constant), which
+    validation permits (§3.1), so the wire is valid without a grid bridge. Pure
+    function."""
+    a_off = not (coord_on_grid(a[0]) and coord_on_grid(a[1]))
+    if a_off:
+        return _route_diagonal_first(a, b)
+    return route_diagonal(a, b)             # only b is the off-grid pin
+
+
 def route_pin_aware(
     a: tuple[float, float],
     b: tuple[float, float],
     vfirst: bool | None = None,
+    style: str = "manhattan",
 ) -> list[tuple[float, float]]:
     """Manhattan route a→b that respects **off-grid component pins** (a scaled
     logic gate's terminal). The leg adjacent to an off-grid endpoint is oriented
@@ -692,9 +791,22 @@ def route_pin_aware(
     one of the pin's own off-grid coordinates, which validation permits — so
     *vfirst* is honoured, making vertical routing work just like horizontal. Shared
     by the canvas drawing/vertex-drag router (`SchematicScene._route`) and
-    component-follow re-routing (`SetComponentScaleCommand`). Pure function."""
+    component-follow re-routing (`SetComponentScaleCommand`). Pure function.
+
+    *style* selects the elbow shape: ``"manhattan"`` (axis-only, the default and
+    everything below) or ``"laplata"`` (a 45° leg, :func:`route_diagonal`). La Plata
+    routing works for **on-grid** endpoints (`route_diagonal`) and **off-grid pins**
+    (`_route_diagonal_pin_aware`): an off-grid pin is first bridged onto the grid by a
+    short axis lead — valid via the pin-axis exemption (§3.1), since the bridge corner
+    inherits the pin's own off-grid coordinate — and the 45° diagonal then runs
+    grid-to-grid. (A 45° leg can't validly touch an arbitrary off-grid point directly:
+    a slope-±1 line through a generic off-grid pin passes through no grid node.)"""
     a_off = not (_on_quarter_grid(a[0]) and _on_quarter_grid(a[1]))
     b_off = not (_on_quarter_grid(b[0]) and _on_quarter_grid(b[1]))
+    if style == "laplata" and not a_off and not b_off:
+        return route_diagonal(a, b)
+    if style == "laplata":              # at least one endpoint is an off-grid pin
+        return _route_diagonal_pin_aware(a, b)
     if not a_off and not b_off:
         return route(a, b, vfirst)
     if len(route(a, b)) != 3:
@@ -762,15 +874,7 @@ def component_pin_positions(component: "Component") -> list[tuple[float, float]]
             dx, dy = gate[i]["pin_offset"]
         if nf is not None:
             dx, dy = dx * nf[0], dy * nf[1]
-        r = component.rotation % 360
-        if r == 90:
-            rx, ry = (-dy, dx)
-        elif r == 180:
-            rx, ry = (-dx, -dy)
-        elif r == 270:
-            rx, ry = (dy, -dx)
-        else:
-            rx, ry = (dx, dy)
+        rx, ry = rotate_vector(dx, dy, component.rotation)
         if component.mirror:
             rx = -rx
         out.append((ox + rx, oy + ry))
@@ -789,19 +893,39 @@ INVERSION_BUBBLE_KINDS: frozenset[str] = frozenset({"ocirc", "notcirc"})
 NODE_SIDES: tuple[str, ...] = ("left", "right", "above", "below")
 
 
+#: Exact rotation matrices for the four right-angle orientations, as
+#: ``(a, b, c, d)`` with ``rx = a·dx + b·dy``, ``ry = c·dx + d·dy``. Kept exact so a
+#: 90°-multiple rotation of an on-grid pin lands *exactly* on the grid (the trig
+#: formula would leave float noise like ``1.2e-16``, knocking it off-grid).
+_ROT_EXACT: dict[int, tuple[int, int, int, int]] = {
+    0: (1, 0, 0, 1),
+    90: (0, -1, 1, 0),
+    180: (-1, 0, 0, -1),
+    270: (0, 1, -1, 0),
+}
+
+
+def rotate_vector(dx: float, dy: float, rotation: int) -> tuple[float, float]:
+    """Rotate a local vector by *rotation* degrees in the canvas convention
+    (clockwise on the Y-down canvas; the standard CCW matrix in raw coordinates —
+    see ``component_pin_positions``). Right-angle multiples use the exact integer
+    matrix; 45° multiples (and any other angle) use the trig formula. Off-grid
+    results are expected and supported (the wire magnet / pin-axis alignment, §3.1)."""
+    r = rotation % 360
+    exact = _ROT_EXACT.get(r)
+    if exact is not None:
+        a, b, c, d = exact
+        return (a * dx + b * dy, c * dx + d * dy)
+    rad = math.radians(r)
+    cos, sin = math.cos(rad), math.sin(rad)
+    return (dx * cos - dy * sin, dx * sin + dy * cos)
+
+
 def _rotate_mirror(dx: float, dy: float, rotation: int,
                    mirror: bool) -> tuple[float, float]:
     """Apply a component's clockwise-rotate-then-horizontal-mirror transform to a
     local vector (the same transform :func:`component_pin_positions` uses)."""
-    r = rotation % 360
-    if r == 90:
-        rx, ry = (-dy, dx)
-    elif r == 180:
-        rx, ry = (-dx, -dy)
-    elif r == 270:
-        rx, ry = (dy, -dx)
-    else:
-        rx, ry = (dx, dy)
+    rx, ry = rotate_vector(dx, dy, rotation)
     return (-rx, ry) if mirror else (rx, ry)
 
 

@@ -63,7 +63,7 @@ def test_window_shot_captures_full_dark_gui(tmp_path) -> None:
     preview pane, not a canvas-only crop), predominantly dark, and visually
     structured (panels and schematic ink, not a blank fill).
     """
-    name = "mux-4-1-dark.png"
+    name = "boost-converter-dark.png"
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     proc = subprocess.run(
         [sys.executable, str(_SCRIPT), "--out", str(tmp_path), "--only", name],

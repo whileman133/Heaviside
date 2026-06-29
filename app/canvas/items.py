@@ -219,9 +219,15 @@ _LABEL_GAP = 8       # px gap between bbox top edge and bottom of label block
 _LABEL_BG_PAD = 3.0
 # Voltage sources whose default (unsuffixed) `v=` label sits on the opposite
 # side from passives — CircuiTikZ's source voltage convention (see
-# ComponentItem._slot_direction).  Current sources (I/cI/isourcesin) follow the
-# passive default and are NOT listed.
-_VOLTAGE_SOURCE_KINDS = frozenset({"V", "cV", "vsourcesin"})
+# ComponentItem._slot_direction).  Current sources follow the passive default and
+# are NOT listed.  Derived from the library: a Sources-category symbol whose
+# CircuiTikZ keyword names it a *voltage* source (american/european/cute/
+# sinusoidal/controlled/noise/square …), so it tracks the data rather than a
+# hand-maintained kind list.
+_VOLTAGE_SOURCE_KINDS = frozenset(
+    k for k, d in REGISTRY.items()
+    if d.category == "Sources" and "voltage" in d.tikz_keyword.lower()
+)
 
 # Bodyless components: a current (`i=`) arrow is centred on the wire's midpoint
 # (like CircuiTikZ) rather than ridden out on the exit lead, since there is no
@@ -959,6 +965,34 @@ class ComponentItem(QGraphicsItem):
         nd = library.param_n_data(self._component)
         return tuple(nd["bbox"]) if nd else self._defn.bbox
 
+    def _diode_body_scale(self) -> tuple[float, float, float, float] | None:
+        """For a diode whose document ``diode_scale`` differs from the baked
+        ``DIODE_SYMBOL_SCALE``, return ``(ratio, cx_px, cy_px, lead_w_px)`` to scale the
+        **body** about its centre so the canvas matches the exported
+        ``\\ctikzset{diodes/scale=…}``; ``None`` for non-diodes / no scene / ratio 1.
+
+        The body is everything except the full-span axial **lead** (the widest path —
+        the lead runs terminal-to-terminal *under* the body, so scaling the body about
+        the lead's midpoint leaves no gap). Paths at/above ``0.9·lead_w`` are leads and
+        are left unscaled; narrower paths (triangle, bar, arrows) scale by ``ratio``."""
+        from app.components import library
+        if not library.is_diode(self._component.kind):
+            return None
+        sc = self.scene()
+        sch = getattr(sc, "schematic", None) if sc is not None else None
+        doc = getattr(sch, "diode_scale", None)
+        if doc is None:
+            return None
+        ratio = float(doc) / library.DIODE_SYMBOL_SCALE
+        if abs(ratio - 1.0) < 1e-9:
+            return None
+        paths = symbol_paths(self._geometry_kind())
+        if not paths:
+            return None
+        widths = [p.path.boundingRect().width() for p in paths]
+        lead = paths[widths.index(max(widths))].path.boundingRect()
+        return (ratio, lead.center().x(), lead.center().y(), max(widths))
+
     def _node_side_offset_px(self) -> tuple[float, float]:
         """Canvas render shift (scene px) for a single-terminal node's placement
         ``node_side`` (left/right/above/below): the symbol is drawn on that side of its
@@ -1232,7 +1266,7 @@ class ComponentItem(QGraphicsItem):
         """The node's CircuiTikZ ``text`` anchor, screen-relative to the item origin
         — where the inline ``{…}`` text is **west-anchored** (its left edge sits
         here, extending right). The per-kind offset from centre is measured into
-        ``ComponentDef.text_anchor`` (``components/add_text_anchors.py``), so the
+        ``ComponentDef.text_anchor`` (``components/generate_library.py``), so the
         on-canvas label lands exactly where the compiled figure places it (a
         transistor's just right of the symbol, an op-amp's centred, a transformer's
         a unit above)."""
@@ -1535,7 +1569,14 @@ class ComponentItem(QGraphicsItem):
             (y1 - y0) * GRID_PX + 2 * margin,
         )
         bdx, bdy = self._node_side_offset_px()           # cover the placement shift, if any
-        return rect.united(rect.translated(bdx, bdy)) if (bdx or bdy) else rect
+        if bdx or bdy:
+            rect = rect.united(rect.translated(bdx, bdy))
+        diode = self._diode_body_scale()                 # cover a grown diode body
+        if diode is not None and diode[0] > 1.0:
+            grown = QTransform().translate(diode[1], diode[2]).scale(
+                diode[0], diode[0]).translate(-diode[1], -diode[2]).mapRect(rect)
+            rect = rect.united(grown)
+        return rect
 
     def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
         painter.setRenderHint(QPainter.Antialiasing, True)
@@ -1558,6 +1599,7 @@ class ComponentItem(QGraphicsItem):
             painter.translate(_bdx, _bdy)   # node_side → symbol drawn on the chosen side
         if s != 1.0:
             painter.scale(s, s)
+        diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
         for sym in symbol_paths(self._geometry_kind()):
             lw = _stroke_px(sym.stroke_width, lw_scale)
             # Counter the body scale so the stroke keeps its on-screen weight.
@@ -1568,6 +1610,16 @@ class ComponentItem(QGraphicsItem):
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)
+            # A diode's body (everything but the full-span lead) scales about its centre
+            # to the document's diode_scale; the lead spans terminal-to-terminal and is
+            # left as-is, so the body shrinks/grows on the continuous lead (no gap).
+            body_scaled = (diode is not None
+                           and sym.path.boundingRect().width() < 0.9 * diode[3])
+            if body_scaled:
+                painter.save()
+                painter.translate(diode[1], diode[2])
+                painter.scale(diode[0], diode[0])
+                painter.translate(-diode[1], -diode[2])
             if sym.clip is not None:
                 # Clip to the wedge dvisvgm used so full-circle wavefronts (RF
                 # antennas) paint only as the visible arcs.
@@ -1577,6 +1629,8 @@ class ComponentItem(QGraphicsItem):
                 painter.restore()
             else:
                 painter.drawPath(sym.path)
+            if body_scaled:
+                painter.restore()
         painter.restore()
 
         # --- transformer polarity dots -----------------------------------
@@ -2530,6 +2584,56 @@ class WirePreviewItem(QGraphicsItem):
                 painter.setPen(_pen(style.COLOR_GHOST, 1.0))
                 painter.setBrush(QBrush(QColor(style.COLOR_GHOST)))
                 painter.drawEllipse(QPointF(cx, cy), PIN_R, PIN_R)
+
+
+# ---------------------------------------------------------------------------
+# Pin-alignment guide
+# ---------------------------------------------------------------------------
+
+class AlignmentGuideItem(QGraphicsItem):
+    """Faint full-span guide line(s) marking the x and/or y of a component pin a
+    wire end has snapped onto (an "artificial grid line" extending from a pin).
+
+    Drawn while routing or dragging a wire whose end lands *off the 0.25 GU grid*
+    but **collinear with a pin** — the guide shows *why* it went off-grid (it is
+    lined up with that pin), like a CAD alignment guide. ``guide_x``/``guide_y``
+    are the snapped coordinates in grid units (either may be ``None``); the lines
+    span the whole scene rect so the alignment reads across the canvas.
+    Non-interactive and painted below the wire ghosts.
+    """
+
+    def __init__(self, parent: QGraphicsItem | None = None):
+        super().__init__(parent)
+        self.guide_x: float | None = None
+        self.guide_y: float | None = None
+        self.setZValue(40)                         # below ghosts/junctions, above wires
+        self.setAcceptedMouseButtons(Qt.NoButton)  # never steal clicks
+
+    def set_guides(self, gx: float | None, gy: float | None) -> None:
+        self.prepareGeometryChange()
+        self.guide_x = gx
+        self.guide_y = gy
+        self.update()
+
+    def _scene_rect_px(self) -> QRectF:
+        sc = self.scene()
+        return sc.sceneRect() if sc is not None else QRectF()
+
+    def boundingRect(self) -> QRectF:
+        return self._scene_rect_px()
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        rect = self._scene_rect_px()
+        if rect.isEmpty():
+            return
+        painter.setRenderHint(QPainter.Antialiasing, False)
+        painter.setPen(_pen(style.COLOR_GUIDE, 1.0, Qt.DashLine))
+        if self.guide_x is not None:
+            x = self.guide_x * GRID_PX
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+        if self.guide_y is not None:
+            y = self.guide_y * GRID_PX
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
 
 
 # ---------------------------------------------------------------------------

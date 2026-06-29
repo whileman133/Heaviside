@@ -65,6 +65,7 @@ _LIGHT = {
     "COLOR_GRID":       "#FFBFBFBF",   # integer-lattice dots (stronger)
     "COLOR_GRID_SUB":   "#FFDCDCDC",   # 0.25 GU minor dots (lighter, still visible)
     "COLOR_GRID_FINE":  "#FFDCDCDC",   # (kept as an alias of the minor dot colour)
+    "COLOR_GUIDE":      "#660055CC",   # faint pin-alignment guide line (selection blue)
 }
 _DARK = {
     "COLOR_NORMAL":     "#FFE6E6E6",   # near-white ink on a dark canvas
@@ -77,6 +78,7 @@ _DARK = {
     "COLOR_GRID":       "#FF60636B",   # integer-lattice dots (light on dark)
     "COLOR_GRID_SUB":   "#FF44464D",   # 0.25 GU minor dots (dimmer, still visible)
     "COLOR_GRID_FINE":  "#FF44464D",
+    "COLOR_GUIDE":      "#665C9DFF",   # faint pin-alignment guide line (selection blue)
 }
 
 # Active values — module globals, defaulting to light. ``set_dark`` rebinds them.
@@ -90,6 +92,7 @@ COLOR_LABEL_BG   = _LIGHT["COLOR_LABEL_BG"]
 COLOR_GRID       = _LIGHT["COLOR_GRID"]
 COLOR_GRID_SUB   = _LIGHT["COLOR_GRID_SUB"]
 COLOR_GRID_FINE  = _LIGHT["COLOR_GRID_FINE"]
+COLOR_GUIDE      = _LIGHT["COLOR_GUIDE"]
 
 
 def set_dark(on: bool) -> None:
@@ -115,8 +118,8 @@ OPEN_ANNOTATION_OPACITY: float = 0.3
 # ---------------------------------------------------------------------------
 
 GEOMETRY_PATH: str = str(component_data_path("geometry.json"))
-"""Absolute path to the active CircuiTikZ symbol geometry file (curated by default;
-the manual-generated library when HEAVISIDE_COMPONENT_LIB=manual)."""
+"""Absolute path to the CircuiTikZ symbol geometry file
+(``components/generated/geometry.json``)."""
 
 SVG_PT_PER_GU: float = 28.34765
 """SVG point units per grid unit.
