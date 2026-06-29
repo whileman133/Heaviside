@@ -590,6 +590,11 @@ def test_transformer_centre_taps_emit_subnode_anchor_refs() -> None:
         assert re.search(rf"\(node_[0-9a-f]+-{coil}\.midtap\)", src), (kind, coil)
 
 
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
 def test_transformer_centre_tap_pin_coincides_with_circuitikz_anchor() -> None:
     """The transformer centre-tap pins' baked positions equal where CircuiTikZ draws
     the ``L1.midtap`` / ``L2.midtap`` sub-node anchors, so the canvas dot lands on
@@ -614,6 +619,11 @@ def test_transformer_centre_tap_pin_coincides_with_circuitikz_anchor() -> None:
             assert abs(cx - px) < 0.02 and abs(cy - py) < 0.02, (kind, coil, (px, py), (cx, cy))
 
 
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
 def test_inductor_midtap_pin_coincides_with_circuitikz_anchor() -> None:
     """The inductor's third (``midtap``) pin — an on-axis centre tap connected by
     *coordinate* (the inductor is an anonymous ``to[…]``) — coincides with the
@@ -2455,6 +2465,11 @@ def test_thyristor_gate_pin_coincides_with_circuitikz_anchor() -> None:
                 )
 
 
+@pytest.mark.skipif(
+    __import__("shutil").which("latex") is None
+    or __import__("shutil").which("dvisvgm") is None,
+    reason="requires latex and dvisvgm",
+)
 def test_potentiometer_wiper_pin_coincides_with_circuitikz_anchor() -> None:
     """The potentiometer's third (wiper) pin world position equals where CircuiTikZ
     draws the ``wiper`` anchor, at all 8 rotation×mirror cases — so a wire to the
