@@ -1,6 +1,6 @@
 [project]
 name = "heaviside"
-version = "0.5.0"
+version = "0.6.0"
 description = "Graphical editor for CircuiTikZ circuit diagrams"
 requires-python = ">=3.12"
 dependencies = [
