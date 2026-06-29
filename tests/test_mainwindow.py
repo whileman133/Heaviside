@@ -55,6 +55,60 @@ def _restore_light_theme():
     _theme.set_dark(False)
 
 
+@pytest.fixture(autouse=True)
+def _reset_custom_runtime():
+    """Scrub any runtime-registered custom components so they don't leak into the
+    module-level REGISTRY seen by other tests."""
+    yield
+    from app.components.registry import reset_runtime_components
+    reset_runtime_components()
+
+
+def _custom_spec(name: str = "custom:t"):
+    from app.components.model import CustomComponentSpec
+    return CustomComponentSpec(
+        name=name, display_name="T", category="Custom", base_kind="transformer",
+        ctikzset=[], extra_options="",
+        pins=[{"name": "A1", "offset": [-1.0, -1.0], "anchor": "A1"}],
+        bbox=(-1.0, -1.0, 1.0, 1.0), default_span=(0.0, 0.0),
+        geometry={"viewBox": "0 0 1 1", "paths": [], "glyphs": []}, ctikz_version=None)
+
+
+def test_install_and_delete_custom_component(tmp_path, monkeypatch):
+    from app.components.registry import REGISTRY
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _win(tmp_path)
+    spec = _custom_spec()
+    win._install_custom_component(spec, rebuild=False)
+    assert spec.name in win._scene.schematic.custom_components
+    assert spec.name in REGISTRY                    # registered at runtime
+
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    win._on_delete_custom_component(spec.name)
+    assert spec.name not in win._scene.schematic.custom_components
+    assert spec.name not in REGISTRY                # scrubbed
+
+
+def test_delete_custom_component_blocked_when_in_use(tmp_path, monkeypatch):
+    from app.components.model import Component
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _win(tmp_path)
+    spec = _custom_spec()
+    win._install_custom_component(spec, rebuild=False)
+    win._scene.schematic.components.append(
+        Component(id="x1", kind=spec.name, position=(0.0, 0.0), rotation=0, options=""))
+
+    shown = {"info": False}
+    monkeypatch.setattr(QMessageBox, "information",
+                        lambda *a, **k: shown.__setitem__("info", True))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    win._on_delete_custom_component(spec.name)
+    assert shown["info"]                            # the "in use" notice was shown
+    assert spec.name in win._scene.schematic.custom_components   # not deleted
+
+
 def _win(tmp_path):
     """A MainWindow whose Preferences are backed by an isolated temp INI."""
     win = MainWindow()

@@ -1,5 +1,5 @@
 {
-  "version": "0.10",
+  "version": "0.11",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
@@ -11,7 +11,8 @@
     "line_hops": true,
     "mark_open_ends": true,
     "mark_junctions": true,
-    "diode_scale": 0.8
+    "diode_scale": 0.8,
+    "custom_components": {}
   },
   "components": [
     {

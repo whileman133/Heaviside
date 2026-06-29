@@ -729,6 +729,15 @@ class MainWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        # Build a custom component from a base built-in (§custom). Lives in Edit,
+        # near the document-level controls; the created component is stored on the
+        # document and appears in the palette's Custom category.
+        self._act_new_custom = QAction("New &Custom Component…", self)
+        self._act_new_custom.triggered.connect(self._on_new_custom_component)
+        edit_menu.addAction(self._act_new_custom)
+
+        edit_menu.addSeparator()
+
         # Per-document CircuiTikZ conventions live in the inspector's Document tab
         # (the old Edit ▸ Document Settings… dialog was replaced by it).
 
@@ -968,6 +977,9 @@ class MainWindow(QMainWindow):
         # Left: palette, spanning the full window height.
         self._palette = ComponentPalette()
         self._palette.set_scene(self._scene)
+        self._palette.new_custom_requested.connect(self._on_new_custom_component)
+        self._palette.edit_custom_requested.connect(self._on_edit_custom_component)
+        self._palette.delete_custom_requested.connect(self._on_delete_custom_component)
         outer.addWidget(self._palette)
 
         # Right: a vertical stack of (canvas | properties) over (source | preview).
@@ -1539,6 +1551,91 @@ class MainWindow(QMainWindow):
             # Recompiles, or refreshes the no-LaTeX notice if a tool is still
             # missing (or clears it once a newly-configured path resolves).
             self._on_auto_compile()
+
+    def _on_new_custom_component(self) -> None:
+        """Open the custom-component creator (§5.10).
+
+        On accept, store the captured spec on the document, register it at runtime
+        (so it places/exports like a built-in), refresh the palette, and mark the
+        document modified. The component is document-scoped — it travels with the
+        ``.hv`` file."""
+        from app.ui.custom_component_dialog import CustomComponentDialog
+
+        schematic = self._scene.schematic
+        dialog = CustomComponentDialog(
+            dark=self._dark, existing=set(schematic.custom_components), parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        spec = dialog.result_spec()
+        if spec is not None:
+            self._install_custom_component(spec, rebuild=False)
+
+    def _on_edit_custom_component(self, kind: str) -> None:
+        """Open the editor for an existing custom component (§5.10).
+
+        The dialog keeps the component's *kind*, so on accept the new definition
+        replaces the old one in place and every placed instance is rebuilt with the
+        updated geometry/anchors."""
+        from app.ui.custom_component_dialog import CustomComponentDialog
+
+        schematic = self._scene.schematic
+        spec = schematic.custom_components.get(kind)
+        if spec is None:
+            return
+        dialog = CustomComponentDialog(
+            dark=self._dark, existing=set(schematic.custom_components),
+            editing=spec, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        new_spec = dialog.result_spec()
+        if new_spec is not None:
+            self._install_custom_component(new_spec, rebuild=True)
+
+    def _on_delete_custom_component(self, kind: str) -> None:
+        """Delete a custom component from the document (§5.10).
+
+        Blocked when the component is placed on the canvas — the user removes those
+        instances first (an undoable canvas edit), keeping the undo history consistent
+        (custom-component CRUD is not on the undo stack)."""
+        from app.components.registry import sync_runtime_components
+
+        schematic = self._scene.schematic
+        spec = schematic.custom_components.get(kind)
+        if spec is None:
+            return
+        in_use = sum(1 for c in schematic.components if c.kind == kind)
+        if in_use:
+            QMessageBox.information(
+                self, "Custom component in use",
+                f"“{spec.display_name}” is used by {in_use} placed component"
+                f"{'s' if in_use != 1 else ''}. Delete those from the canvas first.")
+            return
+        if QMessageBox.question(
+                self, "Delete custom component",
+                f"Delete the custom component “{spec.display_name}”?") != QMessageBox.Yes:
+            return
+        del schematic.custom_components[kind]
+        sync_runtime_components(schematic)   # scrub this kind, keep the rest
+        self._palette.refresh_registry()
+        self._modified = True
+        self._update_title()
+        self._scene.schematic_changed.emit()
+
+    def _install_custom_component(self, spec, *, rebuild: bool) -> None:  # noqa: ANN001
+        """Store *spec* on the document, register it at runtime, refresh the palette,
+        and mark modified. ``rebuild`` recreates placed graphics items (after an edit,
+        whose geometry/anchors may have changed)."""
+        from app.components.custom import spec_to_component_def
+        from app.components.registry import register_runtime_component
+
+        self._scene.schematic.custom_components[spec.name] = spec
+        register_runtime_component(spec_to_component_def(spec))
+        self._palette.refresh_registry()
+        if rebuild:
+            self._scene.reload_components()
+        self._modified = True
+        self._update_title()
+        self._scene.schematic_changed.emit()
 
     def _on_export_tex(self) -> None:
         """Export the schematic as an includable CircuiTikZ ``.tex`` snippet.

@@ -41,10 +41,14 @@ def validate(schematic: Schematic) -> list[str]:
     errors: list[str] = []
 
     # ------------------------------------------------------------------
-    # Invariant 1: all Component.kind values exist in REGISTRY
+    # Invariant 1: all Component.kind values exist in REGISTRY, or are a custom
+    # component declared on this document (registered into REGISTRY at runtime when
+    # the document is active — but a valid document is self-describing, so accept a
+    # kind the document defines even when its runtime registration is not in effect).
     # ------------------------------------------------------------------
+    custom_kinds = set(getattr(schematic, "custom_components", {}))
     for comp in schematic.components:
-        if comp.kind not in REGISTRY:
+        if comp.kind not in REGISTRY and comp.kind not in custom_kinds:
             errors.append(
                 f"Component '{comp.id}': unknown kind '{comp.kind}' (not in REGISTRY)"
             )
