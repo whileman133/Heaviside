@@ -4969,7 +4969,9 @@ def test_component_origin_aligns_pin_to_offgrid_pin_axis(scene: SchematicScene):
 
     t = Component(id="t1", kind="npn", position=(2.0, 1.0), rotation=0, options="")
     r = Component(id="r1", kind="R", position=(2.0, 3.0), rotation=90, options="")
-    scene.set_schematic(Schematic(version="0.11", name="t", components=[t, r]))
+    # Pure model logic (no QGraphicsItems): assign the document directly rather than
+    # set_schematic, which would build a heavy multi-terminal item just to discard it.
+    scene._schematic = Schematic(version="0.11", name="t", components=[t, r])
 
     xs, _ = scene._offgrid_pin_axes_excluding({"r1"})
     assert xs, "the transistor should contribute off-grid pin axes"
