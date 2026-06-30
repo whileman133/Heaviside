@@ -2185,6 +2185,65 @@ class SchematicScene(QGraphicsScene):
                 return target, True, (None, None)
         return axis_pt, False, guides
 
+    # -- component pin-to-pin alignment (drag, §5.9) ---------------------
+
+    def _offgrid_pin_axes_excluding(
+        self, exclude_ids: "set[str] | frozenset[str] | tuple[str, ...]"
+    ) -> tuple[set[float], set[float]]:
+        """Off-grid pin x/y axis lines from every component **except** *exclude_ids*
+        (the component being dragged), so a moving component can align its pins to
+        *other* components' off-grid pins without snapping to its own."""
+        xs: set[float] = set()
+        ys: set[float] = set()
+        for comp in self._schematic.components:
+            if comp.id in exclude_ids:
+                continue
+            for px, py in _component_pin_positions(comp):
+                if not self._coord_on_grid(px):
+                    xs.add(round(px, 6))
+                if not self._coord_on_grid(py):
+                    ys.add(round(py, 6))
+        return xs, ys
+
+    def _snap_origin_axis(
+        self, raw_v: float, offsets: list[float], axes: set[float]
+    ) -> tuple[float, float | None]:
+        """Snap one origin coordinate to the nearer of the 0.25 grid or a position that
+        lands one of the component's pins on a pin axis line. *offsets* are the dragged
+        component's pin offsets (pin − origin) along this axis; for each, ``axis −
+        offset`` is a candidate origin. Returns ``(origin, guide)`` — *guide* is the pin
+        axis the alignment landed on, or ``None`` when the grid won (ties → the grid)."""
+        best = self.snap_gu(raw_v)
+        best_d = abs(raw_v - best)
+        guide: float | None = None
+        for off in offsets:
+            for ax in axes:
+                cand = ax - off
+                d = abs(raw_v - cand)
+                if d < best_d - 1e-9:
+                    best, best_d, guide = cand, d, ax
+        return best, guide
+
+    def _resolve_component_origin(
+        self,
+        comp: Component,
+        raw: tuple[float, float],
+        exclude_ids: "set[str] | frozenset[str] | tuple[str, ...]",
+    ) -> tuple[tuple[float, float], tuple[float | None, float | None]]:
+        """Resolve a dragged component's origin from the **raw** (unsnapped) cursor:
+        each axis snaps to the nearer of the 0.25 grid or a position that lands one of
+        the component's pins on another component's **off-grid** pin axis (§5.9), so two
+        components' pins can line up even off the grid. Returns ``(origin, (gx, gy))``;
+        the guides drive the on-screen alignment lines (:meth:`_show_guides`)."""
+        xs, ys = self._offgrid_pin_axes_excluding(exclude_ids)
+        ox0, oy0 = comp.position
+        pins = _component_pin_positions(comp)
+        off_x = [px - ox0 for px, _ in pins]
+        off_y = [py - oy0 for _, py in pins]
+        sx, gx = self._snap_origin_axis(raw[0], off_x, xs)
+        sy, gy = self._snap_origin_axis(raw[1], off_y, ys)
+        return (sx, sy), (gx, gy)
+
     def _snap_vertex_target(
         self,
         pt: tuple[float, float],
@@ -2519,6 +2578,7 @@ class SchematicScene(QGraphicsScene):
         super().mouseMoveEvent(event)
         if self._mode == Mode.SELECT and self._drag.drag_start:
             solo = len(self._drag.drag_start) == 1
+            guide_x = guide_y = None
             for cid in self._drag.drag_start:
                 item = self._comp_items.get(cid)
                 if item is None:
@@ -2526,9 +2586,15 @@ class SchematicScene(QGraphicsScene):
                 comp = self._component_by_id(cid)
                 if solo and comp is not None and is_terminal_marker(comp):
                     new = self._marker_drag_snap(comp, item.pos())
+                elif solo and comp is not None:
+                    # Align a pin to another component's off-grid pin axis (§5.9),
+                    # showing a guide line; falls back to the 0.25 grid otherwise.
+                    new, (guide_x, guide_y) = self._resolve_component_origin(
+                        comp, self.scene_to_gu(item.pos()), {cid})
                 else:
                     new = self.snap_point_gu(item.pos())
                 item.setPos(self.gu_to_scene(*new))
+            self._show_guides(guide_x, guide_y)   # (None, None) clears them
             self._drag.preview_component_drag()
             self._refresh_preview_hops()
 
@@ -3013,6 +3079,7 @@ class SchematicScene(QGraphicsScene):
         # change, so it does not depend on super() having run first.
         super().mouseReleaseEvent(event)
 
+        self._clear_guides()   # drop any pin-alignment guide lines from the drag
         if pending:
             self._drag.commit_component_drag()
 
