@@ -5,6 +5,16 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Pin-to-pin alignment when moving components.** Dragging a component now snaps it so
+  one of its pins lines up with another component's pin — including **off-grid** pins
+  (e.g. a transistor's collector) — with a guide line showing the alignment. This makes
+  it easy to put a resistor directly in line with a transistor terminal without a tiny
+  jog. Falls back to the normal 0.25 GU grid snap when not near a pin axis; applies to a
+  single dragged component (group drags keep the grid).
+
 ## [0.7.0] - 2026-06-29
 
 ### Added

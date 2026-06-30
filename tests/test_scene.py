@@ -4955,3 +4955,37 @@ def test_push_during_rebuild_signal_is_safe(scene: SchematicScene):
     assert fired["done"], "the re-entrant push path was not exercised"
     assert scene.schematic.components == []
     assert scene._comp_items == {}
+
+
+# ---------------------------------------------------------------------------
+# Component pin-to-pin alignment (off-grid, §5.9)
+# ---------------------------------------------------------------------------
+
+def test_component_origin_aligns_pin_to_offgrid_pin_axis(scene: SchematicScene):
+    """Dragging a component near another component's off-grid pin axis snaps its
+    origin so a pin lands exactly on that axis (with a guide); far away it grid-snaps."""
+    from app.components.model import Component
+    from app.schematic.model import Schematic
+
+    t = Component(id="t1", kind="npn", position=(2.0, 1.0), rotation=0, options="")
+    r = Component(id="r1", kind="R", position=(2.0, 3.0), rotation=90, options="")
+    # Pure model logic (no QGraphicsItems): assign the document directly rather than
+    # set_schematic, which would build a heavy multi-terminal item just to discard it.
+    scene._schematic = Schematic(version="0.11", name="t", components=[t, r])
+
+    xs, _ = scene._offgrid_pin_axes_excluding({"r1"})
+    assert xs, "the transistor should contribute off-grid pin axes"
+    ax = sorted(xs)[0]
+    # Cursor inside the axis's capture zone → the resistor pin aligns to it.
+    (sx, _sy), (gx, _gy) = scene._resolve_component_origin(r, (ax + 0.03, 3.0), {"r1"})
+    assert sx == pytest.approx(ax)
+    assert gx == pytest.approx(ax)        # guide line reported at the pin axis
+
+    # A component never aligns to its own pins (exclude_ids).
+    own_xs, _ = scene._offgrid_pin_axes_excluding({"t1", "r1"})
+    assert ax not in own_xs
+
+    # Far from any axis → plain 0.25-grid snap, no guide.
+    (fx, _fy), (fgx, _fgy) = scene._resolve_component_origin(r, (3.02, 3.0), {"r1"})
+    assert fx == pytest.approx(3.0)
+    assert fgx is None

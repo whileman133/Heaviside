@@ -854,12 +854,17 @@ class DragPreviewController:
                 item.setPos(gu_to_scene(*start))  # guard against float drift
                 continue
             comp = scene._component_by_id(cid)
-            if (comp is not None and is_terminal_marker(comp)
-                    and len(self.drag_start) == 1):
+            solo = len(self.drag_start) == 1
+            if comp is not None and is_terminal_marker(comp) and solo:
                 # A lone dragged terminal marker magnet-snaps its pin onto the nearest
                 # connection point (off-grid OK), like placement and the live move — so
                 # it re-lands on an anchor, not the grid. (Group drags keep the grid.)
                 new_gu = scene._marker_drag_snap(comp, item.pos())
+            elif comp is not None and solo:
+                # A lone dragged component aligns a pin to another component's off-grid
+                # pin axis (§5.9), matching the live preview; else snaps to the grid.
+                new_gu, _ = scene._resolve_component_origin(
+                    comp, scene_to_gu(item.pos()), {cid})
             else:
                 new_gu = snap_point_gu(item.pos())
             # Reset the item to its model position; the command moves it.
