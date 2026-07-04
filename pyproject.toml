@@ -36,7 +36,7 @@ dev = [
     "pytest-qt>=4.2",
     "pytest-cov>=4.0",
     "pyinstaller>=6.21.0",
-    "pillow>=12.2.0",
+    "pillow>=12.3.0",
 ]
 
 [tool.pytest.ini_options]
