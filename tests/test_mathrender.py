@@ -618,3 +618,32 @@ def test_cache_dir_falls_back_when_squatted(monkeypatch, tmp_path, _fresh_cache_
     d = _mr._cache_dir()
     assert d != squatted
     assert d.name.startswith("heaviside-mathcache-")
+
+
+# (key, passive (at_entry, reversed), voltage source (at_entry, reversed)),
+# measured by compiling `R` and `american voltage source` with each key.
+_CURRENT_PLACEMENTS = [
+    ("i",   (False, False), (True, True)),
+    ("i^",  (False, False), (True, True)),
+    ("i_",  (False, False), (True, True)),
+    ("i>",  (False, False), (True, False)),
+    ("i<",  (True, True),   (True, True)),
+    ("i^>", (False, False), (False, False)),
+    ("i^<", (False, True),  (False, True)),
+    ("i_>", (False, False), (False, False)),
+    ("i_<", (False, True),  (False, True)),
+    ("i>^", (True, False),  (True, False)),
+    ("i<^", (True, True),   (True, True)),
+    ("i>_", (True, False),  (True, False)),
+    ("i<_", (True, True),   (True, True)),
+]
+
+
+@pytest.mark.parametrize("key,passive,vsource", _CURRENT_PLACEMENTS)
+def test_current_arrow_placement_matches_circuitikz(key, passive, vsource) -> None:
+    """The canvas current arrow's lead and direction follow CircuiTikZ for every
+    modifier combination, including a voltage source's entry-lead convention
+    (regression: `i>=` on a controlled voltage source drew on the exit lead)."""
+    from app.preview.mathrender import current_arrow_placement
+    assert current_arrow_placement(key) == passive
+    assert current_arrow_placement(key, voltage_source=True) == vsource

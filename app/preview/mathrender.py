@@ -802,6 +802,31 @@ def slot_reversed(key: str) -> bool:
     return "<" in key
 
 
+def current_arrow_placement(key: str, voltage_source: bool = False) -> tuple[bool, bool]:
+    """Where CircuiTikZ draws an ``i`` slot's arrowhead: ``(at_entry, reversed)``.
+
+    ``at_entry`` puts the head on the entry (first-pin) lead instead of the exit
+    lead; ``reversed`` points it toward the first pin. Measured against CircuiTikZ:
+
+    * With both a direction (``<``/``>``) and a side (``^``/``_``) modifier, their
+      order sets the lead for every component: side first (``i^>``, ``i_<``) rides
+      the exit lead, direction first (``i>^``, ``i<_``) the entry lead.
+    * Otherwise ``i<`` rides the entry lead and ``i>`` the exit lead, except on a
+      *voltage source* (*voltage_source*), which puts every such arrow on the
+      entry lead (its ``+`` terminal).
+    * The direction is reversed by ``<``, and on a voltage source also when no
+      direction is given (plain ``i``/``i^``/``i_`` points toward the first pin).
+    """
+    dirs = [i for i, ch in enumerate(key) if ch in "<>"]
+    sides = [i for i, ch in enumerate(key) if ch in "^_"]
+    if not dirs:
+        return voltage_source, voltage_source
+    reversed_ = key[dirs[0]] == "<"
+    if sides:
+        return dirs[0] < sides[0], reversed_
+    return reversed_ or voltage_source, reversed_
+
+
 def slot_fragments(options: str) -> list[tuple[str, str]]:
     r"""Parse *options* into ``(slot_key, latex)`` pairs for per-side placement.
 

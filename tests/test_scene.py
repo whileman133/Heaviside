@@ -2994,6 +2994,51 @@ def test_current_reversed_modifier_flips_direction_and_lead(scene: SchematicScen
     assert fwd_slot._center_rel.x() > rev_slot._center_rel.x()
 
 
+def test_voltage_source_current_rides_entry_lead(scene: SchematicScene):
+    """On a voltage source, CircuiTikZ draws `i>=` on the *entry* lead (the `+`
+    terminal), still pointing toward the second pin, whereas a current source uses
+    the exit lead like a passive (regression: the canvas drew a controlled source's
+    `i>=` label beneath the source while the preview drew it above).
+
+    Both are vertical (rotation 90 → pins (0,0)-(0,2), traversal down), so the
+    entry lead is screen-up."""
+    v = scene.place_component("american controlled voltage source", (0.0, 0.0),
+                              rotation=90)
+    scene.edit_component_options(v.id, r"i>=$i$")
+    c = scene.place_component("american current source", (4.0, 0.0), rotation=90)
+    scene.edit_component_options(c.id, r"i>=$i$")
+
+    def current(comp):
+        item = scene._comp_items[comp.id]
+        dec = next(d for d in item._decoration_items if d.isVisible())
+        slot = next(s for s in item._slot_items if s.isVisible())
+        return dec, slot._center_rel.y() - item._slot_geometry()["center_rel"].y()
+
+    v_dec, v_dy = current(v)
+    assert v_dec._at_entry is True and v_dec._reversed is False
+    assert v_dy < 0, "voltage source current label must sit above the source"
+    c_dec, c_dy = current(c)
+    assert c_dec._at_entry is False and c_dec._reversed is False
+    assert c_dy > 0, "current source current label must sit below the source"
+
+    # Plain `i=` on a voltage source also rides the entry lead, but reversed.
+    scene.edit_component_options(v.id, r"i=$i$")
+    v_dec, v_dy = current(v)
+    assert v_dec._at_entry is True and v_dec._reversed is True
+    assert v_dy < 0
+
+
+def test_battery_follows_voltage_source_convention(scene: SchematicScene):
+    """Voltage-like symbols whose keyword doesn't say "voltage" (a battery) still
+    get the voltage-source default `v` side, like CircuiTikZ."""
+    from app.canvas.items import _VOLTAGE_SOURCE_KINDS
+    assert "battery1" in _VOLTAGE_SOURCE_KINDS
+    b = scene.place_component("battery1", (0.0, 0.0), rotation=90)
+    scene.edit_component_options(b.id, "v=$V$")
+    slot = next(s for s in scene._comp_items[b.id]._slot_items if s.isVisible())
+    assert slot._dir.x() > 0.5
+
+
 def test_voltage_reversed_modifier_sets_polarity(scene: SchematicScene):
     """`v<=` marks the voltage decoration reversed (swapped ± / arrow)."""
     comp = scene.place_component("R", (0.0, 0.0))

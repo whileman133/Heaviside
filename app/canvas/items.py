@@ -223,17 +223,21 @@ _LABEL_GAP = 8       # px gap between bbox top edge and bottom of label block
 # Padding (px) of the opaque backdrop drawn behind axis-centred labels so the
 # annotation line does not appear to run into the text.
 _LABEL_BG_PAD = 3.0
-# Voltage sources whose default (unsuffixed) `v=` label sits on the opposite
-# side from passives — CircuiTikZ's source voltage convention (see
-# ComponentItem._slot_direction).  Current sources follow the passive default and
-# are NOT listed.  Derived from the library: a Sources-category symbol whose
-# CircuiTikZ keyword names it a *voltage* source (american/european/cute/
-# sinusoidal/controlled/noise/square …), so it tracks the data rather than a
-# hand-maintained kind list.
+# Voltage sources: CircuiTikZ draws these with its source convention, so their
+# default (unsuffixed) `v=` label sits on the opposite side from passives (see
+# ComponentItem._slot_direction) and their `i=` arrow rides the *entry* lead, not
+# the exit lead (see mathrender.current_arrow_placement).  Current sources follow
+# the passive defaults and are NOT listed.  Mostly derived from the library (a
+# Sources-category symbol whose CircuiTikZ keyword names it a *voltage* source);
+# the extras are the voltage-like symbols whose keyword doesn't say so, confirmed
+# by compiling each Sources symbol with `v=` and `i=`.
 _VOLTAGE_SOURCE_KINDS = frozenset(
     k for k, d in REGISTRY.items()
     if d.category == "Sources" and "voltage" in d.tikz_keyword.lower()
-)
+) | frozenset({
+    "battery", "battery1", "battery2", "baertty", "dcvsource", "esource",
+    "vsourcetri", "pvsource", "pvmodule", "empty controlled source",
+})
 
 # Bodyless components: a current (`i=`) arrow is centred on the wire's midpoint
 # (like CircuiTikZ) rather than ridden out on the exit lead, since there is no
@@ -733,6 +737,7 @@ class _AnnotationDecoration(QGraphicsItem):
         self._perp = 0.0                 # distance from the lead axis to the glyphs
         self._reversed = False           # `<` modifier: flip current dir / v polarity
         self._centered = False           # current arrow centred on the line (open)
+        self._at_entry = False           # current arrow on the entry (first-pin) lead
 
     def configure(
         self,
@@ -745,6 +750,7 @@ class _AnnotationDecoration(QGraphicsItem):
         inv: QTransform,
         reversed: bool = False,
         centered: bool = False,
+        at_entry: bool = False,
     ) -> None:
         """Place this decoration. ``center_rel`` is the component centre and
         ``inv`` the screen→parent-local transform (both from ``_slot_geometry``);
@@ -752,7 +758,8 @@ class _AnnotationDecoration(QGraphicsItem):
         glyphs at screen-space offsets from there. ``reversed`` flips the current
         arrow direction / the voltage polarity (the CircuiTikZ ``<`` modifier);
         ``centered`` draws the current arrowhead at the line's midpoint (the
-        ``open`` annotation) instead of out on the exit lead."""
+        ``open`` annotation) instead of out on a lead, and ``at_entry`` puts it on
+        the entry lead instead of the exit lead (see ``current_arrow_placement``)."""
         self.prepareGeometryChange()
         self._mode = mode
         self._axis = axis_unit
@@ -761,6 +768,7 @@ class _AnnotationDecoration(QGraphicsItem):
         self._perp = perp
         self._reversed = reversed
         self._centered = centered
+        self._at_entry = at_entry
         self.setTransform(inv)
         self.setPos(inv.map(center_rel))
         self.setVisible(bool(mode))
@@ -866,12 +874,20 @@ class _AnnotationDecoration(QGraphicsItem):
         elif self._mode == "current":
             # A bare arrowhead on the wire (no shaft, so it never overlaps the
             # body). Default: near the exit lead, pointing toward the second pin.
-            # `i<` reverses the direction and moves it to the entry lead; the
-            # `open` annotation centres the head on the line instead (_centered).
-            # The label is centred over the head (see _layout_slots).
+            # _at_entry moves it to the entry lead and _reversed flips it toward
+            # the first pin; the `open` annotation centres the head on the line
+            # instead (_centered). The label is centred over the head (see
+            # _layout_slots). The head covers the same stretch of lead whichever
+            # way it points: an inward-pointing head (toward the body) has its tip
+            # one head-length in from the outward tip position.
             sign = -1.0 if self._reversed else 1.0
-            along = sign * (_CUR_ARROW_HEAD / 2.0 if self._centered
-                            else _CUR_ARROW_TIP * L)
+            if self._centered:
+                along = sign * _CUR_ARROW_HEAD / 2.0
+            else:
+                outward = -1.0 if self._at_entry else 1.0
+                along = outward * _CUR_ARROW_TIP * L
+                if sign != outward:
+                    along -= outward * _CUR_ARROW_HEAD
             tip = QPointF(a.x() * along + off.x(), a.y() * along + off.y())
             self._draw_arrowhead(painter, color, tip, sign * a.x(), sign * a.y(),
                                  length=_CUR_ARROW_HEAD, width=_CUR_ARROW_HEAD_W)
@@ -1198,7 +1214,9 @@ class ComponentItem(QGraphicsItem):
         as clutter. Only their node text is drawn on the canvas.
         """
         from app.codegen.circuitikz import is_node_style
-        from app.preview.mathrender import _slot_family, slot_fragments, slot_reversed
+        from app.preview.mathrender import (
+            _slot_family, current_arrow_placement, slot_fragments, slot_reversed,
+        )
 
         if self._ghost or is_node_style(self._component.kind):
             slots = []
@@ -1237,11 +1255,13 @@ class ComponentItem(QGraphicsItem):
                 # centred over that head. The head sits on the thin lead (perp
                 # offset 0), so the label clears the ARROWHEAD, not the component
                 # body (using body half-thickness floated it above the wire). The
-                # `<` modifier reverses the direction and moves the arrow to the
-                # *entry* lead; for the centred `open` annotation it stays on the
-                # midpoint and only flips direction (label always above the head).
-                rev = slot_reversed(key)
-                sign = -1.0 if rev else 1.0
+                # key's modifiers (and whether this is a voltage source) pick the
+                # lead and direction — see current_arrow_placement; for the centred
+                # `open` annotation it stays on the midpoint and only flips
+                # direction (label always above the head).
+                at_entry, rev = current_arrow_placement(
+                    key, self._component.kind in _VOLTAGE_SOURCE_KINDS)
+                sign = -1.0 if at_entry else 1.0
                 axis = geom["axis_unit"]
                 # Bodyless parts (short/open) centre the arrow on the midpoint;
                 # a component with a body rides the entry/exit lead.
@@ -1255,7 +1275,8 @@ class ComponentItem(QGraphicsItem):
                 item.setVisible(True)
                 dec.configure("current", geom["axis_unit"], geom["half_len"],
                               direction, 0.0, geom["center_rel"], geom["inv"],
-                              reversed=rev, centered=cur_centered)
+                              reversed=rev, centered=cur_centered,
+                              at_entry=at_entry)
                 continue
 
             mode = self._decoration_mode(key, centered, v_style, i_style)

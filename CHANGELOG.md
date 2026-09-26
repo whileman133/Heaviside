@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jog. Falls back to the normal 0.25 GU grid snap when not near a pin axis; applies to a
   single dragged component (group drags keep the grid).
 
+### Fixed
+- **Current labels on voltage sources now match the LaTeX preview.** CircuiTikZ draws
+  a voltage source's `i=`/`i>=` arrow on the entry lead (the `+` terminal), but the
+  canvas drew it on the exit lead, so e.g. a controlled source's current label showed
+  beneath the source on the canvas and above it in the preview. The canvas also now
+  honours the modifier order for every component (`i>^` rides the entry lead, `i^<`
+  the exit lead), and batteries and the other voltage-like sources (`dcvsource`,
+  `esource`, PV sources, …) get the voltage-source default `v=` side.
+
 ## [0.7.0] - 2026-06-29
 
 ### Added
