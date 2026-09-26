@@ -5,7 +5,7 @@ description = "Graphical editor for CircuiTikZ circuit diagrams"
 requires-python = ">=3.12"
 dependencies = [
     "PySide6>=6.5",
-    "pydantic>=2.0",
+    "pydantic>=2.13.5",
     "qtawesome>=1.4.2",
     "ziamath>=0.13",
 ]
@@ -35,8 +35,8 @@ dev = [
     "pytest>=9.1.1",
     "pytest-qt>=4.2",
     "pytest-cov>=4.0",
-    "pyinstaller>=6.21.0",
-    "pillow>=12.2.0",
+    "pyinstaller>=6.22.3",
+    "pillow>=12.3.0",
 ]
 
 [tool.pytest.ini_options]
