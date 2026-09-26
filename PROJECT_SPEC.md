@@ -950,15 +950,24 @@ makes the rendered PDF match the canvas, the on-screen side equals the side
 CircuiTikZ draws — for rotated/mirrored bodies too. Resizable components
 (open/short/bipole) track their actual span, not the registry bbox. A **voltage
 source** flips its default (unsuffixed) `v=` to the opposite side (CircuiTikZ's
-source convention); explicit `v^`/`v_` are not flipped. Slot labels are
+source convention); explicit `v^`/`v_` are not flipped. "Voltage source" means the
+`_VOLTAGE_SOURCE_KINDS` set in `app/canvas/items.py`: every Sources symbol whose
+keyword names a voltage source, plus the voltage-like symbols whose keyword does not
+(batteries, `dcvsource`, `esource`, `vsourcetri`, `pvsource`, `pvmodule`,
+`empty controlled source`), as measured by compiling each one. Slot labels are
 counter-rotated upright and stack outward when several share a side.
 
 **Voltage/current decorations.** Each `v=`/`i=` slot draws a CircuiTikZ-style mark
 beside its text: for `v=`, american `+`/`−` signs at the two terminals or, when the
 document `voltage_style` is european, a curved voltage arrow; for `i=`, a bare
-arrowhead riding the exit lead in the traversal direction (centred on the line for
-bodyless `open`/`short`). The `<`/`>` direction modifiers and `^`/`_` side
-modifiers are honoured independently. The document `voltage_style`/`current_style`
+arrowhead riding a lead (centred on the line for bodyless `open`/`short`). By
+default it rides the exit lead in the traversal direction. The lead and direction
+follow CircuiTikZ (`mathrender.current_arrow_placement`): `<` reverses the
+direction; with both a direction and a side modifier, their order picks the lead
+(`i^>`/`i_<` exit, `i>^`/`i<_` entry); otherwise `i<` rides the entry lead. A
+**voltage source** puts every arrow without a side-then-direction key on the *entry*
+lead, and a plain `i`/`i^`/`i_` there points toward the first pin. The `^`/`_` side
+modifiers pick the label side independently. The document `voltage_style`/`current_style`
 (§7.2) selects american vs european; changing it calls
 `SchematicScene.relayout_annotations()`. This is a convention-faithful
 representation, not a pixel-exact copy of CircuiTikZ's geometry. A component may opt
@@ -3229,7 +3238,9 @@ The pure (Qt-free) command layer is unit-tested directly (undo/redo behaviour al
 #### Math Render (`test_mathrender.py`)
 
 On-canvas math rendering and option-slot parsing (§5.8). Pure-logic tests always
-run (slot splitting/side-mapping, `label_display_latex`); LaTeX-render tests are
+run (slot splitting/side-mapping, `label_display_latex`, and the
+`current_arrow_placement` table of every `i` modifier combination on a passive and a
+voltage source, measured against CircuiTikZ); LaTeX-render tests are
 gated on `latex`+`dvisvgm`; the bundled **ziamath** fallback tests need no LaTeX.
 Covers engine selection (LaTeX when present else ziamath, `force_ziamath`
 override), baseline-normalised `QPainterPath` output, math-delimiter handling,
