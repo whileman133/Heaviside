@@ -1470,7 +1470,7 @@ def _rect(comp_id="r", position=(0.0, 0.0), span=(2.0, 2.0)) -> Component:
     from app.components.model import RectComponent
     return RectComponent(
         id=comp_id, kind="rect", position=position, rotation=0,
-        options="", span_override=span,
+        options="", span_override=span, wire_connections=True,
     )
 
 
@@ -1557,7 +1557,7 @@ def _circle(comp_id="o", position=(0.0, 0.0), span=(2.0, 2.0)) -> Component:
     from app.components.model import CircleComponent
     return CircleComponent(
         id=comp_id, kind="circle", position=position, rotation=0,
-        options="", span_override=span,
+        options="", span_override=span, wire_connections=True,
     )
 
 

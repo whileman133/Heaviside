@@ -996,11 +996,12 @@ def rect_perimeter_points(component: "Component") -> set[tuple[float, float]]:
     A block-diagram rectangle accepts a wire connection at *any* grid point on
     its perimeter; this enumerates those points (corners included) so the
     coincident-coordinate connectivity machinery can treat them as connection
-    targets.  Returns an empty set for non-rect kinds.  The box is taken to be
+    targets.  Returns an empty set for non-rect kinds and for a rect whose
+    ``wire_connections`` is off (an enclosure, the default).  The box is taken to be
     axis-aligned (rects are not rotatable), spanning ``position`` to
     ``position + (span_override or default_span)``.
     """
-    if component.kind != "rect":
+    if component.kind != "rect" or not getattr(component, "wire_connections", False):
         return set()
     from app.components.registry import REGISTRY
 
@@ -1036,9 +1037,9 @@ def circle_connection_points(component: "Component") -> set[tuple[float, float]]
     circle/ellipse inscribed in the box defined by ``position`` and
     ``span_override or default_span``.  Returns an empty set for other kinds.
     Each point lies on the 0.25 GU grid (span commits on the 0.5 grid, so half-
-    spans are 0.25-aligned).
+    spans are 0.25-aligned). Empty when ``wire_connections`` is off.
     """
-    if component.kind != "circle":
+    if component.kind != "circle" or not getattr(component, "wire_connections", False):
         return set()
     from app.components.registry import REGISTRY
 

@@ -326,6 +326,127 @@ def is_logic_gate(kind: str) -> bool:
 _SCALABLE_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
 
 
+#: Kinds whose printed text reads wrong when the part is mirrored, keyed by tikz
+#: keyword, with how CircuiTikZ treats that text (issue #49):
+#:
+#: * ``"upright"`` — the shape turns its labels upright itself under rotation
+#:   (flip-flop letters, chip pin numbers) but not under a reflection;
+#:   The path symbols with a label in a box (``DSP``, ``FFT``, ``A/D``, ``φ``)
+#:   behave the same way;
+#: * ``"body"`` — text that turns with the symbol's body (a thermistor's ``ϑ``).
+#:
+#: Deliberately absent: text that is symmetric under a mirror (the ± of sources and
+#: amplifiers, a meter's A/V/Ω, a varistor's U), the en amp's ▷ (it *should*
+#: follow the signal direction), and the European gates (CircuiTikZ already keeps
+#: ``&``/``≥1``/``=1`` unmirrored).
+TEXT_UNFLIP: dict[str, str] = {
+    "flipflop D": "upright", "flipflop T": "upright", "flipflop SR": "upright",
+    "flipflop JK": "upright", "latch": "upright",
+    "dipchip": "upright", "qfpchip": "upright",
+    "adc": "upright", "dac": "upright", "dsp": "upright", "fft": "upright",
+    "phaseshifter": "upright", "vphaseshifter": "upright",
+    "thRn": "body", "thRp": "body",
+}
+
+
+def text_unflip_category(kind: str) -> str | None:
+    """``"upright"`` / ``"body"`` for a kind in :data:`TEXT_UNFLIP`, else ``None``."""
+    from app.components.registry import REGISTRY
+    defn = REGISTRY.get(kind)
+    return TEXT_UNFLIP.get(defn.tikz_keyword) if defn is not None else None
+
+
+def has_upright_letters(kind: str) -> bool:
+    """True for a kind whose labels CircuiTikZ keeps upright under rotation
+    (flip-flops, chips) — the canvas draws them upright too."""
+    return text_unflip_category(kind) == "upright"
+
+
+def text_unflip_option(kind: str, rotation: int, mirrored: bool) -> str:
+    r"""The ``hv unflip x`` / ``hv unflip y`` node or path option that keeps a
+    mirrored part's text readable, or ``""`` when none is needed.
+
+    The option (defined once per picture by
+    :data:`app.codegen.circuitikz.TEXT_UNFLIP_DEF`) wraps everything that one
+    shape prints with ``\pgftext`` in CircuiTikZ's own un-flip macro: ``x`` is
+    ``\ctikzflipx``; ``y`` is ``\ctikzflipy`` raised by the flipped box's
+    ``\depth − \height``, which reflects the text about its box's centre instead of
+    its baseline, so every label keeps its original baseline.
+
+    Both un-mirror the text; they differ only by a half-turn (a flip in x after a
+    flip in y is a 180° rotation), so the choice is whichever leaves the text
+    closest to upright — measured by rendering every kind at every rotation:
+    CircuiTikZ already uprights ``"upright"`` text, which needs ``y`` at 0°/180°
+    and ``x`` at 90°/270°; ``"body"`` text turns with the part and needs ``x`` near
+    0° and ``y`` otherwise (at the sideways 90°/270° tie ``y`` matches the
+    unmirrored orientation). Spec §6.5."""
+    cat = text_unflip_category(kind)
+    if not mirrored or cat is None:
+        return ""
+    r = rotation % 360
+    if cat == "upright":
+        return "hv unflip y" if r % 180 == 0 else "hv unflip x"
+    return "hv unflip x" if r in (0, 45, 315) else "hv unflip y"
+
+#: Boxed path blocks whose **inner symbol** CircuiTikZ keeps upright, keyed by tikz
+#: keyword (``\pgfcirc@define@twoports`` in ``pgfcircquadpoles.tex``): the box and
+#: leads follow the path, but the inner symbol (filter waves, an A/D diagonal, the
+#: ``DSP``/``FFT`` text) is counter-rotated by the path direction snapped to 90°
+#: (:func:`twoport_inner_rotation`), so a vertical ``to[adc]`` still shows ``/``
+#: with ``A`` top-left. Absent on purpose: the ``detector`` (``…@norotate``) and the
+#: amplifier triangles, which turn rigidly with the path, and the plain
+#: ``twoport`` box, which has no inner geometry.
+TWOPORT_UPRIGHT_INNER: frozenset[str] = frozenset({
+    "twoportsplit",
+    "bandpass", "bandstop", "highpass", "highpass2", "lowpass", "lowpass2", "allpass",
+    "adc", "dac", "dsp", "fft",
+    "piattenuator", "vpiattenuator", "tattenuator", "vtattenuator",
+    "phaseshifter", "vphaseshifter",
+    "saturation", "sigmoid", "allornothing",
+    "sacdc", "sdcdc", "sdcac", "sacac", "tacdc", "tdcac", "tacac",
+})
+
+#: The subset of :data:`TWOPORT_UPRIGHT_INNER` that also **swaps its two halves**
+#: when the path runs "backwards" (counter-rotation ≥ 145°, i.e. the path heads
+#: left or up): ``A``/``D`` trade corners, an ac/dc converter's wave and bars trade
+#: places. Each maps to the anchors of its upper-left and lower-right content
+#: (in units of the box half-side, TikZ y-up) as drawn at rotation 0; swapping moves
+#: each half to the point reflection of its anchor without turning it.
+TWOPORT_SWAP_ANCHORS: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
+    "adc": ((-0.45, 0.45), (0.45, -0.45)),
+    "dac": ((-0.45, 0.45), (0.45, -0.45)),
+    "twoportsplit": ((-0.45, 0.45), (0.45, -0.45)),
+    "sacdc": ((-0.45, 0.5), (0.5, -0.5)),     # ac wave up, dc bars down
+    "sdcac": ((-0.5, 0.5), (0.45, -0.5)),     # dc bars up, ac wave down
+    "tacdc": ((-0.45, 0.5), (0.5, -0.5)),     # three ac waves up, dc bars down
+    "tdcac": ((-0.5, 0.5), (0.45, -0.5)),     # dc bars up, three ac waves down
+}
+
+
+def twoport_tikz(kind: str) -> str | None:
+    """The tikz keyword of *kind* when it is in :data:`TWOPORT_UPRIGHT_INNER`."""
+    from app.components.registry import REGISTRY
+    defn = REGISTRY.get(kind)
+    kw = defn.tikz_keyword if defn is not None else None
+    return kw if kw in TWOPORT_UPRIGHT_INNER else None
+
+
+def twoport_inner_rotation(direction_deg: float) -> int:
+    """CircuiTikZ's inner-symbol counter-rotation (``\\@@rotation``, degrees CCW)
+    for a two-port block on a path heading *direction_deg* (TikZ, CCW from +x):
+    the direction snapped to the nearest quarter turn, negated. The thresholds and
+    the truncation to whole degrees reproduce
+    ``\\pfgcirc@twoport@get@symbol@rotation``."""
+    d = int(round(direction_deg % 360.0, 6)) % 360
+    if 45 < d < 135:
+        return 270
+    if 134 < d < 225:
+        return 180
+    if 224 < d < 315:
+        return 90
+    return 0
+
+
 def is_length_resizable(kind: str) -> bool:
     """True for a **length-resizable path symbol** (any ``to[…]`` device with two
     axial terminals — R, C, L, diode, source, thyristor, potentiometer, …) — the kinds

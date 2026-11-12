@@ -250,6 +250,25 @@ def _custom_extra_options(comp: Component) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+#: ``hv unflip x`` / ``hv unflip y``: node/path options that wrap everything *that
+#: one* shape prints with ``\pgftext`` in an un-flip, so a mirrored part's own text
+#: (flip-flop letters, chip pin numbers, "DSP", φ, …) reads normally (issue #49).
+#: The redefinition of PGF's ``\pgf@text`` happens inside the option's code, so it
+#: is local to that node's group; ``\csname`` avoids needing ``\makeatletter`` in
+#: the user's document. ``y`` raises the ``\ctikzflipy``-ed box by its
+#: ``\depth − \height``: that reflects the text about its box centre rather than its
+#: baseline, which keeps every label on its original baseline.
+TEXT_UNFLIP_DEF = (
+    r"  \tikzset{hv unflip/.code={\expandafter\let\csname hvPgfText\expandafter"
+    r"\endcsname\csname pgf@text\endcsname\expandafter\def\csname pgf@text\endcsname"
+    r"[##1]##2{\csname hvPgfText\endcsname[##1]{#1{##2}}}},"
+    r" hv unflip x/.style={hv unflip=\ctikzflipx},"
+    r" hv unflip y/.style={hv unflip=\hvFlipY}}"
+    "\n"
+    r"  \providecommand\hvFlipY[1]{\raisebox{\dimexpr\depth-\height\relax}{\ctikzflipy{#1}}}"
+)
+
+
 def generate(
     schematic: Schematic,
     y_flip: bool = False,
@@ -605,6 +624,10 @@ def generate(
 
     lines.append(r"\end{circuitikz}")
 
+    # Define the text un-flip options once, at the top of the picture, only when a
+    # mirrored part uses them (scoped to this circuitikz environment).
+    if any("hv unflip" in ln for ln in lines):
+        lines.insert(1, TEXT_UNFLIP_DEF)
     return "\n".join(lines)
 
 
@@ -738,6 +761,9 @@ def _two_terminal_line(
     opts.extend(style)   # local voltage=european / current=european (per annotation)
     if comp.mirror:
         opts.append("mirror")
+        unflip = _library.text_unflip_option(comp.kind, comp.rotation, True)
+        if unflip:
+            opts.append(unflip)   # keep the symbol's own text readable (issue #49)
     if label_str:
         opts.append(label_str)
 
@@ -902,8 +928,12 @@ def _multi_terminal_line(
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
     rotation = rot_fn(comp.rotation)
-    if rotation != 0:
-        kind_arg = f"{kind_arg}, rotate={rotation}"
+    # The mirror must come BEFORE the rotation in the option list. PGF applies a
+    # node's transform options last-listed-first, so ``xscale=-1, rotate=a`` rotates
+    # and *then* reflects — the canvas's global Flip-X after rotation (§7 Mirror).
+    # The reverse order reflects in the node's own frame first, which only agrees at
+    # 0°/180°: at 90°/270°/45° the export was flipped about the other axis, so a
+    # mirrored node's anchors (and wires) landed away from the canvas pins.
     if comp.mirror:
         if extra_opts and "xscale=" in extra_opts:
             kind_arg = re.sub(
@@ -914,6 +944,13 @@ def _multi_terminal_line(
             )
         else:
             kind_arg = f"{kind_arg}, xscale=-1"
+    if rotation != 0:
+        kind_arg = f"{kind_arg}, rotate={rotation}"
+    # A mirrored part with text (flip-flop letters, chip pin numbers) would print
+    # it mirror-imaged; un-flip it (TEXT_UNFLIP_DEF, issue #49).
+    unflip = _library.text_unflip_option(comp.kind, comp.rotation, comp.mirror)
+    if unflip:
+        kind_arg = f"{kind_arg}, {unflip}"
     # CircuiTikZ quadpole shapes (transformers) flip their internal coils when the
     # node is rotated by an odd 90° (crossing the terminal leads) or mirrored (the
     # coils face outward). Drawing the shape under the node transform (``transform
@@ -1439,6 +1476,7 @@ def _rect_line(comp: Component, y_fn=lambda y: y) -> str:
         fill_color=comp.fill_color,
         line_width=comp.line_width,
         line_style=comp.line_style,
+        line_color=comp.line_color,
     )
     style_arg = f"[{style}]" if style else ""
 
@@ -1488,6 +1526,7 @@ def _circle_line(comp: Component, y_fn=lambda y: y) -> str:
         fill_color=comp.fill_color,
         line_width=comp.line_width,
         line_style=comp.line_style,
+        line_color=comp.line_color,
     )
     style_arg = f"[{style}]" if style else ""
 
@@ -1518,11 +1557,12 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
     # Span length is invariant under rotation and mirror.
     span_len = math.hypot(so[0], so[1])
 
-    # Compute actual terminal offset (mirror then rotate, same as _two_terminal_line).
-    dx, dy = so
+    # Terminal offset: rotate, THEN mirror (the canvas's global Flip-X after
+    # rotation, as component_pin_positions does). Mirroring first only agrees at
+    # 0°/180°; at 90°/270°/45° it put the box a span away from its own pins.
+    rdx, rdy = _rotate(so, comp.rotation)
     if comp.mirror:
-        dx = -dx
-    rdx, rdy = _rotate((dx, dy), comp.rotation)
+        rdx = -rdx
     x1, y1 = x0 + rdx, y0 + rdy
 
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
@@ -1552,6 +1592,7 @@ def _bipole_node_line(comp: "BipoleComponent", y_fn=lambda y: y) -> str:
         fill_color=comp.fill_color,
         line_width=comp.line_width,
         line_style=comp.line_style,
+        line_color=comp.line_color,
     )
     extra_opts = f", {style}" if style else ""
 

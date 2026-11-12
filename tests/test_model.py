@@ -114,7 +114,7 @@ def test_component_mixin_composition() -> None:
 
 def _rect(**kwargs) -> Component:
     from app.components.model import RectComponent
-    defaults = dict(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="")
+    defaults = dict(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="", wire_connections=True)
     defaults.update(kwargs)
     return RectComponent(**defaults)
 
@@ -164,7 +164,7 @@ def test_open_endpoint_on_rect_edge_is_connected() -> None:
 
 def _circle(**kwargs) -> Component:
     from app.components.model import CircleComponent
-    defaults = dict(id=_uid(), kind="circle", position=(0.0, 0.0), rotation=0, options="")
+    defaults = dict(id=_uid(), kind="circle", position=(0.0, 0.0), rotation=0, options="", wire_connections=True)
     defaults.update(kwargs)
     return CircleComponent(**defaults)
 

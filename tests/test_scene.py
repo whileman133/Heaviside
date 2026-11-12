@@ -3878,10 +3878,13 @@ def test_new_wire_inherits_selected_wire_style(scene: SchematicScene):
 
 
 def test_unconnected_perimeter_point_autostarts_wire(scene: SchematicScene):
-    """Clicking a free rect-edge / circle-cardinal point starts a wire there."""
-    scene.place_component("rect", (0.0, 0.0))        # 1x1; top-edge midpoint (0.5,0)
+    """Clicking a free rect-edge / circle-cardinal point starts a wire there
+    (once the box's wire connections are turned on)."""
+    r = scene.place_component("rect", (0.0, 0.0))    # 1x1; top-edge midpoint (0.5,0)
+    scene.set_wire_connections(r.id, True)
     assert scene.unconnected_pin_at(scene.gu_to_scene(0.5, 0.0)) == (0.5, 0.0)
-    scene.place_component("circle", (10.0, 0.0))     # 0.5x0.5; east cardinal (10.5,0.25)
+    c = scene.place_component("circle", (10.0, 0.0))  # 0.5x0.5; east cardinal (10.5,0.25)
+    scene.set_wire_connections(c.id, True)
     assert scene.unconnected_pin_at(scene.gu_to_scene(10.5, 0.25)) == (10.5, 0.25)
 
 
@@ -3892,6 +3895,34 @@ def test_perimeter_connection_dots(scene: SchematicScene):
     assert len(scene._comp_items[r.id]._connection_dots_local()) == 16
     c = scene.place_component("circle", (10.0, 0.0))
     assert len(scene._comp_items[c.id]._connection_dots_local()) == 4
+
+
+@pytest.mark.parametrize("kind", ["rect", "circle"])
+def test_new_box_has_no_wire_connections_until_enabled(scene: SchematicScene, kind):
+    """Issue #49: a newly placed rect/circle is an enclosure, so its edges are
+    not wire snap / auto-start targets and show no dots; turning
+    ``wire_connections`` on (undoably) restores block-diagram wiring."""
+    from app.schematic.model import component_connection_points, open_endpoints
+
+    box = scene.place_component(kind, (0.0, 0.0))
+    live = scene._component_by_id(box.id)
+    live.span_override = (2.0, 2.0)
+    scene._rebuild_items()
+    assert live.wire_connections is False
+    assert component_connection_points(live) == set()
+    assert scene.unconnected_pin_at(scene.gu_to_scene(1.0, 0.0)) is None
+    # A wire ending on the edge is an open end, not a connection.
+    w = scene.add_wire([(2.0, 1.0), (5.0, 1.0)])
+    assert (2.0, 1.0) in {tuple(p) for p in open_endpoints(scene.schematic)}
+
+    scene.set_wire_connections(box.id, True)
+    live = scene._component_by_id(box.id)
+    assert (2.0, 1.0) in component_connection_points(live)
+    assert (2.0, 1.0) not in {tuple(p) for p in open_endpoints(scene.schematic)}
+    assert scene.unconnected_pin_at(scene.gu_to_scene(1.0, 0.0)) == (1.0, 0.0)
+    scene.undo()
+    assert scene._component_by_id(box.id).wire_connections is False
+    assert w.id
 
 
 def test_new_wire_inherits_style_from_tab_cycle(scene: SchematicScene):
@@ -5034,3 +5065,134 @@ def test_component_origin_aligns_pin_to_offgrid_pin_axis(scene: SchematicScene):
     (fx, _fy), (fgx, _fgy) = scene._resolve_component_origin(r, (3.02, 3.0), {"r1"})
     assert fx == pytest.approx(3.0)
     assert fgx is None
+
+
+# ---------------------------------------------------------------------------
+# Vertical mirror (issue #49): a dedicated mirror_v, folded into mirror/rotation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rotation", [0, 45, 90, 270])
+@pytest.mark.parametrize("mirror", [False, True])
+def test_mirror_vertical_reflects_pins_top_to_bottom(scene: SchematicScene, rotation, mirror):
+    """Turning the vertical mirror on reflects every pin across the horizontal
+    line through the component's position (an op amp's +/- inputs swap), from
+    any starting rotation/mirror, and undoes in one step."""
+    from app.schematic.model import component_pin_positions
+
+    comp = scene.place_component("op amp", (2.0, 3.0))
+    scene.rotate_component(comp.id, rotation)
+    if mirror:
+        scene.mirror_component(comp.id, True)
+    live = scene._component_by_id(comp.id)
+    py = live.position[1]
+    before = component_pin_positions(live)
+
+    scene.mirror_component_vertical(comp.id, True)
+    live = scene._component_by_id(comp.id)
+    assert live.mirror_v is True
+    after = component_pin_positions(live)
+    for (ax, ay), (bx, by) in zip(after, before):
+        assert ax == pytest.approx(bx, abs=1e-9)
+        assert ay == pytest.approx(2 * py - by, abs=1e-9)
+
+    scene.undo()  # one step restores all three fields
+    restored = scene._component_by_id(comp.id)
+    assert (restored.rotation, restored.mirror, restored.mirror_v) == (rotation, mirror, False)
+
+
+def test_mirror_vertical_keeps_user_rotation_and_horizontal_mirror(scene: SchematicScene):
+    """With the vertical mirror on, setting the rotation / horizontal mirror
+    acts on the user's values (the flip's 180° and mirror stay folded in), and
+    turning it off returns exactly to the user's orientation."""
+    comp = scene.place_component("flipflop D", (0.0, 0.0))
+    scene.mirror_component_vertical(comp.id, True)
+    scene.rotate_component(comp.id, 90)          # user rotation 90
+    scene.mirror_component(comp.id, True)        # user horizontal mirror on
+    live = scene._component_by_id(comp.id)
+    assert (live.rotation, live.mirror, live.mirror_v) == (270, False, True)
+    scene.mirror_component_vertical(comp.id, False)
+    live = scene._component_by_id(comp.id)
+    assert (live.rotation, live.mirror, live.mirror_v) == (90, True, False)
+    scene.mirror_component_vertical(comp.id, False)      # unchanged → no undo entry
+    scene.undo()
+    assert scene._component_by_id(comp.id).mirror_v is True
+
+
+# ---------------------------------------------------------------------------
+# Drag-to-place path symbols by length (issue #49)
+# ---------------------------------------------------------------------------
+
+def _drag_place(scene: SchematicScene, start, end, *, release_at=None):
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent as _Ev
+    _press(scene, start)
+    mv = _Ev(_Ev.GraphicsSceneMouseMove)
+    mv.setButtons(Qt.LeftButton)
+    mv.setScenePos(scene.gu_to_scene(*end))
+    scene.mouseMoveEvent(mv)
+    rel = _Ev(_Ev.GraphicsSceneMouseRelease)
+    rel.setButton(Qt.LeftButton)
+    rel.setScenePos(scene.gu_to_scene(*(release_at or end)))
+    scene.mouseReleaseEvent(rel)
+
+
+def test_drag_to_place_sets_length_from_endpoints(scene: SchematicScene):
+    """Pressing at (0,0) and releasing at (5,0) places one resistor whose pins
+    are exactly the two endpoints (like CircuiTikZ ``(0,0) to[R] (5,0)``), as a
+    single undo step, and PLACE mode stays armed."""
+    from app.schematic.model import component_pin_positions
+
+    scene.start_placement("R")
+    _drag_place(scene, (0.0, 0.0), (5.0, 0.0))
+    assert len(scene.schematic.components) == 1
+    r = scene.schematic.components[0]
+    pins = component_pin_positions(r)
+    assert pins[0] == pytest.approx((0.0, 0.0)) and pins[1] == pytest.approx((5.0, 0.0))
+    assert scene.mode == Mode.PLACE
+    scene.undo()
+    assert scene.schematic.components == []
+
+
+@pytest.mark.parametrize("end", [(0.0, 4.0), (0.0, -4.0), (-4.0, 0.0), (3.0, 3.0)])
+def test_drag_to_place_takes_rotation_from_drag_direction(scene: SchematicScene, end):
+    from app.schematic.model import component_pin_positions
+
+    scene.start_placement("R")
+    _drag_place(scene, (0.0, 0.0), end)
+    pins = component_pin_positions(scene.schematic.components[0])
+    assert pins[0] == pytest.approx((0.0, 0.0), abs=1e-9)
+    assert pins[1][0] == pytest.approx(end[0], abs=1e-9)
+    assert pins[1][1] == pytest.approx(end[1], abs=1e-9)
+
+
+def test_drag_to_place_click_and_short_drag_keep_default(scene: SchematicScene):
+    """A plain click (and a drag shorter than the natural length, along +x) keeps
+    today's default placement; a tiny jitter doesn't rotate the part."""
+    scene.start_placement("R")
+    _drag_place(scene, (0.0, 0.0), (0.0, 0.0))               # click
+    _drag_place(scene, (0.0, 4.0), (0.1, 4.0))               # jitter < threshold
+    _drag_place(scene, (0.0, 8.0), (1.0, 8.0))               # shorter than natural
+    for c in scene.schematic.components:
+        assert c.rotation == 0 and c.span_override is None
+
+
+def test_drag_to_place_not_for_nodes(scene: SchematicScene):
+    """Kinds that aren't length-resizable (a ground) ignore the drag."""
+    scene.start_placement("ground")
+    _drag_place(scene, (0.0, 0.0), (4.0, 0.0))
+    g = scene.schematic.components[0]
+    assert (g.position, g.rotation, g.span_override) == ((0.0, 0.0), 0, None)
+
+
+def test_drag_to_place_escape_mid_drag_keeps_default_visible(scene: SchematicScene):
+    from PySide6.QtWidgets import QGraphicsSceneMouseEvent as _Ev
+    scene.start_placement("R")
+    _press(scene, (0.0, 0.0))
+    mv = _Ev(_Ev.GraphicsSceneMouseMove)
+    mv.setButtons(Qt.LeftButton)
+    mv.setScenePos(scene.gu_to_scene(0.0, 4.0))
+    scene.mouseMoveEvent(mv)
+    rid = scene.schematic.components[0].id
+    assert not scene._comp_items[rid].isVisible()      # hidden behind the ghost
+    scene.set_mode(Mode.SELECT)                        # Esc
+    assert scene._comp_items[rid].isVisible()
+    assert scene.schematic.components[0].rotation == 0

@@ -14,8 +14,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it easy to put a resistor directly in line with a transistor terminal without a tiny
   jog. Falls back to the normal 0.25 GU grid snap when not near a pin axis; applies to a
   single dragged component (group drags keep the grid).
+- **Drag to place a component at any length.** While placing a resistor, capacitor,
+  diode, source or other two-terminal part, press and drag from one point to another:
+  the part is laid between them, like `(0,0) to[R] (5,0)` in CircuiTikZ. The drag
+  direction sets the rotation (in 45° steps). A plain click still places it at the
+  default length. ([#49](https://github.com/whileman133/Heaviside/issues/49))
+- **Vertical mirror.** Components have a **Mirror (vertical)** checkbox next to the
+  horizontal one, so an op amp's inputs can be swapped top-to-bottom (Circuit2TikZ's
+  *Invert*, CircuiTikZ's `yscale=-1`). ([#49](https://github.com/whileman133/Heaviside/issues/49))
+- **Line colour and custom colours for boxes.** Rectangles, circles and bipole boxes
+  have a separate **Line color**, and both colour lists are longer and end in
+  **Custom…**, which opens a colour picker for any RGB colour.
+  ([#49](https://github.com/whileman133/Heaviside/issues/49))
+
+### Changed
+- **Rectangles and circles no longer catch wires by default.** A new box is an
+  enclosure: no connection dots along its edges, and wires near it snap to the circuit
+  instead. Tick **Wiring ▸ Wires connect to edges** in the inspector for a
+  block-diagram box. Boxes in files from earlier versions keep their connections.
+  ([#49](https://github.com/whileman133/Heaviside/issues/49))
+- **File format 0.12** (vertical mirror, line colour, box wiring). Files saved by this
+  version open only in this version or later; older files open unchanged.
 
 ### Fixed
+- **Mirrored parts rotated 90° or 270° now export the right way round.** A mirrored
+  op amp, transistor, flip-flop, multiplexer or other multi-pin part at 90°, 270° (or
+  45°) was flipped about the wrong axis in the LaTeX output, so its pins, and the
+  wires drawn to them, didn't line up with the canvas. A mirrored bipole box at those
+  angles was also drawn away from its own wires.
+- **Text on mirrored parts stays readable.** Mirroring a part used to print its own
+  text back-to-front or upside down: flip-flop and latch letters, chip pin numbers,
+  "DSP"/"FFT", an A/D converter's letters, a phase shifter's φ, a thermistor's ϑ.
+  The LaTeX output now un-flips that text, keeping each label on its original
+  baseline, and the canvas draws it the same way. Symbols whose direction matters
+  (an amplifier's ▷) still mirror.
+  ([#49](https://github.com/whileman133/Heaviside/issues/49))
+- **Rotated block symbols now match the LaTeX preview.** CircuiTikZ keeps the inside
+  of a boxed block (A/D and D/A converters, filters, DSP/FFT, attenuators, phase
+  shifters, ac/dc converters) upright when the block is rotated, but the canvas
+  rotated the whole symbol. A vertical A/D converter showed a `\` diagonal with
+  sideways letters, and a filter's waves stood on end. The canvas now draws the inner
+  symbol as the export does at every rotation, mirrored or not, including the swap
+  of `A`/`D` (or the ac/dc marks) when the block points left or up.
 - **Current labels on voltage sources now match the LaTeX preview.** CircuiTikZ draws
   a voltage source's `i=`/`i>=` arrow on the entry lead (the `+` terminal), but the
   canvas drew it on the exit lead, so e.g. a controlled source's current label showed

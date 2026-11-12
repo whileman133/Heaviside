@@ -20,7 +20,9 @@ Section → applicability map:
   VariantSection      – one checkbox per boolean variant the kind declares
                         (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
-  FillBorderSection   – StyledComponent (rect, circle, bipole) — fill + line style
+  FillBorderSection   – StyledComponent (rect, circle, bipole) — line style, line
+                        colour, fill colour (presets + Custom… colour picker)
+  WireConnectionsSection – rect/circle: opt-in block-diagram edge wiring
   StrokeWidthSection  – the unified stroke/outline width, every kind but text_node
                         (symbols and blocks share one line_width)
   (Scalable gates/blocks have no Size dropdown — they resize by a corner drag
@@ -110,18 +112,143 @@ _WIRE_LABEL_PLACEMENT_OPTIONS: list[tuple[str, str]] = [
 _LABEL_TO_PLACEMENT = {label: val for label, val in _WIRE_LABEL_PLACEMENT_OPTIONS}
 _PLACEMENT_TO_LABEL = {val: label for label, val in _WIRE_LABEL_PLACEMENT_OPTIONS}
 
-# ── Fill color ──────────────────────────────────────────────────────────────
+# ── Fill / line colour ──────────────────────────────────────────────────────
+# Presets are plain xcolor names or ``name!pct`` tints (pct% of the colour mixed
+# with white), so the export needs no preamble. Anything else — a hand-authored
+# value or a "Custom…" pick (stored as ``{rgb,255:red,R;green,G;blue,B}``) — is
+# shown as an extra item carrying its raw TikZ value.
 _FILL_OPTIONS: list[tuple[str, str]] = [
-    ("None",       ""),
-    ("White",      "white"),
-    ("Light gray", "gray!15"),
-    ("Yellow",     "yellow!20"),
-    ("Blue",       "cyan!15"),
-    ("Green",      "green!15"),
-    ("Red",        "red!15"),
+    ("None",          ""),
+    ("White",         "white"),
+    ("Light gray",    "gray!15"),
+    ("Light yellow",  "yellow!20"),
+    ("Light blue",    "cyan!15"),
+    ("Light green",   "green!15"),
+    ("Light red",     "red!15"),
+    ("Light orange",  "orange!20"),
+    ("Light violet",  "violet!15"),
+    ("Gray",          "gray!50"),
+    ("Yellow",        "yellow"),
+    ("Orange",        "orange"),
+    ("Red",           "red"),
+    ("Green",         "green"),
+    ("Blue",          "blue"),
+    ("Cyan",          "cyan"),
+    ("Violet",        "violet"),
+    ("Black",         "black"),
 ]
 _LABEL_TO_TIKZ_FILL = {label: tikz for label, tikz in _FILL_OPTIONS}
 _TIKZ_FILL_TO_LABEL: dict[str, str] = {tikz: label for label, tikz in _FILL_OPTIONS}
+
+_LINE_COLOR_OPTIONS: list[tuple[str, str]] = [
+    ("Default", ""),
+    ("Black",   "black"),
+    ("Gray",    "gray"),
+    ("Red",     "red"),
+    ("Orange",  "orange"),
+    ("Green",   "green"),
+    ("Blue",    "blue"),
+    ("Cyan",    "cyan"),
+    ("Violet",  "violet"),
+    ("Brown",   "brown"),
+    ("White",   "white"),
+]
+
+_CUSTOM_COLOR_LABEL = "Custom…"
+
+
+def _pick_color(initial, parent):  # noqa: ANN001, ANN202
+    """Open the colour dialog; returns the chosen QColor, or None on cancel.
+    A module-level hook so tests can stub the modal dialog."""
+    from PySide6.QtWidgets import QColorDialog
+    c = QColorDialog.getColor(initial, parent, "Choose colour")
+    return c if c.isValid() else None
+
+
+class _ColorCombo(QComboBox):
+    """Preset colours (with swatches) + a trailing **Custom…** entry.
+
+    The model value is the TikZ colour string (:meth:`value` / :meth:`set_value`).
+    Choosing Custom… opens a colour picker; the pick becomes an extra item (shown
+    as its raw TikZ value, like any unrepresentable loaded value) and emits
+    :attr:`valueChanged`. Cancelling restores the previous choice."""
+
+    valueChanged = Signal(str)
+
+    _EXTRA = Qt.UserRole + 1     # item data: True on an extra (non-preset) item
+
+    def __init__(self, options: list[tuple[str, str]]) -> None:
+        super().__init__()
+        from app.canvas.items import resolve_tikz_color
+        self._resolve = resolve_tikz_color
+        for label, tikz in options:
+            self.addItem(self._swatch(tikz), label, tikz)
+        self.addItem(_CUSTOM_COLOR_LABEL, None)
+        self._prev = 0
+        self.activated.connect(self._on_activated)
+
+    def _swatch(self, tikz: str):  # noqa: ANN202
+        from PySide6.QtGui import QIcon, QPixmap, QColor
+        pm = QPixmap(12, 12)
+        if tikz:
+            pm.fill(self._resolve(tikz))
+        else:
+            pm.fill(QColor(0, 0, 0, 0))     # "None"/"Default": empty swatch
+        return QIcon(pm)
+
+    def _custom_index(self) -> int:
+        return self.findText(_CUSTOM_COLOR_LABEL)
+
+    def value(self) -> str:
+        data = self.currentData()
+        return data if isinstance(data, str) else ""
+
+    def set_value(self, value: str) -> None:
+        """Select *value* without emitting, inserting it as an extra item (just
+        before Custom…) when no preset matches; stale extras are dropped."""
+        self.blockSignals(True)
+        for i in range(self.count() - 1, -1, -1):
+            if self.itemData(i, self._EXTRA) is True:
+                self.removeItem(i)
+        idx = next(
+            (i for i in range(self.count()) if self.itemData(i) == value), -1
+        )
+        if idx < 0:
+            idx = self._custom_index()
+            self.insertItem(idx, self._swatch(value), value, value)
+            self.setItemData(idx, True, self._EXTRA)
+        self.setCurrentIndex(idx)
+        self._prev = idx
+        self.blockSignals(False)
+
+    def _on_activated(self, index: int) -> None:
+        if index == self._custom_index():
+            current = self.itemData(self._prev)
+            initial = self._resolve(current) if isinstance(current, str) and current else None
+            from PySide6.QtGui import QColor
+            picked = _pick_color(initial or QColor(Qt.white), self)
+            if picked is None:                     # cancelled: restore
+                self.blockSignals(True)
+                self.setCurrentIndex(self._prev)
+                self.blockSignals(False)
+                return
+            from app.components.style import tikz_rgb_color
+            self.set_value(tikz_rgb_color(picked.red(), picked.green(), picked.blue()))
+        else:
+            self._prev = index
+        self.valueChanged.emit(self.value())
+
+
+def _make_color_row(
+    label: str, options: list[tuple[str, str]], on_change: Callable[[str], None]
+) -> tuple[QHBoxLayout, _ColorCombo]:
+    row = QHBoxLayout()
+    row.setSpacing(6)
+    row.addWidget(QLabel(label))
+    combo = _ColorCombo(options)
+    combo.valueChanged.connect(on_change)
+    row.addWidget(combo, 1)
+    return row, combo
 
 _ROT_BTN_WIDTH = 52
 _Z_ORDER_TOOLTIP = "Negative = behind circuit elements; 0 = default; positive = in front"
@@ -1058,7 +1185,8 @@ class FontSection(InspectorSection):
 
 
 class FillBorderSection(InspectorSection):
-    """Fill color + line style for any StyledComponent (rect, circle, bipole).
+    """Line style, line colour and fill colour for any StyledComponent (rect,
+    circle, bipole). Both colours offer presets plus a Custom… picker.
 
     Reads/writes the StyledComponent fields directly via the generic per-field
     scene setters — no string parsing, no per-type branching. The outline
@@ -1075,8 +1203,13 @@ class FillBorderSection(InspectorSection):
         )
         self.body.addLayout(self._ls_row)
 
-        self._fill_row, self._fill = _make_combo_row(
-            "Fill", [lbl for lbl, _ in _FILL_OPTIONS], lambda _i: self._timer.start()
+        self._lc_row, self._line_color = _make_color_row(
+            "Line color", _LINE_COLOR_OPTIONS, lambda _v: self._timer.start()
+        )
+        self.body.addLayout(self._lc_row)
+
+        self._fill_row, self._fill = _make_color_row(
+            "Fill", _FILL_OPTIONS, lambda _v: self._timer.start()
         )
         self.body.addLayout(self._fill_row)
 
@@ -1092,22 +1225,55 @@ class FillBorderSection(InspectorSection):
         # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
         # as extra items so an unrelated edit in this section round-trips them.
         _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
-        _set_combo_value(self._fill, comp.fill_color, _TIKZ_FILL_TO_LABEL)
+        self._fill.set_value(comp.fill_color)
+        self._line_color.set_value(getattr(comp, "line_color", ""))
 
     def _commit(self) -> None:
         # Per-field undoable commands (no-ops when unchanged); for a multi-select
         # both fields across all components collapse into one undo step. An extra
         # item's display text IS the raw TikZ value, so it maps to itself.
         style_text = self._line_style.currentText()
-        fill_text = self._fill.currentText()
         style = _LABEL_TO_TIKZ_STYLE.get(style_text, style_text)
-        fill = _LABEL_TO_TIKZ_FILL.get(fill_text, fill_text)
+        fill = self._fill.value()
+        line_color = self._line_color.value()
 
         def apply(s, cid):  # noqa: ANN001
             s.set_line_style(cid, style)
+            s.set_line_color(cid, line_color)
             s.set_fill_color(cid, fill)
 
         self._apply("Style", apply)
+
+
+class WireConnectionsSection(InspectorSection):
+    """Opt-in block-diagram wiring for rect/circle (issue #49).
+
+    Off by default, so a box drawn to enclose or group part of a circuit has no
+    connection dots and doesn't catch wire snaps meant for nearby pins. Turn it
+    on for a block-diagram box whose edges wires should attach to."""
+
+    title = "Wiring"
+    multi_kind_safe = True
+
+    def _build(self) -> None:
+        self._cb = QCheckBox("Wires connect to edges")
+        self._cb.setToolTip(
+            "Rectangle: any grid point on the edge. Circle: the four N/S/E/W points."
+        )
+        self._cb.stateChanged.connect(self._on_toggle)
+        self.body.addWidget(self._cb)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, (RectComponent, CircleComponent))
+
+    def _load(self, comp: Component) -> None:
+        self._cb.blockSignals(True)
+        self._cb.setChecked(bool(comp.wire_connections))
+        self._cb.blockSignals(False)
+
+    def _on_toggle(self, state: int) -> None:
+        on = bool(state)
+        self._apply("Wire connections", lambda s, cid: s.set_wire_connections(cid, on))
 
 
 class StrokeWidthSection(InspectorSection):
@@ -1460,7 +1626,7 @@ class WireStyleSection(InspectorSection):
 
 
 class TransformSection(InspectorSection):
-    """Rotation buttons + mirror checkbox.
+    """Rotation buttons + horizontal and vertical mirror checkboxes.
 
     Rotation applies to everything except rect (whose rotation is a codegen
     no-op).  Mirror is only meaningful for path-emitted circuit components and
@@ -1478,6 +1644,11 @@ class TransformSection(InspectorSection):
         self._mirror_cb.stateChanged.connect(self._on_mirror)
         self.body.addWidget(self._mirror_cb)
 
+        self._mirror_v_cb = QCheckBox("Mirror (vertical)")
+        self._mirror_v_cb.setToolTip("Flip top-to-bottom (CircuiTikZ yscale=-1).")
+        self._mirror_v_cb.stateChanged.connect(self._on_mirror_v)
+        self.body.addWidget(self._mirror_v_cb)
+
     def applies_to(self, comp: Component) -> bool:
         # rect and circle are axis-aligned boxes — rotation is a codegen no-op.
         return not isinstance(comp, (RectComponent, CircleComponent))
@@ -1489,16 +1660,22 @@ class TransformSection(InspectorSection):
     def _load(self, comp: Component) -> None:
         for angle, btn in self._rot_buttons.items():
             btn.blockSignals(True)
-            btn.setChecked(angle == comp.rotation)
+            # The user's rotation: a vertical mirror's 180° is not theirs.
+            btn.setChecked(angle == (comp.rotation - (180 if comp.mirror_v else 0)) % 360)
             btn.blockSignals(False)
 
         if self._mirror_applies(comp):
             self._mirror_cb.show()
             self._mirror_cb.blockSignals(True)
-            self._mirror_cb.setChecked(comp.mirror)
+            self._mirror_cb.setChecked(comp.mirror != comp.mirror_v)
             self._mirror_cb.blockSignals(False)
+            self._mirror_v_cb.show()
+            self._mirror_v_cb.blockSignals(True)
+            self._mirror_v_cb.setChecked(comp.mirror_v)
+            self._mirror_v_cb.blockSignals(False)
         else:
             self._mirror_cb.hide()
+            self._mirror_v_cb.hide()
 
     def _on_rotate(self, angle: int) -> None:
         self._apply("Rotate", lambda s, cid: s.rotate_component(cid, angle))
@@ -1506,6 +1683,10 @@ class TransformSection(InspectorSection):
     def _on_mirror(self, state: int) -> None:
         on = bool(state)
         self._apply("Mirror", lambda s, cid: s.mirror_component(cid, on))
+
+    def _on_mirror_v(self, state: int) -> None:
+        on = bool(state)
+        self._apply("Mirror vertical", lambda s, cid: s.mirror_component_vertical(cid, on))
 
 
 class LayerSection(InspectorSection):
@@ -1884,6 +2065,7 @@ class PropertiesPanel(QWidget):
             ParamSection(),
             FontSection(),
             FillBorderSection(),
+            WireConnectionsSection(),
             StrokeWidthSection(),
             TransformSection(),
             LayerSection(),

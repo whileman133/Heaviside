@@ -264,7 +264,9 @@ def test_parity_contained_wire_removed(scene: SchematicScene):
 
 def test_parity_box_resize_with_attached_wires(scene: SchematicScene):
     comp = scene.place_component("rect", (0.0, 0.0))
+    comp = scene._component_by_id(comp.id)   # the live component
     comp.span_override = (2.0, 2.0)
+    comp.wire_connections = True             # block-diagram box (opt-in, #49)
     scene._rebuild_items()
     # One wire on the moving (right) edge midpoint, one on the anchored corner.
     w_right = scene.add_wire([(2.0, 1.0), (5.0, 1.0)])

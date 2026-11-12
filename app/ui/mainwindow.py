@@ -2032,6 +2032,8 @@ _HELP_GESTURE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
         ("Click empty canvas",   "Clear the current selection."),
     ]),
     ("Moving & resizing", [
+        ("Drag while placing",    "Lay a resistor/capacitor/source/… from the press "
+                                  "point to the release point (sets length and angle)."),
         ("Drag a component body", "Move it; connected wires follow."),
         ("Drag a corner handle",  "Resize a rectangle, circle, or bipole."),
         ("Drag a wire vertex",    "Reshape the wire (stays orthogonal)."),
@@ -2042,7 +2044,8 @@ _HELP_GESTURE_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Wiring", [
         ("Double-click a wire",            "Split it and start a new wire there."),
         ("Double-click empty canvas",      "Start a new wire from that grid point."),
-        ("Click a free pin or edge dot",   "Start a wire from that connection point."),
+        ("Click a free pin or edge dot",   "Start a wire from that connection point "
+                                           "(box edges: turn on Wiring in the inspector)."),
         ("Click while wiring",             "Drop a vertex / corner."),
         ("Double-click while wiring",      "Finish the wire (or click a pin)."),
     ]),
