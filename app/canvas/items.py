@@ -1661,13 +1661,23 @@ class ComponentItem(QGraphicsItem):
             painter.scale(s, s)
         diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
         syms = symbol_paths(self._geometry_kind())
+        # A two-port block's inner symbol stays upright like CircuiTikZ's (the box
+        # and leads turn with the item; the A/D diagonal, waves, text do not).
+        inner = twoport_inner_paths(self._component.kind, [sp.path for sp in syms],
+                                    self.transform())
+        base = inner if inner is not None else [sp.path for sp in syms]
+        # Then text reads like the rendered output (issue #49): each label turned
+        # upright / un-mirrored about its own centre, at the position set above.
         upright: dict[int, QPainterPath] = {}
         idx = [i for i, sp in enumerate(syms) if sp.glyph]
+        # Shape from the upright local glyph, position from the two-port step.
         fixed = readable_glyphs(self._component.kind, [syms[i].path for i in idx],
-                                self.transform(), self._component.rotation) if idx else None
+                                self.transform(), self._component.rotation,
+                                placed=[base[i] for i in idx]) if idx else None
         if fixed is not None:
             upright = dict(zip(idx, fixed))
         for _i, sym in enumerate(syms):
+            path = upright.get(_i, base[_i])
             lw = _stroke_px(sym.stroke_width, lw_scale)
             # Counter the body scale so the stroke keeps its on-screen weight. A custom
             # component may carry an explicit stroke colour / dash (``color=``/``dash=``);
@@ -1688,7 +1698,7 @@ class ComponentItem(QGraphicsItem):
             # to the document's diode_scale; the lead spans terminal-to-terminal and is
             # left as-is, so the body shrinks/grows on the continuous lead (no gap).
             body_scaled = (diode is not None
-                           and sym.path.boundingRect().width() < 0.9 * diode[3])
+                           and path.boundingRect().width() < 0.9 * diode[3])
             if body_scaled:
                 painter.save()
                 painter.translate(diode[1], diode[2])
@@ -1699,12 +1709,10 @@ class ComponentItem(QGraphicsItem):
                 # antennas) paint only as the visible arcs.
                 painter.save()
                 painter.setClipPath(sym.clip)
-                painter.drawPath(sym.path)
+                painter.drawPath(path)
                 painter.restore()
-            elif _i in upright:
-                painter.drawPath(upright[_i])
             else:
-                painter.drawPath(sym.path)
+                painter.drawPath(path)
             if body_scaled:
                 painter.restore()
         painter.restore()
@@ -3023,7 +3031,8 @@ def _glyph_clusters(rects: list[QRectF]) -> list[list[int]]:
     return groups
 
 
-def upright_glyphs(paths: list[QPainterPath], item_xform: QTransform) -> list[QPainterPath]:
+def upright_glyphs(paths: list[QPainterPath], item_xform: QTransform,
+                   placed: list[QPainterPath] | None = None) -> list[QPainterPath]:
     """*paths* (glyphs, item-local px) re-oriented so that, drawn under the item's
     *item_xform*, each label reads upright and unmirrored, still centred where
     the item transform puts it.
@@ -3033,20 +3042,30 @@ def upright_glyphs(paths: list[QPainterPath], item_xform: QTransform) -> list[QP
     the inverse of the item's rotation/mirror about the label's own centre, so
     the item transform cancels out for its shape but still carries its position.
     Used for text CircuiTikZ keeps upright (flip-flop letters, chip pin numbers,
-    "DSP"; issue #49)."""
+    "DSP"; issue #49).
+
+    *placed* (same length) gives each glyph's **position** when an earlier step
+    already moved it — a two-port block's inner text, which
+    :func:`twoport_inner_paths` swaps and counter-rotates. The label's shape is
+    then still taken from *paths* (the upright local glyph), only its centre
+    from *placed*: re-uprighting the already-turned glyph would leave the
+    two-port counter-rotation on it."""
     lin = QTransform(item_xform.m11(), item_xform.m12(),
                      item_xform.m21(), item_xform.m22(), 0.0, 0.0)
     inv, ok = lin.inverted()
     if not ok or not paths:
         return list(paths)
+    placed = paths if placed is None else placed
     rects = [p.boundingRect() for p in paths]
+    prects = [p.boundingRect() for p in placed]
     out = list(paths)
     for group in _glyph_clusters(rects):
-        box = rects[group[0]]
+        box, pbox = rects[group[0]], prects[group[0]]
         for j in group[1:]:
             box = box.united(rects[j])
-        c = box.center()
-        t = QTransform.fromTranslate(-c.x(), -c.y()) * inv * QTransform.fromTranslate(c.x(), c.y())
+            pbox = pbox.united(prects[j])
+        c, pc = box.center(), pbox.center()
+        t = QTransform.fromTranslate(-c.x(), -c.y()) * inv * QTransform.fromTranslate(pc.x(), pc.y())
         for j in group:
             out[j] = t.map(paths[j])
     return out
@@ -3097,14 +3116,17 @@ def unmirrored_glyphs(paths: list[QPainterPath], item_xform: QTransform,
 
 
 def readable_glyphs(kind: str, paths: list[QPainterPath], item_xform: QTransform,
-                    rotation: int) -> list[QPainterPath] | None:
+                    rotation: int,
+                    placed: list[QPainterPath] | None = None) -> list[QPainterPath] | None:
     """Canvas counterpart of the export's text un-flip (issue #49): the glyph
     *paths* re-oriented so *kind*'s text reads like the rendered output, or
-    ``None`` when *kind* has no text needing it (:data:`library.TEXT_UNFLIP`)."""
+    ``None`` when *kind* has no text needing it (:data:`library.TEXT_UNFLIP`).
+    *placed*: glyph positions already moved by an earlier step (see
+    :func:`upright_glyphs`)."""
     from app.components import library
     cat = library.text_unflip_category(kind)
     if cat == "upright":
-        return upright_glyphs(paths, item_xform)
+        return upright_glyphs(paths, item_xform, placed)
     if cat == "body":
         return unmirrored_glyphs(paths, item_xform, rotation)
     return None
@@ -3123,6 +3145,63 @@ def _outline_color(comp, state_color: str) -> str:  # noqa: ANN001
     if lc and state_color == style.COLOR_NORMAL:
         return _resolve_tikz_color(lc).name()
     return state_color
+
+
+def twoport_inner_rotation_for(item_xform: QTransform) -> int:
+    """CircuiTikZ's two-port inner counter-rotation (degrees CCW, TikZ y-up) for
+    a path symbol drawn under *item_xform*: the emitted path runs along the item's
+    local +x axis, so its TikZ direction is that axis mapped to the scene with y
+    negated (:func:`app.components.library.twoport_inner_rotation`)."""
+    from app.components import library
+    v = item_xform.map(QPointF(1.0, 0.0)) - item_xform.map(QPointF(0.0, 0.0))
+    return library.twoport_inner_rotation(math.degrees(math.atan2(-v.y(), v.x())))
+
+
+def twoport_inner_paths(kind: str, paths: list[QPainterPath],
+                        item_xform: QTransform) -> list[QPainterPath] | None:
+    """*paths* (a path symbol's geometry, item-local px) with the inner symbol
+    re-oriented the way CircuiTikZ draws a two-port block on a path, or ``None``
+    when *kind* is not one (:data:`app.components.library.TWOPORT_UPRIGHT_INNER`).
+
+    The baked geometry is the block on a rightward path. CircuiTikZ turns the box
+    and leads with the path but counter-rotates everything inside by the path
+    direction snapped to 90° (``\\@@rotation``), and for a backwards path swaps
+    the two halves of an A/D-style symbol (:data:`~app.components.library.
+    TWOPORT_SWAP_ANCHORS`). Here the lead (the widest, full-span path) is kept;
+    every other path is swapped if needed, then turned by the counter-rotation
+    about the box centre — the square box maps onto itself — so that under
+    *item_xform* (rotation and mirror) the canvas matches the export."""
+    from app.components import library
+    kw = library.twoport_tikz(kind)
+    if kw is None or len(paths) < 2:
+        return None
+    rects = [p.boundingRect() for p in paths]
+    lead = max(range(len(paths)), key=lambda i: rects[i].width())
+    box = None
+    for i, r in enumerate(rects):
+        if i != lead:
+            box = r if box is None else box.united(r)
+    c = box.center()
+    half = box.width() / 2.0
+    rot = twoport_inner_rotation_for(item_xform)
+    swap = library.TWOPORT_SWAP_ANCHORS.get(kw) if rot >= 145 else None
+    # TikZ CCW rotation by `rot` in y-up coordinates is a Qt rotate(-rot) in the
+    # item's y-down local frame.
+    turn = (QTransform.fromTranslate(-c.x(), -c.y()) * QTransform().rotate(-rot)
+            * QTransform.fromTranslate(c.x(), c.y()))
+    eps = 0.05 * half
+    out = list(paths)
+    for i, p in enumerate(paths):
+        if i == lead:
+            continue
+        if swap is not None:
+            dy = rects[i].center().y() - c.y()
+            anchor = swap[0] if dy < -eps else swap[1] if dy > eps else None
+            if anchor is not None:   # point-reflect the half's anchor (TikZ y-up)
+                p = QTransform.fromTranslate(-2.0 * anchor[0] * half,
+                                             2.0 * anchor[1] * half).map(p)
+        out[i] = turn.map(p)
+    return out
 
 
 def _resolve_tikz_color(tikz: str) -> QColor:

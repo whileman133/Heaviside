@@ -49,6 +49,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   baseline, and the canvas draws it the same way. Symbols whose direction matters
   (an amplifier's ▷) still mirror.
   ([#49](https://github.com/whileman133/Heaviside/issues/49))
+- **Rotated block symbols now match the LaTeX preview.** CircuiTikZ keeps the inside
+  of a boxed block (A/D and D/A converters, filters, DSP/FFT, attenuators, phase
+  shifters, ac/dc converters) upright when the block is rotated, but the canvas
+  rotated the whole symbol. A vertical A/D converter showed a `\` diagonal with
+  sideways letters, and a filter's waves stood on end. The canvas now draws the inner
+  symbol as the export does at every rotation, mirrored or not, including the swap
+  of `A`/`D` (or the ac/dc marks) when the block points left or up.
 - **Current labels on voltage sources now match the LaTeX preview.** CircuiTikZ draws
   a voltage source's `i=`/`i>=` arrow on the entry lead (the `+` terminal), but the
   canvas drew it on the exit lead, so e.g. a controlled source's current label showed

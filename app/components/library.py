@@ -388,6 +388,64 @@ def text_unflip_option(kind: str, rotation: int, mirrored: bool) -> str:
         return "hv unflip y" if r % 180 == 0 else "hv unflip x"
     return "hv unflip x" if r in (0, 45, 315) else "hv unflip y"
 
+#: Boxed path blocks whose **inner symbol** CircuiTikZ keeps upright, keyed by tikz
+#: keyword (``\pgfcirc@define@twoports`` in ``pgfcircquadpoles.tex``): the box and
+#: leads follow the path, but the inner symbol (filter waves, an A/D diagonal, the
+#: ``DSP``/``FFT`` text) is counter-rotated by the path direction snapped to 90°
+#: (:func:`twoport_inner_rotation`), so a vertical ``to[adc]`` still shows ``/``
+#: with ``A`` top-left. Absent on purpose: the ``detector`` (``…@norotate``) and the
+#: amplifier triangles, which turn rigidly with the path, and the plain
+#: ``twoport`` box, which has no inner geometry.
+TWOPORT_UPRIGHT_INNER: frozenset[str] = frozenset({
+    "twoportsplit",
+    "bandpass", "bandstop", "highpass", "highpass2", "lowpass", "lowpass2", "allpass",
+    "adc", "dac", "dsp", "fft",
+    "piattenuator", "vpiattenuator", "tattenuator", "vtattenuator",
+    "phaseshifter", "vphaseshifter",
+    "saturation", "sigmoid", "allornothing",
+    "sacdc", "sdcdc", "sdcac", "sacac", "tacdc", "tdcac", "tacac",
+})
+
+#: The subset of :data:`TWOPORT_UPRIGHT_INNER` that also **swaps its two halves**
+#: when the path runs "backwards" (counter-rotation ≥ 145°, i.e. the path heads
+#: left or up): ``A``/``D`` trade corners, an ac/dc converter's wave and bars trade
+#: places. Each maps to the anchors of its upper-left and lower-right content
+#: (in units of the box half-side, TikZ y-up) as drawn at rotation 0; swapping moves
+#: each half to the point reflection of its anchor without turning it.
+TWOPORT_SWAP_ANCHORS: dict[str, tuple[tuple[float, float], tuple[float, float]]] = {
+    "adc": ((-0.45, 0.45), (0.45, -0.45)),
+    "dac": ((-0.45, 0.45), (0.45, -0.45)),
+    "twoportsplit": ((-0.45, 0.45), (0.45, -0.45)),
+    "sacdc": ((-0.45, 0.5), (0.5, -0.5)),     # ac wave up, dc bars down
+    "sdcac": ((-0.5, 0.5), (0.45, -0.5)),     # dc bars up, ac wave down
+    "tacdc": ((-0.45, 0.5), (0.5, -0.5)),     # three ac waves up, dc bars down
+    "tdcac": ((-0.5, 0.5), (0.45, -0.5)),     # dc bars up, three ac waves down
+}
+
+
+def twoport_tikz(kind: str) -> str | None:
+    """The tikz keyword of *kind* when it is in :data:`TWOPORT_UPRIGHT_INNER`."""
+    from app.components.registry import REGISTRY
+    defn = REGISTRY.get(kind)
+    kw = defn.tikz_keyword if defn is not None else None
+    return kw if kw in TWOPORT_UPRIGHT_INNER else None
+
+
+def twoport_inner_rotation(direction_deg: float) -> int:
+    """CircuiTikZ's inner-symbol counter-rotation (``\\@@rotation``, degrees CCW)
+    for a two-port block on a path heading *direction_deg* (TikZ, CCW from +x):
+    the direction snapped to the nearest quarter turn, negated. The thresholds and
+    the truncation to whole degrees reproduce
+    ``\\pfgcirc@twoport@get@symbol@rotation``."""
+    d = int(round(direction_deg % 360.0, 6)) % 360
+    if 45 < d < 135:
+        return 270
+    if 134 < d < 225:
+        return 180
+    if 224 < d < 315:
+        return 90
+    return 0
+
 
 def is_length_resizable(kind: str) -> bool:
     """True for a **length-resizable path symbol** (any ``to[…]`` device with two
