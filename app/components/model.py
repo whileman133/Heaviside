@@ -39,7 +39,17 @@ class Component:
     only; the text in the trailing ``{…}`` slot lives in :attr:`node_text`."""
 
     mirror: bool = False
-    """Horizontal mirror applied before rotation."""
+    """Effective horizontal mirror: a global Flip-X applied *after* rotation.
+    Together with :attr:`rotation` this is the component's actual orientation,
+    which all geometry (pins, canvas, export) reads."""
+
+    mirror_v: bool = False
+    """The user's **vertical mirror** (issue #49). A top-to-bottom flip equals a
+    horizontal mirror plus a 180° turn, so it is folded into the effective
+    :attr:`mirror` / :attr:`rotation` (toggling it toggles ``mirror`` and adds
+    180°, :class:`~app.canvas.commands.MirrorVerticalCommand`) and geometry needs
+    nothing else; this flag records the intent so the inspector shows the user's
+    own rotation (``rotation − 180°``) and horizontal mirror (``mirror ≠ mirror_v``)."""
 
     node_text: str = ""
     """Text for the ``{…}`` slot of a **node-style** component's emitted
@@ -201,6 +211,10 @@ class StyledComponent:
     line_style: str = ""
     """Raw TikZ line-style tokens (e.g. ``"dashed"``, ``"dotted"``).  Empty = solid."""
 
+    line_color: str = ""
+    """TikZ colour for the outline (emitted as ``draw=<colour>``), e.g. ``"red"``
+    or a custom ``"{rgb,255:red,…;green,…;blue,…}"``. Empty = the default ink."""
+
 
 @dataclass
 class TextNodeComponent(FontedComponent, DrawingComponent):
@@ -217,6 +231,12 @@ class RectComponent(FontedComponent, StyledComponent, DrawingComponent):
     raw LaTeX text fragment drawn centred inside the box (empty = no text).
     """
 
+    wire_connections: bool = False
+    """True ⇒ wires connect at any 0.25-GU grid point on the perimeter (block
+    diagrams). Off by default so an enclosing/grouping box doesn't steal wire
+    snaps from the circuit inside it (issue #49). A legacy (pre-0.12) file that
+    omits the key loads with it **on**, keeping old block-diagram wires attached."""
+
 
 @dataclass
 class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):
@@ -229,6 +249,10 @@ class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):
     bounding-box edge midpoints).  A *sibling* of ``RectComponent`` (not a
     subclass) so code generation and canvas painting can distinguish the shapes.
     """
+
+    wire_connections: bool = False
+    """True ⇒ the four cardinal points accept wires (see
+    :attr:`RectComponent.wire_connections`; same default and legacy rule)."""
 
 
 @dataclass

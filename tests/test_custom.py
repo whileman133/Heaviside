@@ -223,7 +223,7 @@ def test_io_round_trip(tmp_path):
     p = tmp_path / "t.hv"
     io.save(sch, p)
     loaded = io.load(p)
-    assert loaded.version == "0.11"
+    assert loaded.version == io._FORMAT_VERSION
     ls = loaded.custom_components[spec.name]
     assert ls.base_kind == "transformer"
     assert ls.ctikzset == spec.ctikzset

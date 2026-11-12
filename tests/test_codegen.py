@@ -7,12 +7,16 @@ All tests are pure: no Qt, no filesystem, no LaTeX.
 from __future__ import annotations
 
 import copy
+import math
+import re
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
 from app.codegen.circuitikz import generate, _fmt
+from app.components.registry import REGISTRY
 from app.components.model import CircleComponent, Component, RectComponent, TextNodeComponent
 from app.schematic.model import Component, Schematic, Wire
 
@@ -2530,3 +2534,209 @@ def test_node_side_default_emits_no_keyword():
     assert r"\node[ground] at (0,0) {};" in src
     for side in ("left", "right", "above", "below"):
         assert f"ground, {side}" not in src
+
+
+def test_line_color_emits_draw_key_before_fill() -> None:
+    r"""Issue #49: rect/circle/bipole outline colour is emitted as ``draw=<c>``
+    (stroke only), independent of a (custom ``{rgb,255:…}``) fill."""
+    from app.components.model import BipoleComponent
+    from app.components.style import tikz_rgb_color
+
+    custom = tikz_rgb_color(18, 52, 86)
+    rect = RectComponent(
+        id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0, options="",
+        mirror=False, span_override=(2.0, 2.0), line_color="red", fill_color=custom,
+    )
+    src = generate(_schematic(rect))
+    assert (r"\draw[draw=red, fill={rgb,255:red,18;green,52;blue,86}] "
+            r"(0,0) rectangle (2,2);") in src
+
+    circ = CircleComponent(
+        id=_uid(), kind="circle", position=(0.0, 0.0), rotation=0, options="",
+        mirror=False, span_override=(2.0, 2.0), line_color="blue",
+    )
+    assert "draw=blue" in generate(_schematic(circ))
+
+    bip = BipoleComponent(
+        id=_uid(), kind="bipole", position=(0.0, 0.0), rotation=0, options="",
+        mirror=False, span_override=(3.0, 0.0), line_color=custom,
+    )
+    assert f"draw={custom}" in generate(_schematic(bip))
+
+
+def test_tikz_rgb_color_round_trips_and_clamps() -> None:
+    from app.components.style import parse_tikz_rgb_color, tikz_rgb_color
+
+    assert tikz_rgb_color(300, -5, 128) == "{rgb,255:red,255;green,0;blue,128}"
+    assert parse_tikz_rgb_color(tikz_rgb_color(1, 2, 3)) == (1, 2, 3)
+    assert parse_tikz_rgb_color("rgb,255:red,1;green,2;blue,3") == (1, 2, 3)  # unbraced
+    assert parse_tikz_rgb_color("rgb,255:red,999;green,0;blue,0") is None
+    assert parse_tikz_rgb_color("red!20") is None
+
+
+
+@pytest.mark.parametrize("kind, rotation, want", [
+    # "upright" text (CircuiTikZ already uprights it): y at 0°/180°, x at 90°/270°/45°
+    ("flipflop D", 0, "y"), ("flipflop D", 180, "y"), ("flipflop D", 90, "x"),
+    ("flipflop D", 270, "x"), ("flipflop D", 45, "x"), ("latch", 0, "y"),
+    ("dipchip", 0, "y"), ("dipchip", 90, "x"), ("qfpchip", 270, "x"),
+    ("dsp", 0, "y"), ("dsp", 90, "x"), ("adc", 180, "y"), ("phaseshifter", 270, "x"),
+    # "body" text (turns with the part): x near 0°, else y (y at the 90°/270° tie)
+    ("thRn", 0, "x"), ("thRn", 45, "x"), ("thRn", 315, "x"), ("thRn", 90, "y"),
+    ("thRn", 180, "y"), ("thRp", 270, "y"),
+])
+def test_mirrored_text_gets_the_measured_unflip(kind, rotation, want) -> None:
+    r"""Issue #49: a mirrored part with text is emitted with the ``hv unflip x|y``
+    option that (measured by rendering every kind at every rotation) leaves the
+    text un-mirrored and closest to upright; the picture defines the option."""
+    from app.codegen.circuitikz import TEXT_UNFLIP_DEF
+
+    src = generate(_schematic(_comp(kind, rotation=rotation, mirror=True)), y_flip=True)
+    assert f"hv unflip {want}" in src
+    assert f"hv unflip {'y' if want == 'x' else 'x'}]" not in src
+    assert TEXT_UNFLIP_DEF in src
+
+
+def test_unflip_only_when_mirrored_and_only_for_listed_text() -> None:
+    """No option (and no definition) for an unmirrored part, a listed kind's
+    bare shape without text, or text that must not be un-flipped: symmetric
+    signs, the en amp's directional ▷, and the European gates (CircuiTikZ
+    already keeps their symbols unmirrored)."""
+    from app.codegen.circuitikz import TEXT_UNFLIP_DEF
+
+    for kind, mirror in (("flipflop D", False), ("dsp", False), ("flipflop", True),
+                         ("op amp", True), ("en amp", True), ("european and port", True),
+                         ("american voltage source", True), ("ammeter", True)):
+        src = generate(_schematic(_comp(kind, mirror=mirror)), y_flip=True)
+        assert "hv unflip" not in src, kind
+        assert TEXT_UNFLIP_DEF not in src, kind
+
+
+def test_text_unflip_table_names_real_kinds() -> None:
+    from app.components import library
+    keywords = {d.tikz_keyword for d in REGISTRY.values()}
+    assert set(library.TEXT_UNFLIP) <= keywords
+    assert set(library.TEXT_UNFLIP.values()) == {"upright", "body"}
+
+
+def test_vertical_mirror_uses_the_flipy_unflip() -> None:
+    """A vertically mirrored flip-flop (effective rotate=180 + mirror) gets the
+    y un-flip; the vertical mirror itself needs no extra emission."""
+    c = _comp("latch", rotation=180, mirror=True)
+    c.mirror_v = True
+    src = generate(_schematic(c))
+    assert "xscale=-1, rotate=180, hv unflip y" in src
+
+
+@pytest.mark.slow
+def test_mirrored_text_unflip_compiles() -> None:
+    """The emitted un-flip TeX compiles for every listed kind, both wraps, inside
+    node and path options (needs pdflatex; skipped without it)."""
+    import shutil
+    import subprocess
+    import tempfile
+    from app.components import library
+
+    if shutil.which("pdflatex") is None:
+        pytest.skip("pdflatex not installed")
+    kinds = sorted(k for k, d in REGISTRY.items() if d.tikz_keyword in library.TEXT_UNFLIP)
+    comps = [_comp(k, position=(6.0 * i, 6.0 * r), rotation=rot, mirror=True)
+             for i, k in enumerate(kinds) for r, rot in enumerate((0, 90))]
+    src = generate(_schematic(*comps), y_flip=True)
+    assert "hv unflip x" in src and "hv unflip y" in src
+    doc = ("\\documentclass{standalone}\\usepackage{circuitikz}\\begin{document}"
+           + src + "\\end{document}")
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "t.tex").write_text(doc)
+        r = subprocess.run(["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "t.tex"],
+                           cwd=d, capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, r.stdout[-2000:]
+
+
+# ---------------------------------------------------------------------------
+# Mirrored nodes match the canvas at every rotation (issue #49 follow-up)
+# ---------------------------------------------------------------------------
+
+def _node_option_matrix(opts: str):
+    """2x2 linear map of a node's transform options, composed the way PGF does:
+    the **last-listed** option is applied to coordinates first (checked against
+    pdflatex: ``xscale=-1, rotate=a`` rotates then reflects)."""
+    import math
+    m = [[1.0, 0.0], [0.0, 1.0]]
+
+    def mul(a, b):
+        return [[sum(a[i][k] * b[k][j] for k in range(2)) for j in range(2)] for i in range(2)]
+
+    for key, val in re.findall(r"\b(rotate|xscale|yscale)=(-?[\d.]+)", opts):
+        v = float(val)
+        if key == "rotate":
+            r = math.radians(v)
+            t = [[math.cos(r), -math.sin(r)], [math.sin(r), math.cos(r)]]
+        elif key == "xscale":
+            t = [[v, 0.0], [0.0, 1.0]]
+        else:
+            t = [[1.0, 0.0], [0.0, v]]
+        m = mul(m, t)
+    return m
+
+
+def _emitted_opts(comp) -> str:
+    src = generate(_schematic(comp), y_flip=True)
+    # Non-greedy up to "] (node_": option values may contain brackets (a
+    # flip-flop's \raisebox{…}[0pt][0pt] label wrap).
+    return re.search(r"node\[(.*?)\] \(node_", src).group(1)
+
+
+@pytest.mark.parametrize("kind", ["op amp", "npn", "nmos", "flipflop D", "latch", "muxdemux"])
+@pytest.mark.parametrize("rotation", [0, 45, 90, 135, 180, 225, 270, 315])
+@pytest.mark.parametrize("mirror", [False, True])
+def test_node_transform_puts_anchors_on_canvas_pins(kind, rotation, mirror) -> None:
+    """The emitted rotate/xscale options must carry each pin's local anchor to
+    where the canvas draws that pin. Before the fix a mirrored node emitted
+    ``rotate=a, xscale=-1`` (reflect in the node's own frame, then rotate), which
+    only agrees with the canvas's mirror-after-rotation at 0°/180°."""
+    from app.schematic.model import component_pin_positions
+
+    base = _comp(kind)
+    case = _comp(kind, rotation=rotation, mirror=mirror)
+    mb = _node_option_matrix(_emitted_opts(base))
+    mc = _node_option_matrix(_emitted_opts(case))
+    det = mb[0][0] * mb[1][1] - mb[0][1] * mb[1][0]
+    mb_inv = [[mb[1][1] / det, -mb[0][1] / det], [-mb[1][0] / det, mb[0][0] / det]]
+
+    def tikz(p, q):  # canvas (y down) delta → TikZ (y up)
+        return (p[0] - q[0], -(p[1] - q[1]))
+
+    bp, cp = component_pin_positions(base), component_pin_positions(case)
+    for i in range(1, len(bp)):
+        lx, ly = tikz(bp[i], bp[0])
+        ux = mb_inv[0][0] * lx + mb_inv[0][1] * ly          # undo the baked base scale
+        uy = mb_inv[1][0] * lx + mb_inv[1][1] * ly
+        px = mc[0][0] * ux + mc[0][1] * uy
+        py = mc[1][0] * ux + mc[1][1] * uy
+        ex, ey = tikz(cp[i], cp[0])
+        assert px == pytest.approx(ex, abs=1e-3), (i, (px, py), (ex, ey))
+        assert py == pytest.approx(ey, abs=1e-3), (i, (px, py), (ex, ey))
+
+
+@pytest.mark.parametrize("rotation", [0, 45, 90, 180, 270])
+def test_mirrored_bipole_box_is_centred_between_its_pins(rotation) -> None:
+    """The bipole box's centre is the midpoint of its canvas pins whether or not
+    it is mirrored (it used to mirror before rotating, landing a span away at
+    90°/270°). Mirrored and unmirrored at 90°/270° share pins, so share a centre."""
+    from app.components.model import BipoleComponent
+    from app.schematic.model import component_pin_positions
+
+    def centre(mirror):
+        c = BipoleComponent(id="b", kind="bipole", position=(5.0, 5.0), rotation=rotation,
+                            mirror=mirror, options="", span_override=(3.0, 0.0))
+        (x0, y0), (x1, y1) = component_pin_positions(c)
+        src = generate(_schematic(c))
+        cx, cy = map(float, re.search(r"at \(([-\d.]+),([-\d.]+)\) \{", src).groups())
+        # the exporter shifts the drawing by the floored minimum pin coordinate
+        sx, sy = math.floor(min(x0, x1)), math.floor(min(y0, y1))
+        return (cx, cy), ((x0 + x1) / 2 - sx, (y0 + y1) / 2 - sy)
+
+    for mirror in (False, True):
+        got, want = centre(mirror)
+        assert got == (pytest.approx(want[0], abs=0.01), pytest.approx(want[1], abs=0.01))

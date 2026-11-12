@@ -20,9 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from app.components.model import (
+    CircleComponent,
     Component,
     CustomComponentSpec,
     FontedComponent,
+    RectComponent,
     StyledComponent,
 )
 from app.components.registry import REGISTRY
@@ -99,11 +101,19 @@ from app.schematic.validate import validate
 #: kind. A 0.10 build would silently strip them on save (and could not draw a placed
 #: custom component anyway), so the bump refuses the newer file; 0.1–0.10 files load
 #: unchanged (absent custom_components defaults to empty).
-_FORMAT_VERSION: str = "0.11"
+#: 0.12 adds three component fields (issue #49): ``mirror_v`` (the user's vertical
+#: mirror, folded into the effective mirror/rotation; written only when on),
+#: ``line_color`` on rect / circle / bipole (the outline colour, emitted ``draw=<c>``;
+#: omitted when empty) and ``wire_connections`` on rect / circle (opt-in
+#: block-diagram edge wiring; always written). A 0.11 build would silently strip them on save, so the bump refuses the
+#: newer file; 0.1–0.11 files load unchanged (no line colour, and **connections on**
+#: for every box, since every box edge was connectable before 0.12).
+_FORMAT_VERSION: str = "0.12"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {
     "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11",
+    "0.12",
 }
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
@@ -317,6 +327,10 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
         "mirror": c.mirror,
         "options": c.options,
     }
+    # The user's vertical mirror (0.12+); omitted when off. ``mirror``/``rotation``
+    # above are already the effective orientation, so this only records intent.
+    if c.mirror_v:
+        d["mirror_v"] = True
     # Node-style {…} slot text; omitted when empty (the common case).
     if c.node_text:
         d["node_text"] = c.node_text
@@ -346,11 +360,17 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # Per-instance logic-gate size multiplier, omitted at the default (1.0).
     if abs(c.scale - 1.0) > 1e-6:
         d["scale"] = c.scale
+    if isinstance(c, (RectComponent, CircleComponent)):
+        # Always written (0.12+): a missing key means a legacy file, which loads
+        # with block-diagram connections ON so its edge wires stay attached.
+        d["wire_connections"] = bool(c.wire_connections)
     if isinstance(c, StyledComponent):
         if c.fill_color:
             d["fill_color"] = c.fill_color
         if c.line_style:
             d["line_style"] = c.line_style
+        if c.line_color:
+            d["line_color"] = c.line_color
     if isinstance(c, FontedComponent):
         # Omit fields equal to the class-level default to keep files compact.
         cls_default_size = type(c).__dataclass_fields__["font_size"].default
@@ -612,6 +632,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
     _finite(position[1], f"{ctx}.position")
 
     mirror = bool(data.get("mirror", False))
+    mirror_v = bool(data.get("mirror_v", False))
 
     if "options" in data:
         options = data["options"]
@@ -707,6 +728,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "position": position,
         "rotation": rotation,
         "mirror": mirror,
+        "mirror_v": mirror_v,
         "options": options,
         "node_text": node_text,
         "node_side": node_side,
@@ -725,9 +747,14 @@ def _dict_to_component(data: Any, index: int) -> Component:
         raise SchematicLoadError(f"{ctx}.z_order must be an integer")
     kwargs["z_order"] = raw_z
 
+    if issubclass(cls, (RectComponent, CircleComponent)):
+        # Absent ⇒ a pre-0.12 file, where every box edge was connectable.
+        kwargs["wire_connections"] = bool(data.get("wire_connections", True))
+
     if issubclass(cls, StyledComponent):
         kwargs["fill_color"] = str(data.get("fill_color", ""))
         kwargs["line_style"] = str(data.get("line_style", ""))
+        kwargs["line_color"] = str(data.get("line_color", ""))
 
     if issubclass(cls, FontedComponent):
         raw_ff = data.get("font_family", "")

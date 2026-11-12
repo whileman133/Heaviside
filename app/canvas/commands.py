@@ -1515,6 +1515,34 @@ class MirrorCommand(Command):
         comp.mirror = self._old_mirror if self._old_mirror is not None else False
 
 
+class MirrorVerticalCommand(Command):
+    """Set the vertical mirror (``mirror_v``) of a component.
+
+    A vertical flip is folded into the effective orientation: changing
+    ``mirror_v`` also toggles ``mirror`` and turns ``rotation`` by 180° (see
+    :attr:`Component.mirror_v`). Inverse: restore all three fields."""
+
+    label = "Mirror Vertical"
+
+    def __init__(self, component_id: str, new_mirror_v: bool) -> None:
+        self._component_id = component_id
+        self._new = new_mirror_v
+        self._old: tuple[bool, bool, int] | None = None   # (mirror_v, mirror, rotation)
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        self._old = (comp.mirror_v, comp.mirror, comp.rotation)
+        if comp.mirror_v != self._new:
+            comp.mirror_v = self._new
+            comp.mirror = not comp.mirror
+            comp.rotation = (comp.rotation + 180) % 360
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        assert self._old is not None
+        comp.mirror_v, comp.mirror, comp.rotation = self._old
+
+
 class SetVariantCommand(Command):
     """Toggle a named boolean variant on a component (e.g. ``filled``,
     ``body_diode``).  Generic over any variant the component's kind declares."""
@@ -1611,6 +1639,42 @@ class SetFillColorCommand(Command):
         from app.components.model import StyledComponent
         comp = _typed_component(schematic, self._component_id, StyledComponent)
         comp.fill_color = self._old_fill
+
+
+class SetWireConnectionsCommand(Command):
+    """Toggle ``wire_connections`` on a rect/circle (block-diagram wiring on/off)."""
+
+    label = "Set Wire Connections"
+
+    def __init__(self, component_id: str, new_value: bool, old_value: bool) -> None:
+        self._component_id = component_id
+        self._new_value = new_value
+        self._old_value = old_value
+
+    def do(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).wire_connections = self._new_value
+
+    def undo(self, schematic: Schematic) -> None:
+        _find_component(schematic, self._component_id).wire_connections = self._old_value
+
+
+class SetLineColorCommand(Command):
+    """Set ``line_color`` (outline colour) on a StyledComponent."""
+
+    label = "Set Line Color"
+
+    def __init__(self, component_id: str, new_color: str, old_color: str) -> None:
+        self._component_id = component_id
+        self._new_color = new_color
+        self._old_color = old_color
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.model import StyledComponent
+        _typed_component(schematic, self._component_id, StyledComponent).line_color = self._new_color
+
+    def undo(self, schematic: Schematic) -> None:
+        from app.components.model import StyledComponent
+        _typed_component(schematic, self._component_id, StyledComponent).line_color = self._old_color
 
 
 class SetComponentLineWidthCommand(Command):

@@ -326,6 +326,69 @@ def is_logic_gate(kind: str) -> bool:
 _SCALABLE_BLOCK_TIKZ = ("flipflop", "muxdemux", "ALU", "one bit adder")
 
 
+#: Kinds whose printed text reads wrong when the part is mirrored, keyed by tikz
+#: keyword, with how CircuiTikZ treats that text (issue #49):
+#:
+#: * ``"upright"`` — the shape turns its labels upright itself under rotation
+#:   (flip-flop letters, chip pin numbers) but not under a reflection;
+#:   The path symbols with a label in a box (``DSP``, ``FFT``, ``A/D``, ``φ``)
+#:   behave the same way;
+#: * ``"body"`` — text that turns with the symbol's body (a thermistor's ``ϑ``).
+#:
+#: Deliberately absent: text that is symmetric under a mirror (the ± of sources and
+#: amplifiers, a meter's A/V/Ω, a varistor's U), the en amp's ▷ (it *should*
+#: follow the signal direction), and the European gates (CircuiTikZ already keeps
+#: ``&``/``≥1``/``=1`` unmirrored).
+TEXT_UNFLIP: dict[str, str] = {
+    "flipflop D": "upright", "flipflop T": "upright", "flipflop SR": "upright",
+    "flipflop JK": "upright", "latch": "upright",
+    "dipchip": "upright", "qfpchip": "upright",
+    "adc": "upright", "dac": "upright", "dsp": "upright", "fft": "upright",
+    "phaseshifter": "upright", "vphaseshifter": "upright",
+    "thRn": "body", "thRp": "body",
+}
+
+
+def text_unflip_category(kind: str) -> str | None:
+    """``"upright"`` / ``"body"`` for a kind in :data:`TEXT_UNFLIP`, else ``None``."""
+    from app.components.registry import REGISTRY
+    defn = REGISTRY.get(kind)
+    return TEXT_UNFLIP.get(defn.tikz_keyword) if defn is not None else None
+
+
+def has_upright_letters(kind: str) -> bool:
+    """True for a kind whose labels CircuiTikZ keeps upright under rotation
+    (flip-flops, chips) — the canvas draws them upright too."""
+    return text_unflip_category(kind) == "upright"
+
+
+def text_unflip_option(kind: str, rotation: int, mirrored: bool) -> str:
+    r"""The ``hv unflip x`` / ``hv unflip y`` node or path option that keeps a
+    mirrored part's text readable, or ``""`` when none is needed.
+
+    The option (defined once per picture by
+    :data:`app.codegen.circuitikz.TEXT_UNFLIP_DEF`) wraps everything that one
+    shape prints with ``\pgftext`` in CircuiTikZ's own un-flip macro: ``x`` is
+    ``\ctikzflipx``; ``y`` is ``\ctikzflipy`` raised by the flipped box's
+    ``\depth − \height``, which reflects the text about its box's centre instead of
+    its baseline, so every label keeps its original baseline.
+
+    Both un-mirror the text; they differ only by a half-turn (a flip in x after a
+    flip in y is a 180° rotation), so the choice is whichever leaves the text
+    closest to upright — measured by rendering every kind at every rotation:
+    CircuiTikZ already uprights ``"upright"`` text, which needs ``y`` at 0°/180°
+    and ``x`` at 90°/270°; ``"body"`` text turns with the part and needs ``x`` near
+    0° and ``y`` otherwise (at the sideways 90°/270° tie ``y`` matches the
+    unmirrored orientation). Spec §6.5."""
+    cat = text_unflip_category(kind)
+    if not mirrored or cat is None:
+        return ""
+    r = rotation % 360
+    if cat == "upright":
+        return "hv unflip y" if r % 180 == 0 else "hv unflip x"
+    return "hv unflip x" if r in (0, 45, 315) else "hv unflip y"
+
+
 def is_length_resizable(kind: str) -> bool:
     """True for a **length-resizable path symbol** (any ``to[…]`` device with two
     axial terminals — R, C, L, diode, source, thyristor, potentiometer, …) — the kinds

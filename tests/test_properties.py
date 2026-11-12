@@ -640,7 +640,7 @@ def test_fill_combo_preserves_hand_authored_value(_app):
     comp.fill_color = "white"
     sec._load(comp)
     assert sec._fill.currentText() == "White"
-    assert sec._fill.count() == len(_FILL_OPTIONS)
+    assert sec._fill.count() == len(_FILL_OPTIONS) + 1   # presets + Custom…
 
 
 def test_wire_line_style_combo_preserves_unknown_value(_app):
@@ -772,3 +772,102 @@ def test_document_panel_preamble_settings_undoable(_app):
     assert scene.schematic.preamble == ""
     panel.refresh()
     assert panel._preamble.toPlainText() == ""
+
+
+def test_transform_section_vertical_mirror_checkbox(_app):
+    """Mirror (vertical) is its own checkbox: it flips every selected component
+    as one undo step, and the horizontal checkbox and rotation buttons keep
+    showing the user's own values (not the folded-in flip)."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import TransformSection, PropertiesPanel
+
+    scene = SchematicScene()
+    a = scene.place_component("op amp", (0.0, 0.0))
+    b = scene.place_component("R", (4.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_components([a.id, b.id])
+    transform = next(s for s in panel._sections if isinstance(s, TransformSection))
+
+    transform._mirror_v_cb.setChecked(True)
+    for cid in (a.id, b.id):
+        live = scene._component_by_id(cid)
+        assert (live.rotation, live.mirror, live.mirror_v) == (180, True, True)
+    transform._load(scene._component_by_id(a.id))
+    assert transform._mirror_v_cb.isChecked()
+    assert not transform._mirror_cb.isChecked()      # user's horizontal: off
+    assert transform._rot_buttons[0].isChecked()     # user's rotation: 0
+    scene.undo()
+    for cid in (a.id, b.id):
+        live = scene._component_by_id(cid)
+        assert (live.rotation, live.mirror, live.mirror_v) == (0, False, False)
+
+    t = scene.place_component("text_node", (8.0, 0.0))
+    panel.show_component(t.id)
+    assert transform._mirror_v_cb.isHidden()
+
+
+# ---------------------------------------------------------------------------
+# Issue #49: line colour, custom colour picker, opt-in box wiring
+# ---------------------------------------------------------------------------
+
+def test_fill_border_line_color_and_custom_pick(_app, monkeypatch):
+    """Line colour is its own combo; Custom… opens the picker and stores the
+    pick as an xcolor {rgb,255:…} value; cancelling restores the old choice."""
+    from PySide6.QtGui import QColor
+    from app.canvas.scene import SchematicScene
+    from app.ui import properties
+    from app.ui.properties import FillBorderSection, _CUSTOM_COLOR_LABEL
+
+    scene = SchematicScene()
+    comp = scene.place_component("rect", (0.0, 0.0))
+    sec = FillBorderSection()
+    sec.bind(scene._component_by_id(comp.id), scene)
+
+    # Preset line colour.
+    sec._line_color.setCurrentIndex(sec._line_color.findText("Red"))
+    sec._line_color.activated.emit(sec._line_color.currentIndex())
+    sec._commit()
+    assert scene._component_by_id(comp.id).line_color == "red"
+    assert scene._component_by_id(comp.id).fill_color == ""
+
+    # Custom fill via the (stubbed) picker.
+    monkeypatch.setattr(properties, "_pick_color", lambda init, parent: QColor(10, 20, 30))
+    custom = sec._fill.findText(_CUSTOM_COLOR_LABEL)
+    sec._fill.setCurrentIndex(custom)
+    sec._fill.activated.emit(custom)
+    assert sec._fill.value() == "{rgb,255:red,10;green,20;blue,30}"
+    sec._commit()
+    assert scene._component_by_id(comp.id).fill_color == "{rgb,255:red,10;green,20;blue,30}"
+
+    # Cancelling the picker keeps the previous value.
+    monkeypatch.setattr(properties, "_pick_color", lambda init, parent: None)
+    custom = sec._fill.findText(_CUSTOM_COLOR_LABEL)
+    sec._fill.setCurrentIndex(custom)
+    sec._fill.activated.emit(custom)
+    assert sec._fill.value() == "{rgb,255:red,10;green,20;blue,30}"
+
+    scene.undo()   # one step per commit
+    assert scene._component_by_id(comp.id).fill_color == ""
+
+
+def test_wire_connections_section_toggles_box_wiring(_app):
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PropertiesPanel, WireConnectionsSection
+
+    scene = SchematicScene()
+    box = scene.place_component("rect", (0.0, 0.0))
+    r = scene.place_component("R", (6.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    sec = next(s for s in panel._sections if isinstance(s, WireConnectionsSection))
+
+    panel.show_component(r.id)
+    assert sec.isHidden()                       # circuit symbols: not applicable
+    panel.show_component(box.id)
+    assert not sec.isHidden()
+    assert not sec._cb.isChecked()              # new boxes default off
+    sec._cb.setChecked(True)
+    assert scene._component_by_id(box.id).wire_connections is True
+    scene.undo()
+    assert scene._component_by_id(box.id).wire_connections is False

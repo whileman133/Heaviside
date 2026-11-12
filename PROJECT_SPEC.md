@@ -172,6 +172,7 @@ class Component:                        # circuit components (R, C, L, op amp, �
     rotation: int                       # a 45° multiple: 0, 45, 90, …, 315 degrees
     options: str                        # raw CircuiTikZ option string, e.g. "l=$R_1$, v=$V_s$"
     mirror: bool = False                # global horizontal mirror, applied after rotation (§7 Mirror)
+    mirror_v: bool = False              # user's vertical mirror, folded into mirror/rotation (§6.5; format 0.12)
     label_offset: tuple[float, float] | None = None  # legacy; persisted but no longer affects display (§5.8)
     span_override: tuple[float, float] | None = None  # custom span for resizable components
     variants: dict[str, bool] = field(default_factory=dict)  # active boolean variants (§5.4)
@@ -214,6 +215,7 @@ class FontedComponent:                  # mixed into text_node, rect, circle, an
 class StyledComponent:                  # mixed into rect, circle, and bipole
     fill_color: str = ""                # TikZ fill color, e.g. "yellow!20"; "" = transparent
     line_style: str = ""                # raw TikZ line-style tokens, e.g. "dashed"; "" = solid
+    line_color: str = ""                # outline colour, emitted draw=<c>; "" = default ink (format 0.12)
     # outline WIDTH is the unified Component.line_width (shared with symbols) — no separate field
 
 @dataclass
@@ -222,11 +224,12 @@ class TextNodeComponent(FontedComponent, DrawingComponent):
 
 @dataclass
 class RectComponent(FontedComponent, StyledComponent, DrawingComponent):  # span_override = (w,h)
-    pass                                # options holds the centred text label
+    wire_connections: bool = False      # opt-in block-diagram edge wiring (format 0.12; legacy files → True)
+                                        # options holds the centred text label
 
 @dataclass
 class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):  # span_override = (w,h)
-    pass                                # like rect; only N/S/E/W connect (a sibling, not a subclass)
+    wire_connections: bool = False      # as rect; when on, only N/S/E/W connect (a sibling, not a subclass)
 
 @dataclass
 class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
@@ -670,13 +673,13 @@ The split is by whether the kind is sized via a CircuiTikZ body-**height** key (
 
 #### Drawing Annotations
 
-Drawing annotations are non-circuit visual elements that appear in the palette under the **Drawing** category. They have no *named* circuit pins. `text_node` does not participate in connectivity at all; `rect` and `circle` are special cases that support **block-diagram wiring** — wires connect to grid points on their boundary (the rect's full perimeter; the circle's four cardinal points) and follow when the shape is moved or resized, but those connection points are never junction-dot sites. Drawing annotations are emitted as standalone LaTeX commands around the main `\draw` block in the generated output.
+Drawing annotations are non-circuit visual elements that appear in the palette under the **Drawing** category. They have no *named* circuit pins. `text_node` does not participate in connectivity at all; `rect` and `circle` are special cases that support **opt-in block-diagram wiring** — when the shape's **`wire_connections`** flag is on (inspector **Wiring ▸ Wires connect to edges**), wires connect to grid points on their boundary (the rect's full perimeter; the circle's four cardinal points) and follow when the shape is moved or resized, but those connection points are never junction-dot sites. The flag is **off for a newly placed shape** (issue #49: most boxes enclose or group part of a circuit, and edge snap targets there stole wire snaps meant for nearby pins); with it off the shape has **no** connection points, dots, snap targets or wire auto-start, and a wire ending on its edge is an ordinary open end. A file saved before format 0.12 loads with it **on** for every box, so existing block diagrams stay wired. Drawing annotations are emitted as standalone LaTeX commands around the main `\draw` block in the generated output.
 
 | Kind | Display Name | Pins | Default Span | Resizable | Inspector Controls |
 |------|-------------|------|-------------|-----------|-------------------|
 | `text_node` | Text | none | (0,0) | No | Text content field, Font size spinbox (6–72 pt), Bold/Italic checkboxes, Font family combo, Z-order spinbox, Rotation buttons (0°/90°/180°/270°) |
-| `rect` | Rectangle | edge grid points (any 0.25 GU point on the perimeter) | (1,1) | Yes (corner drag) | Text content field, Font size spinbox, Bold/Italic checkboxes, Font family combo, Line style combo, Border width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
-| `circle` | Circle | four cardinal points (N/S/E/W = bounding-box edge midpoints) | (0.5,0.5) | Yes (corner drag) | Text content field, Font size spinbox, Bold/Italic checkboxes, Font family combo, Line style combo, Border width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
+| `rect` | Rectangle | none by default; with `wire_connections` on, edge grid points (any 0.25 GU point on the perimeter) | (1,1) | Yes (corner drag) | Text content field, Font size spinbox, Bold/Italic checkboxes, Font family combo, Line style combo, Border width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
+| `circle` | Circle | none by default; with `wire_connections` on, four cardinal points (N/S/E/W = bounding-box edge midpoints) | (0.5,0.5) | Yes (corner drag) | Text content field, Font size spinbox, Bold/Italic checkboxes, Font family combo, Line style combo, Border width spinbox (pt), Fill color combo, Move to front/back buttons, Z-order spinbox |
 
 #### Bipole Component (`bipole`)
 
@@ -696,7 +699,7 @@ The `bipole` kind is a generic labelled rectangular box representing an arbitrar
 
 **Inline label editing:** Double-clicking a `BipoleItem` activates an inline text editor centred inside the box showing only the `t=` label text (not the full options string). On commit the edited text is spliced back into `options` using `_replace_bipole_label`, preserving all other slots. The painted label is suppressed while the editor is active.
 
-**Fill color, line style, outline width** — fill and line style are carried by the shared `StyledComponent` mixin (same fields as rect): `fill_color: str` (default `""`, TikZ color e.g. `"yellow!20"`, empty = transparent; palette None/White/Light gray/Yellow/Blue/Green/Red) and `line_style: str` (default `""` = solid, raw TikZ tokens e.g. `"dashed"`). The **outline width** is the unified `Component.line_width` (default `0.4` pt) — the same field circuit symbols use for their stroke, so there is no separate `border_width`. Each is saved in JSON only when non-default and rendered on canvas (`_resolve_tikz_color` for fill; pixel-equivalent width for the outline). Edited via per-field undoable commands (`SetFillColorCommand`, `SetComponentLineWidthCommand`, `SetLineStyleCommand`).
+**Fill color, line style, outline width** — fill and line style are carried by the shared `StyledComponent` mixin (same fields as rect): `fill_color: str` (default `""`, TikZ color e.g. `"yellow!20"`, empty = transparent), `line_color: str` (default `""` = the theme ink on canvas / TikZ default black on export; emitted `draw=<c>` so it colours only the stroke), and `line_style: str` (default `""` = solid, raw TikZ tokens e.g. `"dashed"`). The **outline width** is the unified `Component.line_width` (default `0.4` pt) — the same field circuit symbols use for their stroke, so there is no separate `border_width`. Each is saved in JSON only when non-default and rendered on canvas (`_resolve_tikz_color` for fill and line colour — the outline uses `line_color` only in the normal state, so the selection/hover tint still shows; pixel-equivalent width for the outline). **Colour values:** the inspector offers presets (fill: None, White, light tints `gray!15`/`yellow!20`/`cyan!15`/`green!15`/`red!15`/`orange!20`/`violet!15`, `gray!50`, and full yellow/orange/red/green/blue/cyan/violet/black; line: Default, black/gray/red/orange/green/blue/cyan/violet/brown/white) plus **Custom…**, which opens a colour dialog and stores the pick as the xcolor expression `{rgb,255:red,R;green,G;blue,B}` (`style.tikz_rgb_color` / `parse_tikz_rgb_color`) — braced so its commas survive option parsing, and readable by xcolor with no preamble. `_resolve_tikz_color` understands xcolor's base names (with xcolor's RGB values, e.g. `orange` = (255,128,0), so the canvas matches the render), `name!pct` tints, and the `{rgb,255:…}` form. A value no preset matches (hand-authored or custom) shows as an extra combo item carrying the raw TikZ value. Edited via per-field undoable commands (`SetFillColorCommand`, `SetLineColorCommand`, `SetComponentLineWidthCommand`, `SetLineStyleCommand`).
 
 **Code generation:** Bipole is NOT in `_TWO_TERMINAL_KINDS`. It is handled in the same background/foreground drawing-annotation passes as `rect` and `text_node`, via `_bipole_node_line()`. Emits a standalone TikZ node whose dimensions are derived from `span_override` so the box exactly fills the pin-to-pin space (example with a 3 cm custom span):
 ```latex
@@ -729,7 +732,7 @@ The canvas item draws the text centered at the position using a QFont with match
 
 **Centred text (block-diagram label).** `RectComponent.options` holds a raw LaTeX text fragment (same convention as a `text_node`: `$…$` typesets as math, plain text renders verbatim) drawn **centred** (horizontally and vertically) inside the box. Appearance is controlled by the `FontedComponent` fields (`font_size` default 12 pt, `font_bold`, `font_italic`, `font_family`). On the canvas the fragment is typeset via the shared async `render_async` path (`RectItem._request_vector` → centred `_vec_path`, raw-text fallback until it renders), mirroring `TextNodeItem`/`BipoleItem`. **Double-clicking** a rect activates an in-place editor (the shared `LabelTextItem`) centred in the box, pre-filled with `options`; **Enter** or focus-loss commits via `edit_component_options` (`EditCommand`), **Escape** cancels — the painted text is suppressed while editing. The text is edited verbatim (no comma↔newline conversion). The **Text content** inspector field edits the same `options`.
 
-**Edge wire connections.** Every 0.25 GU grid point on the rectangle's perimeter (`rect_perimeter_points`) is a wire-connection point — exposed through `component_connection_points` (which returns the perimeter for a rect, named pins otherwise). A wire endpoint landing on an edge is **connected** (no open-circle terminal; see §6.4) and **follows the rectangle** when it is moved (uniform translation) or **resized** (an anchored scale about the fixed corner: a connection point P maps to `position + (P − position)·(new_span/old_span)`, snapped to 0.25 GU, so each edge point stays on its corresponding edge). Move-follow reuses the shared `reshape_wire_points`; resize-follow is computed by `reshape.compute_box_resize_reshape` (applied by `ResizeCommand`, and ghosted from the same function by the live preview in `drag.py`). Rect edge points do **not** trigger junction dots, but **are** offered as wire-drawing snap targets (`nearest_connection_point`) and as **SELECT-mode wire auto-start** targets: clicking an *unconnected* edge point (tightly, within `PIN_GRAB_GU`) starts a new wire there, exactly like clicking a free component pin (`unconnected_pin_at` uses `nearest_connection_point`). The connection points are drawn as small **muted-red dots** around the perimeter (`RectItem._connection_dots_local`, `_CONN_DOT_COLOR`/`_CONN_DOT_R` — smaller and more translucent than a component pin) so the connection rail is visible without being obtrusive; clicking the rect *interior* (not on a dot) still selects/drags it. `RectComponent.options` holds the rect's centred text, loaded verbatim; its draw style lives in the dedicated `StyledComponent` fields (see §9.4).
+**Edge wire connections (opt-in).** When `wire_connections` is on, every 0.25 GU grid point on the rectangle's perimeter (`rect_perimeter_points`, empty when the flag is off) is a wire-connection point — exposed through `component_connection_points` (which returns the perimeter for a rect, named pins otherwise). A wire endpoint landing on an edge is **connected** (no open-circle terminal; see §6.4) and **follows the rectangle** when it is moved (uniform translation) or **resized** (an anchored scale about the fixed corner: a connection point P maps to `position + (P − position)·(new_span/old_span)`, snapped to 0.25 GU, so each edge point stays on its corresponding edge). Move-follow reuses the shared `reshape_wire_points`; resize-follow is computed by `reshape.compute_box_resize_reshape` (applied by `ResizeCommand`, and ghosted from the same function by the live preview in `drag.py`). Rect edge points do **not** trigger junction dots, but **are** offered as wire-drawing snap targets (`nearest_connection_point`) and as **SELECT-mode wire auto-start** targets: clicking an *unconnected* edge point (tightly, within `PIN_GRAB_GU`) starts a new wire there, exactly like clicking a free component pin (`unconnected_pin_at` uses `nearest_connection_point`). The connection points are drawn as small **muted-red dots** around the perimeter (`RectItem._connection_dots_local`, `_CONN_DOT_COLOR`/`_CONN_DOT_R` — smaller and more translucent than a component pin) so the connection rail is visible without being obtrusive (no dots when the flag is off — `_draw_connection_dots`); clicking the rect *interior* (not on a dot) still selects/drags it. `RectComponent.options` holds the rect's centred text, loaded verbatim; its draw style lives in the dedicated `StyledComponent` fields (see §9.4).
 
 New rects default to `z_order = -10` (behind circuit elements). TikZ color strings in `fill=` (e.g. `yellow!20`, `gray!15`) are resolved to Qt colors using the `color!percent` mixing formula (percent% of the named color blended with white) before rendering on the Qt canvas. The hit region for selection is the full rectangle interior (not just a band along the diagonal), so clicking anywhere inside the rect selects it.
 
@@ -1131,6 +1134,16 @@ The view sets the cursor from the current mode (`SchematicView._apply_mode_curso
 4. Right-click or `Escape` cancels placement and returns to **Select** mode. `Escape` is registered as a **window-level shortcut** so it fires regardless of which widget (palette, canvas, etc.) currently holds keyboard focus — clicking a palette entry to start placement does not require a subsequent click on the canvas before Escape works.
 5. After placement, the canvas remains in **Place** mode for rapid repeated placement of the same component type.
 
+**Drag-to-place by length (path symbols, issue #49).** For a length-resizable path
+symbol (`library.is_length_resizable`: R, C, L, diodes, sources, …) the press that
+places it also starts a **drag gesture**, like drawing `(0,0) to[R] (5,0)` in
+CircuiTikZ: holding the button and dragging lays the part from the press point
+toward the cursor, and the release commits it.
+- The press places the default part as above (`PlaceCommand`); a **release without a drag** (or a drag shorter than `_STRETCH_MIN_GU` = 0.5 GU, so jitter doesn't rotate it) keeps it.
+- During the drag the placed item is hidden and the ghost previews the stretched part (`_update_place_stretch`). The far end magnet-snaps like a span placement (`_span_snap_target`: pin/wire, else grid).
+- **Rotation** is the 45° step whose axis is closest to the drag (`_stretch_params`, found by trial through `component_pin_positions`, so it honours the placement mirror); **length** is the drag projected on that axis, floored at the natural length (lengthen-only, §5.7), stored in `span_override` unrounded so a 45° drag lands exactly on its end point.
+- On release the default placement is undone and the stretched one placed (`place_component(…, rotation, span_override=(length, 0))`), so the gesture is **one undo step**; Place mode re-arms with the normal ghost. **Escape** mid-drag keeps the default placement (and un-hides it).
+
 **Two-click span placement (voltage/current annotations).** The `open` (voltage)
 and `short` (current) annotations — the resizable two-terminal line kinds in
 `_SPAN_PLACE_KINDS` — are placed by a **two-click span gesture** instead of the
@@ -1406,7 +1419,10 @@ Wires do not auto-route around components in v1 — the user routes manually.
 - **Dragging the options label** repositions it freely within the parent component's coordinate system. On mouse release a `MoveOptionsLabelCommand` is pushed, storing the new `(dx, dy)` component-local pixel offset as `Component.label_offset`. The drag is only possible in **Select** mode.
 - **Double-clicking the component body** in **Select** mode opens an in-place editor **and** emits `SchematicScene.component_double_clicked(component_id)` to open the **Properties Panel** simultaneously. It opens the **options** editor — except for a **node-style component**, where it opens the **node-text** editor (a node's `node[…]` options are inspector-only, never edited on the canvas; §5.4). While editing, all key events (Backspace, Delete, arrows, Escape) are routed to the editor rather than the canvas hotkeys.
 - The **Properties Panel** shows a single `QLineEdit` for the options string, with the component's valid `label_slots` shown as hint text below the field. The field accepts any CircuiTikZ option string verbatim.
-- Rotation and mirror controls are also in this panel.
+- Rotation and mirror controls are also in this panel: rotation buttons, **Mirror (horizontal)** and **Mirror (vertical)** (issue #49). A vertical mirror flips the component top-to-bottom about its position (an op amp's +/− inputs swap — CircuiTikZ `yscale=-1`). Because a top-to-bottom flip equals a horizontal mirror plus a 180° turn, it is **folded into the effective orientation**: `rotation`/`mirror` always hold the component's actual orientation (which all geometry — pins, canvas, export — reads unchanged), and `mirror_v` records the user's intent. `MirrorVerticalCommand` sets `mirror_v` and, when it changes, toggles `mirror` and adds 180° to `rotation` (one undo step, exact restore). The inspector shows the user's own values — rotation `rotation − 180°·mirror_v`, horizontal mirror `mirror ≠ mirror_v` — and `scene.rotate_component` / `scene.mirror_component` take user values and fold the flip back in, so e.g. turning the vertical mirror off after rotating returns exactly to the user's rotation and horizontal mirror.
+- **Readable text on mirrored parts** (issue #49). A part's own printed text — flip-flop letters (D/Q/Q̄/CLK/J/K/S/R/T), chip pin numbers, "DSP"/"FFT", adc/dac's A/D, a phase shifter's φ, a thermistor's ϑ — is drawn by CircuiTikZ in the shape's frame, so a reflection prints it mirror-imaged or upside down. `library.TEXT_UNFLIP` lists the kinds whose text needs un-flipping, with how CircuiTikZ treats it: **`upright`** (CircuiTikZ already turns it upright under rotation: flip-flops, latch, dipchip, qfpchip, dsp, fft, adc, dac, phaseshifter, vphaseshifter) or **`body`** (it turns with the part: thRn, thRp). Deliberately absent: text symmetric under a mirror (± of sources and amplifiers, a meter's A/V/Ω, a varistor's U), the en amp's ▷ (it should follow the signal direction), and the European gates (CircuiTikZ already keeps `&`/`≥1`/`=1` unmirrored).
+  - *Export:* a mirrored listed part gets a `hv unflip x` or `hv unflip y` node/path option (`library.text_unflip_option`), defined once at the top of the picture only when used (`circuitikz.TEXT_UNFLIP_DEF`). The option redefines PGF's `\pgf@text` *inside that node's option group* (so it is local to that one shape, and needs no `\makeatletter` thanks to `\csname`) to wrap everything the shape prints: `x` in `\ctikzflipx`; `y` in `\ctikzflipy` raised by the flipped box's `\depth − \height` (`\hvFlipY`). That raise reflects the text about its box **centre** rather than its **baseline**: CircuiTikZ centres each flip-flop/chip label box on its pin with a fixed strut (height 1em, depth 0.4em), and a baseline reflection left every label 0.6em off its original baseline after the shape's own flip (verified by overlaying plain and mirrored flip-flops/chips in pdflatex: the labels now coincide). The two wraps both un-mirror the text and differ only by a half-turn (a flip in x after a flip in y is a 180° rotation), so the one used is whichever leaves the text closest to upright — chosen by rendering every listed kind at 0/90/180/270° × each wrap: `upright` text needs `y` at 0°/180° and `x` at 90°/270° (and 45°-family); `body` text needs `x` near 0° (0/45/315°) and `y` otherwise (at the sideways 90°/270° tie `y` matches the unmirrored orientation).
+  - *Canvas:* glyph paths are tagged (`SymbolPath.glyph`) and grouped into printed labels (`items._glyph_clusters`: two glyphs belong together when their gap is ≤ `GLYPH_LABEL_GAP` = 0.6 × the taller one's height — letters within a label sit ≤ ~0.4× apart (DSP's S–P, a two-digit qfpchip number, Q̄'s overline), separate labels ≥ 0.8× (adc's A and D); every listed kind's label count is pinned by a test). `items.readable_glyphs` then draws `upright` labels upright (each pre-transformed by the inverse of the item's rotation/mirror about its own centre, `upright_glyphs`) and, for a mirrored `body` part, flips each label in place by the local x- or y-flip that is most upright with the same tie-break as the export (`unmirrored_glyphs`). Known differences: at 45° CircuiTikZ turns `upright` text sideways while the canvas keeps it upright; and CircuiTikZ re-orients the whole adc/dac box when rotated 90°/270° (its diagonal), which the canvas does not — an existing difference unrelated to mirroring.
 - Changes are applied immediately (300 ms debounce) and record an `EditCommand`.
 
 ### 6.6 Undo / Redo
@@ -1598,7 +1614,22 @@ order) plus the CircuiTikZ `mirror` key, which supplies the reflection
 *perpendicular* to the axis so off-axis features (an LED's emission arrows, a
 voltage label's side) land where the canvas Flip-X puts them at every rotation.
 The key is emitted only when `mirror` is set; unmirrored output is unchanged.
-(Multi-terminal nodes flip via `xscale=-1` instead, §7.2.)
+**Mirrored nodes.** Node-style components (op amps, transistors, flip-flops,
+mux/demux, transformers, …) flip via `xscale=-1` (or the negated baked
+`xscale=-s`) instead, and it is emitted **before** `rotate=` in the option list:
+`node[op amp, xscale=-1, rotate=-90]`. PGF applies a node's transform options
+last-listed-first, so this order rotates and *then* reflects — the canvas's global
+Flip-X after rotation. The reverse order (`rotate=…, xscale=-1`, used before
+issue #49) reflects in the node's own frame first, which agrees only at 0°/180°;
+at 90°/270° and the diagonals the export was flipped about the other axis, so a
+mirrored node's anchors, and the wires drawn to them, landed away from the canvas
+pins. The **bipole** box likewise places its far terminal rotate-then-mirror
+(`_bipole_node_line`); mirroring first put a mirrored 90°/270° box a span away from
+its own pins. Pinned by `test_codegen.test_node_transform_puts_anchors_on_canvas_pins`
+(composes the emitted options PGF's way and checks every pin lands on the canvas
+pin, for op amp / npn / nmos / flip-flops / mux × 8 rotations × mirror) and
+`…test_mirrored_bipole_box_is_centred_between_its_pins`; the composition order was
+confirmed against pdflatex by printing each anchor's position from TikZ.
 
 **Value protection.** The options string is mostly passed through verbatim, but
 each `key=value` label slot whose *value* contains a **comma** (`v=$\phi(0,0)$` →
@@ -1810,7 +1841,7 @@ After junction and open-endpoint nodes, the generator emits standalone commands 
 \node at (2,1) {$H(s)$};
 ```
 
-`(x2,y2) = (x1+dx, y1+dy)` where `(dx,dy)` is `span_override` when set, or `default_span = (2,2)` otherwise. `STYLE` is composed by `compose_style_options()` from `line_style`, the unified `line_width`, and `fill_color` — the bracket is omitted when all are default. When `Component.options` (the centred text) is non-empty, `_centered_text_line` appends a separate `\node[font=…] at (cx,cy) {text};` centred on the rectangle (`(cx,cy) = (x1+dx/2, y1+dy/2)`); the font option reuses `_text_node_line`'s composition (omitted at the default 12 pt / no styling), and a text-free rect emits only the `\draw` line. The `y_flip` transform applies to all coordinates.
+`(x2,y2) = (x1+dx, y1+dy)` where `(dx,dy)` is `span_override` when set, or `default_span = (2,2)` otherwise. `STYLE` is composed by `compose_style_options()` from `line_style`, the unified `line_width`, `line_color` (as `draw=<c>`), and `fill_color`, in that order — the bracket is omitted when all are default. When `Component.options` (the centred text) is non-empty, `_centered_text_line` appends a separate `\node[font=…] at (cx,cy) {text};` centred on the rectangle (`(cx,cy) = (x1+dx/2, y1+dy/2)`); the font option reuses `_text_node_line`'s composition (omitted at the default 12 pt / no styling), and a text-free rect emits only the `\draw` line. The `y_flip` transform applies to all coordinates.
 
 **Circles** (`circle`):
 
@@ -2127,7 +2158,8 @@ A component may also carry optional keys when non-default: `span_override`,
 `{…}` slot text of a node-style component, written only when non-empty, §5.4),
 **`node_side`** (a single-terminal node's placement keyword `left`/`right`/`above`/
 `below`, written only when non-empty — format 0.8, §5.4), drawing-style fields
-(`fill_color`/`line_style`/font fields), and **`variants`** — a `{name: true}`
+(`fill_color`/`line_color`/`line_style`/font fields), and for `rect`/`circle` the
+**`wire_connections`** flag (always written from format 0.12; absent ⇒ legacy ⇒ on), and **`variants`** — a `{name: true}`
 map of active boolean variants
 (§5.4), e.g. `"variants": {"filled": true}`. Only active variants are written.
 For back-compat the loader also reads the legacy top-level `filled` /
@@ -2177,7 +2209,7 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.11"}`); `save` always writes the **current** format version (`0.11`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.12"}`); `save` always writes the **current** format version (`0.12`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
@@ -2192,6 +2224,7 @@ Format versions:
 - **0.9** — adds three document **`config`** fields: **`mark_unconnected_pins`** and **`line_hops`** (the display options moved out of app Preferences, §10.3) and **`diode_scale`** (the CircuiTikZ `diodes/scale` body size, §5). A 0.8 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.8 files load unchanged — defaults: marks off, line-hops on, diode scale 0.8. New documents declare 0.9.
 - **0.10** — adds two document **`config`** fields: **`mark_open_ends`** (draw `ocirc` terminals at dangling wire ends) and **`mark_junctions`** (draw `circ` dots at wire junctions), both default **on** (§6.4/§10.3). A 0.9 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.9 files load unchanged — both default on, preserving the prior always-draw behaviour. New documents declare 0.10.
 - **0.11** — adds the document **`custom_components`** map to `config` (user-defined custom components, §5.10: base kind, scoped `ctikzset`, extra options, re-measured pins, and captured geometry — keyed by custom kind). A 0.10 build would silently strip them on save (and could not draw a placed custom component), so the bump makes it refuse the newer file. 0.1–0.10 files load unchanged — an absent `custom_components` defaults to empty; a malformed entry is skipped rather than failing the load. New documents declare 0.11.
+- **0.12** — adds three component fields (issue #49): **`mirror_v`** (the user's vertical mirror, folded into the effective `mirror`/`rotation`; written only when on, §6.5), **`line_color`** on rect/circle/bipole (outline colour, written only when non-empty) and **`wire_connections`** on rect/circle (opt-in block-diagram edge wiring, always written). A 0.11 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.11 files load unchanged — no vertical mirror, no line colour, and `wire_connections` **on** for every box (every box edge was connectable before 0.12, so existing block-diagram wires stay attached). New documents declare 0.12.
 
 ### 9.5 Bundled Examples
 
@@ -2474,10 +2507,11 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 | `VariantSection` | any kind that declares variants in `definitions.json` | one checkbox per declared boolean variant (e.g. diode **Filled**, MOSFET **Body diode**, a transformer's four **polarity-dot** `dot` variants); auto-generated (uses the variant's `label` if present), `SetVariantCommand` |
 | `ParamSection` | any parametric kind (`library.is_parametric`) | one spinbox per declared parameter — a logic gate's **Inputs** (`param`), a mux/demux's **Inputs**/**Outputs** + **Selects** (`params`); auto-generated, `SetParamCommand` per name |
 | `FontSection` | `FontedComponent` (text_node, rect, circle, bipole) | size / bold / italic / family |
-| `FillBorderSection` | `StyledComponent` (rect, circle, bipole) | line style, fill |
+| `FillBorderSection` | `StyledComponent` (rect, circle, bipole) | line style, **line color**, fill — each colour a preset list with swatches plus **Custom…** (colour dialog → `{rgb,255:…}`); `_ColorCombo` |
+| `WireConnectionsSection` | `rect`, `circle` | **Wiring ▸ Wires connect to edges** checkbox (`wire_connections`, off for new shapes); `SetWireConnectionsCommand` |
 | `StrokeWidthSection` | every drawable kind except `text_node` (symbols **and** blocks) | the unified stroke/outline width (`line_width`, pt); `SetComponentLineWidthCommand` |
 | `NodeSizeSection` | scalable kinds (`library.is_scalable` — logic gates **and** the digital blocks: flip-flops, mux/demux, ALU, adder) | **Size** Height/Width factors (for gates with CircuiTikZ body keys) or the uniform size factor; resizes the symbol about its origin, pins follow; `ResizeNodeCommand` / `SetComponentScaleCommand` (§5.4, §6.4) |
-| `TransformSection` | all but `rect`/`circle` (their rotation is a codegen no-op) | rotation buttons; mirror checkbox (circuit + bipole only) |
+| `TransformSection` | all but `rect`/`circle` (their rotation is a codegen no-op) | rotation buttons; **Mirror (horizontal)** and **Mirror (vertical)** checkboxes (circuit + bipole only), showing the user's rotation/mirror with a vertical mirror's 180° folded out (§6.5) |
 | `LayerSection` | `DrawingComponent` (text_node, rect, circle, bipole) | move front/back buttons + z-order spinbox |
 
 `WireStyleSection` is a section for **wires** (not Components, so it is outside the component `applies_to` loop). When a single wire is selected, `PropertiesPanel.show_wire(wire_id)` unbinds the component sections and binds it via `bind_wire`. **Multi-wire bulk edit:** when **several wires** are selected (no components), `show_wires(wire_ids)` binds them via `bind_wires` (header `N wires selected`), loading the controls from the first wire; **editing any field applies it to every selected wire as one undo step** — each write goes through `WireStyleSection._apply_wires`, which wraps the per-wire scene setters in `scene.batch()` (one `MacroCommand`, §6). The panel header already reads **Wire**, so the section has no title of its own; its controls are grouped under bold sub-headers for clarity:
@@ -3180,7 +3214,7 @@ document's customs with **no cross-document leak**; codegen scopes the `ctikzset
 group and appends the extra options for both node and path bases, and emits a
 **base-delegated** sub-node anchor ref (`(node-L1.midtap)`) for a transformer tap;
 `validate` accepts a custom kind the document declares but rejects an undeclared one;
-and the `.hv` round-trips at format `0.11`, skipping a malformed entry. Qt-only tests
+and the `.hv` round-trips (custom components arrived in format `0.11`), skipping a malformed entry. Qt-only tests
 cover the palette (the User Defined category is always present; a registered custom appears
 after `refresh_registry`) and the searchable base picker (partial text yields no base,
 an exact item resolves to its kind). The capture pipeline (`build_custom`), the dialog
@@ -3392,6 +3426,8 @@ is on the toolbar with the bug-report button just after it (last);
 and in a menu and that triggering it opens `_ISSUES_URL` via
 `QDesktopServices.openUrl`.
 
+**Issue #49 editing improvements.** *Vertical mirror:* `test_scene.test_mirror_vertical_reflects_pins_top_to_bottom` (every pin reflects across the horizontal line through the position from each starting rotation × mirror; one undo step restores all three fields), `…keeps_user_rotation_and_horizontal_mirror` (rotation / horizontal mirror set while vertically mirrored act on user values; turning it off returns to them), `test_properties.test_transform_section_vertical_mirror_checkbox` (multi-select is one undo step; the other controls show user values; hidden where mirror doesn't apply), and `test_io.test_mirror_v_roundtrips_and_is_omitted_when_off`. *Readable mirrored text:* `test_codegen.test_mirrored_text_gets_the_measured_unflip` (the measured `x`/`y` choice per category and rotation, and the definition emitted with it), `…unflip_only_when_mirrored_and_only_for_listed_text` (no option or definition for unmirrored parts, a text-less `flipflop`, symmetric signs, the en amp, European gates), `…text_unflip_table_names_real_kinds`, `…vertical_mirror_uses_the_flipy_unflip`, and the slow `…mirrored_text_unflip_compiles` (every listed kind, both wraps, node and path options, through pdflatex; skipped without it); `test_items_stroke.test_upright_glyph_cancels_item_rotation_and_mirror`, `…body_text_unmirrors_and_stays_most_upright`, `…glyphs_group_into_printed_labels` (label count per listed kind), `…text_kinds_have_tagged_glyphs`, and `…every_text_kind_paints_mirrored` (paints each listed kind mirrored by direct call, since PySide only prints an exception raised inside a paint it calls itself). *Mirrored-node export:* `test_codegen.test_node_transform_puts_anchors_on_canvas_pins` (the emitted `xscale`/`rotate` options, composed last-listed-first as PGF does, carry every pin's local anchor onto its canvas pin; op amp / npn / nmos / flip-flop D / latch / muxdemux × 8 rotations × mirror — fails 36 cases with the old `rotate, xscale` order) and `…test_mirrored_bipole_box_is_centred_between_its_pins` (§7 Mirror). *Opt-in box wiring:* `test_scene.test_new_box_has_no_wire_connections_until_enabled` (a new rect/circle has no connection points, auto-start or attachment; enabling it is undoable and restores them), `test_properties.test_wire_connections_section_toggles_box_wiring`, and `test_io.test_line_color_and_wire_connections_roundtrip` / `…test_legacy_box_without_key_loads_connectable` (pre-0.12 boxes load connectable); the existing block-diagram tests opt in explicitly. *Colours:* `test_codegen.test_line_color_emits_draw_key_before_fill` (rect/circle/bipole `draw=<c>` with a custom `{rgb,255:…}` fill), `…test_tikz_rgb_color_round_trips_and_clamps`, `test_items_stroke.test_resolve_tikz_color_custom_rgb_and_xcolor_names`, and `test_properties.test_fill_border_line_color_and_custom_pick` (preset line colour; Custom… with a stubbed `_pick_color` stores the rgb form; cancel keeps the old value). *Drag-to-place:* `test_scene.test_drag_to_place_sets_length_from_endpoints` (pins land on the press/release points, one undo step, Place mode stays), `…takes_rotation_from_drag_direction` (±x, ±y, 45°), `…click_and_short_drag_keep_default`, `…not_for_nodes`, and `…escape_mid_drag_keeps_default_visible`.
+
 ### 13.3 Integration Tests
 
 Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail. As with §13.2, `test_scene.py` is the authoritative list; this is a summary of coverage.
@@ -3411,6 +3447,7 @@ The following criteria define v1 completion. Each must be verified manually by t
 - [ ] Each component can be placed on the canvas by clicking the palette entry and clicking the canvas.
 - [ ] Placed components snap to the 0.25 GU grid visibly and consistently.
 - [ ] A ghost preview follows the cursor during placement.
+- [ ] Press-dragging while placing a resistor (or any path symbol) from one point to another places it with its terminals on those points; a plain click places it at the default length.
 - [ ] Pressing `Escape` cancels placement without modifying the schematic.
 
 #### AC-2: Canvas Interaction

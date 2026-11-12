@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from app.components.registry import REGISTRY
-from app.schematic.io import SchematicLoadError, load, save
+from app.schematic.io import _FORMAT_VERSION, SchematicLoadError, load, save
 from app.schematic.model import Component, Schematic, Wire
 
 
@@ -135,7 +135,7 @@ def test_config_roundtrip(tmp_path: Path) -> None:
     # save() writes a config object at the current format version.
     import json
     data = json.loads(p.read_text(encoding="utf-8"))
-    assert data["version"] == "0.11"
+    assert data["version"] == _FORMAT_VERSION
     assert data["config"] == {
         "voltage_style": "european", "current_style": "american",
         "symbol_style": {},                # all-american default (§5.4)
@@ -1200,14 +1200,16 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
     assert "z_order" not in json.loads(p.read_text(encoding="utf-8"))["components"][0]
 
 
-def test_format_version_011_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes version 0.11; files declaring 0.1–0.11 all load."""
+def test_format_version_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+    """save() writes the current version (0.12); files declaring 0.1–0.11 all load."""
+    assert _FORMAT_VERSION == "0.12"
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
-    assert json.loads(p.read_text(encoding="utf-8"))["version"] == "0.11"
-    assert load(p).version == "0.11"
+    assert json.loads(p.read_text(encoding="utf-8"))["version"] == _FORMAT_VERSION
+    assert load(p).version == _FORMAT_VERSION
 
-    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10"):
+    for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
+                "0.11"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",
@@ -1215,3 +1217,68 @@ def test_format_version_011_roundtrips_and_old_versions_load(tmp_path: Path) -> 
             encoding="utf-8",
         )
         assert load(q).version == old
+
+
+# ---------------------------------------------------------------------------
+# 0.12: line_color + opt-in wire_connections (issue #49)
+# ---------------------------------------------------------------------------
+
+def test_line_color_and_wire_connections_roundtrip(tmp_path: Path) -> None:
+    from app.components.model import BipoleComponent, CircleComponent, RectComponent
+
+    rect = RectComponent(id=_uid(), kind="rect", position=(0.0, 0.0), rotation=0,
+                         options="", line_color="{rgb,255:red,1;green,2;blue,3}",
+                         wire_connections=True)
+    circ = CircleComponent(id=_uid(), kind="circle", position=(5.0, 0.0), rotation=0,
+                           options="")
+    bip = BipoleComponent(id=_uid(), kind="bipole", position=(0.0, 5.0), rotation=0,
+                          options="", line_color="red")
+    sch = Schematic(version=_FORMAT_VERSION, name="c", components=[rect, circ, bip], wires=[])
+    path = tmp_path / "c.hv"
+    save(sch, path)
+    raw = json.loads(path.read_text())
+    by_kind = {c["kind"]: c for c in raw["components"]}
+    assert by_kind["circle"]["wire_connections"] is False     # always written
+    assert "line_color" not in by_kind["circle"]              # omitted when empty
+    assert "wire_connections" not in by_kind["bipole"]        # boxes only
+
+    loaded = {c.kind: c for c in load(path).components}
+    assert loaded["rect"].line_color == "{rgb,255:red,1;green,2;blue,3}"
+    assert loaded["rect"].wire_connections is True
+    assert loaded["circle"].wire_connections is False
+    assert loaded["bipole"].line_color == "red"
+
+
+def test_legacy_box_without_key_loads_connectable(tmp_path: Path) -> None:
+    """A pre-0.12 file has no wire_connections key; its boxes keep the old
+    always-connectable edges so existing block-diagram wires stay attached."""
+    path = tmp_path / "old.hv"
+    path.write_text(json.dumps({
+        "version": "0.11",
+        "name": "old",
+        "components": [
+            {"id": "r", "kind": "rect", "position": [0, 0], "rotation": 0,
+             "mirror": False, "options": ""},
+            {"id": "o", "kind": "circle", "position": [4, 0], "rotation": 0,
+             "mirror": False, "options": ""},
+        ],
+        "wires": [],
+    }))
+    comps = {c.id: c for c in load(path).components}
+    assert comps["r"].wire_connections is True
+    assert comps["o"].wire_connections is True
+    assert comps["r"].line_color == ""
+
+
+
+def test_mirror_v_roundtrips_and_is_omitted_when_off(tmp_path: Path) -> None:
+    on = Component(id="a", kind="op amp", position=(0.0, 0.0), rotation=180,
+                   mirror=True, mirror_v=True, options="")
+    off = Component(id="b", kind="op amp", position=(5.0, 0.0), rotation=0, options="")
+    path = tmp_path / "v.hv"
+    save(Schematic(version=_FORMAT_VERSION, name="v", components=[on, off]), path)
+    raw = {c["id"]: c for c in json.loads(path.read_text())["components"]}
+    assert raw["a"]["mirror_v"] is True and "mirror_v" not in raw["b"]
+    loaded = {c.id: c for c in load(path).components}
+    assert (loaded["a"].rotation, loaded["a"].mirror, loaded["a"].mirror_v) == (180, True, True)
+    assert loaded["b"].mirror_v is False

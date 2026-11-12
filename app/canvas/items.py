@@ -64,6 +64,7 @@ from app.canvas.svgsym import (
     symbol_paths,
 )
 from app.components.registry import REGISTRY
+from app.components.style import parse_tikz_rgb_color
 from app.schematic.model import HOP_ARC_RADIUS_GU, HOP_HALF_GU
 
 if TYPE_CHECKING:
@@ -1659,7 +1660,14 @@ class ComponentItem(QGraphicsItem):
         if s != 1.0:
             painter.scale(s, s)
         diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
-        for sym in symbol_paths(self._geometry_kind()):
+        syms = symbol_paths(self._geometry_kind())
+        upright: dict[int, QPainterPath] = {}
+        idx = [i for i, sp in enumerate(syms) if sp.glyph]
+        fixed = readable_glyphs(self._component.kind, [syms[i].path for i in idx],
+                                self.transform(), self._component.rotation) if idx else None
+        if fixed is not None:
+            upright = dict(zip(idx, fixed))
+        for _i, sym in enumerate(syms):
             lw = _stroke_px(sym.stroke_width, lw_scale)
             # Counter the body scale so the stroke keeps its on-screen weight. A custom
             # component may carry an explicit stroke colour / dash (``color=``/``dash=``);
@@ -1693,6 +1701,8 @@ class ComponentItem(QGraphicsItem):
                 painter.setClipPath(sym.clip)
                 painter.drawPath(sym.path)
                 painter.restore()
+            elif _i in upright:
+                painter.drawPath(upright[_i])
             else:
                 painter.drawPath(sym.path)
             if body_scaled:
@@ -2962,26 +2972,171 @@ class TextNodeItem(_DrawingAnnotationBase):
             painter.drawRect(rect)
 
 
+# xcolor's base colour names (the set TikZ always has), as 0–255 RGB. The canvas
+# must agree with what LaTeX renders, so these are xcolor's values, not Qt/SVG's
+# (xcolor ``orange`` is (1, 0.5, 0), not SVG's (255, 165, 0)).
+_XCOLOR_NAMED: dict[str, tuple[int, int, int]] = {
+    "white":     (255, 255, 255),
+    "black":     (0,   0,   0),
+    "gray":      (128, 128, 128),
+    "lightgray": (191, 191, 191),
+    "darkgray":  (64,  64,  64),
+    "red":       (255, 0,   0),
+    "green":     (0,   255, 0),
+    "blue":      (0,   0,   255),
+    "cyan":      (0,   255, 255),
+    "magenta":   (255, 0,   255),
+    "yellow":    (255, 255, 0),
+    "orange":    (255, 128, 0),
+    "violet":    (128, 0,   128),
+    "purple":    (191, 0,   64),
+    "brown":     (191, 128, 64),
+    "pink":      (255, 191, 191),
+    "lime":      (191, 255, 0),
+    "olive":     (128, 128, 0),
+    "teal":      (0,   128, 128),
+}
+
+
+#: Two glyphs belong to the same printed label when the gap between their boxes is
+#: at most this fraction of the taller one's height. Measured over every kind with
+#: text: letters within a label sit up to ~0.4× apart (DSP's S–P, a two-digit
+#: qfpchip pin number, Q̄'s overline above its Q), separate labels ≥0.8× (adc's A
+#: and D), so 0.6 has margin both ways (tests pin every kind's label count).
+GLYPH_LABEL_GAP = 0.6
+
+
+def _glyph_clusters(rects: list[QRectF]) -> list[list[int]]:
+    """Group glyph indices into printed labels (see :data:`GLYPH_LABEL_GAP`) — e.g.
+    the letters of "CLK", or a Q and the separate overline rule that makes it Q̄."""
+    def gap(a: QRectF, b: QRectF) -> float:
+        dx = max(b.left() - a.right(), a.left() - b.right(), 0.0)
+        dy = max(b.top() - a.bottom(), a.top() - b.bottom(), 0.0)
+        return max(dx, dy)
+
+    groups: list[list[int]] = []
+    for i, r in enumerate(rects):
+        hits = [g for g in groups if any(
+            gap(r, rects[j]) <= GLYPH_LABEL_GAP * max(r.height(), rects[j].height())
+            for j in g)]
+        groups = [g for g in groups if g not in hits] + [[i] + [j for g in hits for j in g]]
+    return groups
+
+
+def upright_glyphs(paths: list[QPainterPath], item_xform: QTransform) -> list[QPainterPath]:
+    """*paths* (glyphs, item-local px) re-oriented so that, drawn under the item's
+    *item_xform*, each label reads upright and unmirrored, still centred where
+    the item transform puts it.
+
+    Glyphs are first grouped into labels (:func:`_glyph_clusters` — a letter and
+    its overline bar are separate glyphs), and each label is pre-transformed by
+    the inverse of the item's rotation/mirror about the label's own centre, so
+    the item transform cancels out for its shape but still carries its position.
+    Used for text CircuiTikZ keeps upright (flip-flop letters, chip pin numbers,
+    "DSP"; issue #49)."""
+    lin = QTransform(item_xform.m11(), item_xform.m12(),
+                     item_xform.m21(), item_xform.m22(), 0.0, 0.0)
+    inv, ok = lin.inverted()
+    if not ok or not paths:
+        return list(paths)
+    rects = [p.boundingRect() for p in paths]
+    out = list(paths)
+    for group in _glyph_clusters(rects):
+        box = rects[group[0]]
+        for j in group[1:]:
+            box = box.united(rects[j])
+        c = box.center()
+        t = QTransform.fromTranslate(-c.x(), -c.y()) * inv * QTransform.fromTranslate(c.x(), c.y())
+        for j in group:
+            out[j] = t.map(paths[j])
+    return out
+
+
+def unmirrored_glyphs(paths: list[QPainterPath], item_xform: QTransform,
+                      rotation: int) -> list[QPainterPath]:
+    """*paths* (glyphs, item-local px) with each label flipped in place so that,
+    under a **mirroring** *item_xform*, it reads un-mirrored while still turning
+    with the body — for text that rotates with its symbol (a thermistor's ϑ).
+
+    A local flip in x or in y both cancel the reflection; they differ by a
+    half-turn, so the one leaving the label closest to upright is used, and at a
+    sideways tie the one matching the unmirrored text at this *rotation* — the
+    same choice :func:`app.components.library.text_unflip_option` makes for the
+    export. Labels are grouped as in :func:`upright_glyphs`. Unchanged when the
+    item transform does not mirror."""
+    import math
+    lin = QTransform(item_xform.m11(), item_xform.m12(),
+                     item_xform.m21(), item_xform.m22(), 0.0, 0.0)
+    if lin.determinant() >= 0 or not paths:
+        return list(paths)
+
+    def angle(t: QTransform) -> float:
+        return math.degrees(math.atan2(t.m12(), t.m11()))
+
+    def off(a: float, b: float) -> float:
+        return abs((a - b + 180.0) % 360.0 - 180.0)
+
+    best = None
+    for f in (QTransform.fromScale(-1.0, 1.0), QTransform.fromScale(1.0, -1.0)):
+        a = angle(f * lin)
+        key = (round(off(a, 0.0), 6), off(a, float(rotation)))
+        if best is None or key < best[0]:
+            best = (key, f)
+    flip = best[1]
+    rects = [p.boundingRect() for p in paths]
+    out = list(paths)
+    for group in _glyph_clusters(rects):
+        box = rects[group[0]]
+        for j in group[1:]:
+            box = box.united(rects[j])
+        c = box.center()
+        t = QTransform.fromTranslate(-c.x(), -c.y()) * flip * QTransform.fromTranslate(c.x(), c.y())
+        for j in group:
+            out[j] = t.map(paths[j])
+    return out
+
+
+def readable_glyphs(kind: str, paths: list[QPainterPath], item_xform: QTransform,
+                    rotation: int) -> list[QPainterPath] | None:
+    """Canvas counterpart of the export's text un-flip (issue #49): the glyph
+    *paths* re-oriented so *kind*'s text reads like the rendered output, or
+    ``None`` when *kind* has no text needing it (:data:`library.TEXT_UNFLIP`)."""
+    from app.components import library
+    cat = library.text_unflip_category(kind)
+    if cat == "upright":
+        return upright_glyphs(paths, item_xform)
+    if cat == "body":
+        return unmirrored_glyphs(paths, item_xform, rotation)
+    return None
+
+
+def upright_glyph(path: QPainterPath, item_xform: QTransform) -> QPainterPath:
+    """Single-glyph form of :func:`upright_glyphs`."""
+    return upright_glyphs([path], item_xform)[0]
+
+
+def _outline_color(comp, state_color: str) -> str:  # noqa: ANN001
+    """Pen colour for a styled box/bipole outline: its ``line_color`` when set
+    and the item is in its normal state. Selection/hover/ghost tints win, so the
+    user can still see what is selected."""
+    lc = getattr(comp, "line_color", "")
+    if lc and state_color == style.COLOR_NORMAL:
+        return _resolve_tikz_color(lc).name()
+    return state_color
+
+
 def _resolve_tikz_color(tikz: str) -> QColor:
     """Convert a TikZ color string (e.g. ``"yellow!20"``) to a :class:`QColor`.
 
-    Handles plain named colors and the ``color!percent`` mixing-with-white
-    syntax used by the rect fill palette.  Falls back to Qt's own parser for
+    Handles xcolor's named colours, the ``color!percent`` mixing-with-white
+    syntax of the preset palettes, and the ``{rgb,255:red,R;green,G;blue,B}``
+    form a custom pick is stored as.  Falls back to Qt's own parser for
     any string it doesn't recognise.
     """
-    _NAMED: dict[str, tuple[int, int, int]] = {
-        "white":   (255, 255, 255),
-        "black":   (0,   0,   0),
-        "gray":    (128, 128, 128),
-        "red":     (255, 0,   0),
-        "green":   (0,   255, 0),
-        "blue":    (0,   0,   255),
-        "cyan":    (0,   255, 255),
-        "magenta": (255, 0,   255),
-        "yellow":  (255, 255, 0),
-        "orange":  (255, 165, 0),
-    }
     tikz = tikz.strip()
+    rgb = parse_tikz_rgb_color(tikz)       # a custom-picked {rgb,255:…} colour
+    if rgb is not None:
+        return QColor(*rgb)
     if "!" in tikz:
         parts = tikz.split("!", 1)
         base_name = parts[0].strip().lower()
@@ -2989,17 +3144,21 @@ def _resolve_tikz_color(tikz: str) -> QColor:
             pct = float(parts[1].strip()) / 100.0
         except ValueError:
             pct = 1.0
-        base = _NAMED.get(base_name, (0, 0, 0))
+        base = _XCOLOR_NAMED.get(base_name, (0, 0, 0))
         # Mix base color with white: result = white*(1-pct) + base*pct
         r = int(round(255 * (1 - pct) + base[0] * pct))
         g = int(round(255 * (1 - pct) + base[1] * pct))
         b = int(round(255 * (1 - pct) + base[2] * pct))
         return QColor(r, g, b)
     lower = tikz.lower()
-    if lower in _NAMED:
-        return QColor(*_NAMED[lower])
+    if lower in _XCOLOR_NAMED:
+        return QColor(*_XCOLOR_NAMED[lower])
     c = QColor(tikz)
     return c if c.isValid() else QColor(Qt.white)
+
+
+#: Public name for the inspector's colour swatches.
+resolve_tikz_color = _resolve_tikz_color
 
 
 # Connection-point dots drawn around rect/circle perimeters: smaller and more
@@ -3113,7 +3272,7 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
     def _draw_shape(self, painter: QPainter, color: str, rect: QRectF) -> None:
         """Stroke/fill the outline shape. Overridden by CircleItem (ellipse)."""
         pen_style, line_width_px, fill = self._parse_options()
-        painter.setPen(_pen(color, line_width_px, pen_style))
+        painter.setPen(_pen(_outline_color(self._component, color), line_width_px, pen_style))
         if fill and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(fill)))
         else:
@@ -3177,7 +3336,9 @@ class RectItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         return out
 
     def _draw_connection_dots(self, painter: QPainter) -> None:
-        if self._ghost:
+        # No dots on a ghost, or on a box whose wire connections are off (the
+        # default: an enclosure, not a block-diagram node).
+        if self._ghost or not getattr(self.component, "wire_connections", False):
             return
         painter.setPen(Qt.NoPen)
         painter.setBrush(QBrush(_CONN_DOT_COLOR))
@@ -3214,7 +3375,7 @@ class CircleItem(RectItem):
 
     def _draw_shape(self, painter: QPainter, color: str, rect: QRectF) -> None:
         pen_style, line_width_px, fill = self._parse_options()
-        painter.setPen(_pen(color, line_width_px, pen_style))
+        painter.setPen(_pen(_outline_color(self._component, color), line_width_px, pen_style))
         if fill and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(fill)))
         else:
@@ -3346,7 +3507,7 @@ class BipoleItem(_DrawingAnnotationBase, _ResizableTwoTerminalItem):
         comp = self._component
         assert isinstance(comp, _BipoleComponent)
         bw_px = comp.line_width * GRID_PX / _PT_PER_GU
-        painter.setPen(_pen(color, bw_px, _resolve_pen_style(comp.line_style)))
+        painter.setPen(_pen(_outline_color(comp, color), bw_px, _resolve_pen_style(comp.line_style)))
         if comp.fill_color and not self._ghost:
             painter.setBrush(QBrush(_resolve_tikz_color(comp.fill_color)))
         else:
@@ -3527,14 +3688,22 @@ class _ResizableNodeItem(ComponentItem):
         t.scale(wf, hf)
         # Symbol body — scale the path *coordinates* (not the painter) so the pen
         # weight stays uniform under an anisotropic resize.
-        for sym in symbol_paths(self._geometry_kind()):
+        syms = symbol_paths(self._geometry_kind())
+        upright: dict[int, QPainterPath] = {}
+        # Text (flip-flop letters, chip pin numbers) reads like the rendered output.
+        idx = [i for i, sp in enumerate(syms) if sp.glyph]
+        fixed = readable_glyphs(self._component.kind, [t.map(syms[i].path) for i in idx],
+                                self.transform(), self._component.rotation) if idx else None
+        if fixed is not None:
+            upright = dict(zip(idx, fixed))
+        for _i, sym in enumerate(syms):
             painter.setPen(_pen(color, _stroke_px(sym.stroke_width, lw_scale)))
             if sym.filled:
                 fill = style.COLOR_BACKGROUND if sym.fill_bg else color
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)
-            path = t.map(sym.path)
+            path = upright[_i] if _i in upright else t.map(sym.path)
             if sym.clip is not None:
                 painter.save()
                 painter.setClipPath(t.map(sym.clip))

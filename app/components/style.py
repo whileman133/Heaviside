@@ -1,7 +1,8 @@
 """
 Fill/border style helpers shared by StyledComponent consumers.
 
-A StyledComponent carries its appearance as ``fill_color`` and ``line_style``
+A StyledComponent carries its appearance as ``fill_color``, ``line_color`` and
+``line_style``
 (raw TikZ draw tokens such as ``"dashed"``), and its outline width as the shared
 ``Component.line_width`` (pt).  The canvas and the code generator turn those into
 a TikZ draw-options string; these pure functions are the single source of truth
@@ -159,14 +160,46 @@ def protect_label_values(options: str) -> str:
     return ", ".join(s for s in out if s)
 
 
+# A user-picked colour is stored as an xcolor extended expression, braced so its
+# inner commas survive TikZ option parsing: ``{rgb,255:red,R;green,G;blue,B}``.
+# xcolor (always loaded by TikZ) reads it directly, so no \definecolor preamble.
+_RGB255_RE = re.compile(
+    r"^\{?\s*rgb\s*,\s*255\s*:\s*red\s*,\s*(\d{1,3})\s*;\s*green\s*,\s*(\d{1,3})"
+    r"\s*;\s*blue\s*,\s*(\d{1,3})\s*\}?$",
+    re.IGNORECASE,
+)
+
+
+def tikz_rgb_color(r: int, g: int, b: int) -> str:
+    """The stored/emitted TikZ value for a custom RGB colour (0–255 channels)."""
+    r, g, b = (max(0, min(255, int(v))) for v in (r, g, b))
+    return f"{{rgb,255:red,{r};green,{g};blue,{b}}}"
+
+
+def parse_tikz_rgb_color(value: str) -> tuple[int, int, int] | None:
+    """Inverse of :func:`tikz_rgb_color` (braces optional); ``None`` if *value*
+    is not that form or a channel is out of range."""
+    m = _RGB255_RE.match((value or "").strip())
+    if not m:
+        return None
+    rgb = tuple(int(c) for c in m.groups())
+    return rgb if all(c <= 255 for c in rgb) else None  # type: ignore[return-value]
+
+
 def compose_style_options(
-    *, fill_color: str = "", line_width: float = _DEFAULT_LINE_WIDTH, line_style: str = ""
+    *,
+    fill_color: str = "",
+    line_width: float = _DEFAULT_LINE_WIDTH,
+    line_style: str = "",
+    line_color: str = "",
 ) -> str:
     """Build a TikZ draw-options string from style fields.
 
-    Order is ``line_style, line width, fill``.  A line width equal to the
-    TikZ default (0.4 pt) and empty fill/line_style are omitted, so a fully
-    default style composes to ``""`` (no brackets emitted by callers).
+    Order is ``line_style, line width, draw=<line colour>, fill``.  A line width
+    equal to the TikZ default (0.4 pt) and empty fill/line_style/line_color are
+    omitted, so a fully default style composes to ``""`` (no brackets emitted by
+    callers). ``draw=<colour>`` (not a bare colour key) sets only the stroke, so
+    a fill and its outline can differ.
     """
     parts: list[str] = []
     if line_style:
@@ -178,6 +211,8 @@ def compose_style_options(
             else (f"{bw:.1f}" if bw == round(bw, 1) else f"{bw:.2f}")
         )
         parts.append(f"line width={bw_str}pt")
+    if line_color:
+        parts.append(f"draw={line_color}")
     if fill_color:
         parts.append(f"fill={fill_color}")
     return ", ".join(parts)

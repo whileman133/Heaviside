@@ -238,6 +238,7 @@ class SymbolPath:
     #                             effective_color) — a custom component's ``color=red``
     fill_color: str = ""        # raw SVG fill colour (for a filled body)
     dash: tuple[float, ...] = ()  # SVG-pt on/off dash lengths; () ⇒ solid (custom ``dash=``)
+    glyph: bool = False         # a text mark (letter / sign), not body geometry
 
 
 #: SVG stroke colours that mean "default ink": the painter substitutes the theme
@@ -319,6 +320,7 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
 
     for g in entry.get("glyphs", ()):
         placed = xform.map(QTransform(*g["matrix"]).map(parse_path(g["d"])))
-        out.append(SymbolPath(path=placed, stroke_width=float(g["stroke_width"]), filled=True))
+        out.append(SymbolPath(path=placed, stroke_width=float(g["stroke_width"]),
+                              filled=True, glyph=True))
 
     return tuple(out)

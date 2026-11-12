@@ -1,5 +1,5 @@
 {
-  "version": "0.11",
+  "version": "0.12",
   "name": "untitled",
   "config": {
     "voltage_style": "american",
@@ -29,7 +29,8 @@
         1.0,
         1.0
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     },
     {
       "id": "2396d7a8-2367-489d-9da2-86630f004c85",
@@ -46,6 +47,7 @@
         1.0
       ],
       "z_order": -10,
+      "wire_connections": true,
       "font_size": 14.0
     },
     {
@@ -62,7 +64,8 @@
         1.0,
         1.0
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     },
     {
       "id": "b860eba0-a6cd-44d1-8575-34eace1da376",
@@ -78,7 +81,8 @@
         0.5,
         0.5
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     },
     {
       "id": "a143a905-90b5-44bc-94b0-3ca34773c5b2",
@@ -94,7 +98,8 @@
         0.5,
         0.5
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     },
     {
       "id": "c1fc80d3-1b0e-4248-b528-c31f5a2f4f4b",
@@ -110,7 +115,8 @@
         1.0,
         1.0
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     },
     {
       "id": "e742a8c4-7cb2-44d4-8b17-e351009e6716",
@@ -126,7 +132,8 @@
         1.0,
         1.0
       ],
-      "z_order": -10
+      "z_order": -10,
+      "wire_connections": true
     }
   ],
   "wires": [

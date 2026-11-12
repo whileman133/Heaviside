@@ -59,6 +59,7 @@ from app.canvas.commands import (
     MoveWireVertexCommand,
     PlaceCommand,
     RotateCommand,
+    MirrorVerticalCommand,
     SplitWireCommand,
     UndoStack,
     WireCommand,
@@ -126,6 +127,11 @@ from app.schematic.model import (
 _LABEL_CLEARANCE = 6  # px gap used by auto-placement candidates (§8.3)
 
 _log = logging.getLogger(__name__)
+
+
+#: Drag distance (GU) after a placement press before it becomes a drag-to-place
+#: (issue #49) rather than a click, so hand jitter doesn't rotate the part.
+_STRETCH_MIN_GU: float = 0.5
 
 
 class Mode(Enum):
@@ -231,6 +237,10 @@ class SchematicScene(QGraphicsScene):
         # Two-click span placement (open/short annotations, §6.2): the clicked
         # origin once the first click lands, else None (awaiting the first click).
         self._place_start_gu: tuple[float, float] | None = None
+        # Drag-to-place for a length-resizable path symbol (issue #49): set on the
+        # press that placed it; once the drag passes _STRETCH_MIN_GU the gesture is
+        # "active" and the release re-places it along the drag (rotation + length).
+        self._place_stretch: dict | None = None
 
         # Paste placement (§6.7): when the clipboard is pasted via the keyboard /
         # Edit menu, the group follows the cursor as ghosts (a sub-state of PLACE
@@ -1081,7 +1091,12 @@ class SchematicScene(QGraphicsScene):
         return (best_dx, best_dy)
 
     def rotate_component(self, component_id: str, new_rotation: int) -> None:
-        """Set the rotation of a component via an undoable RotateCommand."""
+        """Set the user's rotation of a component (undoable RotateCommand). For a
+        vertically mirrored component the stored (effective) rotation carries the
+        flip's extra 180° (:attr:`Component.mirror_v`), so it is added here."""
+        comp = self._component_by_id(component_id)
+        if comp is not None and comp.mirror_v:
+            new_rotation = (new_rotation + 180) % 360
         self._push(RotateCommand(component_id, new_rotation))
 
     def rotate_selected_cw(self) -> None:
@@ -1137,8 +1152,22 @@ class SchematicScene(QGraphicsScene):
         self._push(GroupRotateCommand(comp_ids, wire_ids, (cx, cy), step=step))
 
     def mirror_component(self, component_id: str, new_mirror: bool) -> None:
-        """Set the mirror state of a component via an undoable MirrorCommand."""
+        """Set the user's **horizontal** mirror via an undoable MirrorCommand. The
+        effective ``mirror`` also carries a vertical mirror's flip
+        (:attr:`Component.mirror_v`), so the stored value is ``new ≠ mirror_v``."""
+        comp = self._component_by_id(component_id)
+        if comp is not None and comp.mirror_v:
+            new_mirror = not new_mirror
         self._push(MirrorCommand(component_id, new_mirror))
+
+    def mirror_component_vertical(self, component_id: str, on: bool) -> None:
+        """Set the user's **vertical** mirror (undoable MirrorVerticalCommand): the
+        component flips top-to-bottom about its position, e.g. an op amp's +/−
+        inputs swap (CircuiTikZ ``yscale=-1``). No-op when unchanged."""
+        comp = self._component_by_id(component_id)
+        if comp is None or comp.mirror_v == on:
+            return
+        self._push(MirrorVerticalCommand(component_id, on))
 
     def set_component_variant(self, component_id: str, name: str, value: bool) -> None:
         """Toggle a named boolean variant on a component (undoable, generic)."""
@@ -1156,6 +1185,26 @@ class SchematicScene(QGraphicsScene):
         if comp is None or not isinstance(comp, StyledComponent) or comp.fill_color == new_fill:
             return
         self._push(SetFillColorCommand(component_id, new_fill, comp.fill_color))
+
+    def set_line_color(self, component_id: str, new_color: str) -> None:
+        """Set the outline colour (``line_color``) of a StyledComponent (undoable)."""
+        from app.components.model import StyledComponent
+        from app.canvas.commands import SetLineColorCommand
+        comp = self._component_by_id(component_id)
+        if not isinstance(comp, StyledComponent) or comp.line_color == new_color:
+            return
+        self._push(SetLineColorCommand(component_id, new_color, comp.line_color))
+
+    def set_wire_connections(self, component_id: str, on: bool) -> None:
+        """Turn a rect/circle's block-diagram wire connection points on or off
+        (undoable). Wires already ending on the edge stay where they are; with
+        connections off they are simply no longer attached (open ends)."""
+        from app.components.model import CircleComponent, RectComponent
+        from app.canvas.commands import SetWireConnectionsCommand
+        comp = self._component_by_id(component_id)
+        if not isinstance(comp, (RectComponent, CircleComponent)) or comp.wire_connections == on:
+            return
+        self._push(SetWireConnectionsCommand(component_id, on, comp.wire_connections))
 
     def set_component_line_width(self, component_id: str, new_width: float) -> None:
         """Set the unified stroke/outline width (``line_width``) on a component via
@@ -1961,6 +2010,83 @@ class SchematicScene(QGraphicsScene):
         if hasattr(self._ghost, "set_preview_span"):
             self._ghost.set_preview_span((end[0] - start[0], end[1] - start[1]))
 
+    def _stretch_params(
+        self, kind: str, origin: tuple[float, float], end: tuple[float, float],
+        mirror: bool,
+    ) -> tuple[int, float] | None:
+        """``(rotation, length)`` that lays a path symbol from *origin* toward *end*
+        (drag-to-place, §6.2), or ``None`` while the drag is shorter than
+        :data:`_STRETCH_MIN_GU`. The rotation is the 45° step whose axis is
+        closest to the drag (found by trial through ``component_pin_positions``,
+        so the rotate/mirror convention is the model's own); the length is the
+        drag projected on that axis, floored at the natural length."""
+        import math
+        vx, vy = end[0] - origin[0], end[1] - origin[1]
+        if math.hypot(vx, vy) < _STRETCH_MIN_GU:
+            return None
+        defn = REGISTRY[kind]
+        l0 = math.hypot(*defn.default_span)
+        best: tuple[float, int] | None = None
+        for rot in range(0, 360, 45):
+            trial = defn.component_class(
+                id="__stretch__", kind=kind, position=origin, rotation=rot,
+                mirror=mirror, options="",
+            )
+            pins = _component_pin_positions(trial)
+            dx, dy = pins[1][0] - pins[0][0], pins[1][1] - pins[0][1]
+            n = math.hypot(dx, dy) or 1.0
+            proj = (vx * dx + vy * dy) / n
+            if best is None or proj > best[0] + 1e-9:
+                best = (proj, rot)
+        proj, rot = best  # type: ignore[misc]
+        return rot, max(proj, l0)   # unrounded: a 45° drag lands exactly on its end
+
+    def _update_place_stretch(self, end: tuple[float, float]) -> None:
+        """Live preview of a drag-to-place: hide the just-placed item and show the
+        ghost laid along the drag."""
+        st = self._place_stretch
+        assert st is not None
+        params = self._stretch_params(st["kind"], st["origin"], end, self._place_mirror)
+        if params is None:
+            return
+        st["params"] = params
+        item = self._comp_items.get(st["id"])
+        if item is not None:
+            item.setVisible(False)
+        rot, length = params
+        self._cancel_ghost()
+        cls = ITEM_CLASSES.get(st["kind"], ComponentItem)
+        ghost = cls(REGISTRY[st["kind"]].component_class(
+            id="__ghost__", kind=st["kind"], position=(0.0, 0.0), rotation=rot,
+            mirror=self._place_mirror, options="", span_override=(length, 0.0),
+        ))
+        ghost.set_ghost(True)
+        ghost.setFlag(ghost.GraphicsItemFlag.ItemIsSelectable, False)
+        ghost.setFlag(ghost.GraphicsItemFlag.ItemIsMovable, False)
+        ghost.setZValue(1000)
+        ghost.setPos(self.gu_to_scene(*st["origin"]))
+        self.addItem(ghost)
+        self._ghost = ghost
+
+    def _finish_place_stretch(self, scene_pos) -> None:  # noqa: ANN001
+        """Release of a placement press: a click keeps the default placement; a
+        drag replaces it with the stretched one, as a single undo step."""
+        st, self._place_stretch = self._place_stretch, None
+        assert st is not None
+        if st["params"] is None:
+            return
+        rot, length = st["params"]
+        import math
+        l0 = math.hypot(*REGISTRY[st["kind"]].default_span)
+        self.undo()   # drop the default placement the press made …
+        self.place_component(   # … and place it along the drag instead
+            st["kind"], st["origin"], rotation=rot, mirror=self._place_mirror,
+            span_override=(length, 0.0) if length > l0 + 1e-9 else None,
+        )
+        # Re-arm the normal cursor-following ghost for the next placement.
+        self._spawn_ghost(st["kind"])
+        self._move_ghost(self._place_target(scene_pos))
+
     def _cancel_ghost(self) -> None:
         if self._ghost is not None:
             self._remove_item(self._ghost)
@@ -1974,6 +2100,12 @@ class SchematicScene(QGraphicsScene):
         self._place_rotation = 0
         self._place_mirror = False
         self._place_start_gu = None
+        if self._place_stretch is not None:
+            # Abandoned mid-drag (Esc): keep the default placement, visible again.
+            item = self._comp_items.get(self._place_stretch["id"])
+            if item is not None:
+                item.setVisible(True)
+        self._place_stretch = None
 
     # ------------------------------------------------------------------
     # Wire routing
@@ -2507,6 +2639,9 @@ class SchematicScene(QGraphicsScene):
             if self._paste_anchor_gu is not None:
                 # Interactive paste: the whole clipboard group tracks the cursor.
                 self._move_paste_ghosts(gu)
+            elif (self._place_stretch is not None
+                  and event.buttons() & Qt.LeftButton):
+                self._update_place_stretch(self._span_snap_target(event.scenePos()))
             elif self._place_kind in _SPAN_PLACE_KINDS:
                 # The ghost only exists (and stretches) once the origin is set.
                 if self._place_start_gu is not None:
@@ -2764,11 +2899,18 @@ class SchematicScene(QGraphicsScene):
                 if self._place_kind in _SPAN_PLACE_KINDS:
                     self._place_span_click(self._span_snap_target(event.scenePos()))
                 else:
-                    self.place_component(
+                    placed = self.place_component(
                         self._place_kind, self._place_target(event.scenePos()),
                         rotation=self._place_rotation,
                         mirror=self._place_mirror,
                     )
+                    from app.components import library
+                    if library.is_length_resizable(self._place_kind):
+                        # A plain click is done; a drag before release stretches it.
+                        self._place_stretch = {
+                            "id": placed.id, "kind": self._place_kind,
+                            "origin": placed.position, "params": None,
+                        }
                 # Stay in PLACE mode for rapid repeated placement (spec §6.2).
                 event.accept()
                 return
@@ -2948,6 +3090,11 @@ class SchematicScene(QGraphicsScene):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event: QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        if (self._mode == Mode.PLACE and self._place_stretch is not None
+                and event.button() == Qt.LeftButton):
+            self._finish_place_stretch(event.scenePos())
+            event.accept()
+            return
         # Commit a whole-wire drag if one is active.
         if self._drag.wire_drag_ids and event.button() == Qt.LeftButton:
             start = self._drag.wire_drag_start_gu
