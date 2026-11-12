@@ -5,7 +5,18 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-11-12
+
+The first published release of the 0.8 changes listed under 0.8.0 below.
+
+### Fixed
+- **Release builds.** The 0.8.0 builds failed before anything was published: the
+  Linux packaging tool is now pinned to a fixed upstream version, and the macOS
+  build is notarized again. No app changes since 0.8.0.
+
 ## [0.8.0] - 2026-11-11
+
+Tagged but never published (its release builds failed); 0.8.1 ships these changes.
 
 ### Added
 - **Pin-to-pin alignment when moving components.** Dragging a component now snaps it so
@@ -758,6 +769,7 @@ version reset to 0.1.0 — this is the first release of the current line.)
   diagram; the full reference is still available from the Help menu, the
   toolbar `?` button, and `F1`.
 
+[0.8.1]: https://github.com/whileman133/Heaviside/releases/tag/v0.8.1
 [0.8.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.8.0
 [0.7.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.7.0
 [0.6.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.6.0
