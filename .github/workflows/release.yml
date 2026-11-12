@@ -64,14 +64,14 @@ jobs:
             label: Linux (x64)
             artifact: Heaviside-linux-x64.tar.gz
             appimage: Heaviside-linux-x86_64.AppImage
-            appimagetool_sha256: a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
+            appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
           # ubuntu-24.04-arm runners are native arm64, free for public repos.
           # This build runs on Raspberry Pi OS (64-bit) and other aarch64 Linux.
           - os: ubuntu-24.04-arm
             label: Linux (arm64)
             artifact: Heaviside-linux-arm64.tar.gz
             appimage: Heaviside-linux-aarch64.AppImage
-            appimagetool_sha256: 1b00524ba8c6b678dc15ef88a5c25ec24def36cdfc7e3abb32ddcd068e8007fe
+            appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
 
     steps:
       # Third-party actions are pinned to commit SHAs (not mutable tags) because
@@ -264,17 +264,21 @@ jobs:
       # Built on every Linux run (x64 and arm64), alongside the portable
       # .tar.gz. appimagetool is itself an AppImage; APPIMAGE_EXTRACT_AND_RUN
       # (set by make_appimage.py) lets it run without FUSE on the runner.
-      # appimagetool ships only via a mutable "continuous" release, so the
-      # download is pinned by SHA-256 (per arch, in the matrix). When upstream
-      # rebuilds, this step fails closed; refresh the pins by downloading the
-      # new files, verifying them, and updating appimagetool_sha256 above.
+      # appimagetool is pinned to a versioned upstream release (not the
+      # mutable "continuous" build, which upstream replaces and which broke the
+      # v0.8.0 build when it changed under its SHA pin), and each arch's file is
+      # still checked against its SHA-256 in the matrix. To upgrade: bump
+      # APPIMAGETOOL_VERSION, then update appimagetool_sha256 above from the
+      # release's asset digests (gh api repos/AppImage/appimagetool/releases/
+      # tags/<version>), confirmed by downloading and hashing the files.
       - name: Install appimagetool (Linux)
         if: runner.os == 'Linux'
         env:
+          APPIMAGETOOL_VERSION: "1.9.1"
           APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
         run: |
-          curl -sSL -o appimagetool \
-            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$(uname -m).AppImage"
+          curl -fsSL -o appimagetool \
+            "https://github.com/AppImage/appimagetool/releases/download/${APPIMAGETOOL_VERSION}/appimagetool-$(uname -m).AppImage"
           echo "$APPIMAGETOOL_SHA256  appimagetool" | sha256sum -c -
           sudo mv appimagetool /usr/local/bin/appimagetool
           sudo chmod +x /usr/local/bin/appimagetool
