@@ -5,7 +5,7 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-11-11
 
 ### Added
 - **Pin-to-pin alignment when moving components.** Dragging a component now snaps it so
@@ -758,6 +758,7 @@ version reset to 0.1.0 — this is the first release of the current line.)
   diagram; the full reference is still available from the Help menu, the
   toolbar `?` button, and `F1`.
 
+[0.8.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.8.0
 [0.7.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.7.0
 [0.6.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.6.0
 [0.5.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.5.0
