@@ -27,7 +27,7 @@ import math
 from functools import lru_cache
 from pathlib import Path
 
-from app.components.model import Component, ComponentDef, PinDef
+from app.components.model import Component, ComponentDef, PinDef, SymbolComponent
 from app.resources import component_data_path, resource_path
 
 # Kinds NOT in the library (no CircuiTikZ-command symbol) — keep hand-coded defs.
@@ -604,8 +604,8 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
         default_span=default_span,
         resizable=resizable,
         # Variants are now generic per-instance state on the base Component, so
-        # every library kind uses Component (no DiodeComponent/MosfetComponent).
-        component_class=Component,
+        # every library kind uses SymbolComponent (Component + fill/line-style fields).
+        component_class=SymbolComponent,
         # Measured node-text anchor offset (components/generate_library.py); (0,0)
         # when absent.
         text_anchor=tuple(entry.get("text_anchor", (0.0, 0.0))),  # type: ignore[arg-type]

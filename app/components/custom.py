@@ -24,7 +24,9 @@ from __future__ import annotations
 
 from app.canvas.style import SVG_PT_PER_GU
 from app.components import library, render
-from app.components.model import Component, ComponentDef, CustomComponentSpec, PinDef
+from app.components.model import (
+    Component, ComponentDef, CustomComponentSpec, PinDef, SymbolComponent,
+)
 
 # These MUST match app/components/generate.py's fixed-bounding-box scheme. The
 # ``origin_svg`` constant in components/generated/definitions.json — the single
@@ -180,7 +182,7 @@ def spec_to_component_def(spec: CustomComponentSpec) -> ComponentDef:
         tikz_keyword=base.get("tikz", spec.base_kind),
         default_span=tuple(spec.default_span),  # type: ignore[arg-type]
         resizable=False,  # Phase 1: geometry is captured at a fixed size
-        component_class=Component,
+        component_class=SymbolComponent,
         base_kind=spec.base_kind,
         ctikzset=tuple(spec.ctikzset),
         extra_options=spec.extra_options,

@@ -157,7 +157,7 @@ class ComponentDef:
     component_class: type = Component  # Component subclass to instantiate for placed instances
 ```
 
-`component_class` defaults to `Component` — used for all CircuiTikZ symbols, including diodes and MOSFETs (whose `filled`/`body_diode` are generic `variants`, §5.4). It is overridden only for the bespoke drawing kinds that carry extra per-instance state: `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `CircleComponent` for `circle`, `BipoleComponent` for `bipole`. All of the last group extend the `DrawingComponent` base and compose capability mixins (`FontedComponent`, `StyledComponent`) for font and fill/border state respectively (`text_node` is font-only; `rect`, `circle`, and `bipole` carry both). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
+`component_class` defaults to `Component` on the dataclass, but the library (`components/library.py`) and custom components (`components/custom.py`) set it to **`SymbolComponent`** for every CircuiTikZ symbol, including diodes and MOSFETs (whose `filled`/`body_diode` are generic `variants`, §5.4) — a `Component` that also carries the `StyledComponent` appearance fields (§4.2, §7.8). It is overridden for the bespoke drawing kinds that carry extra per-instance state: `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `CircleComponent` for `circle`, `BipoleComponent` for `bipole`. All of the last group extend the `DrawingComponent` base and compose capability mixins (`FontedComponent`, `StyledComponent`) for font and fill/border state respectively (`text_node` is font-only; `rect`, `circle`, and `bipole` carry both). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
 
 ### 4.2 `Component` hierarchy
 
@@ -212,10 +212,10 @@ class FontedComponent:                  # mixed into text_node, rect, circle, an
     font_family: str = ""               # "" = default, "serif"/"sans"/"mono"
 
 @dataclass
-class StyledComponent:                  # mixed into rect, circle, and bipole
+class StyledComponent:                  # mixed into rect, circle, bipole, and SymbolComponent
     fill_color: str = ""                # TikZ fill color, e.g. "yellow!20"; "" = transparent
     line_style: str = ""                # raw TikZ line-style tokens, e.g. "dashed"; "" = solid
-    line_color: str = ""                # outline colour, emitted draw=<c>; "" = default ink (format 0.12)
+    line_color: str = ""                # outline colour: draw=<c> on blocks, \draw[<c>] on symbols; "" = default ink (format 0.12)
     # outline WIDTH is the unified Component.line_width (shared with symbols) — no separate field
 
 @dataclass
@@ -234,6 +234,11 @@ class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):  # sp
 @dataclass
 class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
     font_size: float = 7.0              # override: smaller box default
+
+@dataclass
+class SymbolComponent(StyledComponent, Component):   # every CircuiTikZ library / custom symbol
+    pass                                # carries fill_color / line_style / line_color (format 0.13);
+                                        # which of them apply is decided by components/shapes.py (§7.8)
 ```
 
 `label_offset` is a **legacy** field. Labels now auto-place on their conventional sides and are not draggable (§5.8), so `label_offset` no longer affects display. It is still round-tripped in the file format (a two-element JSON array; absent or `null` loads as `None`) and set by `MoveOptionsLabelCommand` for back-compat, but the canvas ignores it.
@@ -504,6 +509,8 @@ The on-canvas label system (§5.8) is:
 - **Editing** — double-clicking a component (or any of its slot labels) activates a single child `LabelTextItem` (`QGraphicsTextItem`) that edits the options string. The editor is **centred over the component body** (regardless of where the slot labels sit) and shows the options **one slot per line** (`options_to_editable()` splits top-level commas to newlines; `editable_to_options()` joins them back with `, ` on commit). Commas inside `$...$`/`{...}` or escaped as a LaTeX control sequence (e.g. `\,`) are *not* split. **Enter** commits, **Shift+Enter** inserts a newline, **Escape** cancels. While editing, the slot labels are hidden and the editor shows a solid white rounded backdrop with a blue border; the whole component is raised to `_EDIT_Z` so nothing overlaps the editor. `TextNodeItem` edits its free text verbatim (no comma/newline conversion).
 - **No dragging** — labels auto-place on their sides and are not draggable. `set_label_interactive()` is a no-op. (`Component.label_offset` and `MoveOptionsLabelCommand` remain in the model/command layer for file back-compat but no longer affect display.)
 - **`text_node` and `bipole`** label text is rendered inline (centred) by the item's own `paint()` using the same vector renderer, with raw-text fallback.
+
+**User line style, line colour and fill (circuit symbols).** A symbol's `symbol_style(comp)` (§7.8) overrides the geometry's own look, the canvas counterpart of the `\draw[…]` options CircuiTikZ receives. `_styled_symbol_pen` — shared by both paths that paint symbol geometry (`ComponentItem.paint` and `_ResizableNodeItem.paint`), so they cannot drift apart — takes the symbol's own stroke colour and dash and applies the user's line colour and line style over them; the line colour only in the normal state, so the selection/hover tint still shows. Default-ink solid parts (end bars, dots, text marks) take the line colour too, as `\draw[red]` colours them. The **fill** paints one path per symbol: `svgsym.body_fill_index(kind)` — the largest closed, non-text outline whose bounding box is not a sliver (aspect ≥ 0.3), cached per kind — so leads, arrowheads and capacitor plates keep their colour. A shaped kind with no such closed path (`damper`, `viscoe`, `triac`, `empty triac`, `cpe`, `empty bidirectionaldiode`, `sinusoidal current source`) is filled in the LaTeX output but shows no fill preview on the canvas.
 
 ### 5.3 Palette Thumbnails
 
@@ -1103,7 +1110,10 @@ A **default-black** stroke maps to the theme ink (so ordinary symbols still foll
 light/dark mode, `svgsym.effective_color`); an explicit colour is honoured verbatim. Dash
 lengths (SVG-pt) are converted to `QPen` dash units — multiples of the pen width — by
 `svgsym.dash_for_pen`. Built-in symbols are solid black and carry neither, so they are
-unaffected.
+unaffected. On the canvas a user-set line colour / line style (§7.8) takes precedence over
+these captured values; in the generated LaTeX the symbol's own `color=`/`dash=` options
+(inside `to[…]`) are more specific than the outer `\draw[…]` and win, so for a custom
+component that sets its own colour the user's line colour is not visible in the output.
 
 **Validation.** Invariant 1 (§4.5) accepts a `Component.kind` that the document
 declares in `custom_components` even when its runtime registration is not in effect,
@@ -1814,7 +1824,7 @@ canvas mirrors the same markers — see §10.5.
 
 **Line-hops** (optional) — when `generate()` is called with `mark_line_hops=True`, each crossing returned by `wire_crossings()` (§6.4) is emitted as a CircuiTikZ **`jump crossing` node** (the package's native crossing, used as the maintainers intend): `\node[jump crossing] (xingK) at (x,y) {};`, rotated `90°` when the hopper is **vertical** so the arc lands on the vertical arm. The nodes are emitted **up front**, before any `\draw` (TikZ has no forward node references). **Both** wires at the crossing then break to the node's anchors — the hopper to `.west`/`.east` (the arm carrying the arc), the crossed wire to `.north`/`.south` (the gapped arm) — so a wire's path reads `… -- (xingK.west) (xingK.east) -- …` (the space starts a fresh sub-path), leaving the crossing itself for the node to draw. The anchor for each arm is chosen by its position relative to the crossing (`_crossing_anchor`), validated against the shape; multiple crossings on one wire chain (`(xing0.east) -- (xing1.west)`). Node positions pass through the same `_y` Y-flip as the rest of the figure. The default `bipoles/crossing/size` is used (no `\ctikzset` override); its measured anchor offset (0.14 GU) is `HOP_HALF_GU`, which the canvas matches. The flag is driven by the **Draw line-hops** display preference (§10.8), defaults to `False` at the `generate()` layer (the app passes the preference, which defaults on), so output is unchanged unless requested. *Limitation:* CircuiTikZ crossing nodes are fixed-size, so two crossings closer than ~0.28 GU (rare — adjacent grid cells) can visually overlap; there is no auto-shrink (unlike the former hand-drawn bump).
 
-**Wire and component z-layering** — wires **and every component** participate in one z-order stack (§7.7): an object with `z_order < 0` is emitted in the **background** block (before the shared path, sorted ascending by z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays at the default layer (a circuit component in the shared `\draw` path / a drawing annotation after the block) — so default output is unchanged. A re-layered **circuit** component is emitted as its own `\draw …;` statement (`_component_layer_lines`), a `\ctikzset`-group node (gate/transformer) as its own group, and a drawing annotation via its standalone-command path. **Layer-block wires and any wire connecting to a re-layered node use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) defined in a layer block (or the main `\draw`) must not be referenced by name from elsewhere if that reference could precede the definition (a LaTeX compile error). The generator therefore builds `pin_coord_to_ref` from **only `z_order == 0` components**, and the background-layer wire emit passes `pin_coord_to_ref=None`; affected endpoints fall back to bare coordinates, which connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss.
+**Wire and component z-layering** — wires **and every component** participate in one z-order stack (§7.7): an object with `z_order < 0` is emitted in the **background** block (before the shared path, sorted ascending by z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays at the default layer (a circuit component in the shared `\draw` path / a drawing annotation after the block) — so default output is unchanged. A re-layered **circuit** component is emitted as its own `\draw …;` statement (`_component_layer_lines`), a `\ctikzset`-group node (gate/transformer) as its own group, and a drawing annotation via its standalone-command path. **Layer-block wires and any wire connecting to a re-layered node use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) defined in a layer block (or the main `\draw`) must not be referenced by name from elsewhere if that reference could precede the definition (a LaTeX compile error). The generator therefore builds `pin_coord_to_ref` from **only `z_order == 0` components**, and the background-layer wire emit passes `pin_coord_to_ref=None`; affected endpoints fall back to bare coordinates, which connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss. A circuit symbol with a custom line style, colour or fill (§7.8) is likewise emitted in its own `\draw[…]` statement, in the foreground block (sorted by `z_order`; a `z_order < 0` one stays in the background block), and like a re-layered node contributes no named anchors.
 
 ### 7.7 Drawing Annotation Commands
 
@@ -1857,6 +1867,24 @@ After junction and open-endpoint nodes, the generator emits standalone commands 
 ```
 
 Centre `(cx,cy) = (x0+dx/2, y0+dy/2)`, radii `rx = |dx|/2`, `ry = |dy|/2` (`_circle_line`). `circle (r)` is emitted when `rx == ry`, otherwise `ellipse (rx and ry)`. `STYLE` and the centred text `\node` work exactly as for rect (the latter via the shared `_centered_text_line`).
+
+### 7.8 Symbol Style (line style, line colour, fill)
+
+A circuit symbol carries the `StyledComponent` appearance fields (`line_style`, `line_color`, `fill_color`; §4.2). Which of them apply is decided in one place, `components/shapes.py`, so the code generator, the canvas painter (§5.2) and the inspector (§10.3) cannot disagree:
+
+- `is_shaped(comp)` is true for the drawing blocks (rect / circle / bipole) and for a symbol whose kind is in `SHAPED_KINDS` — a kind with an enclosed *body* (a box, triangle or circle: an op amp, a logic gate, a source circle, an outline diode, a chip). Every other symbol (resistor, capacitor, ground, transistor, switch, …) is not shaped. A resistor is never shaped, even when the document draws resistors European (box) style (§5.4), which keeps it visually distinct from a fuse. A kind absent from the set — including every user-defined custom component (§5.10) — is not shaped.
+- `symbol_style(comp)` returns the `(line_style, line_color, fill_color)` in effect: line style and colour for every symbol, **the fill only for a shaped one**. A stale fill on a resistor (e.g. from a hand-edited file) is ignored everywhere.
+
+`SHAPED_KINDS` is derived, not hand-written. `scripts/find_fillable_kinds.py` (needs `pdflatex`, `circuitikz` and `pdftoppm`) renders every library kind once with `fill=yellow` on its `\draw` and keeps the kinds where the fill paints a visible region (≥ 12 px at 60 dpi) that is **compact** — a bounding-box aspect ratio ≥ 0.3. CircuiTikZ also fills capacitor plates, but those are slivers rather than an enclosed shape and are excluded (the capacitor family, `inerter`, `mslstub`, `mstline`, `nmosd`). Re-run it after regenerating the component library (§5.6) and paste the printed set into `shapes.py`; a stale entry fails `test_shapes.test_shaped_kinds_are_real_registry_kinds`.
+
+**Emission.** `_symbol_style_opts` builds the options and `_in_main_layer` moves a styled symbol out of the shared `\draw` path, so the style sits on the symbol's own statement rather than inside `to[…]`/`node[…]`:
+
+```latex
+\draw[dashed, red, fill=yellow] (2,-1) node[op amp] (node_9aadb6d0) {};   % shaped: style, colour, fill
+\draw[dashed, red] (18,-1) to[resistor] (20,-1);                          % not shaped: no fill
+```
+
+The order is line style, line colour, fill. A plain colour name is emitted bare (`red`, `red!50`); anything else — a custom `{rgb,255:…}` colour — as `color=<c>` (the braces keep its commas intact). The fill comes last so it overrides the fill that a bare colour also sets. Like a re-layered component (§7.6), a styled symbol is emitted in the foreground block at its `z_order` (a `z_order < 0` symbol stays in the background block), contributes no named anchors, and wires that reach it use absolute pin coordinates. Block components (rect / circle / bipole) are unaffected: they keep `compose_style_options()` (§7.7). Unstyled symbols emit exactly what they did before.
 
 ---
 
@@ -2159,8 +2187,8 @@ A component may also carry optional keys when non-default: `span_override`,
 `z_order`, the unified `line_width` (stroke/outline width), **`node_text`** (the
 `{…}` slot text of a node-style component, written only when non-empty, §5.4),
 **`node_side`** (a single-terminal node's placement keyword `left`/`right`/`above`/
-`below`, written only when non-empty — format 0.8, §5.4), drawing-style fields
-(`fill_color`/`line_color`/`line_style`/font fields), and for `rect`/`circle` the
+`below`, written only when non-empty — format 0.8, §5.4), style fields
+(`fill_color`/`line_color`/`line_style` — on circuit symbols as well as blocks from format 0.13, §9.4 — and the font fields), and for `rect`/`circle` the
 **`wire_connections`** flag (always written from format 0.12; absent ⇒ legacy ⇒ on), and **`variants`** — a `{name: true}`
 map of active boolean variants
 (§5.4), e.g. `"variants": {"filled": true}`. Only active variants are written.
@@ -2211,7 +2239,7 @@ On file load, the application:
 
 ### 9.4 Versioning
 
-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.12"}`); `save` always writes the **current** format version (`0.12`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.13"}`); `save` always writes the **current** format version (`0.13`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
 
 Format versions:
 
@@ -2227,6 +2255,7 @@ Format versions:
 - **0.10** — adds two document **`config`** fields: **`mark_open_ends`** (draw `ocirc` terminals at dangling wire ends) and **`mark_junctions`** (draw `circ` dots at wire junctions), both default **on** (§6.4/§10.3). A 0.9 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.9 files load unchanged — both default on, preserving the prior always-draw behaviour. New documents declare 0.10.
 - **0.11** — adds the document **`custom_components`** map to `config` (user-defined custom components, §5.10: base kind, scoped `ctikzset`, extra options, re-measured pins, and captured geometry — keyed by custom kind). A 0.10 build would silently strip them on save (and could not draw a placed custom component), so the bump makes it refuse the newer file. 0.1–0.10 files load unchanged — an absent `custom_components` defaults to empty; a malformed entry is skipped rather than failing the load. New documents declare 0.11.
 - **0.12** — adds three component fields (issue #49): **`mirror_v`** (the user's vertical mirror, folded into the effective `mirror`/`rotation`; written only when on, §6.5), **`line_color`** on rect/circle/bipole (outline colour, written only when non-empty) and **`wire_connections`** on rect/circle (opt-in block-diagram edge wiring, always written). A 0.11 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.11 files load unchanged — no vertical mirror, no line colour, and `wire_connections` **on** for every box (every box edge was connectable before 0.12, so existing block-diagram wires stay attached). New documents declare 0.12.
+- **0.13** — circuit symbols may now carry the `StyledComponent` appearance fields **`line_style`**, **`line_color`** and **`fill_color`** (§4.2, §7.8), each written only when non-empty (previously only rect / circle / bipole did). A 0.12 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.12 files load unchanged — an absent field defaults to empty, i.e. no style change. New documents declare 0.13; the bundled examples (§9.5) are re-stamped 0.13, which `test_examples` requires of each.
 
 ### 9.5 Bundled Examples
 
@@ -2509,7 +2538,7 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
 | `VariantSection` | any kind that declares variants in `definitions.json` | one checkbox per declared boolean variant (e.g. diode **Filled**, MOSFET **Body diode**, a transformer's four **polarity-dot** `dot` variants); auto-generated (uses the variant's `label` if present), `SetVariantCommand` |
 | `ParamSection` | any parametric kind (`library.is_parametric`) | one spinbox per declared parameter — a logic gate's **Inputs** (`param`), a mux/demux's **Inputs**/**Outputs** + **Selects** (`params`); auto-generated, `SetParamCommand` per name |
 | `FontSection` | `FontedComponent` (text_node, rect, circle, bipole) | size / bold / italic / family |
-| `FillBorderSection` | `StyledComponent` (rect, circle, bipole) | line style, **line color**, fill — each colour a preset list with swatches plus **Custom…** (colour dialog → `{rgb,255:…}`); `_ColorCombo` |
+| `FillBorderSection` | `StyledComponent` (rect, circle, bipole **and every circuit symbol**) | line style, **line color**, fill — each colour a preset list with swatches plus **Custom…** (colour dialog → `{rgb,255:…}`); `_ColorCombo`. **Fill** is offered only for a component with a body (`shapes.is_shaped`, §7.8); other symbols (resistor, capacitor, …) show line style and colour only, and the section is titled **Line style & color** instead of **Fill & line style**. For a mixed selection Fill is shown if any selected component supports it, and one undo step writes line style and colour to all of them but the fill only to those that can take one |
 | `WireConnectionsSection` | `rect`, `circle` | **Wiring ▸ Wires connect to edges** checkbox (`wire_connections`, off for new shapes); `SetWireConnectionsCommand` |
 | `StrokeWidthSection` | every drawable kind except `text_node` (symbols **and** blocks) | the unified stroke/outline width (`line_width`, pt); `SetComponentLineWidthCommand` |
 | `NodeSizeSection` | scalable kinds (`library.is_scalable` — logic gates **and** the digital blocks: flip-flops, mux/demux, ALU, adder) | **Size** Height/Width factors (for gates with CircuiTikZ body keys) or the uniform size factor; resizes the symbol about its origin, pins follow; `ResizeNodeCommand` / `SetComponentScaleCommand` (§5.4, §6.4) |
@@ -2748,6 +2777,7 @@ heaviside/
 │   ├── make_dmg_background.py     # Generate the macOS .dmg "drag to Applications" art
 │   ├── make_dmg.py                # Build the macOS .dmg (dmgbuild + packaging/dmg_settings.py)
 │   ├── make_installer.py          # Build the Windows installer (iscc + packaging/heaviside.iss)
+│   ├── find_fillable_kinds.py     # Derive SHAPED_KINDS by rendering every kind with a fill (§7.8; needs pdflatex)
 │   └── render_screenshots.py      # Render the README example gallery (offscreen Qt → docs/images/examples/)
 ├── packaging/
 │   ├── entitlements.plist         # macOS hardened-runtime entitlements (signing)
@@ -2781,6 +2811,7 @@ heaviside/
 │   │   ├── registry.py            # REGISTRY: bespoke literals + library-derived kinds
 │   │   ├── library.py             # loads components/generated/definitions.json → ComponentDefs,
 │   │   │                          #   codegen tables, origin_svg, variant helpers
+│   │   ├── shapes.py              # SHAPED_KINDS + is_shaped / symbol_style: which symbols have a fillable body (§7.8)
 │   │   ├── render.py              # render a symbol + measure pin anchors (latex/dvisvgm)
 │   │   └── generate.py            # Qt-free shared render/measure/alignment helpers
 │   │                              #   (spec/component-pipeline.md; used by generate_library.py)
@@ -2829,6 +2860,7 @@ heaviside/
     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
     ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; LaTeX render gated, ziamath/engine tests ungated)
     ├── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
+    ├── test_shapes.py             # which symbols have a fillable body; symbol fill painting (offscreen Qt)
     ├── test_twoport_inner.py      # two-port blocks keep their inner symbol upright like CircuiTikZ (offscreen Qt)
     ├── test_components_library.py # definitions.json → registry/codegen reconstruction
     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
@@ -3440,6 +3472,8 @@ and in a menu and that triggering it opens `_ISSUES_URL` via
 `QDesktopServices.openUrl`.
 
 **Issue #49 editing improvements.** *Vertical mirror:* `test_scene.test_mirror_vertical_reflects_pins_top_to_bottom` (every pin reflects across the horizontal line through the position from each starting rotation × mirror; one undo step restores all three fields), `…keeps_user_rotation_and_horizontal_mirror` (rotation / horizontal mirror set while vertically mirrored act on user values; turning it off returns to them), `test_properties.test_transform_section_vertical_mirror_checkbox` (multi-select is one undo step; the other controls show user values; hidden where mirror doesn't apply), and `test_io.test_mirror_v_roundtrips_and_is_omitted_when_off`. *Readable mirrored text:* `test_codegen.test_mirrored_text_gets_the_measured_unflip` (the measured `x`/`y` choice per category and rotation, and the definition emitted with it), `…unflip_only_when_mirrored_and_only_for_listed_text` (no option or definition for unmirrored parts, a text-less `flipflop`, symmetric signs, the en amp, European gates), `…text_unflip_table_names_real_kinds`, `…vertical_mirror_uses_the_flipy_unflip`, and the slow `…mirrored_text_unflip_compiles` (every listed kind, both wraps, node and path options, through pdflatex; skipped without it); `test_items_stroke.test_upright_glyph_cancels_item_rotation_and_mirror`, `…body_text_unmirrors_and_stays_most_upright`, `…glyphs_group_into_printed_labels` (label count per listed kind), `…text_kinds_have_tagged_glyphs`, and `…every_text_kind_paints_mirrored` (paints each listed kind mirrored by direct call, since PySide only prints an exception raised inside a paint it calls itself). *Mirrored-node export:* `test_codegen.test_node_transform_puts_anchors_on_canvas_pins` (the emitted `xscale`/`rotate` options, composed last-listed-first as PGF does, carry every pin's local anchor onto its canvas pin; op amp / npn / nmos / flip-flop D / latch / muxdemux × 8 rotations × mirror — fails 36 cases with the old `rotate, xscale` order) and `…test_mirrored_bipole_box_is_centred_between_its_pins` (§7 Mirror). *Opt-in box wiring:* `test_scene.test_new_box_has_no_wire_connections_until_enabled` (a new rect/circle has no connection points, auto-start or attachment; enabling it is undoable and restores them), `test_properties.test_wire_connections_section_toggles_box_wiring`, and `test_io.test_line_color_and_wire_connections_roundtrip` / `…test_legacy_box_without_key_loads_connectable` (pre-0.12 boxes load connectable); the existing block-diagram tests opt in explicitly. *Colours:* `test_codegen.test_line_color_emits_draw_key_before_fill` (rect/circle/bipole `draw=<c>` with a custom `{rgb,255:…}` fill), `…test_tikz_rgb_color_round_trips_and_clamps`, `test_items_stroke.test_resolve_tikz_color_custom_rgb_and_xcolor_names`, and `test_properties.test_fill_border_line_color_and_custom_pick` (preset line colour; Custom… with a stubbed `_pick_color` stores the rgb form; cancel keeps the old value). *Drag-to-place:* `test_scene.test_drag_to_place_sets_length_from_endpoints` (pins land on the press/release points, one undo step, Place mode stays), `…takes_rotation_from_drag_direction` (±x, ±y, 45°), `…click_and_short_drag_keep_default`, `…not_for_nodes`, and `…escape_mid_drag_keeps_default_visible`.
+
+**Symbol line style, line colour and fill (§7.8).** `test_shapes.test_shaped_kinds_are_real_registry_kinds` (every `SHAPED_KINDS` entry is a registry kind, so a regenerated library cannot leave a stale one), `…test_examples_from_the_spec` (op amp / outline diode / ALU shaped; resistor / capacitor / ground / npn not), `…test_symbol_style_gate` (line style and colour kept for every symbol, the fill only for a shaped one), `…test_body_fill_index_finds_bodies_not_slivers` (an op amp and an outline diode have a fill path; a resistor and capacitor plates do not) and `…test_fill_paints_a_shaped_symbol_but_is_ignored_on_a_plain_one` (offscreen render: a fill paints an op amp and not a resistor); `test_codegen.test_symbol_style_goes_on_the_draw_and_respects_the_shape` (`\draw[dashed, red]` for a resistor and transistor with no fill, `\draw[dashed, red, fill=yellow]` for an op amp, nothing for unstyled symbols); `test_properties.test_plain_symbol_offers_style_and_color_but_no_fill`, `…test_shaped_symbol_and_block_offer_fill_and_style`, `…test_style_edit_on_mixed_selection_only_writes_applicable_fields` (resistor + op amp: line style and colour reach both, the fill only the op amp, one undo step) and the updated `…test_multi_select_symbol_and_block_share_stroke_width` (the style section now binds a resistor + rectangle); `test_io.test_symbol_appearance_roundtrip` (line style / colour / fill of a symbol round-trip, defaults omitted) and `…test_format_version_roundtrips_and_old_versions_load` (current format 0.13; 0.1–0.12 load); and `test_components_library.test_resistor_def` (library kinds are `SymbolComponent`).
 
 ### 13.3 Integration Tests
 

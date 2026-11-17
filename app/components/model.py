@@ -275,6 +275,20 @@ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
     """Override default: bipole box is smaller so 7 pt fits better than 12 pt."""
 
 
+@dataclass
+class SymbolComponent(StyledComponent, Component):
+    """Circuit symbol (R, C, diode, transistor, op amp, gate, ...) that carries
+    the fill / line-style / line-colour fields.
+
+    Unlike the drawing kinds it is *not* a :class:`DrawingComponent`, so symbols
+    keep their circuit-pin and CircuiTikZ ``to[]``/``node[]`` code paths; the
+    mixin only adds appearance overrides (and makes ``isinstance(comp,
+    StyledComponent)`` true so the inspector's "Fill & line style" section shows).
+    The mixin is listed *before* ``Component`` for the same dataclass
+    field-ordering reason as the drawing classes above.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Static component definitions
 # ---------------------------------------------------------------------------

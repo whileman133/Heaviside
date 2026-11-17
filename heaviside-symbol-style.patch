@@ -1,0 +1,1471 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 071d7a2..477798f 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,33 @@ All notable changes to Heaviside are documented in this file.
+ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+ 
++## [Unreleased]
++
++### Added
++- **Line style, line colour and fill for circuit symbols.** Resistors, capacitors,
++  diodes, sources, op amps, gates and every other symbol now have the same **Line
++  style** and **Line color** controls as boxes, so a part can be drawn dashed or in a
++  colour. **Fill** is offered only for components with an enclosed body — an op amp, a
++  logic gate, a source circle, an outline diode, a chip or a box. Symbols without one,
++  such as a resistor, capacitor or ground, get line style and colour only (the inspector
++  section is then titled **Line style & color**). With several parts selected, line
++  style and colour apply to all of them and the fill only to those that can take one.
++  The styling shows on the canvas and in the generated CircuiTikZ, e.g.
++  `\draw[dashed, red, fill=yellow] (2,-1) node[op amp] … ;`. A few symbols with no
++  closed outline (for example the damper and viscoelastic element) are filled in the
++  LaTeX output but show no fill preview on the canvas.
++
++### Changed
++- **New file format version (0.13).** A file in which a symbol has a line style, colour
++  or fill is saved as format 0.13, so an older Heaviside refuses to open it instead of
++  quietly dropping the styling the next time it saves. Existing files open unchanged.
++- **Styled symbols are written as their own statement.** In the CircuiTikZ source, a
++  symbol with a custom line style, colour or fill is emitted in its own `\draw[…]` after
++  the main circuit path, like a layered component, rather than inside the shared path.
++  It is drawn on top of unstyled parts, and wires reach it by coordinates instead of a
++  node name; the result looks the same unless parts overlap. Unstyled symbols are
++  unchanged.
++
+ ## [0.8.1] - 2026-11-12
+ 
+ The first published release of the 0.8 changes listed under 0.8.0 below.
+diff --git a/PROJECT_SPEC.md b/PROJECT_SPEC.md
+index b285f32..9ccc229 100644
+--- a/PROJECT_SPEC.md
++++ b/PROJECT_SPEC.md
+@@ -157,7 +157,7 @@ class ComponentDef:
+     component_class: type = Component  # Component subclass to instantiate for placed instances
+ ```
+ 
+-`component_class` defaults to `Component` — used for all CircuiTikZ symbols, including diodes and MOSFETs (whose `filled`/`body_diode` are generic `variants`, §5.4). It is overridden only for the bespoke drawing kinds that carry extra per-instance state: `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `CircleComponent` for `circle`, `BipoleComponent` for `bipole`. All of the last group extend the `DrawingComponent` base and compose capability mixins (`FontedComponent`, `StyledComponent`) for font and fill/border state respectively (`text_node` is font-only; `rect`, `circle`, and `bipole` carry both). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
++`component_class` defaults to `Component` on the dataclass, but the library (`components/library.py`) and custom components (`components/custom.py`) set it to **`SymbolComponent`** for every CircuiTikZ symbol, including diodes and MOSFETs (whose `filled`/`body_diode` are generic `variants`, §5.4) — a `Component` that also carries the `StyledComponent` appearance fields (§4.2, §7.8). It is overridden for the bespoke drawing kinds that carry extra per-instance state: `TextNodeComponent` for `text_node`, `RectComponent` for `rect`, `CircleComponent` for `circle`, `BipoleComponent` for `bipole`. All of the last group extend the `DrawingComponent` base and compose capability mixins (`FontedComponent`, `StyledComponent`) for font and fill/border state respectively (`text_node` is font-only; `rect`, `circle`, and `bipole` carry both). The deserializer in `schematic/io.py` uses this pointer to construct the correct subclass without a type-discriminator field in the JSON.
+ 
+ ### 4.2 `Component` hierarchy
+ 
+@@ -212,10 +212,10 @@ class FontedComponent:                  # mixed into text_node, rect, circle, an
+     font_family: str = ""               # "" = default, "serif"/"sans"/"mono"
+ 
+ @dataclass
+-class StyledComponent:                  # mixed into rect, circle, and bipole
++class StyledComponent:                  # mixed into rect, circle, bipole, and SymbolComponent
+     fill_color: str = ""                # TikZ fill color, e.g. "yellow!20"; "" = transparent
+     line_style: str = ""                # raw TikZ line-style tokens, e.g. "dashed"; "" = solid
+-    line_color: str = ""                # outline colour, emitted draw=<c>; "" = default ink (format 0.12)
++    line_color: str = ""                # outline colour: draw=<c> on blocks, \draw[<c>] on symbols; "" = default ink (format 0.12)
+     # outline WIDTH is the unified Component.line_width (shared with symbols) — no separate field
+ 
+ @dataclass
+@@ -234,6 +234,11 @@ class CircleComponent(FontedComponent, StyledComponent, DrawingComponent):  # sp
+ @dataclass
+ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
+     font_size: float = 7.0              # override: smaller box default
++
++@dataclass
++class SymbolComponent(StyledComponent, Component):   # every CircuiTikZ library / custom symbol
++    pass                                # carries fill_color / line_style / line_color (format 0.13);
++                                        # which of them apply is decided by components/shapes.py (§7.8)
+ ```
+ 
+ `label_offset` is a **legacy** field. Labels now auto-place on their conventional sides and are not draggable (§5.8), so `label_offset` no longer affects display. It is still round-tripped in the file format (a two-element JSON array; absent or `null` loads as `None`) and set by `MoveOptionsLabelCommand` for back-compat, but the canvas ignores it.
+@@ -505,6 +510,8 @@ The on-canvas label system (§5.8) is:
+ - **No dragging** — labels auto-place on their sides and are not draggable. `set_label_interactive()` is a no-op. (`Component.label_offset` and `MoveOptionsLabelCommand` remain in the model/command layer for file back-compat but no longer affect display.)
+ - **`text_node` and `bipole`** label text is rendered inline (centred) by the item's own `paint()` using the same vector renderer, with raw-text fallback.
+ 
++**User line style, line colour and fill (circuit symbols).** A symbol's `symbol_style(comp)` (§7.8) overrides the geometry's own look, the canvas counterpart of the `\draw[…]` options CircuiTikZ receives. `_styled_symbol_pen` — shared by both paths that paint symbol geometry (`ComponentItem.paint` and `_ResizableNodeItem.paint`), so they cannot drift apart — takes the symbol's own stroke colour and dash and applies the user's line colour and line style over them; the line colour only in the normal state, so the selection/hover tint still shows. Default-ink solid parts (end bars, dots, text marks) take the line colour too, as `\draw[red]` colours them. The **fill** paints one path per symbol: `svgsym.body_fill_index(kind)` — the largest closed, non-text outline whose bounding box is not a sliver (aspect ≥ 0.3), cached per kind — so leads, arrowheads and capacitor plates keep their colour. A shaped kind with no such closed path (`damper`, `viscoe`, `triac`, `empty triac`, `cpe`, `empty bidirectionaldiode`, `sinusoidal current source`) is filled in the LaTeX output but shows no fill preview on the canvas.
++
+ ### 5.3 Palette Thumbnails
+ 
+ The component palette renders each component's thumbnail by instantiating its `ComponentItem` and painting it into a `QPixmap` at a fixed small scale. No separate thumbnail assets are needed.
+@@ -1103,7 +1110,10 @@ A **default-black** stroke maps to the theme ink (so ordinary symbols still foll
+ light/dark mode, `svgsym.effective_color`); an explicit colour is honoured verbatim. Dash
+ lengths (SVG-pt) are converted to `QPen` dash units — multiples of the pen width — by
+ `svgsym.dash_for_pen`. Built-in symbols are solid black and carry neither, so they are
+-unaffected.
++unaffected. On the canvas a user-set line colour / line style (§7.8) takes precedence over
++these captured values; in the generated LaTeX the symbol's own `color=`/`dash=` options
++(inside `to[…]`) are more specific than the outer `\draw[…]` and win, so for a custom
++component that sets its own colour the user's line colour is not visible in the output.
+ 
+ **Validation.** Invariant 1 (§4.5) accepts a `Component.kind` that the document
+ declares in `custom_components` even when its runtime registration is not in effect,
+@@ -1814,7 +1824,7 @@ canvas mirrors the same markers — see §10.5.
+ 
+ **Line-hops** (optional) — when `generate()` is called with `mark_line_hops=True`, each crossing returned by `wire_crossings()` (§6.4) is emitted as a CircuiTikZ **`jump crossing` node** (the package's native crossing, used as the maintainers intend): `\node[jump crossing] (xingK) at (x,y) {};`, rotated `90°` when the hopper is **vertical** so the arc lands on the vertical arm. The nodes are emitted **up front**, before any `\draw` (TikZ has no forward node references). **Both** wires at the crossing then break to the node's anchors — the hopper to `.west`/`.east` (the arm carrying the arc), the crossed wire to `.north`/`.south` (the gapped arm) — so a wire's path reads `… -- (xingK.west) (xingK.east) -- …` (the space starts a fresh sub-path), leaving the crossing itself for the node to draw. The anchor for each arm is chosen by its position relative to the crossing (`_crossing_anchor`), validated against the shape; multiple crossings on one wire chain (`(xing0.east) -- (xing1.west)`). Node positions pass through the same `_y` Y-flip as the rest of the figure. The default `bipoles/crossing/size` is used (no `\ctikzset` override); its measured anchor offset (0.14 GU) is `HOP_HALF_GU`, which the canvas matches. The flag is driven by the **Draw line-hops** display preference (§10.8), defaults to `False` at the `generate()` layer (the app passes the preference, which defaults on), so output is unchanged unless requested. *Limitation:* CircuiTikZ crossing nodes are fixed-size, so two crossings closer than ~0.28 GU (rare — adjacent grid cells) can visually overlap; there is no auto-shrink (unlike the former hand-drawn bump).
+ 
+-**Wire and component z-layering** — wires **and every component** participate in one z-order stack (§7.7): an object with `z_order < 0` is emitted in the **background** block (before the shared path, sorted ascending by z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays at the default layer (a circuit component in the shared `\draw` path / a drawing annotation after the block) — so default output is unchanged. A re-layered **circuit** component is emitted as its own `\draw …;` statement (`_component_layer_lines`), a `\ctikzset`-group node (gate/transformer) as its own group, and a drawing annotation via its standalone-command path. **Layer-block wires and any wire connecting to a re-layered node use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) defined in a layer block (or the main `\draw`) must not be referenced by name from elsewhere if that reference could precede the definition (a LaTeX compile error). The generator therefore builds `pin_coord_to_ref` from **only `z_order == 0` components**, and the background-layer wire emit passes `pin_coord_to_ref=None`; affected endpoints fall back to bare coordinates, which connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss.
++**Wire and component z-layering** — wires **and every component** participate in one z-order stack (§7.7): an object with `z_order < 0` is emitted in the **background** block (before the shared path, sorted ascending by z-order), `z_order > 0` in the **foreground** block (after), and `z_order == 0` stays at the default layer (a circuit component in the shared `\draw` path / a drawing annotation after the block) — so default output is unchanged. A re-layered **circuit** component is emitted as its own `\draw …;` statement (`_component_layer_lines`), a `\ctikzset`-group node (gate/transformer) as its own group, and a drawing annotation via its standalone-command path. **Layer-block wires and any wire connecting to a re-layered node use absolute coordinates, not named anchors.** A multi-terminal node (op amp, MOSFET, BJT) defined in a layer block (or the main `\draw`) must not be referenced by name from elsewhere if that reference could precede the definition (a LaTeX compile error). The generator therefore builds `pin_coord_to_ref` from **only `z_order == 0` components**, and the background-layer wire emit passes `pin_coord_to_ref=None`; affected endpoints fall back to bare coordinates, which connect exactly via the node's scale / bridge leads (see the codegen module docstring), so there is no geometric loss. A circuit symbol with a custom line style, colour or fill (§7.8) is likewise emitted in its own `\draw[…]` statement, in the foreground block (sorted by `z_order`; a `z_order < 0` one stays in the background block), and like a re-layered node contributes no named anchors.
+ 
+ ### 7.7 Drawing Annotation Commands
+ 
+@@ -1858,6 +1868,24 @@ After junction and open-endpoint nodes, the generator emits standalone commands
+ 
+ Centre `(cx,cy) = (x0+dx/2, y0+dy/2)`, radii `rx = |dx|/2`, `ry = |dy|/2` (`_circle_line`). `circle (r)` is emitted when `rx == ry`, otherwise `ellipse (rx and ry)`. `STYLE` and the centred text `\node` work exactly as for rect (the latter via the shared `_centered_text_line`).
+ 
++### 7.8 Symbol Style (line style, line colour, fill)
++
++A circuit symbol carries the `StyledComponent` appearance fields (`line_style`, `line_color`, `fill_color`; §4.2). Which of them apply is decided in one place, `components/shapes.py`, so the code generator, the canvas painter (§5.2) and the inspector (§10.3) cannot disagree:
++
++- `is_shaped(comp)` is true for the drawing blocks (rect / circle / bipole) and for a symbol whose kind is in `SHAPED_KINDS` — a kind with an enclosed *body* (a box, triangle or circle: an op amp, a logic gate, a source circle, an outline diode, a chip). Every other symbol (resistor, capacitor, ground, transistor, switch, …) is not shaped. A resistor is never shaped, even when the document draws resistors European (box) style (§5.4), which keeps it visually distinct from a fuse. A kind absent from the set — including every user-defined custom component (§5.10) — is not shaped.
++- `symbol_style(comp)` returns the `(line_style, line_color, fill_color)` in effect: line style and colour for every symbol, **the fill only for a shaped one**. A stale fill on a resistor (e.g. from a hand-edited file) is ignored everywhere.
++
++`SHAPED_KINDS` is derived, not hand-written. `scripts/find_fillable_kinds.py` (needs `pdflatex`, `circuitikz` and `pdftoppm`) renders every library kind once with `fill=yellow` on its `\draw` and keeps the kinds where the fill paints a visible region (≥ 12 px at 60 dpi) that is **compact** — a bounding-box aspect ratio ≥ 0.3. CircuiTikZ also fills capacitor plates, but those are slivers rather than an enclosed shape and are excluded (the capacitor family, `inerter`, `mslstub`, `mstline`, `nmosd`). Re-run it after regenerating the component library (§5.6) and paste the printed set into `shapes.py`; a stale entry fails `test_shapes.test_shaped_kinds_are_real_registry_kinds`.
++
++**Emission.** `_symbol_style_opts` builds the options and `_in_main_layer` moves a styled symbol out of the shared `\draw` path, so the style sits on the symbol's own statement rather than inside `to[…]`/`node[…]`:
++
++```latex
++\draw[dashed, red, fill=yellow] (2,-1) node[op amp] (node_9aadb6d0) {};   % shaped: style, colour, fill
++\draw[dashed, red] (18,-1) to[resistor] (20,-1);                          % not shaped: no fill
++```
++
++The order is line style, line colour, fill. A plain colour name is emitted bare (`red`, `red!50`); anything else — a custom `{rgb,255:…}` colour — as `color=<c>` (the braces keep its commas intact). The fill comes last so it overrides the fill that a bare colour also sets. Like a re-layered component (§7.6), a styled symbol is emitted in the foreground block at its `z_order` (a `z_order < 0` symbol stays in the background block), contributes no named anchors, and wires that reach it use absolute pin coordinates. Block components (rect / circle / bipole) are unaffected: they keep `compose_style_options()` (§7.7). Unstyled symbols emit exactly what they did before.
++
+ ---
+ 
+ ## 8. Preview and Export
+@@ -2159,8 +2187,8 @@ A component may also carry optional keys when non-default: `span_override`,
+ `z_order`, the unified `line_width` (stroke/outline width), **`node_text`** (the
+ `{…}` slot text of a node-style component, written only when non-empty, §5.4),
+ **`node_side`** (a single-terminal node's placement keyword `left`/`right`/`above`/
+-`below`, written only when non-empty — format 0.8, §5.4), drawing-style fields
+-(`fill_color`/`line_color`/`line_style`/font fields), and for `rect`/`circle` the
++`below`, written only when non-empty — format 0.8, §5.4), style fields
++(`fill_color`/`line_color`/`line_style` — on circuit symbols as well as blocks from format 0.13, §9.4 — and the font fields), and for `rect`/`circle` the
+ **`wire_connections`** flag (always written from format 0.12; absent ⇒ legacy ⇒ on), and **`variants`** — a `{name: true}`
+ map of active boolean variants
+ (§5.4), e.g. `"variants": {"filled": true}`. Only active variants are written.
+@@ -2211,7 +2239,7 @@ On file load, the application:
+ 
+ ### 9.4 Versioning
+ 
+-The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.12"}`); `save` always writes the **current** format version (`0.12`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
++The JSON `version` field is the **file-format version** (`_FORMAT_VERSION` in `schematic/io.py`), tracked **independently of both the application version and the spec version**. It changes *only* when the on-disk format changes — not on every app release — so it remains a reliable answer to the one question it exists for: "can this build read this file?" (Most app releases ship UI, component, or bug-fix changes that leave the format untouched, and such a release must not restamp saved files with a new format number.) The loader accepts any version in `_KNOWN_VERSIONS` (`{"0.1", …, "0.13"}`); `save` always writes the **current** format version (`0.13`). The bumps are backward-compatible (older files still open with defaults for the missing fields) — `save` then re-stamps them at the current version. A file whose `version` is not recognised is rejected with a descriptive error that tells the user the file was likely saved by a newer release and to update Heaviside.
+ 
+ Format versions:
+ 
+@@ -2227,6 +2255,7 @@ Format versions:
+ - **0.10** — adds two document **`config`** fields: **`mark_open_ends`** (draw `ocirc` terminals at dangling wire ends) and **`mark_junctions`** (draw `circ` dots at wire junctions), both default **on** (§6.4/§10.3). A 0.9 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.9 files load unchanged — both default on, preserving the prior always-draw behaviour. New documents declare 0.10.
+ - **0.11** — adds the document **`custom_components`** map to `config` (user-defined custom components, §5.10: base kind, scoped `ctikzset`, extra options, re-measured pins, and captured geometry — keyed by custom kind). A 0.10 build would silently strip them on save (and could not draw a placed custom component), so the bump makes it refuse the newer file. 0.1–0.10 files load unchanged — an absent `custom_components` defaults to empty; a malformed entry is skipped rather than failing the load. New documents declare 0.11.
+ - **0.12** — adds three component fields (issue #49): **`mirror_v`** (the user's vertical mirror, folded into the effective `mirror`/`rotation`; written only when on, §6.5), **`line_color`** on rect/circle/bipole (outline colour, written only when non-empty) and **`wire_connections`** on rect/circle (opt-in block-diagram edge wiring, always written). A 0.11 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.11 files load unchanged — no vertical mirror, no line colour, and `wire_connections` **on** for every box (every box edge was connectable before 0.12, so existing block-diagram wires stay attached). New documents declare 0.12.
++- **0.13** — circuit symbols may now carry the `StyledComponent` appearance fields **`line_style`**, **`line_color`** and **`fill_color`** (§4.2, §7.8), each written only when non-empty (previously only rect / circle / bipole did). A 0.12 build would silently strip them on save, so the bump makes it refuse the newer file. 0.1–0.12 files load unchanged — an absent field defaults to empty, i.e. no style change. New documents declare 0.13; the bundled examples (§9.5) are re-stamped 0.13, which `test_examples` requires of each.
+ 
+ ### 9.5 Bundled Examples
+ 
+@@ -2509,7 +2538,7 @@ A non-empty **search** replaces the categories/active/in-use sections with a fla
+ | `VariantSection` | any kind that declares variants in `definitions.json` | one checkbox per declared boolean variant (e.g. diode **Filled**, MOSFET **Body diode**, a transformer's four **polarity-dot** `dot` variants); auto-generated (uses the variant's `label` if present), `SetVariantCommand` |
+ | `ParamSection` | any parametric kind (`library.is_parametric`) | one spinbox per declared parameter — a logic gate's **Inputs** (`param`), a mux/demux's **Inputs**/**Outputs** + **Selects** (`params`); auto-generated, `SetParamCommand` per name |
+ | `FontSection` | `FontedComponent` (text_node, rect, circle, bipole) | size / bold / italic / family |
+-| `FillBorderSection` | `StyledComponent` (rect, circle, bipole) | line style, **line color**, fill — each colour a preset list with swatches plus **Custom…** (colour dialog → `{rgb,255:…}`); `_ColorCombo` |
++| `FillBorderSection` | `StyledComponent` (rect, circle, bipole **and every circuit symbol**) | line style, **line color**, fill — each colour a preset list with swatches plus **Custom…** (colour dialog → `{rgb,255:…}`); `_ColorCombo`. **Fill** is offered only for a component with a body (`shapes.is_shaped`, §7.8); other symbols (resistor, capacitor, …) show line style and colour only, and the section is titled **Line style & color** instead of **Fill & line style**. For a mixed selection Fill is shown if any selected component supports it, and one undo step writes line style and colour to all of them but the fill only to those that can take one |
+ | `WireConnectionsSection` | `rect`, `circle` | **Wiring ▸ Wires connect to edges** checkbox (`wire_connections`, off for new shapes); `SetWireConnectionsCommand` |
+ | `StrokeWidthSection` | every drawable kind except `text_node` (symbols **and** blocks) | the unified stroke/outline width (`line_width`, pt); `SetComponentLineWidthCommand` |
+ | `NodeSizeSection` | scalable kinds (`library.is_scalable` — logic gates **and** the digital blocks: flip-flops, mux/demux, ALU, adder) | **Size** Height/Width factors (for gates with CircuiTikZ body keys) or the uniform size factor; resizes the symbol about its origin, pins follow; `ResizeNodeCommand` / `SetComponentScaleCommand` (§5.4, §6.4) |
+@@ -2748,6 +2777,7 @@ heaviside/
+ │   ├── make_dmg_background.py     # Generate the macOS .dmg "drag to Applications" art
+ │   ├── make_dmg.py                # Build the macOS .dmg (dmgbuild + packaging/dmg_settings.py)
+ │   ├── make_installer.py          # Build the Windows installer (iscc + packaging/heaviside.iss)
++│   ├── find_fillable_kinds.py     # Derive SHAPED_KINDS by rendering every kind with a fill (§7.8; needs pdflatex)
+ │   └── render_screenshots.py      # Render the README example gallery (offscreen Qt → docs/images/examples/)
+ ├── packaging/
+ │   ├── entitlements.plist         # macOS hardened-runtime entitlements (signing)
+@@ -2781,6 +2811,7 @@ heaviside/
+ │   │   ├── registry.py            # REGISTRY: bespoke literals + library-derived kinds
+ │   │   ├── library.py             # loads components/generated/definitions.json → ComponentDefs,
+ │   │   │                          #   codegen tables, origin_svg, variant helpers
++│   │   ├── shapes.py              # SHAPED_KINDS + is_shaped / symbol_style: which symbols have a fillable body (§7.8)
+ │   │   ├── render.py              # render a symbol + measure pin anchors (latex/dvisvgm)
+ │   │   └── generate.py            # Qt-free shared render/measure/alignment helpers
+ │   │                              #   (spec/component-pipeline.md; used by generate_library.py)
+@@ -2829,6 +2860,7 @@ heaviside/
+     ├── test_preview_render.py     # QtPdf preview rendering (offscreen Qt + pdflatex)
+     ├── test_mathrender.py         # on-canvas math vector rendering + slot parsing (offscreen Qt; LaTeX render gated, ziamath/engine tests ungated)
+     ├── test_svgsym.py             # symbol geometry incl. glyph (+/-) reconstruction
++    ├── test_shapes.py             # which symbols have a fillable body; symbol fill painting (offscreen Qt)
+     ├── test_twoport_inner.py      # two-port blocks keep their inner symbol upright like CircuiTikZ (offscreen Qt)
+     ├── test_components_library.py # definitions.json → registry/codegen reconstruction
+     ├── test_render.py             # symbol render + automatic anchor measurement (gated)
+@@ -3441,6 +3473,8 @@ and in a menu and that triggering it opens `_ISSUES_URL` via
+ 
+ **Issue #49 editing improvements.** *Vertical mirror:* `test_scene.test_mirror_vertical_reflects_pins_top_to_bottom` (every pin reflects across the horizontal line through the position from each starting rotation × mirror; one undo step restores all three fields), `…keeps_user_rotation_and_horizontal_mirror` (rotation / horizontal mirror set while vertically mirrored act on user values; turning it off returns to them), `test_properties.test_transform_section_vertical_mirror_checkbox` (multi-select is one undo step; the other controls show user values; hidden where mirror doesn't apply), and `test_io.test_mirror_v_roundtrips_and_is_omitted_when_off`. *Readable mirrored text:* `test_codegen.test_mirrored_text_gets_the_measured_unflip` (the measured `x`/`y` choice per category and rotation, and the definition emitted with it), `…unflip_only_when_mirrored_and_only_for_listed_text` (no option or definition for unmirrored parts, a text-less `flipflop`, symmetric signs, the en amp, European gates), `…text_unflip_table_names_real_kinds`, `…vertical_mirror_uses_the_flipy_unflip`, and the slow `…mirrored_text_unflip_compiles` (every listed kind, both wraps, node and path options, through pdflatex; skipped without it); `test_items_stroke.test_upright_glyph_cancels_item_rotation_and_mirror`, `…body_text_unmirrors_and_stays_most_upright`, `…glyphs_group_into_printed_labels` (label count per listed kind), `…text_kinds_have_tagged_glyphs`, and `…every_text_kind_paints_mirrored` (paints each listed kind mirrored by direct call, since PySide only prints an exception raised inside a paint it calls itself). *Mirrored-node export:* `test_codegen.test_node_transform_puts_anchors_on_canvas_pins` (the emitted `xscale`/`rotate` options, composed last-listed-first as PGF does, carry every pin's local anchor onto its canvas pin; op amp / npn / nmos / flip-flop D / latch / muxdemux × 8 rotations × mirror — fails 36 cases with the old `rotate, xscale` order) and `…test_mirrored_bipole_box_is_centred_between_its_pins` (§7 Mirror). *Opt-in box wiring:* `test_scene.test_new_box_has_no_wire_connections_until_enabled` (a new rect/circle has no connection points, auto-start or attachment; enabling it is undoable and restores them), `test_properties.test_wire_connections_section_toggles_box_wiring`, and `test_io.test_line_color_and_wire_connections_roundtrip` / `…test_legacy_box_without_key_loads_connectable` (pre-0.12 boxes load connectable); the existing block-diagram tests opt in explicitly. *Colours:* `test_codegen.test_line_color_emits_draw_key_before_fill` (rect/circle/bipole `draw=<c>` with a custom `{rgb,255:…}` fill), `…test_tikz_rgb_color_round_trips_and_clamps`, `test_items_stroke.test_resolve_tikz_color_custom_rgb_and_xcolor_names`, and `test_properties.test_fill_border_line_color_and_custom_pick` (preset line colour; Custom… with a stubbed `_pick_color` stores the rgb form; cancel keeps the old value). *Drag-to-place:* `test_scene.test_drag_to_place_sets_length_from_endpoints` (pins land on the press/release points, one undo step, Place mode stays), `…takes_rotation_from_drag_direction` (±x, ±y, 45°), `…click_and_short_drag_keep_default`, `…not_for_nodes`, and `…escape_mid_drag_keeps_default_visible`.
+ 
++**Symbol line style, line colour and fill (§7.8).** `test_shapes.test_shaped_kinds_are_real_registry_kinds` (every `SHAPED_KINDS` entry is a registry kind, so a regenerated library cannot leave a stale one), `…test_examples_from_the_spec` (op amp / outline diode / ALU shaped; resistor / capacitor / ground / npn not), `…test_symbol_style_gate` (line style and colour kept for every symbol, the fill only for a shaped one), `…test_body_fill_index_finds_bodies_not_slivers` (an op amp and an outline diode have a fill path; a resistor and capacitor plates do not) and `…test_fill_paints_a_shaped_symbol_but_is_ignored_on_a_plain_one` (offscreen render: a fill paints an op amp and not a resistor); `test_codegen.test_symbol_style_goes_on_the_draw_and_respects_the_shape` (`\draw[dashed, red]` for a resistor and transistor with no fill, `\draw[dashed, red, fill=yellow]` for an op amp, nothing for unstyled symbols); `test_properties.test_plain_symbol_offers_style_and_color_but_no_fill`, `…test_shaped_symbol_and_block_offer_fill_and_style`, `…test_style_edit_on_mixed_selection_only_writes_applicable_fields` (resistor + op amp: line style and colour reach both, the fill only the op amp, one undo step) and the updated `…test_multi_select_symbol_and_block_share_stroke_width` (the style section now binds a resistor + rectangle); `test_io.test_symbol_appearance_roundtrip` (line style / colour / fill of a symbol round-trip, defaults omitted) and `…test_format_version_roundtrips_and_old_versions_load` (current format 0.13; 0.1–0.12 load); and `test_components_library.test_resistor_def` (library kinds are `SymbolComponent`).
++
+ ### 13.3 Integration Tests
+ 
+ Integration tests run against `SchematicScene` / `SchematicView` (file `test_scene.py`). They require Qt with an offscreen platform (`QT_QPA_PLATFORM=offscreen`) but no LaTeX installation. In a headless environment Qt's platform plugin needs the system GL/EGL libraries present; if Qt cannot initialise, the scene tests skip rather than fail. As with §13.2, `test_scene.py` is the authoritative list; this is a summary of coverage.
+diff --git a/app/canvas/items.py b/app/canvas/items.py
+index baf7746..f56f148 100644
+--- a/app/canvas/items.py
++++ b/app/canvas/items.py
+@@ -58,12 +58,14 @@ from app.canvas.style import (
+ )
+ from app.canvas.svgsym import (
+     PX_PER_PT,
++    body_fill_index,
+     dash_for_pen,
+     effective_color,
+     is_thick,
+     symbol_paths,
+ )
+ from app.components.registry import REGISTRY
++from app.components.shapes import symbol_style
+ from app.components.style import parse_tikz_rgb_color
+ from app.schematic.model import HOP_ARC_RADIUS_GU, HOP_HALF_GU
+ 
+@@ -1676,6 +1678,11 @@ class ComponentItem(QGraphicsItem):
+                                 placed=[base[i] for i in idx]) if idx else None
+         if fixed is not None:
+             upright = dict(zip(idx, fixed))
++        _ls, _lc, _fc = symbol_style(self._component)
++        _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
++        # Default-ink solid parts (end bars, dots, text) take the line colour too,
++        # like CircuiTikZ's ``\\draw[red]``.
++        _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
+         for _i, sym in enumerate(syms):
+             path = upright.get(_i, base[_i])
+             lw = _stroke_px(sym.stroke_width, lw_scale)
+@@ -1684,13 +1691,20 @@ class ComponentItem(QGraphicsItem):
+             # a default-black stroke falls back to the theme ink so ordinary symbols
+             # still follow light/dark mode (§5.10).
+             pen_w = lw / s
+-            pen = _pen(effective_color(sym.stroke_color, color), pen_w)
+-            if sym.dash:
+-                pen.setDashPattern(dash_for_pen(sym.dash, PX_PER_PT, pen_w))
++            # The user's Line colour / Line style / Fill (inspector) override the
++            # symbol's own stroke and body, like CircuiTikZ's ``color=`` / ``dashed`` /
++            # ``fill=``. ``symbol_style`` decides what applies (colour for every
++            # symbol; style + fill only for a shaped one); selection/hover tints
++            # still win over the line colour (see _outline_color).
++            pen = _styled_symbol_pen(
++                effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
++                dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None)
+             painter.setPen(pen)
+-            if sym.filled:
++            if _fc and _i == _fill_idx:
++                painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
++            elif sym.filled:
+                 fill = (style.COLOR_BACKGROUND if sym.fill_bg
+-                        else effective_color(sym.fill_color, color))
++                        else effective_color(sym.fill_color, _ink))
+                 painter.setBrush(QBrush(QColor(fill)))
+             else:
+                 painter.setBrush(Qt.NoBrush)
+@@ -3137,6 +3151,24 @@ def upright_glyph(path: QPainterPath, item_xform: QTransform) -> QPainterPath:
+     return upright_glyphs([path], item_xform)[0]
+ 
+ 
++def _styled_symbol_pen(stroke: str, width: float, line_style: str, line_color: str,
++                       state_color: str, dash: list[float] | None = None) -> QPen:
++    """Pen for one circuit-symbol path: the symbol's own *stroke* colour and *dash*,
++    overridden by the user's Line colour / Line style (see ``symbol_style``) the way
++    CircuiTikZ's ``color=`` / ``dashed`` override them. Selection/hover tints win over
++    the line colour so the user can still see what is selected. Shared by every item
++    class that paints symbol paths so they cannot drift apart."""
++    if line_color and state_color == style.COLOR_NORMAL:
++        stroke = _resolve_tikz_color(line_color).name()
++    pen = _pen(stroke, width)
++    user = _resolve_pen_style(line_style)
++    if user != Qt.SolidLine:
++        pen.setStyle(user)
++    elif dash:
++        pen.setDashPattern(dash)
++    return pen
++
++
+ def _outline_color(comp, state_color: str) -> str:  # noqa: ANN001
+     """Pen colour for a styled box/bipole outline: its ``line_color`` when set
+     and the item is in its normal state. Selection/hover/ghost tints win, so the
+@@ -3775,10 +3807,16 @@ class _ResizableNodeItem(ComponentItem):
+                                 self.transform(), self._component.rotation) if idx else None
+         if fixed is not None:
+             upright = dict(zip(idx, fixed))
++        _ls, _lc, _fc = symbol_style(self._component)
++        _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
++        _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
+         for _i, sym in enumerate(syms):
+-            painter.setPen(_pen(color, _stroke_px(sym.stroke_width, lw_scale)))
+-            if sym.filled:
+-                fill = style.COLOR_BACKGROUND if sym.fill_bg else color
++            painter.setPen(_styled_symbol_pen(
++                color, _stroke_px(sym.stroke_width, lw_scale), _ls, _lc, color))
++            if _fc and _i == _fill_idx:
++                painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
++            elif sym.filled:
++                fill = style.COLOR_BACKGROUND if sym.fill_bg else _ink
+                 painter.setBrush(QBrush(QColor(fill)))
+             else:
+                 painter.setBrush(Qt.NoBrush)
+diff --git a/app/canvas/svgsym.py b/app/canvas/svgsym.py
+index bd68aee..7e1d2ad 100644
+--- a/app/canvas/svgsym.py
++++ b/app/canvas/svgsym.py
+@@ -324,3 +324,40 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
+                               filled=True, glyph=True))
+ 
+     return tuple(out)
++
++
++#: A fill colour paints the symbol's *body*, never a sliver (a capacitor plate).
++_MIN_BODY_ASPECT = 0.3
++
++
++@lru_cache(maxsize=None)
++def body_fill_index(kind: str) -> int | None:
++    """Index into :func:`symbol_paths` of the path a user **Fill** colour paints, or
++    ``None`` when the kind has no body.
++
++    The body is the largest *closed* non-text outline (box / triangle / circle) whose
++    bounding box is not a thin sliver, which skips arrowheads, dots and capacitor
++    plates, matching what CircuiTikZ's ``fill=`` paints (see
++    ``scripts/find_fillable_kinds.py``). Painting only this path keeps leads and
++    decorations in their own colour.
++    """
++    best: tuple[float, int] | None = None
++    for idx, sp in enumerate(symbol_paths(kind)):
++        if sp.glyph:
++            continue
++        for poly in sp.path.toSubpathPolygons():
++            n = poly.count()
++            if n < 3 or not poly.isClosed():
++                continue
++            r = poly.boundingRect()
++            hi = max(r.width(), r.height())
++            if hi <= 0 or min(r.width(), r.height()) / hi < _MIN_BODY_ASPECT:
++                continue
++            area = 0.0
++            for k in range(n):
++                p, q = poly.at(k), poly.at((k + 1) % n)
++                area += p.x() * q.y() - q.x() * p.y()
++            area = abs(area) / 2.0
++            if best is None or area > best[0]:
++                best = (area, idx)
++    return best[1] if best else None
+diff --git a/app/codegen/circuitikz.py b/app/codegen/circuitikz.py
+index 43399a6..a9891e6 100644
+--- a/app/codegen/circuitikz.py
++++ b/app/codegen/circuitikz.py
+@@ -88,6 +88,7 @@ from app.components.model import (
+     TextNodeComponent,
+ )
+ from app.components.registry import REGISTRY
++from app.components.shapes import symbol_style
+ from app.components.style import (
+     balance_braces,
+     compose_style_options,
+@@ -393,7 +394,7 @@ def generate(
+             for _p in (_w.points[0], _w.points[-1]):
+                 _ref_endpoints.add((round(_p[0], 6), round(_p[1], 6)))
+     for _c in schematic.components:
+-        if _c.z_order == 0 and _c.kind in _NODE_KINDS:
++        if _in_main_layer(_c) and _c.kind in _NODE_KINDS:
+             _pp = component_pin_positions(_c)
+             if _pp:
+                 _ref_endpoints.add((round(_pp[0][0], 6), round(_pp[0][1], 6)))
+@@ -405,7 +406,7 @@ def generate(
+         # forward reference (compile error). Wires connecting to a layered
+         # component fall back to absolute pin coordinates instead, which connect
+         # exactly (see the module docstring), so nothing is lost geometrically.
+-        if comp.z_order != 0:
++        if not _in_main_layer(comp):
+             continue
+         defn = REGISTRY[comp.kind]
+         node_id = f"node_{comp.id[:8]}"
+@@ -504,7 +505,7 @@ def generate(
+     # the main \draw. A re-layered (z_order != 0) node is emitted in its own layer
+     # block instead, so skip it here.
+     for comp in schematic.components:
+-        if comp.z_order == 0 and _node_group_ctikzset(comp):
++        if _in_main_layer(comp) and _node_group_ctikzset(comp):
+             lines.extend(_node_group_lines(comp, _y, _rot))
+ 
+     draw_lines: list[str] = []
+@@ -515,7 +516,7 @@ def generate(
+     # from the user's `node_side` (a placement key in the bracket), not gate context.
+     node_command_lines: list[str] = []
+     for comp in schematic.components:
+-        if comp.z_order != 0:
++        if not _in_main_layer(comp):
+             continue  # emitted in a background/foreground layer block
+         if _node_group_ctikzset(comp):
+             continue  # already emitted in its own group above
+@@ -609,7 +610,9 @@ def generate(
+     fg_items: list[tuple[int, int, str, object]] = []
+     for i, comp in enumerate(schematic.components):
+         is_drawing = isinstance(comp, DrawingComponent)
+-        if (is_drawing and comp.z_order >= 0) or (not is_drawing and comp.z_order > 0):
++        if (is_drawing and comp.z_order >= 0) or (
++            not is_drawing and (comp.z_order > 0 or (comp.z_order == 0 and not _in_main_layer(comp)))
++        ):
+             fg_items.append((comp.z_order, i, "c", comp))
+     for i, wire in enumerate(schematic.wires):
+         if wire.z_order > 0 and len(wire.points) >= 2:
+@@ -690,13 +693,14 @@ def _component_layer_lines(
+     if _eff_kind(comp) in _NODE_KINDS:
+         # A single-terminal node is its own standalone `\node at` command, even in a
+         # layer block (no `\draw` wrapper).
+-        style = _annotation_style_opts(comp, voltage_european, current_european)
++        style = [*_annotation_style_opts(comp, voltage_european, current_european),
++                 *_symbol_style_opts(comp)]
+         return [rf"  {_node_command(comp, y_fn, style)}"]
+     frags = _component_lines(
+         comp, None, y_fn, rot_fn,
+         voltage_european=voltage_european, current_european=current_european,
+     )
+-    return [rf"  \draw {frag};" for frag in frags]
++    return [rf"  \draw{_draw_opts(comp)} {frag};" for frag in frags]
+ 
+ 
+ def _two_terminal_line(
+@@ -843,7 +847,7 @@ def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) ->
+     else:
+         frag = _multi_terminal_line(comp, y_fn, rot_fn)
+     sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
+-    return ["  {", *sets, rf"    \draw {frag};", "  }"]
++    return ["  {", *sets, rf"    \draw{_draw_opts(comp)} {frag};", "  }"]
+ 
+ 
+ def _multi_terminal_line(
+@@ -1652,6 +1656,41 @@ def _line_width_opt(comp: Component) -> str:
+     return f"line width={comp.line_width:g}pt"
+ 
+ 
++def _symbol_style_opts(comp: Component) -> list[str]:
++    """Line style, line colour and fill for a circuit-symbol component, as options for
++    its own ``\\draw[...]`` (see :func:`_in_main_layer`); empty when unset. What
++    applies is decided by ``symbol_style``: the style and colour for every symbol, the
++    fill only for a shaped one (box / triangle / circle body). A plain colour name is
++    emitted bare (``\\draw[red]``); anything else (an ``{rgb,255:...}`` spec) as
++    ``color=...``. The fill comes last so it overrides the bare colour's fill. Block
++    components (rect/circle/bipole) emit their style via ``compose_style_options``."""
++    if isinstance(comp, DrawingComponent):
++        return []
++    ls, lc, fc = symbol_style(comp)
++    opts: list[str] = []
++    if ls:
++        opts.append(ls)
++    if lc:
++        opts.append(lc if re.fullmatch(r"[A-Za-z][A-Za-z0-9!.+\-]*", lc) else f"color={lc}")
++    if fc:
++        opts.append(f"fill={fc}")
++    return opts
++
++
++def _draw_opts(comp: Component) -> str:
++    """``[opts]`` for ``\\draw`` from the symbol style, or ``""`` when unstyled."""
++    opts = _symbol_style_opts(comp)
++    return f"[{', '.join(opts)}]" if opts else ""
++
++
++def _in_main_layer(comp: Component) -> bool:
++    """True when *comp* is emitted inside the shared main ``\\draw``. A symbol with a
++    custom line style / colour is instead emitted in its own ``\\draw[...]`` statement
++    (like a layered component: absolute pin coordinates, no named anchor), so the
++    style sits on the ``\\draw`` rather than inside ``to[...]``."""
++    return comp.z_order == 0 and not _symbol_style_opts(comp)
++
++
+ def _annotation_style_opts(comp: Component, voltage_european: bool,
+                            current_european: bool) -> list[str]:
+     """Local ``voltage=european`` / ``current=european`` options for a component
+diff --git a/app/components/custom.py b/app/components/custom.py
+index 92c413a..8f0566d 100644
+--- a/app/components/custom.py
++++ b/app/components/custom.py
+@@ -24,7 +24,9 @@ from __future__ import annotations
+ 
+ from app.canvas.style import SVG_PT_PER_GU
+ from app.components import library, render
+-from app.components.model import Component, ComponentDef, CustomComponentSpec, PinDef
++from app.components.model import (
++    Component, ComponentDef, CustomComponentSpec, PinDef, SymbolComponent,
++)
+ 
+ # These MUST match app/components/generate.py's fixed-bounding-box scheme. The
+ # ``origin_svg`` constant in components/generated/definitions.json — the single
+@@ -180,7 +182,7 @@ def spec_to_component_def(spec: CustomComponentSpec) -> ComponentDef:
+         tikz_keyword=base.get("tikz", spec.base_kind),
+         default_span=tuple(spec.default_span),  # type: ignore[arg-type]
+         resizable=False,  # Phase 1: geometry is captured at a fixed size
+-        component_class=Component,
++        component_class=SymbolComponent,
+         base_kind=spec.base_kind,
+         ctikzset=tuple(spec.ctikzset),
+         extra_options=spec.extra_options,
+diff --git a/app/components/library.py b/app/components/library.py
+index d4de0f9..03a52c1 100644
+--- a/app/components/library.py
++++ b/app/components/library.py
+@@ -27,7 +27,7 @@ import math
+ from functools import lru_cache
+ from pathlib import Path
+ 
+-from app.components.model import Component, ComponentDef, PinDef
++from app.components.model import Component, ComponentDef, PinDef, SymbolComponent
+ from app.resources import component_data_path, resource_path
+ 
+ # Kinds NOT in the library (no CircuiTikZ-command symbol) — keep hand-coded defs.
+@@ -604,8 +604,8 @@ def to_component_def(kind: str, entry: dict) -> ComponentDef:
+         default_span=default_span,
+         resizable=resizable,
+         # Variants are now generic per-instance state on the base Component, so
+-        # every library kind uses Component (no DiodeComponent/MosfetComponent).
+-        component_class=Component,
++        # every library kind uses SymbolComponent (Component + fill/line-style fields).
++        component_class=SymbolComponent,
+         # Measured node-text anchor offset (components/generate_library.py); (0,0)
+         # when absent.
+         text_anchor=tuple(entry.get("text_anchor", (0.0, 0.0))),  # type: ignore[arg-type]
+diff --git a/app/components/model.py b/app/components/model.py
+index a5df746..cc95b0d 100644
+--- a/app/components/model.py
++++ b/app/components/model.py
+@@ -275,6 +275,20 @@ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
+     """Override default: bipole box is smaller so 7 pt fits better than 12 pt."""
+ 
+ 
++@dataclass
++class SymbolComponent(StyledComponent, Component):
++    """Circuit symbol (R, C, diode, transistor, op amp, gate, ...) that carries
++    the fill / line-style / line-colour fields.
++
++    Unlike the drawing kinds it is *not* a :class:`DrawingComponent`, so symbols
++    keep their circuit-pin and CircuiTikZ ``to[]``/``node[]`` code paths; the
++    mixin only adds appearance overrides (and makes ``isinstance(comp,
++    StyledComponent)`` true so the inspector's "Fill & line style" section shows).
++    The mixin is listed *before* ``Component`` for the same dataclass
++    field-ordering reason as the drawing classes above.
++    """
++
++
+ # ---------------------------------------------------------------------------
+ # Static component definitions
+ # ---------------------------------------------------------------------------
+diff --git a/app/components/shapes.py b/app/components/shapes.py
+new file mode 100644
+index 0000000..900249a
+--- /dev/null
++++ b/app/components/shapes.py
+@@ -0,0 +1,279 @@
++"""Which circuit symbols have a *body* (a box, triangle, circle...) that can be filled.
++
++A component with a body gets the full "Fill & line style" inspector section (line
++style, line colour, fill); every other symbol (resistor, capacitor, ground, ...)
++gets the same section without **Fill** (there is no body to fill). A resistor is
++never "shaped", even when the document draws resistors European (box) style, which
++keeps it visually distinct from a fuse. Block components (rect / circle / bipole box) are always
++shaped. This module is the single source of truth: the code generator, the canvas
++painter and the inspector all go through :func:`symbol_style` / :func:`is_shaped`,
++so what is emitted, drawn and offered can never disagree.
++
++``SHAPED_KINDS`` is derived, not hand-written: ``scripts/find_fillable_kinds.py``
++renders every kind with ``fill=`` in CircuiTikZ and keeps those where the fill paints
++a compact region (CircuiTikZ also fills capacitor plates, but they are slivers, not
++an enclosed shape). Re-run it after regenerating the component library and paste the
++printed set here. A kind missing from the set simply gets colour-only styling, which
++is the safe default (user-captured custom components are in that case).
++"""
++
++from __future__ import annotations
++
++from app.components.model import Component, DrawingComponent
++
++SHAPED_KINDS: frozenset[str] = frozenset({
++    "ALU",
++    "TL",
++    "adc",
++    "adder",
++    "afuse",
++    "ageneric",
++    "agtobar",
++    "allpass",
++    "american and port",
++    "american buffer port",
++    "american controlled current source",
++    "american controlled voltage source",
++    "american current source",
++    "american gas filled surge arrester",
++    "american nand port",
++    "american nor port",
++    "american not port",
++    "american or port",
++    "american voltage source",
++    "american xnor port",
++    "american xor port",
++    "ammeter",
++    "amp",
++    "bandpass",
++    "bandstop",
++    "bare7seg",
++    "bareRXantenna",
++    "bareTXantenna",
++    "bareantenna",
++    "buffer",
++    "bulb",
++    "buzzer",
++    "circulator",
++    "closed double solder jumper",
++    "closed solder jumper",
++    "controlled sinusoidal current source",
++    "controlled sinusoidal voltage source",
++    "coupler",
++    "coupler2",
++    "cpe",
++    "cute european controlled current source",
++    "cute european controlled voltage source",
++    "cute european current source",
++    "cute european voltage source",
++    "dac",
++    "damper",
++    "dcisource",
++    "dcvsource",
++    "detector",
++    "diodetube",
++    "dipchip",
++    "double bipole",
++    "dsp",
++    "elmech",
++    "empty Schottky diode",
++    "empty TVS diode",
++    "empty ZZener diode",
++    "empty Zener diode",
++    "empty agtobar",
++    "empty bidirectionaldiode",
++    "empty controlled source",
++    "empty diode",
++    "empty gto",
++    "empty gtobar",
++    "empty laser diode",
++    "empty led",
++    "empty photodiode",
++    "empty put",
++    "empty thyristor",
++    "empty triac",
++    "empty tunnel diode",
++    "empty varcap",
++    "en amp",
++    "esource",
++    "european and port",
++    "european blank not port",
++    "european blank port",
++    "european buffer port",
++    "european controlled current source",
++    "european controlled voltage source",
++    "european current source",
++    "european gas filled surge arrester",
++    "european nand port",
++    "european nor port",
++    "european not port",
++    "european or port",
++    "european voltage source",
++    "european xnor port",
++    "european xor port",
++    "fd inst amp",
++    "fd op amp",
++    "fft",
++    "flipflop",
++    "flipflop D",
++    "flipflop JK",
++    "flipflop SR",
++    "flipflop T",
++    "fourport",
++    "fuse",
++    "generic",
++    "genericsplitter",
++    "gm amp",
++    "gridnode",
++    "gto",
++    "gtobar",
++    "gyrator",
++    "highpass",
++    "highpass2",
++    "ieee double tgate",
++    "ieee tgate",
++    "ieeestd and port",
++    "ieeestd buffer port",
++    "ieeestd invschmitt port",
++    "ieeestd nand port",
++    "ieeestd nor port",
++    "ieeestd not port",
++    "ieeestd or port",
++    "ieeestd schmitt port",
++    "ieeestd xnor port",
++    "ieeestd xor port",
++    "inline buffer",
++    "inline double tgate",
++    "inline invschmitt",
++    "inline not",
++    "inline proximeter",
++    "inline schmitt",
++    "inline tgate",
++    "inst amp",
++    "inst amp ra",
++    "invschmitt",
++    "ioosource",
++    "lamp",
++    "latch",
++    "ldR",
++    "left double solder jumper",
++    "loudspeaker",
++    "lowpass",
++    "lowpass2",
++    "magnetron",
++    "mass",
++    "memristor",
++    "mic",
++    "mixer",
++    "mov",
++    "msport",
++    "msrstub",
++    "muxdemux",
++    "mzm",
++    "ngfet",
++    "norator",
++    "nullator",
++    "ohmmeter",
++    "one bit adder",
++    "ooosource",
++    "oosourcetrans",
++    "op amp",
++    "open double solder jumper",
++    "open solder jumper",
++    "oscillator",
++    "oscope",
++    "pentode",
++    "pentode suppressor to cathode",
++    "pgfet",
++    "pground",
++    "phR",
++    "phaseshifter",
++    "piattenuator",
++    "piezoelectric",
++    "plain amp",
++    "plain mono amp",
++    "pmosd",
++    "proximeter",
++    "put",
++    "pvmodule",
++    "pvsource",
++    "qfpchip",
++    "qiprobe",
++    "qpprobe",
++    "qvprobe",
++    "rbuzzer",
++    "reed",
++    "right double solder jumper",
++    "rmeter",
++    "rmeterwa",
++    "sacac",
++    "sacdc",
++    "schmitt",
++    "sdcac",
++    "sdcdc",
++    "sground",
++    "sinusoidal current source",
++    "sinusoidal voltage source",
++    "smeter",
++    "splitter",
++    "square voltage source",
++    "stroke Schottky diode",
++    "stroke ZZener diode",
++    "stroke Zener diode",
++    "stroke agtobar",
++    "stroke diode",
++    "stroke gto",
++    "stroke gtobar",
++    "stroke laser diode",
++    "stroke led",
++    "stroke photodiode",
++    "stroke put",
++    "stroke thyristor",
++    "stroke tunnel diode",
++    "stroke varcap",
++    "tacac",
++    "tacdc",
++    "tattenuator",
++    "tdcac",
++    "tetrode",
++    "tgeneric",
++    "thR",
++    "thRn",
++    "thRp",
++    "thyristor",
++    "tlinestub",
++    "tlmic",
++    "triac",
++    "triode",
++    "twoport",
++    "twoportsplit",
++    "vamp",
++    "variable capacitor",
++    "varistor",
++    "vco",
++    "viscoe",
++    "voltmeter",
++    "voosource",
++    "vphaseshifter",
++    "vpiattenuator",
++    "vsourcetri",
++    "vtattenuator",
++    "wilkinson",
++    "xgeneric",
++})
++
++
++def is_shaped(comp: Component) -> bool:
++    """True when *comp* has a body that a fill colour / line style applies to."""
++    return isinstance(comp, DrawingComponent) or comp.kind in SHAPED_KINDS
++
++
++def symbol_style(comp: Component) -> tuple[str, str, str]:
++    """``(line_style, line_color, fill_color)`` in effect for a circuit symbol.
++
++    Line style and colour apply to every symbol; the fill only to a shaped one, so
++    a stale fill on a resistor (e.g. from a hand-edited file) is ignored consistently
++    by codegen and canvas. Empty string = unset.
++    """
++    fill = getattr(comp, "fill_color", "") if is_shaped(comp) else ""
++    return getattr(comp, "line_style", ""), getattr(comp, "line_color", ""), fill
+diff --git a/app/schematic/io.py b/app/schematic/io.py
+index 9d1700f..2b14591 100644
+--- a/app/schematic/io.py
++++ b/app/schematic/io.py
+@@ -108,12 +108,16 @@ from app.schematic.validate import validate
+ #: block-diagram edge wiring; always written). A 0.11 build would silently strip them on save, so the bump refuses the
+ #: newer file; 0.1–0.11 files load unchanged (no line colour, and **connections on**
+ #: for every box, since every box edge was connectable before 0.12).
+-_FORMAT_VERSION: str = "0.12"
++#: 0.13 lets circuit symbols carry ``line_style`` / ``line_color`` / ``fill_color`` (the
++#: StyledComponent fields, previously blocks only; each omitted when empty). A 0.12 build
++#: would silently strip them on save, so the bump refuses the newer file; 0.1–0.12 files
++#: load unchanged (absent fields default to empty).
++_FORMAT_VERSION: str = "0.13"
+ 
+ # File-format versions this loader accepts. Extend when new versions are defined.
+ _KNOWN_VERSIONS: set[str] = {
+     "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11",
+-    "0.12",
++    "0.12", "0.13",
+ }
+ 
+ # Refuse to parse implausibly large files (a real schematic is a few hundred KB
+diff --git a/app/ui/properties.py b/app/ui/properties.py
+index 17fe2df..05f9bf0 100644
+--- a/app/ui/properties.py
++++ b/app/ui/properties.py
+@@ -64,6 +64,7 @@ from app.canvas.scene import SchematicScene
+ from app.codegen.circuitikz import is_node_style, is_single_terminal_node
+ from app.components.style import split_top_level
+ from app.ui import theme
++from app.components.shapes import is_shaped
+ from app.components.model import (
+     BipoleComponent,
+     CircleComponent,
+@@ -305,6 +306,14 @@ class _HopModeCheckBox(QCheckBox):
+ # Small widget factories (shared across sections)
+ # ---------------------------------------------------------------------------
+ 
++def _set_row_visible(row: QHBoxLayout, visible: bool) -> None:
++    """Show/hide every widget of a ``label: [control]`` row (a layout has no hide)."""
++    for i in range(row.count()):
++        w = row.itemAt(i).widget()
++        if w is not None:
++            w.setVisible(visible)
++
++
+ def _make_section_label(text: str) -> QLabel:
+     lbl = QLabel(text)
+     # Tagged so PropertiesPanel.apply_theme can re-ink it on a light/dark swap
+@@ -1185,8 +1194,14 @@ class FontSection(InspectorSection):
+ 
+ 
+ class FillBorderSection(InspectorSection):
+-    """Line style, line colour and fill colour for any StyledComponent (rect,
+-    circle, bipole). Both colours offer presets plus a Custom… picker.
++    """Line style, line colour and fill colour for any StyledComponent. Both colours
++    offer presets plus a Custom… picker.
++
++    **Fill** is offered only for a component with a body (``components/shapes.py``):
++    a block (rect, circle, bipole box) or a symbol such as an op-amp, gate, source or
++    diode triangle. Every other symbol (resistor, capacitor, ground...) gets line
++    style and colour only. A multi-selection offers Fill if any selected component
++    supports it, and an edit writes the fill only to the components it applies to.
+ 
+     Reads/writes the StyledComponent fields directly via the generic per-field
+     scene setters — no string parsing, no per-type branching. The outline
+@@ -1221,7 +1236,22 @@ class FillBorderSection(InspectorSection):
+     def applies_to(self, comp: Component) -> bool:
+         return isinstance(comp, StyledComponent)
+ 
++    def _bound(self, fallback: Component) -> list[Component]:
++        comps = []
++        if self._scene is not None:
++            for cid in self._comp_ids:
++                c = self._scene._component_by_id(cid)
++                if c is not None:
++                    comps.append(c)
++        return comps or [fallback]
++
+     def _load(self, comp: Component) -> None:
++        # Fill only for components with a body; the heading says so (no "Fill" in
++        # the title for a resistor). Line style and colour apply to every symbol.
++        shaped = any(is_shaped(c) for c in self._bound(comp))
++        _set_row_visible(self._fill_row, shaped)
++        if self._title_label is not None:
++            self._title_label.setText("Fill & line style" if shaped else "Line style & color")
+         # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
+         # as extra items so an unrelated edit in this section round-trips them.
+         _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
+@@ -1238,9 +1268,11 @@ class FillBorderSection(InspectorSection):
+         line_color = self._line_color.value()
+ 
+         def apply(s, cid):  # noqa: ANN001
++            c = s._component_by_id(cid)
+             s.set_line_style(cid, style)
+             s.set_line_color(cid, line_color)
+-            s.set_fill_color(cid, fill)
++            if c is not None and is_shaped(c):   # fill only where a body exists
++                s.set_fill_color(cid, fill)
+ 
+         self._apply("Style", apply)
+ 
+diff --git a/examples/Battery Models/ESC Cell Model.hv b/examples/Battery Models/ESC Cell Model.hv
+index 11f0cde..9f417cb 100644
+--- a/examples/Battery Models/ESC Cell Model.hv	
++++ b/examples/Battery Models/ESC Cell Model.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/examples/Battery Models/Half-Cell Dc Model.hv b/examples/Battery Models/Half-Cell Dc Model.hv
+index 81991b3..f006683 100644
+--- a/examples/Battery Models/Half-Cell Dc Model.hv	
++++ b/examples/Battery Models/Half-Cell Dc Model.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/examples/Battery Models/LIB Pulse Model.hv b/examples/Battery Models/LIB Pulse Model.hv
+index 922af65..c2a1d63 100644
+--- a/examples/Battery Models/LIB Pulse Model.hv	
++++ b/examples/Battery Models/LIB Pulse Model.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/examples/Battery Models/Porous Electrode Interface.hv b/examples/Battery Models/Porous Electrode Interface.hv
+index 0477d8c..7fbeeff 100644
+--- a/examples/Battery Models/Porous Electrode Interface.hv	
++++ b/examples/Battery Models/Porous Electrode Interface.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/examples/Control Systems/State-Space System.hv b/examples/Control Systems/State-Space System.hv
+index 0023f33..4b135d7 100644
+--- a/examples/Control Systems/State-Space System.hv	
++++ b/examples/Control Systems/State-Space System.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/examples/Power Electronics/Boost Converter.hv b/examples/Power Electronics/Boost Converter.hv
+index 99fe58b..0958f3d 100644
+--- a/examples/Power Electronics/Boost Converter.hv	
++++ b/examples/Power Electronics/Boost Converter.hv	
+@@ -1,5 +1,5 @@
+ {
+-  "version": "0.12",
++  "version": "0.13",
+   "name": "untitled",
+   "config": {
+     "voltage_style": "american",
+diff --git a/scripts/find_fillable_kinds.py b/scripts/find_fillable_kinds.py
+new file mode 100644
+index 0000000..269dce7
+--- /dev/null
++++ b/scripts/find_fillable_kinds.py
+@@ -0,0 +1,156 @@
++"""Derive which library kinds have a *fillable body* (a box, triangle, circle...).
++
++Developer tool (needs ``pdflatex`` + ``circuitikz``, ``pdftoppm``, numpy, Pillow).
++Each kind is rendered once with ``fill=yellow`` on its ``\\draw``; a kind counts as
++"shaped" when the yellow region is a real body rather than a sliver (capacitor
++plates fill too, but are not an enclosed shape). The result is the data in
++``app/components/shapes.py``; re-run this after regenerating the library and paste
++the printed ``SHAPED_KINDS`` set there.
++
++    uv run python scripts/find_fillable_kinds.py [--json out.json]
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++
++import numpy as np
++from PIL import Image
++
++ROOT = Path(__file__).resolve().parent.parent
++sys.path.insert(0, str(ROOT))
++
++from app.codegen import circuitikz as cg  # noqa: E402
++from app.components.model import SymbolComponent  # noqa: E402
++from app.components.registry import REGISTRY  # noqa: E402
++from app.schematic.model import Component, Schematic  # noqa: E402
++
++DPI = 60
++# A kind is "shaped" when fill visibly paints something (>= MIN_PIXELS) and that
++# region is compact rather than a sliver: CircuiTikZ also fills capacitor plates,
++# but they are not an enclosed shape. A sliver has min/max bbox side < MIN_ASPECT
++# (capacitor plates ~0.25; diode triangles, op-amps, boxes >= 0.3).
++MIN_ASPECT = 0.3
++MIN_PIXELS = 12
++
++
++def _source(kind: str) -> str:
++    comp = Component(id=f"k_{kind}", kind=kind, position=(0.0, 0.0), rotation=0, options="")
++    sch = Schematic(version="0.1", name="k", components=[comp], wires=[])
++    return cg.generate(sch, y_flip=True)
++
++
++def _compile(kinds: list[str], sources: dict[str, str], tmp: Path) -> list[Image.Image] | None:
++    body = "\n".join(sources[k] for k in kinds)
++    tex = (
++        "\\documentclass[multi=circuitikz,border=2pt]{standalone}\n"
++        "\\usepackage[siunitx]{circuitikz}\n\\begin{document}\n" + body + "\n\\end{document}\n"
++    )
++    (tmp / "b.tex").write_text(tex)
++    for f in tmp.glob("b*.p*m"):
++        f.unlink()
++    pdf = tmp / "b.pdf"
++    if pdf.exists():
++        pdf.unlink()
++    try:
++        subprocess.run(
++            ["pdflatex", "-interaction=nonstopmode", "-no-shell-escape", "b.tex"],
++            cwd=tmp, capture_output=True, timeout=25,
++        )
++    except subprocess.TimeoutExpired:  # a kind that hangs TeX: caller bisects
++        return None
++    if not pdf.exists():
++        return None
++    r = subprocess.run(["pdftoppm", "-r", str(DPI), "b.pdf", "b"], cwd=tmp, capture_output=True)
++    pages = sorted(tmp.glob("b-*.ppm"))
++    if r.returncode != 0:  # a kind produced a broken page: caller bisects
++        for p in pages:
++            p.unlink()
++        pdf.unlink()
++        return None
++    if len(pages) != len(kinds):
++        for p in pages:
++            p.unlink()
++        return None
++    imgs = [Image.open(p).convert("RGB").copy() for p in pages]
++    for p in pages:
++        p.unlink()
++    pdf.unlink()
++    return imgs
++
++
++def _measure(img: Image.Image) -> dict:
++    a = np.asarray(img).astype(int)
++    ink = a.sum(axis=2) < 700
++    yel = (a[..., 0] > 200) & (a[..., 1] > 200) & (a[..., 2] < 120)
++
++    def bbox(m):
++        ys, xs = np.where(m)
++        return (0, 0) if len(xs) == 0 else (int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
++
++    iw, ih = bbox(ink)
++    yw, yh = bbox(yel)
++    extent = max(iw, ih, 1)
++    return {"yellow_px": int(yel.sum()), "yw": yw, "yh": yh, "extent": extent,
++            "aspect": round(min(yw, yh) / max(yw, yh, 1), 3)}
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--json")
++    args = ap.parse_args()
++
++    # Emit ``fill=yellow`` for every symbol regardless of the shape table.
++    cg._symbol_style_opts = lambda comp: ["fill=yellow"]
++
++    kinds = [k for k, d in REGISTRY.items() if d.component_class is SymbolComponent]
++    sources, failed = {}, []
++    for k in kinds:
++        try:
++            sources[k] = _source(k)
++        except Exception as exc:  # noqa: BLE001
++            failed.append((k, f"codegen: {exc}"))
++    kinds = [k for k in kinds if k in sources]
++
++    results: dict[str, dict] = {}
++    with tempfile.TemporaryDirectory() as td:
++        tmp = Path(td)
++
++        def run(chunk: list[str]) -> None:
++            if not chunk:
++                return
++            print(f"[{len(results)}/{len(kinds)}] batch of {len(chunk)}", file=sys.stderr, flush=True)
++            imgs = _compile(chunk, sources, tmp)
++            if imgs is not None:
++                for k, im in zip(chunk, imgs):
++                    results[k] = _measure(im)
++            elif len(chunk) == 1:
++                failed.append((chunk[0], "latex"))
++            else:
++                mid = len(chunk) // 2
++                run(chunk[:mid])
++                run(chunk[mid:])
++
++        for i in range(0, len(kinds), 60):
++            run(kinds[i:i + 60])
++
++    shaped = sorted(k for k, m in results.items()
++                    if m["yellow_px"] >= MIN_PIXELS and m["aspect"] >= MIN_ASPECT)
++    if args.json:
++        Path(args.json).write_text(json.dumps({"results": results, "failed": failed}, indent=1))
++    print(f"# {len(shaped)} shaped of {len(results)} measured; {len(failed)} failed")
++    for k, why in failed:
++        print(f"# FAILED {k}: {why}")
++    print("SHAPED_KINDS = frozenset({")
++    for k in shaped:
++        print(f'    "{k}",')
++    print("})")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/test_codegen.py b/tests/test_codegen.py
+index 38116a1..cf2e007 100644
+--- a/tests/test_codegen.py
++++ b/tests/test_codegen.py
+@@ -2380,6 +2380,27 @@ def test_line_width_emitted_for_symbol_component() -> None:
+     assert "line width" not in generate(_schematic(_comp("R")), y_flip=True)
+ 
+ 
++def test_symbol_style_goes_on_the_draw_and_respects_the_shape() -> None:
++    """Style sits on the symbol's own ``\\draw[...]`` (not inside to[]/node[]). A
++    symbol without a body (resistor, transistor) takes line style and colour but
++    no fill; a shaped one (op-amp) takes the fill too. Defaults emit nothing."""
++    for kind in ("R", "npn", "op amp"):
++        assert "red" not in generate(_schematic(_comp(kind)), y_flip=True)
++
++    for kind in ("R", "npn"):                      # no enclosed body
++        c = _comp(kind)
++        c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
++        src = generate(_schematic(c), y_flip=True)
++        assert "\\draw[dashed, red]" in src, (kind, src)
++        assert "fill=" not in src, (kind, src)
++
++    c = _comp("op amp")                            # triangle body
++    c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
++    src = generate(_schematic(c), y_flip=True)
++    assert "\\draw[dashed, red, fill=yellow]" in src, src
++    assert "color=" not in src
++
++
+ def test_line_width_emitted_once_for_block_components() -> None:
+     """Rect/circle/bipole emit the unified `line_width` through their own
+     draw/node options (via `compose_style_options`) — exactly once, not also via
+diff --git a/tests/test_components_library.py b/tests/test_components_library.py
+index 8ce17be..3e43342 100644
+--- a/tests/test_components_library.py
++++ b/tests/test_components_library.py
+@@ -16,7 +16,7 @@ from __future__ import annotations
+ 
+ from app.codegen import circuitikz as cg
+ from app.components import library
+-from app.components.model import Component, PinDef
++from app.components.model import Component, PinDef, SymbolComponent
+ from app.components.registry import REGISTRY
+ 
+ _LIBRARY_KINDS = set(REGISTRY) - library.NON_LIBRARY_KINDS
+@@ -54,7 +54,7 @@ def test_resistor_def():
+     r = REGISTRY["R"]
+     assert r.pins == [PinDef("in", (0.0, 0.0)), PinDef("out", (2.0, 0.0))]
+     assert r.default_span == (2.0, 0.0)
+-    assert r.component_class is Component
++    assert r.component_class is SymbolComponent
+ 
+ 
+ # NOTE: deleted the curated golden ComponentDef/codegen tests that pinned the
+diff --git a/tests/test_io.py b/tests/test_io.py
+index 875bc0a..5a897e0 100644
+--- a/tests/test_io.py
++++ b/tests/test_io.py
+@@ -1008,6 +1008,27 @@ def test_component_line_width_roundtrip(tmp_path: Path) -> None:
+     assert loaded.components[1].line_width == 0.4
+ 
+ 
++def test_symbol_appearance_roundtrip(tmp_path: Path) -> None:
++    """A circuit symbol's line style / colour / fill survive save+load as a
++    SymbolComponent; unset styles are omitted from the file."""
++    from app.components.model import StyledComponent, SymbolComponent
++    cls = REGISTRY["R"].component_class
++    assert cls is SymbolComponent
++    styled = cls(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, options="",
++                 line_style="dashed", line_color="red", fill_color="yellow")
++    plain = cls(id=_uid(), kind="R", position=(2.0, 0.0), rotation=0, options="")
++    p = tmp_path / "sym.hv"
++    save(Schematic(version="0.1", name="sym", components=[styled, plain]), p)
++    raw = json.loads(p.read_text())
++    assert raw["components"][0]["line_style"] == "dashed"
++    assert raw["components"][0]["line_color"] == "red"
++    assert "line_style" not in raw["components"][1]   # default omitted
++    a, b = load(p).components
++    assert isinstance(a, StyledComponent)
++    assert (a.line_style, a.line_color, a.fill_color) == ("dashed", "red", "yellow")
++    assert (b.line_style, b.line_color, b.fill_color) == ("", "", "")
++
++
+ # ---------------------------------------------------------------------------
+ # Robustness — non-finite numbers, raw-exception wrapping, size bound,
+ # degenerate wires, type strictness, format version (audit fixes)
+@@ -1201,15 +1222,15 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
+ 
+ 
+ def test_format_version_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
+-    """save() writes the current version (0.12); files declaring 0.1–0.11 all load."""
+-    assert _FORMAT_VERSION == "0.12"
++    """save() writes the current version (0.13); files declaring 0.1–0.12 all load."""
++    assert _FORMAT_VERSION == "0.13"
+     p = tmp_path / "v.hv"
+     save(_empty_schematic(), p)
+     assert json.loads(p.read_text(encoding="utf-8"))["version"] == _FORMAT_VERSION
+     assert load(p).version == _FORMAT_VERSION
+ 
+     for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
+-                "0.11"):
++                "0.11", "0.12"):
+         q = tmp_path / f"v{old}.hv"
+         q.write_text(
+             json.dumps({"version": old, "name": "old",
+diff --git a/tests/test_properties.py b/tests/test_properties.py
+index a33fe65..5597b50 100644
+--- a/tests/test_properties.py
++++ b/tests/test_properties.py
+@@ -217,9 +217,9 @@ def test_transform_section_offers_45_degree_rotations(_app):
+ def test_multi_select_symbol_and_block_share_stroke_width(_app):
+     """A symbol + a block (resistor + rectangle) now share the unified stroke
+     width: selecting both exposes the Stroke section and a single edit sets the
+-    width of both as one undo step. Sections that apply to only one of them
+-    (Fill & line style → rect only; the options string → symbol only) stay
+-    hidden."""
++    width of both as one undo step. Fill & line style now binds both (a rect is
++    shaped; the resistor still gets its Line color row), while the options string
++    (symbol-only) stays hidden."""
+     from app.canvas.scene import SchematicScene
+     from app.ui.properties import (
+         FillBorderSection,
+@@ -241,10 +241,10 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
+     fill = next(s for s in panel._sections if isinstance(s, FillBorderSection))
+     options = next(s for s in panel._sections if isinstance(s, OptionsSection))
+ 
+-    # Stroke (unified width) applies to both; fill (rect-only) and options
+-    # (symbol-only) apply to just one, so they're suppressed for the mixed set.
++    # Stroke (unified width) and the style section apply to both; the options
++    # string (symbol-only) applies to just one, so it's suppressed for the mixed set.
+     assert stroke._comp_ids == [r.id, box.id]
+-    assert fill._comp_ids == []
++    assert fill._comp_ids == [r.id, box.id]
+     assert options._comp_ids == []
+ 
+     stroke._width.setValue(1.6)
+@@ -254,6 +254,79 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
+     assert all(abs(c.line_width - 0.4) < 1e-9 for c in scene.schematic.components)
+ 
+ 
++def _style_rows_hidden(section):
++    """(line style, line colour, fill) row visibility as ``(shown, shown, shown)``."""
++    def shown(row):
++        return all(not row.itemAt(i).widget().isHidden() for i in range(row.count()))
++    return shown(section._ls_row), shown(section._lc_row), shown(section._fill_row)
++
++
++def _fill_section(panel):
++    from app.ui.properties import FillBorderSection
++    return next(s for s in panel._sections if isinstance(s, FillBorderSection))
++
++
++def test_plain_symbol_offers_style_and_color_but_no_fill(_app):
++    """A resistor has no enclosed body: line style and colour are offered, Fill is
++    not, and the section is titled for what it offers."""
++    from app.canvas.scene import SchematicScene
++    from app.ui.properties import PropertiesPanel
++
++    scene = SchematicScene()
++    r = scene.place_component("R", (2.0, 0.0))
++    panel = PropertiesPanel()
++    panel.set_scene(scene)
++    panel.show_component(r.id)
++    sec = _fill_section(panel)
++    assert sec._comp_ids == [r.id]
++    assert _style_rows_hidden(sec) == (True, True, False)
++    assert sec._title_label.text() == "Line style & color"
++
++
++def test_shaped_symbol_and_block_offer_fill_and_style(_app):
++    """An op-amp (triangle body) and a rectangle both get line style, colour, fill."""
++    from app.canvas.scene import SchematicScene
++    from app.ui.properties import PropertiesPanel
++
++    scene = SchematicScene()
++    amp = scene.place_component("op amp", (2.0, 0.0))
++    box = scene.place_component("rect", (6.0, 0.0))
++    panel = PropertiesPanel()
++    panel.set_scene(scene)
++    for comp in (amp, box):
++        panel.show_component(comp.id)
++        sec = _fill_section(panel)
++        assert _style_rows_hidden(sec) == (True, True, True)
++        assert sec._title_label.text() == "Fill & line style"
++
++
++def test_style_edit_on_mixed_selection_only_writes_applicable_fields(_app):
++    """Resistor + op-amp selected together: style and colour reach both, but the fill
++    is written only to the op-amp (the resistor has no body to fill)."""
++    from app.canvas.scene import SchematicScene
++    from app.ui.properties import PropertiesPanel, _TIKZ_TO_LABEL_STYLE, _set_combo_value
++
++    scene = SchematicScene()
++    r = scene.place_component("R", (2.0, 0.0))
++    amp = scene.place_component("op amp", (6.0, 0.0))
++    panel = PropertiesPanel()
++    panel.set_scene(scene)
++    panel.show_components([r.id, amp.id])
++    sec = _fill_section(panel)
++    assert sec._comp_ids == [r.id, amp.id]
++    assert _style_rows_hidden(sec) == (True, True, True)   # any shaped → rows offered
++
++    _set_combo_value(sec._line_style, "dashed", _TIKZ_TO_LABEL_STYLE)
++    sec._line_color.set_value("red")
++    sec._fill.set_value("yellow")
++    sec._commit()
++    rc, ac = scene._component_by_id(r.id), scene._component_by_id(amp.id)
++    assert (rc.line_color, rc.line_style, rc.fill_color) == ("red", "dashed", "")
++    assert (ac.line_color, ac.line_style, ac.fill_color) == ("red", "dashed", "yellow")
++    scene.undo()   # one undo step reverts the whole edit
++    assert (rc.line_color, rc.line_style, ac.line_color, ac.fill_color) == ("", "", "", "")
++
++
+ def test_no_size_dropdown_section(_app):
+     """The discrete Size (scale) dropdown is gone — scalable gates/blocks resize by
+     the canvas corner-drag handle (§6.4), so no inspector section provides it."""
+diff --git a/tests/test_shapes.py b/tests/test_shapes.py
+new file mode 100644
+index 0000000..3922546
+--- /dev/null
++++ b/tests/test_shapes.py
+@@ -0,0 +1,85 @@
++"""Which components have a fillable body (``app/components/shapes.py``) and how that
++reaches the canvas: the data is consistent with the registry, the gate is shared,
++and a fill actually paints pixels only for a shaped symbol."""
++
++from __future__ import annotations
++
++import pytest
++from PySide6.QtCore import QRectF
++from PySide6.QtGui import QColor, QImage, QPainter
++from PySide6.QtWidgets import QApplication
++
++from app.canvas.scene import SchematicScene
++from app.canvas.svgsym import body_fill_index
++from app.components.registry import REGISTRY
++from app.components.shapes import SHAPED_KINDS, is_shaped, symbol_style
++from app.schematic.model import Component
++
++
++@pytest.fixture(scope="module")
++def _app():
++    return QApplication.instance() or QApplication([])
++
++
++def _comp(kind: str, **style) -> Component:
++    c = Component(id="x", kind=kind, position=(0.0, 0.0), rotation=0, options="")
++    for k, v in style.items():
++        setattr(c, k, v)
++    return c
++
++
++def test_shaped_kinds_are_real_registry_kinds() -> None:
++    """Guards a stale table after the component library is regenerated."""
++    assert SHAPED_KINDS <= set(REGISTRY)
++
++
++def test_examples_from_the_spec() -> None:
++    for kind in ("op amp", "empty diode", "ALU"):
++        assert is_shaped(_comp(kind)), kind
++    for kind in ("R", "capacitor", "ground", "npn"):   # no enclosed body
++        assert not is_shaped(_comp(kind)), kind
++
++
++def test_symbol_style_gate() -> None:
++    plain = _comp("R", line_style="dashed", line_color="red", fill_color="yellow")
++    assert symbol_style(plain) == ("dashed", "red", "")  # no body: style + colour, no fill
++    amp = _comp("op amp", line_style="dashed", line_color="red", fill_color="yellow")
++    assert symbol_style(amp) == ("dashed", "red", "yellow")
++    assert symbol_style(_comp("op amp")) == ("", "", "")
++
++
++def test_body_fill_index_finds_bodies_not_slivers() -> None:
++    assert body_fill_index("op amp") is not None
++    assert body_fill_index("empty diode") is not None
++    for kind in ("resistor", "capacitor"):              # no body / plates only
++        assert body_fill_index(kind) is None, kind
++
++
++def _render(scene: SchematicScene, comp_id: str) -> QImage:
++    item = scene._comp_items[comp_id]
++    img = QImage(240, 200, QImage.Format_ARGB32)
++    img.fill(QColor("white"))
++    p = QPainter(img)
++    scene.render(p, QRectF(img.rect()), item.sceneBoundingRect().adjusted(-12, -12, 12, 12))
++    p.end()
++    return img
++
++
++def _yellow_pixels(img: QImage) -> int:
++    n = 0
++    for y in range(img.height()):
++        for x in range(img.width()):
++            c = img.pixelColor(x, y)
++            if c.red() > 200 and c.green() > 200 and c.blue() < 120:
++                n += 1
++    return n
++
++
++def test_fill_paints_a_shaped_symbol_but_is_ignored_on_a_plain_one(_app) -> None:
++    scene = SchematicScene()
++    amp = scene.place_component("op amp", (3.0, 3.0))
++    res = scene.place_component("R", (9.0, 3.0))
++    for comp in (amp, res):
++        scene.set_fill_color(comp.id, "yellow")
++    assert _yellow_pixels(_render(scene, amp.id)) > 200
++    assert _yellow_pixels(_render(scene, res.id)) == 0

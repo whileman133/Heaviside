@@ -1008,6 +1008,27 @@ def test_component_line_width_roundtrip(tmp_path: Path) -> None:
     assert loaded.components[1].line_width == 0.4
 
 
+def test_symbol_appearance_roundtrip(tmp_path: Path) -> None:
+    """A circuit symbol's line style / colour / fill survive save+load as a
+    SymbolComponent; unset styles are omitted from the file."""
+    from app.components.model import StyledComponent, SymbolComponent
+    cls = REGISTRY["R"].component_class
+    assert cls is SymbolComponent
+    styled = cls(id=_uid(), kind="R", position=(0.0, 0.0), rotation=0, options="",
+                 line_style="dashed", line_color="red", fill_color="yellow")
+    plain = cls(id=_uid(), kind="R", position=(2.0, 0.0), rotation=0, options="")
+    p = tmp_path / "sym.hv"
+    save(Schematic(version="0.1", name="sym", components=[styled, plain]), p)
+    raw = json.loads(p.read_text())
+    assert raw["components"][0]["line_style"] == "dashed"
+    assert raw["components"][0]["line_color"] == "red"
+    assert "line_style" not in raw["components"][1]   # default omitted
+    a, b = load(p).components
+    assert isinstance(a, StyledComponent)
+    assert (a.line_style, a.line_color, a.fill_color) == ("dashed", "red", "yellow")
+    assert (b.line_style, b.line_color, b.fill_color) == ("", "", "")
+
+
 # ---------------------------------------------------------------------------
 # Robustness — non-finite numbers, raw-exception wrapping, size bound,
 # degenerate wires, type strictness, format version (audit fixes)
@@ -1201,15 +1222,15 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
 
 
 def test_format_version_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes the current version (0.12); files declaring 0.1–0.11 all load."""
-    assert _FORMAT_VERSION == "0.12"
+    """save() writes the current version (0.13); files declaring 0.1–0.12 all load."""
+    assert _FORMAT_VERSION == "0.13"
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
     assert json.loads(p.read_text(encoding="utf-8"))["version"] == _FORMAT_VERSION
     assert load(p).version == _FORMAT_VERSION
 
     for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
-                "0.11"):
+                "0.11", "0.12"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",

@@ -5,6 +5,33 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Line style, line colour and fill for circuit symbols.** Resistors, capacitors,
+  diodes, sources, op amps, gates and every other symbol now have the same **Line
+  style** and **Line color** controls as boxes, so a part can be drawn dashed or in a
+  colour. **Fill** is offered only for components with an enclosed body — an op amp, a
+  logic gate, a source circle, an outline diode, a chip or a box. Symbols without one,
+  such as a resistor, capacitor or ground, get line style and colour only (the inspector
+  section is then titled **Line style & color**). With several parts selected, line
+  style and colour apply to all of them and the fill only to those that can take one.
+  The styling shows on the canvas and in the generated CircuiTikZ, e.g.
+  `\draw[dashed, red, fill=yellow] (2,-1) node[op amp] … ;`. A few symbols with no
+  closed outline (for example the damper and viscoelastic element) are filled in the
+  LaTeX output but show no fill preview on the canvas.
+
+### Changed
+- **New file format version (0.13).** A file in which a symbol has a line style, colour
+  or fill is saved as format 0.13, so an older Heaviside refuses to open it instead of
+  quietly dropping the styling the next time it saves. Existing files open unchanged.
+- **Styled symbols are written as their own statement.** In the CircuiTikZ source, a
+  symbol with a custom line style, colour or fill is emitted in its own `\draw[…]` after
+  the main circuit path, like a layered component, rather than inside the shared path.
+  It is drawn on top of unstyled parts, and wires reach it by coordinates instead of a
+  node name; the result looks the same unless parts overlap. Unstyled symbols are
+  unchanged.
+
 ## [0.8.1] - 2026-11-12
 
 The first published release of the 0.8 changes listed under 0.8.0 below.

@@ -64,6 +64,7 @@ from app.canvas.scene import SchematicScene
 from app.codegen.circuitikz import is_node_style, is_single_terminal_node
 from app.components.style import split_top_level
 from app.ui import theme
+from app.components.shapes import is_shaped
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
@@ -304,6 +305,14 @@ class _HopModeCheckBox(QCheckBox):
 # ---------------------------------------------------------------------------
 # Small widget factories (shared across sections)
 # ---------------------------------------------------------------------------
+
+def _set_row_visible(row: QHBoxLayout, visible: bool) -> None:
+    """Show/hide every widget of a ``label: [control]`` row (a layout has no hide)."""
+    for i in range(row.count()):
+        w = row.itemAt(i).widget()
+        if w is not None:
+            w.setVisible(visible)
+
 
 def _make_section_label(text: str) -> QLabel:
     lbl = QLabel(text)
@@ -1185,8 +1194,14 @@ class FontSection(InspectorSection):
 
 
 class FillBorderSection(InspectorSection):
-    """Line style, line colour and fill colour for any StyledComponent (rect,
-    circle, bipole). Both colours offer presets plus a Custom… picker.
+    """Line style, line colour and fill colour for any StyledComponent. Both colours
+    offer presets plus a Custom… picker.
+
+    **Fill** is offered only for a component with a body (``components/shapes.py``):
+    a block (rect, circle, bipole box) or a symbol such as an op-amp, gate, source or
+    diode triangle. Every other symbol (resistor, capacitor, ground...) gets line
+    style and colour only. A multi-selection offers Fill if any selected component
+    supports it, and an edit writes the fill only to the components it applies to.
 
     Reads/writes the StyledComponent fields directly via the generic per-field
     scene setters — no string parsing, no per-type branching. The outline
@@ -1221,7 +1236,22 @@ class FillBorderSection(InspectorSection):
     def applies_to(self, comp: Component) -> bool:
         return isinstance(comp, StyledComponent)
 
+    def _bound(self, fallback: Component) -> list[Component]:
+        comps = []
+        if self._scene is not None:
+            for cid in self._comp_ids:
+                c = self._scene._component_by_id(cid)
+                if c is not None:
+                    comps.append(c)
+        return comps or [fallback]
+
     def _load(self, comp: Component) -> None:
+        # Fill only for components with a body; the heading says so (no "Fill" in
+        # the title for a resistor). Line style and colour apply to every symbol.
+        shaped = any(is_shaped(c) for c in self._bound(comp))
+        _set_row_visible(self._fill_row, shaped)
+        if self._title_label is not None:
+            self._title_label.setText("Fill & line style" if shaped else "Line style & color")
         # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
         # as extra items so an unrelated edit in this section round-trips them.
         _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
@@ -1238,9 +1268,11 @@ class FillBorderSection(InspectorSection):
         line_color = self._line_color.value()
 
         def apply(s, cid):  # noqa: ANN001
+            c = s._component_by_id(cid)
             s.set_line_style(cid, style)
             s.set_line_color(cid, line_color)
-            s.set_fill_color(cid, fill)
+            if c is not None and is_shaped(c):   # fill only where a body exists
+                s.set_fill_color(cid, fill)
 
         self._apply("Style", apply)
 

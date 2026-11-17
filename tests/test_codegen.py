@@ -2380,6 +2380,27 @@ def test_line_width_emitted_for_symbol_component() -> None:
     assert "line width" not in generate(_schematic(_comp("R")), y_flip=True)
 
 
+def test_symbol_style_goes_on_the_draw_and_respects_the_shape() -> None:
+    """Style sits on the symbol's own ``\\draw[...]`` (not inside to[]/node[]). A
+    symbol without a body (resistor, transistor) takes line style and colour but
+    no fill; a shaped one (op-amp) takes the fill too. Defaults emit nothing."""
+    for kind in ("R", "npn", "op amp"):
+        assert "red" not in generate(_schematic(_comp(kind)), y_flip=True)
+
+    for kind in ("R", "npn"):                      # no enclosed body
+        c = _comp(kind)
+        c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
+        src = generate(_schematic(c), y_flip=True)
+        assert "\\draw[dashed, red]" in src, (kind, src)
+        assert "fill=" not in src, (kind, src)
+
+    c = _comp("op amp")                            # triangle body
+    c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
+    src = generate(_schematic(c), y_flip=True)
+    assert "\\draw[dashed, red, fill=yellow]" in src, src
+    assert "color=" not in src
+
+
 def test_line_width_emitted_once_for_block_components() -> None:
     """Rect/circle/bipole emit the unified `line_width` through their own
     draw/node options (via `compose_style_options`) — exactly once, not also via

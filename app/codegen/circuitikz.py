@@ -88,6 +88,7 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.shapes import symbol_style
 from app.components.style import (
     balance_braces,
     compose_style_options,
@@ -393,7 +394,7 @@ def generate(
             for _p in (_w.points[0], _w.points[-1]):
                 _ref_endpoints.add((round(_p[0], 6), round(_p[1], 6)))
     for _c in schematic.components:
-        if _c.z_order == 0 and _c.kind in _NODE_KINDS:
+        if _in_main_layer(_c) and _c.kind in _NODE_KINDS:
             _pp = component_pin_positions(_c)
             if _pp:
                 _ref_endpoints.add((round(_pp[0][0], 6), round(_pp[0][1], 6)))
@@ -405,7 +406,7 @@ def generate(
         # forward reference (compile error). Wires connecting to a layered
         # component fall back to absolute pin coordinates instead, which connect
         # exactly (see the module docstring), so nothing is lost geometrically.
-        if comp.z_order != 0:
+        if not _in_main_layer(comp):
             continue
         defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
@@ -504,7 +505,7 @@ def generate(
     # the main \draw. A re-layered (z_order != 0) node is emitted in its own layer
     # block instead, so skip it here.
     for comp in schematic.components:
-        if comp.z_order == 0 and _node_group_ctikzset(comp):
+        if _in_main_layer(comp) and _node_group_ctikzset(comp):
             lines.extend(_node_group_lines(comp, _y, _rot))
 
     draw_lines: list[str] = []
@@ -515,7 +516,7 @@ def generate(
     # from the user's `node_side` (a placement key in the bracket), not gate context.
     node_command_lines: list[str] = []
     for comp in schematic.components:
-        if comp.z_order != 0:
+        if not _in_main_layer(comp):
             continue  # emitted in a background/foreground layer block
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
@@ -609,7 +610,9 @@ def generate(
     fg_items: list[tuple[int, int, str, object]] = []
     for i, comp in enumerate(schematic.components):
         is_drawing = isinstance(comp, DrawingComponent)
-        if (is_drawing and comp.z_order >= 0) or (not is_drawing and comp.z_order > 0):
+        if (is_drawing and comp.z_order >= 0) or (
+            not is_drawing and (comp.z_order > 0 or (comp.z_order == 0 and not _in_main_layer(comp)))
+        ):
             fg_items.append((comp.z_order, i, "c", comp))
     for i, wire in enumerate(schematic.wires):
         if wire.z_order > 0 and len(wire.points) >= 2:
@@ -690,13 +693,14 @@ def _component_layer_lines(
     if _eff_kind(comp) in _NODE_KINDS:
         # A single-terminal node is its own standalone `\node at` command, even in a
         # layer block (no `\draw` wrapper).
-        style = _annotation_style_opts(comp, voltage_european, current_european)
+        style = [*_annotation_style_opts(comp, voltage_european, current_european),
+                 *_symbol_style_opts(comp)]
         return [rf"  {_node_command(comp, y_fn, style)}"]
     frags = _component_lines(
         comp, None, y_fn, rot_fn,
         voltage_european=voltage_european, current_european=current_european,
     )
-    return [rf"  \draw {frag};" for frag in frags]
+    return [rf"  \draw{_draw_opts(comp)} {frag};" for frag in frags]
 
 
 def _two_terminal_line(
@@ -843,7 +847,7 @@ def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> 
     else:
         frag = _multi_terminal_line(comp, y_fn, rot_fn)
     sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
-    return ["  {", *sets, rf"    \draw {frag};", "  }"]
+    return ["  {", *sets, rf"    \draw{_draw_opts(comp)} {frag};", "  }"]
 
 
 def _multi_terminal_line(
@@ -1650,6 +1654,41 @@ def _line_width_opt(comp: Component) -> str:
     if isinstance(comp, DrawingComponent) or abs(comp.line_width - 0.4) < 1e-6:
         return ""
     return f"line width={comp.line_width:g}pt"
+
+
+def _symbol_style_opts(comp: Component) -> list[str]:
+    """Line style, line colour and fill for a circuit-symbol component, as options for
+    its own ``\\draw[...]`` (see :func:`_in_main_layer`); empty when unset. What
+    applies is decided by ``symbol_style``: the style and colour for every symbol, the
+    fill only for a shaped one (box / triangle / circle body). A plain colour name is
+    emitted bare (``\\draw[red]``); anything else (an ``{rgb,255:...}`` spec) as
+    ``color=...``. The fill comes last so it overrides the bare colour's fill. Block
+    components (rect/circle/bipole) emit their style via ``compose_style_options``."""
+    if isinstance(comp, DrawingComponent):
+        return []
+    ls, lc, fc = symbol_style(comp)
+    opts: list[str] = []
+    if ls:
+        opts.append(ls)
+    if lc:
+        opts.append(lc if re.fullmatch(r"[A-Za-z][A-Za-z0-9!.+\-]*", lc) else f"color={lc}")
+    if fc:
+        opts.append(f"fill={fc}")
+    return opts
+
+
+def _draw_opts(comp: Component) -> str:
+    """``[opts]`` for ``\\draw`` from the symbol style, or ``""`` when unstyled."""
+    opts = _symbol_style_opts(comp)
+    return f"[{', '.join(opts)}]" if opts else ""
+
+
+def _in_main_layer(comp: Component) -> bool:
+    """True when *comp* is emitted inside the shared main ``\\draw``. A symbol with a
+    custom line style / colour is instead emitted in its own ``\\draw[...]`` statement
+    (like a layered component: absolute pin coordinates, no named anchor), so the
+    style sits on the ``\\draw`` rather than inside ``to[...]``."""
+    return comp.z_order == 0 and not _symbol_style_opts(comp)
 
 
 def _annotation_style_opts(comp: Component, voltage_european: bool,

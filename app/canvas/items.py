@@ -58,12 +58,14 @@ from app.canvas.style import (
 )
 from app.canvas.svgsym import (
     PX_PER_PT,
+    body_fill_index,
     dash_for_pen,
     effective_color,
     is_thick,
     symbol_paths,
 )
 from app.components.registry import REGISTRY
+from app.components.shapes import symbol_style
 from app.components.style import parse_tikz_rgb_color
 from app.schematic.model import HOP_ARC_RADIUS_GU, HOP_HALF_GU
 
@@ -1676,6 +1678,11 @@ class ComponentItem(QGraphicsItem):
                                 placed=[base[i] for i in idx]) if idx else None
         if fixed is not None:
             upright = dict(zip(idx, fixed))
+        _ls, _lc, _fc = symbol_style(self._component)
+        _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
+        # Default-ink solid parts (end bars, dots, text) take the line colour too,
+        # like CircuiTikZ's ``\\draw[red]``.
+        _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         for _i, sym in enumerate(syms):
             path = upright.get(_i, base[_i])
             lw = _stroke_px(sym.stroke_width, lw_scale)
@@ -1684,13 +1691,20 @@ class ComponentItem(QGraphicsItem):
             # a default-black stroke falls back to the theme ink so ordinary symbols
             # still follow light/dark mode (§5.10).
             pen_w = lw / s
-            pen = _pen(effective_color(sym.stroke_color, color), pen_w)
-            if sym.dash:
-                pen.setDashPattern(dash_for_pen(sym.dash, PX_PER_PT, pen_w))
+            # The user's Line colour / Line style / Fill (inspector) override the
+            # symbol's own stroke and body, like CircuiTikZ's ``color=`` / ``dashed`` /
+            # ``fill=``. ``symbol_style`` decides what applies (colour for every
+            # symbol; style + fill only for a shaped one); selection/hover tints
+            # still win over the line colour (see _outline_color).
+            pen = _styled_symbol_pen(
+                effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
+                dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None)
             painter.setPen(pen)
-            if sym.filled:
+            if _fc and _i == _fill_idx:
+                painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
+            elif sym.filled:
                 fill = (style.COLOR_BACKGROUND if sym.fill_bg
-                        else effective_color(sym.fill_color, color))
+                        else effective_color(sym.fill_color, _ink))
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)
@@ -3137,6 +3151,24 @@ def upright_glyph(path: QPainterPath, item_xform: QTransform) -> QPainterPath:
     return upright_glyphs([path], item_xform)[0]
 
 
+def _styled_symbol_pen(stroke: str, width: float, line_style: str, line_color: str,
+                       state_color: str, dash: list[float] | None = None) -> QPen:
+    """Pen for one circuit-symbol path: the symbol's own *stroke* colour and *dash*,
+    overridden by the user's Line colour / Line style (see ``symbol_style``) the way
+    CircuiTikZ's ``color=`` / ``dashed`` override them. Selection/hover tints win over
+    the line colour so the user can still see what is selected. Shared by every item
+    class that paints symbol paths so they cannot drift apart."""
+    if line_color and state_color == style.COLOR_NORMAL:
+        stroke = _resolve_tikz_color(line_color).name()
+    pen = _pen(stroke, width)
+    user = _resolve_pen_style(line_style)
+    if user != Qt.SolidLine:
+        pen.setStyle(user)
+    elif dash:
+        pen.setDashPattern(dash)
+    return pen
+
+
 def _outline_color(comp, state_color: str) -> str:  # noqa: ANN001
     """Pen colour for a styled box/bipole outline: its ``line_color`` when set
     and the item is in its normal state. Selection/hover/ghost tints win, so the
@@ -3775,10 +3807,16 @@ class _ResizableNodeItem(ComponentItem):
                                 self.transform(), self._component.rotation) if idx else None
         if fixed is not None:
             upright = dict(zip(idx, fixed))
+        _ls, _lc, _fc = symbol_style(self._component)
+        _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
+        _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         for _i, sym in enumerate(syms):
-            painter.setPen(_pen(color, _stroke_px(sym.stroke_width, lw_scale)))
-            if sym.filled:
-                fill = style.COLOR_BACKGROUND if sym.fill_bg else color
+            painter.setPen(_styled_symbol_pen(
+                color, _stroke_px(sym.stroke_width, lw_scale), _ls, _lc, color))
+            if _fc and _i == _fill_idx:
+                painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
+            elif sym.filled:
+                fill = style.COLOR_BACKGROUND if sym.fill_bg else _ink
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)
