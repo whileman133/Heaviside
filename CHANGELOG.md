@@ -5,7 +5,7 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.0] - 2026-11-20
 
 ### Added
 - **Circuit symbol appearance.** The inspector offers line colour, body fill and
@@ -15,10 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   edit applies to those that support the field in one undo step. Generated
   CircuiTikZ puts the style in the component's `to[…]` or `node[…]` options,
   preserving default layer order and named pin anchors.
+  ([#51](https://github.com/whileman133/Heaviside/pull/51))
 
 ### Changed
 - **Schematic format 0.13.** Circuit symbols can store appearance fields. Existing
-  files open with their original appearance.
+  files open with their original appearance. Files saved by this version open only
+  in this version or later.
 
 ## [0.8.1] - 2026-11-12
 
@@ -784,6 +786,7 @@ version reset to 0.1.0 — this is the first release of the current line.)
   diagram; the full reference is still available from the Help menu, the
   toolbar `?` button, and `F1`.
 
+[0.9.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.9.0
 [0.8.1]: https://github.com/whileman133/Heaviside/releases/tag/v0.8.1
 [0.8.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.8.0
 [0.7.0]: https://github.com/whileman133/Heaviside/releases/tag/v0.7.0
