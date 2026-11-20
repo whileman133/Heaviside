@@ -60,14 +60,18 @@ jobs:
           # The two Linux entries carry the AppImage name (suffixed with the
           # host's uname -m, per AppImage convention) and the SHA-256 pin of
           # that arch's appimagetool (see "Install appimagetool" below).
-          - os: ubuntu-latest
+          # Linux builds run on the OLDEST still-supported Ubuntu LTS (22.04,
+          # glibc 2.35), not ubuntu-latest: a binary built against a newer glibc
+          # crashes at start on older distros (it needed glibc 2.38 when built
+          # on 24.04). scripts/check_glibc.py enforces the ceiling below.
+          - os: ubuntu-22.04
             label: Linux (x64)
             artifact: Heaviside-linux-x64.tar.gz
             appimage: Heaviside-linux-x86_64.AppImage
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
-          # ubuntu-24.04-arm runners are native arm64, free for public repos.
+          # ubuntu-22.04-arm runners are native arm64, free for public repos.
           # This build runs on Raspberry Pi OS (64-bit) and other aarch64 Linux.
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             label: Linux (arm64)
             artifact: Heaviside-linux-arm64.tar.gz
             appimage: Heaviside-linux-aarch64.AppImage
@@ -94,7 +98,12 @@ jobs:
         with:
           enable-cache: true
 
+      # On Linux, use uv's portable (python-build-standalone) Python, never the
+      # runner's own: a system Python is compiled against that image's glibc and
+      # would raise the bundle's glibc requirement with it.
       - name: Install dependencies
+        env:
+          UV_PYTHON_PREFERENCE: ${{ runner.os == 'Linux' && 'only-managed' || 'managed' }}
         run: uv sync --frozen
 
       # Refresh the canonical license texts that the bundle's LGPLv3 notice
@@ -117,6 +126,12 @@ jobs:
 
       - name: Build the app (PyInstaller)
         run: uv run pyinstaller --noconfirm --clean heaviside.spec
+
+      # Fail the build if any bundled binary needs a newer glibc than the
+      # oldest supported LTS provides (see the Linux matrix entries above).
+      - name: Check glibc requirement (Linux)
+        if: runner.os == 'Linux'
+        run: uv run python scripts/check_glibc.py dist/Heaviside --max 2.35
 
       # macOS signing + notarization (steps below) only runs when the signing
       # secrets are configured. A run without them — a fork, or a
@@ -286,6 +301,28 @@ jobs:
       - name: Build the AppImage (Linux)
         if: runner.os == 'Linux'
         run: uv run python scripts/make_appimage.py "${{ matrix.appimage }}" "dist/Heaviside"
+
+      # Start the AppImage on an older distro than the build host (Debian 12,
+      # also the base of Raspberry Pi OS Bookworm) with a headless Qt platform,
+      # and require it to still be running after 20 s: the app has no
+      # exit-after-start flag, so a crash or early exit is the failure signal
+      # (the same check the AppImage catalog runs). APPIMAGE_EXTRACT_AND_RUN
+      # avoids needing FUSE inside the container.
+      - name: Smoke-test the AppImage on Debian 12 (Linux)
+        if: runner.os == 'Linux'
+        env:
+          APPIMAGE_FILE: ${{ matrix.appimage }}
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w -e APPIMAGE_FILE \
+            -e APPIMAGE_EXTRACT_AND_RUN=1 -e QT_QPA_PLATFORM=offscreen debian:12 bash -c '
+              apt-get update -qq
+              apt-get install -y -qq --no-install-recommends \
+                libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libfontconfig1 >/dev/null
+              ldd --version | head -1
+              chmod +x "$APPIMAGE_FILE"
+              timeout 20 ./"$APPIMAGE_FILE" --no-latex; rc=$?
+              if [ "$rc" -eq 124 ]; then echo "still running after 20 s: OK"; exit 0; fi
+              echo "::error::AppImage exited with code $rc on Debian 12"; exit 1'
 
       # The .dmg is already the single release artifact; just emit its SHA-256
       # for download verification.
