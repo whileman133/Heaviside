@@ -5,6 +5,15 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The x64 Linux build runs on older distributions.** It now needs glibc 2.35
+  (Ubuntu 22.04, Debian 12 and newer) instead of 2.38, so it no longer crashes at
+  start there. The arm64 build still needs glibc 2.39, which Qt's arm64 Linux
+  builds require. Found by the AppImage catalog's test
+  ([AppImage/appimage.github.io#7047](https://github.com/AppImage/appimage.github.io/pull/7047)).
+
 ## [0.9.0] - 2026-11-20
 
 ### Added

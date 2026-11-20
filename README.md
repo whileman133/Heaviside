@@ -71,10 +71,12 @@ If you want a quick diagram in the browser with nothing to install, use Designer
     AppImage: [Heaviside-linux-aarch64.AppImage](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-aarch64.AppImage)  
     Portable: [Heaviside-linux-arm64.tar.gz](https://github.com/whileman133/Heaviside/releases/latest/download/Heaviside-linux-arm64.tar.gz)
 
-  The Linux binaries need glibc ≥ 2.38 (Ubuntu 24.04+, Debian 13 "Trixie" —
-  including Raspberry Pi OS Trixie). On older distros (e.g. Debian 12
-  "Bookworm"), [build from source](#building-from-source) instead. Make an
-  AppImage executable before running it: `chmod +x Heaviside-*.AppImage`.
+  The x64 Linux binaries need glibc 2.35 or newer (Ubuntu 22.04+, Debian 12
+  "Bookworm"+, Fedora 36+). The arm64 binaries need glibc 2.39 or newer
+  (Ubuntu 24.04+, Debian 13 "Trixie", Raspberry Pi OS Trixie), because Qt's
+  arm64 Linux builds require it. On older systems,
+  [build from source](#building-from-source) instead. Make an AppImage
+  executable before running it: `chmod +x Heaviside-*.AppImage`.
 
 All releases, with checksums and notes, on the [Releases page](https://github.com/whileman133/Heaviside/releases).
 
