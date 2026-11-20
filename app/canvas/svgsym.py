@@ -324,3 +324,40 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
                               filled=True, glyph=True))
 
     return tuple(out)
+
+
+#: A fill colour paints the symbol's *body*, never a sliver (a capacitor plate).
+_MIN_BODY_ASPECT = 0.3
+
+
+@lru_cache(maxsize=None)
+def body_fill_index(kind: str) -> int | None:
+    """Index into :func:`symbol_paths` of the path a user **Fill** colour paints, or
+    ``None`` when the kind has no body.
+
+    The body is the largest *closed* non-text outline (box / triangle / circle) whose
+    bounding box is not a thin sliver, which skips arrowheads, dots and capacitor
+    plates, matching what CircuiTikZ's ``fill=`` paints (see
+    ``scripts/find_fillable_kinds.py``). Painting only this path keeps leads and
+    decorations in their own colour.
+    """
+    best: tuple[float, int] | None = None
+    for idx, sp in enumerate(symbol_paths(kind)):
+        if sp.glyph:
+            continue
+        for poly in sp.path.toSubpathPolygons():
+            n = poly.count()
+            if n < 3 or not poly.isClosed():
+                continue
+            r = poly.boundingRect()
+            hi = max(r.width(), r.height())
+            if hi <= 0 or min(r.width(), r.height()) / hi < _MIN_BODY_ASPECT:
+                continue
+            area = 0.0
+            for k in range(n):
+                p, q = poly.at(k), poly.at((k + 1) % n)
+                area += p.x() * q.y() - q.x() * p.y()
+            area = abs(area) / 2.0
+            if best is None or area > best[0]:
+                best = (area, idx)
+    return best[1] if best else None

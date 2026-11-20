@@ -217,9 +217,9 @@ def test_transform_section_offers_45_degree_rotations(_app):
 def test_multi_select_symbol_and_block_share_stroke_width(_app):
     """A symbol + a block (resistor + rectangle) now share the unified stroke
     width: selecting both exposes the Stroke section and a single edit sets the
-    width of both as one undo step. Sections that apply to only one of them
-    (Fill & line style → rect only; the options string → symbol only) stay
-    hidden."""
+    width of both as one undo step. Fill & line style now binds both (a rect is
+    shaped; the resistor still gets its Line color row), while the options string
+    (symbol-only) stays hidden."""
     from app.canvas.scene import SchematicScene
     from app.ui.properties import (
         FillBorderSection,
@@ -241,10 +241,10 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
     fill = next(s for s in panel._sections if isinstance(s, FillBorderSection))
     options = next(s for s in panel._sections if isinstance(s, OptionsSection))
 
-    # Stroke (unified width) applies to both; fill (rect-only) and options
-    # (symbol-only) apply to just one, so they're suppressed for the mixed set.
+    # Stroke (unified width) and the style section apply to both; the options
+    # string (symbol-only) applies to just one, so it's suppressed for the mixed set.
     assert stroke._comp_ids == [r.id, box.id]
-    assert fill._comp_ids == []
+    assert fill._comp_ids == [r.id, box.id]
     assert options._comp_ids == []
 
     stroke._width.setValue(1.6)
@@ -252,6 +252,77 @@ def test_multi_select_symbol_and_block_share_stroke_width(_app):
     assert all(abs(c.line_width - 1.6) < 1e-9 for c in scene.schematic.components)
     scene.undo()  # one step reverts both
     assert all(abs(c.line_width - 0.4) < 1e-9 for c in scene.schematic.components)
+
+
+def _style_rows_hidden(section):
+    """(line style, line colour, fill) row visibility as ``(shown, shown, shown)``."""
+    def shown(row):
+        return all(not row.itemAt(i).widget().isHidden() for i in range(row.count()))
+    return shown(section._ls_row), shown(section._lc_row), shown(section._fill_row)
+
+
+def _fill_section(panel):
+    from app.ui.properties import FillBorderSection
+    return next(s for s in panel._sections if isinstance(s, FillBorderSection))
+
+
+def test_resistor_offers_color_only(_app):
+    """CircuiTikZ supports a resistor’s line colour."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PropertiesPanel
+
+    scene = SchematicScene()
+    r = scene.place_component("R", (2.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(r.id)
+    sec = _fill_section(panel)
+    assert sec._comp_ids == [r.id]
+    assert _style_rows_hidden(sec) == (False, True, False)
+    assert sec._title_label.text() == "Appearance"
+
+
+def test_shaped_symbol_and_block_offer_fill_and_style(_app):
+    """An op-amp (triangle body) and a rectangle both get line style, colour, fill."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PropertiesPanel
+
+    scene = SchematicScene()
+    amp = scene.place_component("op amp", (2.0, 0.0))
+    box = scene.place_component("rect", (6.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    for comp in (amp, box):
+        panel.show_component(comp.id)
+        sec = _fill_section(panel)
+        assert _style_rows_hidden(sec) == (True, True, True)
+        assert sec._title_label.text() == "Appearance"
+
+
+def test_style_edit_on_mixed_selection_only_writes_applicable_fields(_app):
+    """Both symbols take colour. The op amp also takes line style and fill."""
+    from app.canvas.scene import SchematicScene
+    from app.ui.properties import PropertiesPanel, _TIKZ_TO_LABEL_STYLE, _set_combo_value
+
+    scene = SchematicScene()
+    r = scene.place_component("R", (2.0, 0.0))
+    amp = scene.place_component("op amp", (6.0, 0.0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_components([r.id, amp.id])
+    sec = _fill_section(panel)
+    assert sec._comp_ids == [r.id, amp.id]
+    assert _style_rows_hidden(sec) == (True, True, True)
+
+    _set_combo_value(sec._line_style, "dashed", _TIKZ_TO_LABEL_STYLE)
+    sec._line_color.set_value("red")
+    sec._fill.set_value("yellow")
+    sec._commit()
+    rc, ac = scene._component_by_id(r.id), scene._component_by_id(amp.id)
+    assert (rc.line_color, rc.line_style, rc.fill_color) == ("red", "", "")
+    assert (ac.line_color, ac.line_style, ac.fill_color) == ("red", "dashed", "yellow")
+    scene.undo()   # one undo step reverts the whole edit
+    assert (rc.line_color, rc.line_style, ac.line_color, ac.fill_color) == ("", "", "", "")
 
 
 def test_no_size_dropdown_section(_app):
@@ -627,6 +698,7 @@ def test_fill_combo_preserves_hand_authored_value(_app):
 
     scene = SchematicScene()
     comp = scene.place_component("rect", (2.0, 0.0))
+    comp = scene.schematic.components[0]
     comp.fill_color = "red!40"                   # hand-authored in the .hv
 
     sec = FillBorderSection()

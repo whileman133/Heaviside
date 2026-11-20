@@ -5,6 +5,21 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Circuit symbol appearance.** The inspector offers line colour, body fill and
+  line style according to each component's CircuiTikZ support. For example, a
+  resistor supports colour, an op amp supports all three, and boxed two-port
+  components can use a dashed outline. With multiple components selected, an
+  edit applies to those that support the field in one undo step. Generated
+  CircuiTikZ puts the style in the component's `to[…]` or `node[…]` options,
+  preserving default layer order and named pin anchors.
+
+### Changed
+- **Schematic format 0.13.** Circuit symbols can store appearance fields. Existing
+  files open with their original appearance.
+
 ## [0.8.1] - 2026-11-12
 
 The first published release of the 0.8 changes listed under 0.8.0 below.

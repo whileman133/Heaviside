@@ -88,6 +88,7 @@ from app.components.model import (
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
+from app.components.shapes import symbol_style
 from app.components.style import (
     balance_braces,
     compose_style_options,
@@ -393,7 +394,7 @@ def generate(
             for _p in (_w.points[0], _w.points[-1]):
                 _ref_endpoints.add((round(_p[0], 6), round(_p[1], 6)))
     for _c in schematic.components:
-        if _c.z_order == 0 and _c.kind in _NODE_KINDS:
+        if _in_main_layer(_c) and _c.kind in _NODE_KINDS:
             _pp = component_pin_positions(_c)
             if _pp:
                 _ref_endpoints.add((round(_pp[0][0], 6), round(_pp[0][1], 6)))
@@ -405,7 +406,7 @@ def generate(
         # forward reference (compile error). Wires connecting to a layered
         # component fall back to absolute pin coordinates instead, which connect
         # exactly (see the module docstring), so nothing is lost geometrically.
-        if comp.z_order != 0:
+        if not _in_main_layer(comp):
             continue
         defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
@@ -504,7 +505,7 @@ def generate(
     # the main \draw. A re-layered (z_order != 0) node is emitted in its own layer
     # block instead, so skip it here.
     for comp in schematic.components:
-        if comp.z_order == 0 and _node_group_ctikzset(comp):
+        if _in_main_layer(comp) and _node_group_ctikzset(comp):
             lines.extend(_node_group_lines(comp, _y, _rot))
 
     draw_lines: list[str] = []
@@ -515,7 +516,7 @@ def generate(
     # from the user's `node_side` (a placement key in the bracket), not gate context.
     node_command_lines: list[str] = []
     for comp in schematic.components:
-        if comp.z_order != 0:
+        if not _in_main_layer(comp):
             continue  # emitted in a background/foreground layer block
         if _node_group_ctikzset(comp):
             continue  # already emitted in its own group above
@@ -609,7 +610,9 @@ def generate(
     fg_items: list[tuple[int, int, str, object]] = []
     for i, comp in enumerate(schematic.components):
         is_drawing = isinstance(comp, DrawingComponent)
-        if (is_drawing and comp.z_order >= 0) or (not is_drawing and comp.z_order > 0):
+        if (is_drawing and comp.z_order >= 0) or (
+            not is_drawing and comp.z_order > 0
+        ):
             fg_items.append((comp.z_order, i, "c", comp))
     for i, wire in enumerate(schematic.wires):
         if wire.z_order > 0 and len(wire.points) >= 2:
@@ -699,6 +702,32 @@ def _component_layer_lines(
     return [rf"  \draw {frag};" for frag in frags]
 
 
+_TERMINAL_MARKER_SHAPES = {
+    "": "",
+    "*": "circ",
+    "o": "ocirc",
+    "d": "diamondpole",
+    ".": "rectjoinfill",
+}
+
+
+def _separate_terminal_markers(options: str, start: str, end: str) -> tuple[str, str]:
+    """Keep CircuiTikZ's terminal shortcuts out of the styled component scope."""
+    parts = split_top_level(options)
+    markers: tuple[str, str] | None = None
+    remaining = []
+    for part in parts:
+        left, dash, right = part.strip().partition("-")
+        if dash and (left or right) and left in _TERMINAL_MARKER_SHAPES and right in _TERMINAL_MARKER_SHAPES:
+            markers = (_TERMINAL_MARKER_SHAPES[left], _TERMINAL_MARKER_SHAPES[right])
+        else:
+            remaining.append(part)
+    if markers is None:
+        return options, ""
+    nodes = "".join(f" node[{kind}] at {pos} {{}}" for kind, pos in zip(markers, (start, end)) if kind)
+    return ",".join(remaining).strip(), nodes
+
+
 def _two_terminal_line(
     comp: Component,
     pin_coord_to_ref: dict[tuple[float, float], str] | None = None,
@@ -741,6 +770,10 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
+    appearance = _symbol_style_opts(comp)
+    terminals = ""
+    if appearance:
+        label_str, terminals = _separate_terminal_markers(label_str, coord0, coord1)
     _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
     tikz_kind = defn.tikz_keyword + _suffix
 
@@ -758,7 +791,8 @@ def _two_terminal_line(
     lw = _line_width_opt(comp)
     if lw:
         opts.append(lw)
-    opts.extend(style)   # local voltage=european / current=european (per annotation)
+    opts.extend(style)
+    opts.extend(appearance)
     if comp.mirror:
         opts.append("mirror")
         unflip = _library.text_unflip_option(comp.kind, comp.rotation, True)
@@ -767,7 +801,7 @@ def _two_terminal_line(
     if label_str:
         opts.append(label_str)
 
-    return f"{coord0} to[{', '.join(opts)}] {coord1}"
+    return f"{coord0} to[{', '.join(opts)}] {coord1}{terminals}"
 
 
 def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
@@ -973,7 +1007,7 @@ def _multi_terminal_line(
     lw = _line_width_opt(comp)
     if lw:
         kind_arg = f"{kind_arg}, {lw}"
-    for s in style:   # local voltage=european / current=european (per annotation)
+    for s in (*style, *_symbol_style_opts(comp)):
         kind_arg = f"{kind_arg}, {s}"
 
     # Every multi-terminal node is centre-placed (§4): the node sits at the
@@ -1078,7 +1112,7 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     user = _label_args(comp)
     if user:
         args += f", {user}"
-    for s in style:   # local voltage=european / current=european (per annotation)
+    for s in (*style, *_symbol_style_opts(comp)):
         args += f", {s}"
     at = pin_coord_to_ref.get((round(x, 6), round(y, 6))) if pin_coord_to_ref else None
     if at is None:
@@ -1650,6 +1684,23 @@ def _line_width_opt(comp: Component) -> str:
     if isinstance(comp, DrawingComponent) or abs(comp.line_width - 0.4) < 1e-6:
         return ""
     return f"line width={comp.line_width:g}pt"
+
+
+def _symbol_style_opts(comp: Component) -> list[str]:
+    """Effective appearance options for a symbol’s own to or node bracket."""
+    ls, lc, fc = symbol_style(comp)
+    opts: list[str] = []
+    if ls:
+        opts.append(ls)
+    if lc:
+        opts.append(f"color={lc}")
+    if fc:
+        opts.append(f"fill={fc}")
+    return opts
+
+
+def _in_main_layer(comp: Component) -> bool:
+    return comp.z_order == 0
 
 
 def _annotation_style_opts(comp: Component, voltage_european: bool,

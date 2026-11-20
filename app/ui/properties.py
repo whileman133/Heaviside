@@ -20,7 +20,7 @@ Section → applicability map:
   VariantSection      – one checkbox per boolean variant the kind declares
                         (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
-  FillBorderSection   – StyledComponent (rect, circle, bipole) — line style, line
+  FillBorderSection   – drawing blocks and supported symbols — line style, line
                         colour, fill colour (presets + Custom… colour picker)
   WireConnectionsSection – rect/circle: opt-in block-diagram edge wiring
   StrokeWidthSection  – the unified stroke/outline width, every kind but text_node
@@ -64,13 +64,13 @@ from app.canvas.scene import SchematicScene
 from app.codegen.circuitikz import is_node_style, is_single_terminal_node
 from app.components.style import split_top_level
 from app.ui import theme
+from app.components.shapes import style_capabilities
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
     DrawingComponent,
     FontedComponent,
     RectComponent,
-    StyledComponent,
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
@@ -304,6 +304,14 @@ class _HopModeCheckBox(QCheckBox):
 # ---------------------------------------------------------------------------
 # Small widget factories (shared across sections)
 # ---------------------------------------------------------------------------
+
+def _set_row_visible(row: QHBoxLayout, visible: bool) -> None:
+    """Show/hide every widget of a ``label: [control]`` row (a layout has no hide)."""
+    for i in range(row.count()):
+        w = row.itemAt(i).widget()
+        if w is not None:
+            w.setVisible(visible)
+
 
 def _make_section_label(text: str) -> QLabel:
     lbl = QLabel(text)
@@ -1185,16 +1193,9 @@ class FontSection(InspectorSection):
 
 
 class FillBorderSection(InspectorSection):
-    """Line style, line colour and fill colour for any StyledComponent (rect,
-    circle, bipole). Both colours offer presets plus a Custom… picker.
+    """Edit the appearance fields supported by the selected components."""
 
-    Reads/writes the StyledComponent fields directly via the generic per-field
-    scene setters — no string parsing, no per-type branching. The outline
-    **width** is edited by the shared :class:`StrokeWidthSection` (the same
-    control circuit symbols use), so it is not duplicated here.
-    """
-
-    title = "Fill & line style"
+    title = "Appearance"
     multi_kind_safe = True
 
     def _build(self) -> None:
@@ -1219,28 +1220,54 @@ class FillBorderSection(InspectorSection):
         self._timer.timeout.connect(self._commit)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, StyledComponent)
+        return any(style_capabilities(comp))
+
+    def _bound(self, representative: Component) -> list[Component]:
+        comps = [representative]
+        if self._scene is not None:
+            for cid in self._comp_ids:
+                if cid != representative.id:
+                    comp = self._scene._component_by_id(cid)
+                    if comp is not None:
+                        comps.append(comp)
+        return comps
 
     def _load(self, comp: Component) -> None:
-        # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
-        # as extra items so an unrelated edit in this section round-trips them.
-        _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
-        self._fill.set_value(comp.fill_color)
-        self._line_color.set_value(getattr(comp, "line_color", ""))
+        comps = [(c, style_capabilities(c)) for c in self._bound(comp)]
+        fields = (
+            ("line_style", self._ls_row),
+            ("line_color", self._lc_row),
+            ("fill_color", self._fill_row),
+        )
+        values = []
+        for index, (field, row) in enumerate(fields):
+            first = next((c for c, support in comps if support[index]), None)
+            _set_row_visible(row, first is not None)
+            values.append(getattr(first, field, ""))
+
+        _set_combo_value(self._line_style, values[0], _TIKZ_TO_LABEL_STYLE)
+        self._line_color.set_value(values[1])
+        self._fill.set_value(values[2])
+        self._loaded_style = tuple(values)
 
     def _commit(self) -> None:
-        # Per-field undoable commands (no-ops when unchanged); for a multi-select
-        # both fields across all components collapse into one undo step. An extra
-        # item's display text IS the raw TikZ value, so it maps to itself.
+        self._timer.stop()
         style_text = self._line_style.currentText()
-        style = _LABEL_TO_TIKZ_STYLE.get(style_text, style_text)
-        fill = self._fill.value()
-        line_color = self._line_color.value()
+        values = (_LABEL_TO_TIKZ_STYLE.get(style_text, style_text),
+                  self._line_color.value(), self._fill.value())
+        changed = tuple(old != new for old, new in zip(self._loaded_style, values))
+        self._loaded_style = values
 
-        def apply(s, cid):  # noqa: ANN001
-            s.set_line_style(cid, style)
-            s.set_line_color(cid, line_color)
-            s.set_fill_color(cid, fill)
+        def apply(scene, cid):  # noqa: ANN001
+            comp = scene._component_by_id(cid)
+            if comp is None:
+                return
+            setters = (scene.set_line_style, scene.set_line_color, scene.set_fill_color)
+            for setter, value, supported, edited in zip(
+                setters, values, style_capabilities(comp), changed,
+            ):
+                if supported and edited:
+                    setter(cid, value)
 
         self._apply("Style", apply)
 
@@ -2172,6 +2199,8 @@ class PropertiesPanel(QWidget):
         def applicable(sec: InspectorSection) -> bool:
             if same_kind:
                 return sec.applies_to(comps[0])
+            if isinstance(sec, FillBorderSection):
+                return any(sec.applies_to(c) for c in comps)
             return sec.multi_kind_safe and all(sec.applies_to(c) for c in comps)
 
         # A mixed selection with no shared capability has nothing to edit.

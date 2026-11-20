@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from app.codegen import circuitikz as cg
 from app.components import library
-from app.components.model import Component, PinDef
+from app.components.model import Component, PinDef, SymbolComponent
 from app.components.registry import REGISTRY
 
 _LIBRARY_KINDS = set(REGISTRY) - library.NON_LIBRARY_KINDS
@@ -54,7 +54,7 @@ def test_resistor_def():
     r = REGISTRY["R"]
     assert r.pins == [PinDef("in", (0.0, 0.0)), PinDef("out", (2.0, 0.0))]
     assert r.default_span == (2.0, 0.0)
-    assert r.component_class is Component
+    assert r.component_class is SymbolComponent
 
 
 # NOTE: deleted the curated golden ComponentDef/codegen tests that pinned the

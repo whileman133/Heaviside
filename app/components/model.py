@@ -198,7 +198,7 @@ class FontedComponent:
 
 @dataclass
 class StyledComponent:
-    """Mixin: fill + line style (shared by rect, circle, and bipole).
+    """Mixin for drawing block and circuit symbol appearance.
 
     The outline **width** is not here — it is the unified ``Component.line_width``
     (see its docstring), shared with circuit symbols, so one inspector control and
@@ -212,7 +212,7 @@ class StyledComponent:
     """Raw TikZ line-style tokens (e.g. ``"dashed"``, ``"dotted"``).  Empty = solid."""
 
     line_color: str = ""
-    """TikZ colour for the outline (emitted as ``draw=<colour>``), e.g. ``"red"``
+    """TikZ colour for the outline (blocks use ``draw=``, symbols use ``color=``), e.g. ``"red"``
     or a custom ``"{rgb,255:red,…;green,…;blue,…}"``. Empty = the default ink."""
 
 
@@ -273,6 +273,20 @@ class BipoleComponent(FontedComponent, StyledComponent, DrawingComponent):
 
     font_size: float = 7.0
     """Override default: bipole box is smaller so 7 pt fits better than 12 pt."""
+
+
+@dataclass
+class SymbolComponent(StyledComponent, Component):
+    """Circuit symbol (R, C, diode, transistor, op amp, gate, ...) that carries
+    the fill / line-style / line-colour fields.
+
+    Unlike the drawing kinds it is *not* a :class:`DrawingComponent`, so symbols
+    keep their circuit-pin and CircuiTikZ ``to[]``/``node[]`` code paths; the
+    mixin only adds appearance overrides (and makes ``isinstance(comp,
+    StyledComponent)`` true so the inspector's "Fill & line style" section shows).
+    The mixin is listed *before* ``Component`` for the same dataclass
+    field-ordering reason as the drawing classes above.
+    """
 
 
 # ---------------------------------------------------------------------------

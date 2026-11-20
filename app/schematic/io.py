@@ -108,12 +108,16 @@ from app.schematic.validate import validate
 #: block-diagram edge wiring; always written). A 0.11 build would silently strip them on save, so the bump refuses the
 #: newer file; 0.1–0.11 files load unchanged (no line colour, and **connections on**
 #: for every box, since every box edge was connectable before 0.12).
-_FORMAT_VERSION: str = "0.12"
+#: 0.13 lets circuit symbols carry ``line_style`` / ``line_color`` / ``fill_color`` (the
+#: StyledComponent fields, previously blocks only; each omitted when empty). A 0.12 build
+#: would silently strip them on save, so the bump refuses the newer file; 0.1–0.12 files
+#: load unchanged (absent fields default to empty).
+_FORMAT_VERSION: str = "0.13"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {
     "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11",
-    "0.12",
+    "0.12", "0.13",
 }
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
