@@ -105,6 +105,19 @@ def _settle(app, preview_state: dict) -> None:  # noqa: ANN001
     raise TimeoutError("window did not settle (labels/preview) in time")
 
 
+class PreviewError(RuntimeError):
+    """The LaTeX preview failed while rendering a screenshot."""
+
+    def __init__(self, hv_path: Path, log: str) -> None:
+        # Keep LaTeX's own error lines ("! ...") and what follows each; fall back
+        # to the end of the log.
+        lines = log.splitlines()
+        picked = [ln for i, ln in enumerate(lines)
+                  if ln.startswith("!") or (i and lines[i - 1].startswith("!"))]
+        detail = "\n".join(picked[:12] or lines[-15:])
+        super().__init__(f"LaTeX preview failed for {hv_path.name}:\n{detail}")
+
+
 def render_window_shot(hv_path: Path, *, dark: bool, out_path: Path) -> None:
     """Capture the full editor window showing *hv_path* to *out_path*.
 
@@ -121,12 +134,19 @@ def render_window_shot(hv_path: Path, *, dark: bool, out_path: Path) -> None:
 
     window = MainWindow()
     try:
-        # Track the live-preview compile triggered by the load below.
-        preview_state = {"done": False}
+        # Track the live-preview compile triggered by the load below, and its
+        # error text if it fails: a screenshot showing a LaTeX error in the
+        # preview pane must not be published (it happened when the runner lacked
+        # siunitx), so a failed compile fails the run instead.
+        preview_state = {"done": False, "error": None}
         window._preview_worker.preview_ready.connect(
             lambda *_: preview_state.__setitem__("done", True))
-        window._preview_worker.preview_error.connect(
-            lambda *_: preview_state.__setitem__("done", True))
+
+        def _on_error(message: str = "") -> None:
+            preview_state["error"] = message or "unknown error"
+            preview_state["done"] = True
+
+        window._preview_worker.preview_error.connect(_on_error)
 
         window._set_theme_mode("dark" if dark else "light")
         window.resize(*WINDOW_SIZE)
@@ -136,6 +156,8 @@ def render_window_shot(hv_path: Path, *, dark: bool, out_path: Path) -> None:
         if not window.load_path(hv_path):
             raise RuntimeError(f"failed to load {hv_path}")
         _settle(app, preview_state)
+        if preview_state["error"] is not None:
+            raise PreviewError(hv_path, preview_state["error"])
 
         window._view.fit_to_schematic()
         app.processEvents()

@@ -83,3 +83,36 @@ def test_window_shot_captures_full_dark_gui(tmp_path) -> None:
     mean = sum(samples) / len(samples)
     assert mean < 110, f"dark-mode GUI should be predominantly dark (mean {mean:.0f})"
     assert max(samples) - min(samples) > 60, "capture should show real UI structure"
+
+
+def test_preview_error_fails_the_screenshot_run(tmp_path) -> None:
+    """A LaTeX error in the preview pane must fail the run, not be published.
+
+    The README screenshots once shipped showing a preview error (the CI runner
+    lacked siunitx). Render an example whose preamble cannot compile and expect
+    a non-zero exit carrying LaTeX's own error line. Needs pdflatex."""
+    import json
+
+    from app.preview import tools
+
+    if tools.resolve("pdflatex") is None:
+        pytest.skip("pdflatex not installed")
+    rel = _mod.SHOTS[0][0]
+    data = json.loads((_ROOT / rel).read_text(encoding="utf-8"))
+    data.setdefault("config", {})["preamble"] = r"\heavisideUndefinedCommandForTest"
+    bad = tmp_path / "broken.hv"
+    bad.write_text(json.dumps(data), encoding="utf-8")
+    driver = (
+        "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]);"
+        "import render_screenshots as m; m._bootstrap();"
+        "m.render_window_shot(Path(sys.argv[2]), dark=True, out_path=Path(sys.argv[3]))"
+    )
+    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+    proc = subprocess.run(
+        [sys.executable, "-c", driver, str(_SCRIPT.parent), str(bad), str(tmp_path / "out.png")],
+        cwd=_ROOT, env=env, capture_output=True, text=True, timeout=300,
+    )
+    assert proc.returncode != 0, "a preview error must fail the run"
+    assert "LaTeX preview failed for broken.hv" in proc.stderr, proc.stderr
+    assert "Undefined control sequence" in proc.stderr, proc.stderr
+    assert not (tmp_path / "out.png").exists()
