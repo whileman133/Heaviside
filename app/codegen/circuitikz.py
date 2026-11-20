@@ -611,7 +611,7 @@ def generate(
     for i, comp in enumerate(schematic.components):
         is_drawing = isinstance(comp, DrawingComponent)
         if (is_drawing and comp.z_order >= 0) or (
-            not is_drawing and (comp.z_order > 0 or (comp.z_order == 0 and not _in_main_layer(comp)))
+            not is_drawing and comp.z_order > 0
         ):
             fg_items.append((comp.z_order, i, "c", comp))
     for i, wire in enumerate(schematic.wires):
@@ -693,14 +693,39 @@ def _component_layer_lines(
     if _eff_kind(comp) in _NODE_KINDS:
         # A single-terminal node is its own standalone `\node at` command, even in a
         # layer block (no `\draw` wrapper).
-        style = [*_annotation_style_opts(comp, voltage_european, current_european),
-                 *_symbol_style_opts(comp)]
+        style = _annotation_style_opts(comp, voltage_european, current_european)
         return [rf"  {_node_command(comp, y_fn, style)}"]
     frags = _component_lines(
         comp, None, y_fn, rot_fn,
         voltage_european=voltage_european, current_european=current_european,
     )
-    return [rf"  \draw{_draw_opts(comp)} {frag};" for frag in frags]
+    return [rf"  \draw {frag};" for frag in frags]
+
+
+_TERMINAL_MARKER_SHAPES = {
+    "": "",
+    "*": "circ",
+    "o": "ocirc",
+    "d": "diamondpole",
+    ".": "rectjoinfill",
+}
+
+
+def _separate_terminal_markers(options: str, start: str, end: str) -> tuple[str, str]:
+    """Keep CircuiTikZ's terminal shortcuts out of the styled component scope."""
+    parts = split_top_level(options)
+    markers: tuple[str, str] | None = None
+    remaining = []
+    for part in parts:
+        left, dash, right = part.strip().partition("-")
+        if dash and (left or right) and left in _TERMINAL_MARKER_SHAPES and right in _TERMINAL_MARKER_SHAPES:
+            markers = (_TERMINAL_MARKER_SHAPES[left], _TERMINAL_MARKER_SHAPES[right])
+        else:
+            remaining.append(part)
+    if markers is None:
+        return options, ""
+    nodes = "".join(f" node[{kind}] at {pos} {{}}" for kind, pos in zip(markers, (start, end)) if kind)
+    return ",".join(remaining).strip(), nodes
 
 
 def _two_terminal_line(
@@ -745,6 +770,10 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
+    appearance = _symbol_style_opts(comp)
+    terminals = ""
+    if appearance:
+        label_str, terminals = _separate_terminal_markers(label_str, coord0, coord1)
     _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
     tikz_kind = defn.tikz_keyword + _suffix
 
@@ -762,7 +791,8 @@ def _two_terminal_line(
     lw = _line_width_opt(comp)
     if lw:
         opts.append(lw)
-    opts.extend(style)   # local voltage=european / current=european (per annotation)
+    opts.extend(style)
+    opts.extend(appearance)
     if comp.mirror:
         opts.append("mirror")
         unflip = _library.text_unflip_option(comp.kind, comp.rotation, True)
@@ -771,7 +801,7 @@ def _two_terminal_line(
     if label_str:
         opts.append(label_str)
 
-    return f"{coord0} to[{', '.join(opts)}] {coord1}"
+    return f"{coord0} to[{', '.join(opts)}] {coord1}{terminals}"
 
 
 def _gate_height_setting(comp: Component) -> tuple[str, float] | None:
@@ -847,7 +877,7 @@ def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> 
     else:
         frag = _multi_terminal_line(comp, y_fn, rot_fn)
     sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
-    return ["  {", *sets, rf"    \draw{_draw_opts(comp)} {frag};", "  }"]
+    return ["  {", *sets, rf"    \draw {frag};", "  }"]
 
 
 def _multi_terminal_line(
@@ -977,7 +1007,7 @@ def _multi_terminal_line(
     lw = _line_width_opt(comp)
     if lw:
         kind_arg = f"{kind_arg}, {lw}"
-    for s in style:   # local voltage=european / current=european (per annotation)
+    for s in (*style, *_symbol_style_opts(comp)):
         kind_arg = f"{kind_arg}, {s}"
 
     # Every multi-terminal node is centre-placed (§4): the node sits at the
@@ -1082,7 +1112,7 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     user = _label_args(comp)
     if user:
         args += f", {user}"
-    for s in style:   # local voltage=european / current=european (per annotation)
+    for s in (*style, *_symbol_style_opts(comp)):
         args += f", {s}"
     at = pin_coord_to_ref.get((round(x, 6), round(y, 6))) if pin_coord_to_ref else None
     if at is None:
@@ -1657,38 +1687,20 @@ def _line_width_opt(comp: Component) -> str:
 
 
 def _symbol_style_opts(comp: Component) -> list[str]:
-    """Line style, line colour and fill for a circuit-symbol component, as options for
-    its own ``\\draw[...]`` (see :func:`_in_main_layer`); empty when unset. What
-    applies is decided by ``symbol_style``: the style and colour for every symbol, the
-    fill only for a shaped one (box / triangle / circle body). A plain colour name is
-    emitted bare (``\\draw[red]``); anything else (an ``{rgb,255:...}`` spec) as
-    ``color=...``. The fill comes last so it overrides the bare colour's fill. Block
-    components (rect/circle/bipole) emit their style via ``compose_style_options``."""
-    if isinstance(comp, DrawingComponent):
-        return []
+    """Effective appearance options for a symbol’s own to or node bracket."""
     ls, lc, fc = symbol_style(comp)
     opts: list[str] = []
     if ls:
         opts.append(ls)
     if lc:
-        opts.append(lc if re.fullmatch(r"[A-Za-z][A-Za-z0-9!.+\-]*", lc) else f"color={lc}")
+        opts.append(f"color={lc}")
     if fc:
         opts.append(f"fill={fc}")
     return opts
 
 
-def _draw_opts(comp: Component) -> str:
-    """``[opts]`` for ``\\draw`` from the symbol style, or ``""`` when unstyled."""
-    opts = _symbol_style_opts(comp)
-    return f"[{', '.join(opts)}]" if opts else ""
-
-
 def _in_main_layer(comp: Component) -> bool:
-    """True when *comp* is emitted inside the shared main ``\\draw``. A symbol with a
-    custom line style / colour is instead emitted in its own ``\\draw[...]`` statement
-    (like a layered component: absolute pin coordinates, no named anchor), so the
-    style sits on the ``\\draw`` rather than inside ``to[...]``."""
-    return comp.z_order == 0 and not _symbol_style_opts(comp)
+    return comp.z_order == 0
 
 
 def _annotation_style_opts(comp: Component, voltage_european: bool,

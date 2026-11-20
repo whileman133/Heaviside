@@ -266,9 +266,8 @@ def _fill_section(panel):
     return next(s for s in panel._sections if isinstance(s, FillBorderSection))
 
 
-def test_plain_symbol_offers_style_and_color_but_no_fill(_app):
-    """A resistor has no enclosed body: line style and colour are offered, Fill is
-    not, and the section is titled for what it offers."""
+def test_resistor_offers_color_only(_app):
+    """CircuiTikZ supports a resistor’s line colour."""
     from app.canvas.scene import SchematicScene
     from app.ui.properties import PropertiesPanel
 
@@ -279,8 +278,8 @@ def test_plain_symbol_offers_style_and_color_but_no_fill(_app):
     panel.show_component(r.id)
     sec = _fill_section(panel)
     assert sec._comp_ids == [r.id]
-    assert _style_rows_hidden(sec) == (True, True, False)
-    assert sec._title_label.text() == "Line style & color"
+    assert _style_rows_hidden(sec) == (False, True, False)
+    assert sec._title_label.text() == "Appearance"
 
 
 def test_shaped_symbol_and_block_offer_fill_and_style(_app):
@@ -297,12 +296,11 @@ def test_shaped_symbol_and_block_offer_fill_and_style(_app):
         panel.show_component(comp.id)
         sec = _fill_section(panel)
         assert _style_rows_hidden(sec) == (True, True, True)
-        assert sec._title_label.text() == "Fill & line style"
+        assert sec._title_label.text() == "Appearance"
 
 
 def test_style_edit_on_mixed_selection_only_writes_applicable_fields(_app):
-    """Resistor + op-amp selected together: style and colour reach both, but the fill
-    is written only to the op-amp (the resistor has no body to fill)."""
+    """Both symbols take colour. The op amp also takes line style and fill."""
     from app.canvas.scene import SchematicScene
     from app.ui.properties import PropertiesPanel, _TIKZ_TO_LABEL_STYLE, _set_combo_value
 
@@ -314,14 +312,14 @@ def test_style_edit_on_mixed_selection_only_writes_applicable_fields(_app):
     panel.show_components([r.id, amp.id])
     sec = _fill_section(panel)
     assert sec._comp_ids == [r.id, amp.id]
-    assert _style_rows_hidden(sec) == (True, True, True)   # any shaped → rows offered
+    assert _style_rows_hidden(sec) == (True, True, True)
 
     _set_combo_value(sec._line_style, "dashed", _TIKZ_TO_LABEL_STYLE)
     sec._line_color.set_value("red")
     sec._fill.set_value("yellow")
     sec._commit()
     rc, ac = scene._component_by_id(r.id), scene._component_by_id(amp.id)
-    assert (rc.line_color, rc.line_style, rc.fill_color) == ("red", "dashed", "")
+    assert (rc.line_color, rc.line_style, rc.fill_color) == ("red", "", "")
     assert (ac.line_color, ac.line_style, ac.fill_color) == ("red", "dashed", "yellow")
     scene.undo()   # one undo step reverts the whole edit
     assert (rc.line_color, rc.line_style, ac.line_color, ac.fill_color) == ("", "", "", "")
@@ -700,6 +698,7 @@ def test_fill_combo_preserves_hand_authored_value(_app):
 
     scene = SchematicScene()
     comp = scene.place_component("rect", (2.0, 0.0))
+    comp = scene.schematic.components[0]
     comp.fill_color = "red!40"                   # hand-authored in the .hv
 
     sec = FillBorderSection()

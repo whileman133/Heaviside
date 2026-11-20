@@ -2380,25 +2380,80 @@ def test_line_width_emitted_for_symbol_component() -> None:
     assert "line width" not in generate(_schematic(_comp("R")), y_flip=True)
 
 
-def test_symbol_style_goes_on_the_draw_and_respects_the_shape() -> None:
-    """Style sits on the symbol's own ``\\draw[...]`` (not inside to[]/node[]). A
-    symbol without a body (resistor, transistor) takes line style and colour but
-    no fill; a shaped one (op-amp) takes the fill too. Defaults emit nothing."""
-    for kind in ("R", "npn", "op amp"):
-        assert "red" not in generate(_schematic(_comp(kind)), y_flip=True)
+@pytest.mark.parametrize(("kind", "expected"), [
+    ("R", "to[R, color=red]"),
+    ("empty diode", "to[empty diode, color=red]"),
+    ("twoport", "to[twoport, dashed, color=red, fill=yellow]"),
+    ("op amp", "node[op amp, dashed, color=red, fill=yellow]"),
+    ("ground", r"\node[ground, dashed, color=red]"),
+    ("short", "to[short]"),
+])
+def test_symbol_style_stays_in_component_options(kind, expected) -> None:
+    comp = _comp(kind)
+    comp.line_style, comp.line_color, comp.fill_color = "dashed", "red", "yellow"
+    src = generate(_schematic(comp), y_flip=True)
+    assert expected in src
+    assert r"\draw[" not in src
 
-    for kind in ("R", "npn"):                      # no enclosed body
-        c = _comp(kind)
-        c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
-        src = generate(_schematic(c), y_flip=True)
-        assert "\\draw[dashed, red]" in src, (kind, src)
-        assert "fill=" not in src, (kind, src)
 
-    c = _comp("op amp")                            # triangle body
-    c.line_style, c.line_color, c.fill_color = "dashed", "red", "yellow"
-    src = generate(_schematic(c), y_flip=True)
-    assert "\\draw[dashed, red, fill=yellow]" in src, src
-    assert "color=" not in src
+def test_styled_node_keeps_its_named_wire_anchor() -> None:
+    from app.schematic.model import component_pin_positions
+
+    amp = _comp("op amp")
+    amp.line_color = "{rgb,255:red,10;green,20;blue,30}"
+    pin = component_pin_positions(amp)[0]
+    wire = _wire([pin, (-3.0, pin[1])])
+    src = generate(_schematic(amp, wires=[wire]), y_flip=True)
+    assert f"color={amp.line_color}" in src
+    assert f"(node_{amp.id[:8]}.+) --" in src
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("voltage_style", ["american", "european"])
+def test_annotated_symbol_fill_stays_inside_body(tmp_path, voltage_style) -> None:
+    import shutil
+    import subprocess
+
+    from PIL import Image
+
+    if not shutil.which("pdflatex") or not shutil.which("pdftoppm"):
+        pytest.skip("pdflatex and pdftoppm are required")
+
+    def render(options):
+        part = _comp("generic", options=options)
+        part.line_color, part.fill_color = "red", "yellow"
+        schematic = _schematic(part)
+        schematic.voltage_style = voltage_style
+        src = generate(schematic, y_flip=True)
+        start = src.index("\n")
+        src = src[:start] + "\n" + r"\path[use as bounding box] (-1,-2) rectangle (3,2);" + src[start:]
+        (tmp_path / "style.tex").write_text(
+            r"\documentclass{standalone}\usepackage{circuitikz}\begin{document}"
+            + src + r"\end{document}", encoding="utf-8",
+        )
+        result = subprocess.run(
+            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
+             "-no-shell-escape", "style.tex"],
+            cwd=tmp_path, capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode == 0, result.stdout[-2000:]
+        subprocess.run(
+            ["pdftoppm", "-singlefile", "-r", "144", "style.pdf", "style"],
+            cwd=tmp_path, check=True, capture_output=True, timeout=30,
+        )
+        with Image.open(tmp_path / "style.ppm") as image:
+            pixels = image.convert("RGB").get_flattened_data()
+        red = {i for i, (r, g, b) in enumerate(pixels) if r > 180 and g < 90 and b < 90}
+        yellow = {i for i, (r, g, b) in enumerate(pixels) if min(r, g) > 200 and b < 100}
+        return red, yellow
+
+    plain_red, plain_yellow = render("")
+    red, yellow = render("l=$Z$, v=$v$, i=$i$, o-o")
+    assert plain_red and plain_yellow
+    assert yellow == plain_yellow
+    # CircuiTikZ colours the arrowheads. Adding actual label text or terminal
+    # markers must leave the coloured pixels the same.
+    assert red == render(r"l=$\phantom{Z}$, v=$\phantom{v}$, i=$\phantom{i}$")[0]
 
 
 def test_line_width_emitted_once_for_block_components() -> None:

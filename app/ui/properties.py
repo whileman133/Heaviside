@@ -20,7 +20,7 @@ Section → applicability map:
   VariantSection      – one checkbox per boolean variant the kind declares
                         (e.g. diode "filled", MOSFET "body diode")
   FontSection         – FontedComponent (text_node, bipole)
-  FillBorderSection   – StyledComponent (rect, circle, bipole) — line style, line
+  FillBorderSection   – drawing blocks and supported symbols — line style, line
                         colour, fill colour (presets + Custom… colour picker)
   WireConnectionsSection – rect/circle: opt-in block-diagram edge wiring
   StrokeWidthSection  – the unified stroke/outline width, every kind but text_node
@@ -64,14 +64,13 @@ from app.canvas.scene import SchematicScene
 from app.codegen.circuitikz import is_node_style, is_single_terminal_node
 from app.components.style import split_top_level
 from app.ui import theme
-from app.components.shapes import is_shaped
+from app.components.shapes import style_capabilities
 from app.components.model import (
     BipoleComponent,
     CircleComponent,
     DrawingComponent,
     FontedComponent,
     RectComponent,
-    StyledComponent,
     TextNodeComponent,
 )
 from app.components.registry import REGISTRY
@@ -1194,22 +1193,9 @@ class FontSection(InspectorSection):
 
 
 class FillBorderSection(InspectorSection):
-    """Line style, line colour and fill colour for any StyledComponent. Both colours
-    offer presets plus a Custom… picker.
+    """Edit the appearance fields supported by the selected components."""
 
-    **Fill** is offered only for a component with a body (``components/shapes.py``):
-    a block (rect, circle, bipole box) or a symbol such as an op-amp, gate, source or
-    diode triangle. Every other symbol (resistor, capacitor, ground...) gets line
-    style and colour only. A multi-selection offers Fill if any selected component
-    supports it, and an edit writes the fill only to the components it applies to.
-
-    Reads/writes the StyledComponent fields directly via the generic per-field
-    scene setters — no string parsing, no per-type branching. The outline
-    **width** is edited by the shared :class:`StrokeWidthSection` (the same
-    control circuit symbols use), so it is not duplicated here.
-    """
-
-    title = "Fill & line style"
+    title = "Appearance"
     multi_kind_safe = True
 
     def _build(self) -> None:
@@ -1234,45 +1220,54 @@ class FillBorderSection(InspectorSection):
         self._timer.timeout.connect(self._commit)
 
     def applies_to(self, comp: Component) -> bool:
-        return isinstance(comp, StyledComponent)
+        return any(style_capabilities(comp))
 
-    def _bound(self, fallback: Component) -> list[Component]:
-        comps = []
+    def _bound(self, representative: Component) -> list[Component]:
+        comps = [representative]
         if self._scene is not None:
             for cid in self._comp_ids:
-                c = self._scene._component_by_id(cid)
-                if c is not None:
-                    comps.append(c)
-        return comps or [fallback]
+                if cid != representative.id:
+                    comp = self._scene._component_by_id(cid)
+                    if comp is not None:
+                        comps.append(comp)
+        return comps
 
     def _load(self, comp: Component) -> None:
-        # Fill only for components with a body; the heading says so (no "Fill" in
-        # the title for a resistor). Line style and colour apply to every symbol.
-        shaped = any(is_shaped(c) for c in self._bound(comp))
-        _set_row_visible(self._fill_row, shaped)
-        if self._title_label is not None:
-            self._title_label.setText("Fill & line style" if shaped else "Line style & color")
-        # Unrepresentable values (e.g. a hand-authored fill=red!40) are inserted
-        # as extra items so an unrelated edit in this section round-trips them.
-        _set_combo_value(self._line_style, comp.line_style, _TIKZ_TO_LABEL_STYLE)
-        self._fill.set_value(comp.fill_color)
-        self._line_color.set_value(getattr(comp, "line_color", ""))
+        comps = [(c, style_capabilities(c)) for c in self._bound(comp)]
+        fields = (
+            ("line_style", self._ls_row),
+            ("line_color", self._lc_row),
+            ("fill_color", self._fill_row),
+        )
+        values = []
+        for index, (field, row) in enumerate(fields):
+            first = next((c for c, support in comps if support[index]), None)
+            _set_row_visible(row, first is not None)
+            values.append(getattr(first, field, ""))
+
+        _set_combo_value(self._line_style, values[0], _TIKZ_TO_LABEL_STYLE)
+        self._line_color.set_value(values[1])
+        self._fill.set_value(values[2])
+        self._loaded_style = tuple(values)
 
     def _commit(self) -> None:
-        # Per-field undoable commands (no-ops when unchanged); for a multi-select
-        # both fields across all components collapse into one undo step. An extra
-        # item's display text IS the raw TikZ value, so it maps to itself.
+        self._timer.stop()
         style_text = self._line_style.currentText()
-        style = _LABEL_TO_TIKZ_STYLE.get(style_text, style_text)
-        fill = self._fill.value()
-        line_color = self._line_color.value()
+        values = (_LABEL_TO_TIKZ_STYLE.get(style_text, style_text),
+                  self._line_color.value(), self._fill.value())
+        changed = tuple(old != new for old, new in zip(self._loaded_style, values))
+        self._loaded_style = values
 
-        def apply(s, cid):  # noqa: ANN001
-            c = s._component_by_id(cid)
-            s.set_line_style(cid, style)
-            s.set_line_color(cid, line_color)
-            if c is not None and is_shaped(c):   # fill only where a body exists
-                s.set_fill_color(cid, fill)
+        def apply(scene, cid):  # noqa: ANN001
+            comp = scene._component_by_id(cid)
+            if comp is None:
+                return
+            setters = (scene.set_line_style, scene.set_line_color, scene.set_fill_color)
+            for setter, value, supported, edited in zip(
+                setters, values, style_capabilities(comp), changed,
+            ):
+                if supported and edited:
+                    setter(cid, value)
 
         self._apply("Style", apply)
 
@@ -2204,6 +2199,8 @@ class PropertiesPanel(QWidget):
         def applicable(sec: InspectorSection) -> bool:
             if same_kind:
                 return sec.applies_to(comps[0])
+            if isinstance(sec, FillBorderSection):
+                return any(sec.applies_to(c) for c in comps)
             return sec.multi_kind_safe and all(sec.applies_to(c) for c in comps)
 
         # A mixed selection with no shared capability has nothing to edit.

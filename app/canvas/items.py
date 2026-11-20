@@ -689,6 +689,8 @@ class _SlotLabel(QGraphicsItem):
             return
         parent = self.parentItem()
         color = parent._label_color() if hasattr(parent, "_label_color") else QColor(style.COLOR_NORMAL)
+        if self is getattr(parent, "_node_text_item", None):
+            color = parent._symbol_ink()
         painter.setRenderHint(QPainter.Antialiasing, True)
         # Axis-centred labels (e.g. the voltage annotation) sit on top of the
         # line, so give them an opaque backdrop with a little padding to keep
@@ -809,7 +811,7 @@ class _AnnotationDecoration(QGraphicsItem):
         head_path.closeSubpath()
         painter.fillPath(head_path, QBrush(color))
 
-    def _draw_curved_arrow(self, painter: QPainter, color: QColor,
+    def _draw_curved_arrow(self, painter: QPainter, color: QColor, head_color: QColor,
                            tail: QPointF, head: QPointF, ctrl: QPointF) -> None:
         """A quadratic-Bézier arc from *tail* to *head* bowing through *ctrl*, with
         a filled arrowhead at *head* tangent to the curve — CircuiTikZ's european
@@ -825,7 +827,7 @@ class _AnnotationDecoration(QGraphicsItem):
         painter.drawPath(path)
         d = head - ctrl  # tangent at the head end
         ln = math.hypot(d.x(), d.y()) or 1.0
-        self._draw_arrowhead(painter, color, head, d.x() / ln, d.y() / ln)
+        self._draw_arrowhead(painter, head_color, head, d.x() / ln, d.y() / ln)
 
     def paint(self, painter, option, widget=None) -> None:  # noqa: ANN001, N802
         if not self._mode:
@@ -834,6 +836,7 @@ class _AnnotationDecoration(QGraphicsItem):
         color = (parent._label_color() if hasattr(parent, "_label_color")
                  else QColor(style.COLOR_NORMAL))
         painter.setRenderHint(QPainter.Antialiasing, True)
+        head_color = parent._symbol_ink() if hasattr(parent, "_symbol_ink") else color
         a, s, L = self._axis, self._side, self._half_len
         off = QPointF(s.x() * self._perp, s.y() * self._perp)
 
@@ -871,9 +874,9 @@ class _AnnotationDecoration(QGraphicsItem):
             p_first = QPointF(-a.x() * span + end_off.x(), -a.y() * span + end_off.y())
             p_second = QPointF(a.x() * span + end_off.x(), a.y() * span + end_off.y())
             if self._reversed:
-                self._draw_curved_arrow(painter, color, p_second, p_first, ctrl)
+                self._draw_curved_arrow(painter, color, head_color, p_second, p_first, ctrl)
             else:
-                self._draw_curved_arrow(painter, color, p_first, p_second, ctrl)
+                self._draw_curved_arrow(painter, color, head_color, p_first, p_second, ctrl)
         elif self._mode == "current":
             # A bare arrowhead on the wire (no shaft, so it never overlaps the
             # body). Default: near the exit lead, pointing toward the second pin.
@@ -892,7 +895,7 @@ class _AnnotationDecoration(QGraphicsItem):
                 if sign != outward:
                     along -= outward * _CUR_ARROW_HEAD
             tip = QPointF(a.x() * along + off.x(), a.y() * along + off.y())
-            self._draw_arrowhead(painter, color, tip, sign * a.x(), sign * a.y(),
+            self._draw_arrowhead(painter, head_color, tip, sign * a.x(), sign * a.y(),
                                  length=_CUR_ARROW_HEAD, width=_CUR_ARROW_HEAD_W)
 
 
@@ -1523,6 +1526,13 @@ class ComponentItem(QGraphicsItem):
             return QColor(style.COLOR_HOVER)
         return QColor(style.COLOR_NORMAL)
 
+    def _symbol_ink(self) -> QColor:
+        state_color = self._body_color()
+        _, line_color, _ = symbol_style(self._component)
+        if line_color and state_color == style.COLOR_NORMAL:
+            return _resolve_tikz_color(line_color)
+        return self._label_color()
+
     def _body_color(self) -> str:
         if self._ghost:
             return style.COLOR_GHOST
@@ -1680,24 +1690,24 @@ class ComponentItem(QGraphicsItem):
             upright = dict(zip(idx, fixed))
         _ls, _lc, _fc = symbol_style(self._component)
         _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
-        # Default-ink solid parts (end bars, dots, text) take the line colour too,
-        # like CircuiTikZ's ``\\draw[red]``.
         _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
+        from app.codegen.circuitikz import is_node_style
+
+        base_kind = self._defn.base_kind or self._component.kind
+        path_symbol = not is_node_style(base_kind)
+        span = self._defn.default_span[0] * GRID_PX
         for _i, sym in enumerate(syms):
             path = upright.get(_i, base[_i])
-            lw = _stroke_px(sym.stroke_width, lw_scale)
-            # Counter the body scale so the stroke keeps its on-screen weight. A custom
-            # component may carry an explicit stroke colour / dash (``color=``/``dash=``);
-            # a default-black stroke falls back to the theme ink so ordinary symbols
-            # still follow light/dark mode (§5.10).
-            pen_w = lw / s
-            # The user's Line colour / Line style / Fill (inspector) override the
-            # symbol's own stroke and body, like CircuiTikZ's ``color=`` / ``dashed`` /
-            # ``fill=``. ``symbol_style`` decides what applies (colour for every
-            # symbol; style + fill only for a shaped one); selection/hover tints
-            # still win over the line colour (see _outline_color).
+            pen_w = _stroke_px(sym.stroke_width, lw_scale) / s
+            bounds = sym.path.boundingRect()
+            # Path-symbol leads touch an axial terminal. CircuiTikZ draws them
+            # outside the symbol, with the surrounding circuit's stroke.
+            lead = (path_symbol and bounds.width() > 0
+                    and abs(bounds.top()) < 0.01 and bounds.height() < 0.01
+                    and (abs(bounds.left()) < 0.01 or abs(bounds.right() - span) < 0.01))
             pen = _styled_symbol_pen(
-                effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
+                effective_color(sym.stroke_color, color), pen_w,
+                "" if lead else _ls, "" if lead else _lc, color,
                 dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None)
             painter.setPen(pen)
             if _fc and _i == _fill_idx:
@@ -3811,12 +3821,15 @@ class _ResizableNodeItem(ComponentItem):
         _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
         _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         for _i, sym in enumerate(syms):
+            pen_w = _stroke_px(sym.stroke_width, lw_scale)
             painter.setPen(_styled_symbol_pen(
-                color, _stroke_px(sym.stroke_width, lw_scale), _ls, _lc, color))
+                effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
+                dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None))
             if _fc and _i == _fill_idx:
                 painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
             elif sym.filled:
-                fill = style.COLOR_BACKGROUND if sym.fill_bg else _ink
+                fill = (style.COLOR_BACKGROUND if sym.fill_bg
+                        else effective_color(sym.fill_color, _ink))
                 painter.setBrush(QBrush(QColor(fill)))
             else:
                 painter.setBrush(Qt.NoBrush)

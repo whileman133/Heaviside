@@ -1,15 +1,9 @@
-"""Derive which library kinds have a *fillable body* (a box, triangle, circle...).
+"""Measure per-component colour, body fill, and dash support in CircuiTikZ.
 
-Developer tool (needs ``pdflatex`` + ``circuitikz``, ``pdftoppm``, numpy, Pillow).
-Each kind is rendered once with ``fill=yellow`` on its ``\\draw``; a kind counts as
-"shaped" when the yellow region is a real body rather than a sliver (capacitor
-plates fill too, but are not an enclosed shape). The result is the data in
-``app/components/shapes.py``; re-run this after regenerating the library and paste
-the printed ``SHAPED_KINDS`` set there.
-
-    uv run python scripts/find_fillable_kinds.py [--json out.json]
+Requires pdflatex with CircuiTikZ and standalone, pdftoppm, and Pillow.
+Run with uv run python scripts/find_fillable_kinds.py [--json out.json].
+Copy the printed tables into app/components/shapes.py after library updates.
 """
-
 from __future__ import annotations
 
 import argparse
@@ -18,9 +12,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
-import numpy as np
-from PIL import Image
+from PIL import Image, ImageChops
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -39,14 +33,38 @@ MIN_ASPECT = 0.3
 MIN_PIXELS = 12
 
 
-def _source(kind: str) -> str:
+# The project only exposes appearance supported across its target renders.
+# Some CircuiTikZ versions can colour auxiliary strokes of bodyless symbols or
+# fill stroke-only shapes. Those effects are outside the symbol styling contract.
+_COLOR_EXCLUSIONS = {
+    "short", "crossing", "bare jumper", "noise voltage source",
+    "noise current source", "thermocouple", "bare7seg",
+}
+_FILL_EXCLUSIONS = {
+    "cpe", "damper", "sinusoidal current source", "viscoe",  # no closed canvas body
+    "ldR", "memristor", "mov", "phR", "thR", "thRn", "thRp", "varistor",
+}
+
+
+def _supported(kind: str, measured: dict[str, bool]) -> dict[str, bool]:
+    measured = measured.copy()
+    if kind in _COLOR_EXCLUSIONS:
+        measured["COLORABLE_KINDS"] = False
+    if kind in _FILL_EXCLUSIONS or REGISTRY[kind].category in {"Diodes", "Transistors"}:
+        measured["FILLABLE_KINDS"] = False
+    return measured
+
+
+def _source(kind: str, option: str) -> str:
     comp = Component(id=f"k_{kind}", kind=kind, position=(0.0, 0.0), rotation=0, options="")
     sch = Schematic(version="0.1", name="k", components=[comp], wires=[])
-    return cg.generate(sch, y_flip=True)
+    with patch.object(cg, "_symbol_style_opts", return_value=[option] if option else []):
+        return cg.generate(sch, y_flip=True)
 
 
-def _compile(kinds: list[str], sources: dict[str, str], tmp: Path) -> list[Image.Image] | None:
-    body = "\n".join(sources[k] for k in kinds)
+def _compile(keys: list[tuple[str, str]], sources: dict[tuple[str, str], str],
+             tmp: Path) -> list[Image.Image] | None:
+    body = "\n".join(sources[key] for key in keys)
     tex = (
         "\\documentclass[multi=circuitikz,border=2pt]{standalone}\n"
         "\\usepackage[siunitx]{circuitikz}\n\\begin{document}\n" + body + "\n\\end{document}\n"
@@ -58,98 +76,93 @@ def _compile(kinds: list[str], sources: dict[str, str], tmp: Path) -> list[Image
     if pdf.exists():
         pdf.unlink()
     try:
-        subprocess.run(
-            ["pdflatex", "-interaction=nonstopmode", "-no-shell-escape", "b.tex"],
+        result = subprocess.run(
+            ["pdflatex", "-interaction=nonstopmode", "-halt-on-error",
+             "-no-shell-escape", "b.tex"],
             cwd=tmp, capture_output=True, timeout=25,
         )
     except subprocess.TimeoutExpired:  # a kind that hangs TeX: caller bisects
         return None
-    if not pdf.exists():
+    if result.returncode != 0 or not pdf.exists():
         return None
-    r = subprocess.run(["pdftoppm", "-r", str(DPI), "b.pdf", "b"], cwd=tmp, capture_output=True)
+    r = subprocess.run(
+        ["pdftoppm", "-r", str(DPI), "b.pdf", "b"],
+        cwd=tmp, capture_output=True, timeout=25,
+    )
     pages = sorted(tmp.glob("b-*.ppm"))
-    if r.returncode != 0:  # a kind produced a broken page: caller bisects
-        for p in pages:
-            p.unlink()
-        pdf.unlink()
-        return None
-    if len(pages) != len(kinds):
-        for p in pages:
-            p.unlink()
-        return None
-    imgs = [Image.open(p).convert("RGB").copy() for p in pages]
-    for p in pages:
-        p.unlink()
-    pdf.unlink()
-    return imgs
+    if r.returncode != 0 or len(pages) != len(keys):
+        return None  # caller bisects the batch
+    images = []
+    for page in pages:
+        with Image.open(page) as source:
+            images.append(source.convert("RGB"))
+    return images
 
 
-def _measure(img: Image.Image) -> dict:
-    a = np.asarray(img).astype(int)
-    ink = a.sum(axis=2) < 700
-    yel = (a[..., 0] > 200) & (a[..., 1] > 200) & (a[..., 2] < 120)
+def _measure(plain: Image.Image, color: Image.Image, fill: Image.Image,
+             dashed: Image.Image) -> dict[str, bool]:
+    yellow = Image.new("L", fill.size)
+    yellow.putdata([255 if r > 200 and g > 200 and b < 120 else 0
+                    for r, g, b in fill.get_flattened_data()])
+    box = yellow.getbbox()
+    fillable = False
+    if box is not None:
+        width, height = box[2] - box[0], box[3] - box[1]
+        fillable = (yellow.histogram()[255] >= MIN_PIXELS
+                    and min(width, height) / max(width, height) >= MIN_ASPECT)
 
-    def bbox(m):
-        ys, xs = np.where(m)
-        return (0, 0) if len(xs) == 0 else (int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
-
-    iw, ih = bbox(ink)
-    yw, yh = bbox(yel)
-    extent = max(iw, ih, 1)
-    return {"yellow_px": int(yel.sum()), "yw": yw, "yh": yh, "extent": extent,
-            "aspect": round(min(yw, yh) / max(yw, yh, 1), 3)}
+    return {
+        "COLORABLE_KINDS": any(r > 150 and g < 100 and b < 100
+                               for r, g, b in color.get_flattened_data()),
+        "FILLABLE_KINDS": fillable,
+        "DASHABLE_KINDS": (plain.size != dashed.size
+                           or ImageChops.difference(plain, dashed).getbbox() is not None),
+    }
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json")
-    args = ap.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json", type=Path)
+    args = parser.parse_args()
+    kinds = sorted(k for k, d in REGISTRY.items() if d.component_class is SymbolComponent)
+    options = ("", "color=red", "fill=yellow", "dashed")
+    sources = {(kind, option): _source(kind, option) for kind in kinds for option in options}
+    results = {}
+    failed = []
 
-    # Emit ``fill=yellow`` for every symbol regardless of the shape table.
-    cg._symbol_style_opts = lambda comp: ["fill=yellow"]
+    with tempfile.TemporaryDirectory() as directory:
+        tmp = Path(directory)
 
-    kinds = [k for k, d in REGISTRY.items() if d.component_class is SymbolComponent]
-    sources, failed = {}, []
-    for k in kinds:
-        try:
-            sources[k] = _source(k)
-        except Exception as exc:  # noqa: BLE001
-            failed.append((k, f"codegen: {exc}"))
-    kinds = [k for k in kinds if k in sources]
-
-    results: dict[str, dict] = {}
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-
-        def run(chunk: list[str]) -> None:
-            if not chunk:
-                return
-            print(f"[{len(results)}/{len(kinds)}] batch of {len(chunk)}", file=sys.stderr, flush=True)
-            imgs = _compile(chunk, sources, tmp)
-            if imgs is not None:
-                for k, im in zip(chunk, imgs):
-                    results[k] = _measure(im)
-            elif len(chunk) == 1:
-                failed.append((chunk[0], "latex"))
+        def run(batch: list[str]) -> None:
+            keys = [(kind, option) for kind in batch for option in options]
+            images = _compile(keys, sources, tmp)
+            if images is not None:
+                for index, kind in enumerate(batch):
+                    start = len(options) * index
+                    measured = _measure(*images[start:start + len(options)])
+                    results[kind] = _supported(kind, measured)
+            elif len(batch) == 1:
+                failed.append(batch[0])
             else:
-                mid = len(chunk) // 2
-                run(chunk[:mid])
-                run(chunk[mid:])
+                middle = len(batch) // 2
+                run(batch[:middle])
+                run(batch[middle:])
 
-        for i in range(0, len(kinds), 60):
-            run(kinds[i:i + 60])
+        for index in range(0, len(kinds), 25):
+            print(f"Measuring {index + 1}/{len(kinds)}", file=sys.stderr, flush=True)
+            run(kinds[index:index + 25])
 
-    shaped = sorted(k for k, m in results.items()
-                    if m["yellow_px"] >= MIN_PIXELS and m["aspect"] >= MIN_ASPECT)
     if args.json:
-        Path(args.json).write_text(json.dumps({"results": results, "failed": failed}, indent=1))
-    print(f"# {len(shaped)} shaped of {len(results)} measured; {len(failed)} failed")
-    for k, why in failed:
-        print(f"# FAILED {k}: {why}")
-    print("SHAPED_KINDS = frozenset({")
-    for k in shaped:
-        print(f'    "{k}",')
-    print("})")
+        args.json.write_text(json.dumps({"results": results, "failed": failed}, indent=2))
+    print(f"# Measured {len(results)} kinds. Failed: {', '.join(failed) or 'none'}.")
+    for capability in ("COLORABLE_KINDS", "FILLABLE_KINDS", "DASHABLE_KINDS"):
+        print(f"{capability} = frozenset({{")
+        for kind, supported in results.items():
+            if supported[capability]:
+                print(f"    {kind!r},")
+        print("})")
+    if failed:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

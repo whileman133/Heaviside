@@ -198,7 +198,7 @@ class FontedComponent:
 
 @dataclass
 class StyledComponent:
-    """Mixin: fill + line style (shared by rect, circle, and bipole).
+    """Mixin for drawing block and circuit symbol appearance.
 
     The outline **width** is not here — it is the unified ``Component.line_width``
     (see its docstring), shared with circuit symbols, so one inspector control and
@@ -212,7 +212,7 @@ class StyledComponent:
     """Raw TikZ line-style tokens (e.g. ``"dashed"``, ``"dotted"``).  Empty = solid."""
 
     line_color: str = ""
-    """TikZ colour for the outline (emitted as ``draw=<colour>``), e.g. ``"red"``
+    """TikZ colour for the outline (blocks use ``draw=``, symbols use ``color=``), e.g. ``"red"``
     or a custom ``"{rgb,255:red,…;green,…;blue,…}"``. Empty = the default ink."""
 
 
