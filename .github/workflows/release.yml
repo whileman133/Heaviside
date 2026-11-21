@@ -94,16 +94,22 @@ jobs:
       # Linux: PyInstaller bundles the Qt shared libraries, but they must be
       # present on the build host for PyInstaller to find them. (Not needed on
       # the macOS/Windows runners, where PySide6's wheels carry them.)
-      # libxcb-cursor0: Qt 6.5+ needs it to load its X11 (xcb) platform plugin,
-      # and many systems lack it, so it must be in the bundle. PyInstaller only
-      # bundles what it finds on the build machine, hence installing it here
-      # (checked by "Check bundled X11 cursor library" below).
+      # The X11 libraries Qt's xcb platform plugin needs (Qt's "X11
+      # Requirements" list). Many systems lack some of them (libxcb-cursor0,
+      # libxkbcommon-x11-0, ...), and the app cannot open a window without
+      # every one, so they must all be in the bundle. PyInstaller bundles only
+      # what it finds on the build machine, hence installing them here; the
+      # "Check Qt X11 plugin dependencies" step verifies the result.
       - name: Install Qt system libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libxcb-cursor0
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 \
+            libxkbcommon-x11-0 libx11-xcb1 libxcb-cursor0 libxcb-glx0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-shm0 libxcb-sync1 \
+            libxcb-util1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1
 
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -145,15 +151,6 @@ jobs:
         if: runner.os == 'Linux'
         run: uv run python scripts/check_glibc.py dist/Heaviside --max "${{ matrix.glibc_max }}"
 
-      # Without it, the app exits at start on any system lacking libxcb-cursor0
-      # ("no Qt platform plugin could be initialized"), as the AppImage
-      # catalog's test found (AppImage/appimage.github.io#7047).
-      - name: Check bundled X11 cursor library (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          found=$(find dist/Heaviside -name 'libxcb-cursor.so.0*' | head -1)
-          if [ -z "$found" ]; then echo "::error::libxcb-cursor.so.0 is not in the bundle"; exit 1; fi
-          echo "bundled: $found"
 
       # macOS signing + notarization (steps below) only runs when the signing
       # secrets are configured. A run without them — a fork, or a
@@ -330,12 +327,17 @@ jobs:
       # exit-after-start flag, so a crash or early exit is the failure signal
       # (the same check the AppImage catalog runs). APPIMAGE_EXTRACT_AND_RUN
       # avoids needing FUSE inside the container.
-      # It runs on a real X11 display (Xvfb, Qt's xcb plugin) rather than Qt's
-      # headless "offscreen" platform, which never loads the X11 plugin and so
-      # missed a library the plugin needs. The container has the usual desktop
-      # X11 libraries but deliberately NOT libxcb-cursor0, so the bundled copy
-      # must be the one that works.
-      - name: Smoke-test the AppImage on an older distro (Linux)
+      # Test the AppImage the way a bare system sees it: a container with only
+      # an X server (Xvfb, which brings libX11/libxcb) and the basic graphics
+      # libraries every desktop has, and NONE of the X11 extension libraries
+      # Qt's xcb plugin needs. (An earlier version pre-installed "the usual"
+      # ones and so masked a missing libxkbcommon-x11, which the AppImage
+      # catalog's test then hit.) Two checks:
+      #  1. ldd on Qt's X11 plugin, resolved against the bundle: any "not found"
+      #     names a library the bundle is missing and fails the build.
+      #  2. Run it on a real X11 display (Qt's xcb plugin, not the headless
+      #     "offscreen" one): it must still be running after 20 s.
+      - name: Check Qt X11 plugin dependencies and smoke-test (Linux)
         if: runner.os == 'Linux'
         env:
           APPIMAGE_FILE: ${{ matrix.appimage }}
@@ -345,15 +347,24 @@ jobs:
             -e APPIMAGE_EXTRACT_AND_RUN=1 -e QT_QPA_PLATFORM=xcb "$SMOKE_IMAGE" bash -c '
               apt-get update -qq
               apt-get install -y -qq --no-install-recommends \
-                libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libfontconfig1 \
-                xvfb xauth libx11-xcb1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
-                libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
-                libxcb-xinerama0 libxcb-xkb1 >/dev/null
-              if dpkg -s libxcb-cursor0 >/dev/null 2>&1; then
-                echo "::error::libxcb-cursor0 is installed in the test container"; exit 1
-              fi
+                xvfb xauth libegl1 libgl1 libfontconfig1 libglib2.0-0 libdbus-1-3 >/dev/null
+              for pkg in libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 \
+                         libxcb-render-util0 libxcb-xinerama0; do
+                if dpkg -s "$pkg" >/dev/null 2>&1; then
+                  echo "::error::$pkg is installed in the bare test container"; exit 1
+                fi
+              done
               ldd --version | head -1
               chmod +x "$APPIMAGE_FILE"
+              ./"$APPIMAGE_FILE" --appimage-extract >/dev/null
+              B=squashfs-root/usr/bin/Heaviside/_internal
+              plugin=$(find "$B" -path "*platforms/libqxcb.so" | head -1)
+              missing=$(LD_LIBRARY_PATH="$B:$B/PySide6/Qt/lib" ldd "$plugin" | grep "not found" || true)
+              if [ -n "$missing" ]; then
+                echo "::error::Qt X11 plugin dependencies missing from the bundle:"; echo "$missing"; exit 1
+              fi
+              echo "Qt X11 plugin: all dependencies resolved"
+              rm -rf squashfs-root
               xvfb-run -a timeout 20 ./"$APPIMAGE_FILE" --no-latex; rc=$?
               if [ "$rc" -eq 124 ]; then echo "still running after 20 s on X11: OK"; exit 0; fi
               echo "::error::AppImage exited with code $rc"; exit 1'
