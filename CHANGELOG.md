@@ -5,6 +5,16 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The Linux AppImage starts on systems without `libxcb-cursor0`.** Qt needs
+  that library to open a window on X11, and it wasn't bundled, so on many
+  systems the app exited immediately with "no Qt platform plugin could be
+  initialized". It is now included in the Linux builds. Found by the AppImage
+  catalog's test
+  ([AppImage/appimage.github.io#7047](https://github.com/AppImage/appimage.github.io/pull/7047)).
+
 ## [0.9.1] - 2026-11-20
 
 ### Fixed
