@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   initialized". It is now included in the Linux builds. Found by the AppImage
   catalog's test
   ([AppImage/appimage.github.io#7047](https://github.com/AppImage/appimage.github.io/pull/7047)).
+- **Blank labels no longer show stray characters when LaTeX isn't installed.**
+  Without LaTeX, the canvas typesets labels with its built-in engine, which
+  printed text such as `{\,}` (a voltage with no name, `v^={\,}`) literally.
+  Braces and spacing commands outside `$…$` are now invisible, as in LaTeX, and a
+  label with nothing visible draws nothing. The voltage's `+`/`−` are still drawn.
 
 ## [0.9.1] - 2026-11-20
 

@@ -647,3 +647,49 @@ def test_current_arrow_placement_matches_circuitikz(key, passive, vsource) -> No
     from app.preview.mathrender import current_arrow_placement
     assert current_arrow_placement(key) == passive
     assert current_arrow_placement(key, voltage_source=True) == vsource
+
+
+# ---------------------------------------------------------------------------
+# ziamath fallback: text outside $…$ reads like LaTeX text mode
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fragment, expected", [
+    (r"{\,}", " "),                  # a nameless voltage label: v^={\,}
+    (r"\,", " "),
+    ("{}", ""),
+    ("~", " "),
+    (r"\quad x", "  x"),
+    (r"x\!y", "xy"),
+    ("a{b}c", "abc"),                # grouping braces are invisible
+    (r"{$\phi(0,0)$}", r"$\phi(0,0)$"),
+    (r"$a{b}\,c$", r"$a{b}\,c$"),    # math spans untouched
+    (r"\$5 {x}", r"\$5 x"),          # an escaped dollar is not math
+    (r"\{x\}", r"\{x\}"),            # escaped braces are kept
+    (r"\quadx", r"\quadx"),          # not \quad
+])
+def test_text_mode_for_ziamath(fragment, expected):
+    assert _mr._text_mode_for_ziamath(fragment) == expected
+
+
+def test_ziamath_renders_blank_text_as_nothing():
+    """Regression: with the ziamath fallback (no LaTeX installed), a label of only
+    TeX spacing, ``v^={\\,}``, printed the literal glyphs ``{\\,}`` on the canvas
+    instead of nothing (seen in the README screenshots). It now renders nothing,
+    as with the LaTeX engine, and braces around math render like the math alone."""
+    set_force_ziamath(True)
+    render_path.cache_clear()
+    try:
+        for blank in (r"{\,}", r"\,", "{}", "~"):
+            assert render_latex(blank) is None, blank
+        a, b = render_latex(r"{$v$}"), render_latex("$v$")
+        assert a is not None and b is not None
+        assert a.boundingRect().width() == pytest.approx(b.boundingRect().width())
+    finally:
+        set_force_ziamath(False)
+        render_path.cache_clear()
+
+
+def test_blank_label_slot_is_kept_for_its_decoration():
+    """A nameless voltage keeps its slot (so the canvas still draws its +/- or
+    arrow), even though its label renders nothing."""
+    assert slot_fragments(r"l=$R$, v^={\,}") == [("l", "$R$"), ("v^", r"{\,}")]
