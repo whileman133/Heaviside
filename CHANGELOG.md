@@ -5,6 +5,14 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The Linux AppImage starts on systems without Qt's X11 libraries.** 0.9.2
+  bundled `libxcb-cursor0`, but Qt's X11 support needs several more libraries
+  (such as `libxkbcommon-x11-0`) that many systems lack, so the app could still
+  exit immediately. The Linux builds now bundle all of them.
+
 ## [0.9.2] - 2026-11-21
 
 ### Fixed
