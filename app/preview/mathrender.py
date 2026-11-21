@@ -431,6 +431,75 @@ def _warn_ziamath_unavailable_once(exc: BaseException) -> None:
     )
 
 
+#: LaTeX text-mode spacing commands, which ziamath would print verbatim. Each
+#: becomes a plain space (``\!``, a negative thin space, becomes nothing).
+_TEXT_SPACING = {
+    r"\,": " ", r"\;": " ", r"\:": " ", r"\ ": " ", r"\!": "",
+    r"\quad": " ", r"\qquad": " ", r"\enspace": " ", r"\thinspace": " ",
+}
+_TEXT_SPACING_RE = re.compile(
+    r"\\(?:qquad|quad|enspace|thinspace)(?![A-Za-z])|\\[,;: !]")
+
+
+def _text_mode_for_ziamath(fragment: str) -> str:
+    r"""*fragment* with its **text-mode** parts (outside ``$…$``) made to read the
+    way LaTeX typesets them, for the ziamath fallback engine.
+
+    ``ziamath.Text`` prints text verbatim, so ``{\,}`` (an empty label holding a
+    thin space, e.g. ``v^={\,}`` for a voltage with no name) came out as the
+    glyphs ``{\,}`` instead of nothing. In LaTeX text mode, unescaped braces are
+    invisible grouping and spacing commands are space, so: unescaped ``{``/``}``
+    are removed, ``~`` and the spacing commands in :data:`_TEXT_SPACING` become a
+    space. ``$…$`` math spans and escaped characters (``\$``, ``\{``) are kept as
+    they are."""
+    out: list[str] = []
+    in_math = False
+    i, n = 0, len(fragment)
+    text_start = 0
+
+    def flush_text(end: int) -> None:
+        seg = fragment[text_start:end]
+        buf: list[str] = []
+        j = 0
+        while j < len(seg):
+            m = _TEXT_SPACING_RE.match(seg, j)
+            if m:
+                buf.append(_TEXT_SPACING[m.group(0)])
+                j = m.end()
+                continue
+            ch = seg[j]
+            if ch == "\\" and j + 1 < len(seg):
+                buf.append(seg[j:j + 2])      # other escapes (\$, \{, \\, \cmd…) kept
+                j += 2
+                continue
+            if ch in "{}":
+                j += 1                        # invisible grouping in text mode
+                continue
+            buf.append(" " if ch == "~" else ch)
+            j += 1
+        out.append("".join(buf))
+
+    while i < n:
+        ch = fragment[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch == "$":
+            if in_math:
+                out.append(fragment[text_start:i + 1])   # the whole $…$ span, untouched
+                text_start = i + 1
+            else:
+                flush_text(i)
+                text_start = i
+            in_math = not in_math
+        i += 1
+    if in_math:
+        out.append(fragment[text_start:])                # unbalanced: leave as is
+    else:
+        flush_text(n)
+    return "".join(out)
+
+
 def _ziamath_svg(fragment: str) -> str | None:
     """Generate the ziamath SVG for *fragment* — **Qt-free**, so it is safe on a
     worker thread — or ``None`` if ziamath is missing or the fragment fails to
@@ -455,8 +524,14 @@ def _ziamath_svg(fragment: str) -> str | None:
             # so that silent, undiagnosable failure leaves a trail in the logs.
             _warn_ziamath_unavailable_once(exc)
             return None
+        # Text outside $…$ reads as LaTeX text mode does (braces and spacing
+        # commands are invisible); a fragment with nothing visible left renders
+        # nothing, as with the LaTeX engine.
+        text = _text_mode_for_ziamath(fragment)
+        if not text.strip():
+            return None
         try:
-            return ziamath.Text(fragment, size=TEMPLATE_PT).svg()
+            return ziamath.Text(text, size=TEMPLATE_PT).svg()
         except Exception:  # noqa: BLE001 - any parse/layout failure -> raw-text fallback
             return None
 
@@ -832,7 +907,10 @@ def slot_fragments(options: str) -> list[tuple[str, str]]:
 
     Only side-placed annotation slots contribute (``l``/``v``/``i``/``a``
     families); the in-body ``t=`` box label and styling flags are excluded.
-    Empty values (e.g. ``v^=\,``) are dropped.  Order follows the options string.
+    Values that are empty after trimming are dropped. A value that only *renders*
+    blank (``v^={\,}``, a voltage with no name) is kept: its slot still draws the
+    ``+``/``−`` or arrow decoration, and its label renders nothing.  Order follows
+    the options string.
 
         ``l=$R_1$, v=$V_s$`` -> ``[("l", "$R_1$"), ("v", "$V_s$")]``
     """

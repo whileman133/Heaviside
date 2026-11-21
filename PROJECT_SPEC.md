@@ -938,6 +938,15 @@ verbatim and `$…$` spans typeset as math. Two engines produce a baseline-norma
   fonts and `latex2mathml`'s symbol table load at import time, so the frozen bundle
   must ship all three packages' data (guarded by `test_mathrender.py`); a missing
   module/data degrades to raw text with a one-time warning rather than crashing.
+  `ziamath.Text` prints text outside `$…$` verbatim, so before typesetting,
+  `_text_mode_for_ziamath` makes those parts read as LaTeX text mode does:
+  unescaped grouping braces are removed, `~` and the spacing commands (`\,` `\;`
+  `\:` `\ ` `\quad` `\qquad` `\enspace` `\thinspace`) become a space, `\!` nothing;
+  `$…$` spans and escapes (`\$`, `\{`) are untouched. A fragment with nothing
+  visible left (`v^={\,}`, a voltage with no name) renders nothing, as with
+  `latex`, while its slot still draws the `+`/`−` or arrow. Previously the
+  fallback printed the literal `{\,}` (pinned by `test_mathrender.py`'s
+  `…ziamath_renders_blank_text_as_nothing` and `…text_mode_for_ziamath`).
 
 **Engine selection.** Auto: `latex` when `latex`+`dvisvgm` are on `PATH`, else
 `ziamath`. A debug preference (§10.8) forces `ziamath`; toggling it re-typesets all
