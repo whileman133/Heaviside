@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **The Linux AppImage starts on systems without `libxcb-cursor0`.** Qt needs
+  that library to open a window on X11, and it wasn't bundled, so on many
+  systems the app exited immediately with "no Qt platform plugin could be
+  initialized". It is now included in the Linux builds. Found by the AppImage
+  catalog's test
+  ([AppImage/appimage.github.io#7047](https://github.com/AppImage/appimage.github.io/pull/7047)).
 - **Blank labels no longer show stray characters when LaTeX isn't installed.**
   Without LaTeX, the canvas typesets labels with its built-in engine, which
   printed text such as `{\,}` (a voltage with no name, `v^={\,}`) literally.
