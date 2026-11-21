@@ -94,12 +94,16 @@ jobs:
       # Linux: PyInstaller bundles the Qt shared libraries, but they must be
       # present on the build host for PyInstaller to find them. (Not needed on
       # the macOS/Windows runners, where PySide6's wheels carry them.)
+      # libxcb-cursor0: Qt 6.5+ needs it to load its X11 (xcb) platform plugin,
+      # and many systems lack it, so it must be in the bundle. PyInstaller only
+      # bundles what it finds on the build machine, hence installing it here
+      # (checked by "Check bundled X11 cursor library" below).
       - name: Install Qt system libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0
+            libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libxcb-cursor0
 
       - name: Install uv
         uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
@@ -140,6 +144,16 @@ jobs:
       - name: Check glibc requirement (Linux)
         if: runner.os == 'Linux'
         run: uv run python scripts/check_glibc.py dist/Heaviside --max "${{ matrix.glibc_max }}"
+
+      # Without it, the app exits at start on any system lacking libxcb-cursor0
+      # ("no Qt platform plugin could be initialized"), as the AppImage
+      # catalog's test found (AppImage/appimage.github.io#7047).
+      - name: Check bundled X11 cursor library (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          found=$(find dist/Heaviside -name 'libxcb-cursor.so.0*' | head -1)
+          if [ -z "$found" ]; then echo "::error::libxcb-cursor.so.0 is not in the bundle"; exit 1; fi
+          echo "bundled: $found"
 
       # macOS signing + notarization (steps below) only runs when the signing
       # secrets are configured. A run without them — a fork, or a
@@ -316,6 +330,11 @@ jobs:
       # exit-after-start flag, so a crash or early exit is the failure signal
       # (the same check the AppImage catalog runs). APPIMAGE_EXTRACT_AND_RUN
       # avoids needing FUSE inside the container.
+      # It runs on a real X11 display (Xvfb, Qt's xcb plugin) rather than Qt's
+      # headless "offscreen" platform, which never loads the X11 plugin and so
+      # missed a library the plugin needs. The container has the usual desktop
+      # X11 libraries but deliberately NOT libxcb-cursor0, so the bundled copy
+      # must be the one that works.
       - name: Smoke-test the AppImage on an older distro (Linux)
         if: runner.os == 'Linux'
         env:
@@ -323,14 +342,20 @@ jobs:
           SMOKE_IMAGE: ${{ matrix.smoke_image }}
         run: |
           docker run --rm -v "$PWD:/w" -w /w -e APPIMAGE_FILE \
-            -e APPIMAGE_EXTRACT_AND_RUN=1 -e QT_QPA_PLATFORM=offscreen "$SMOKE_IMAGE" bash -c '
+            -e APPIMAGE_EXTRACT_AND_RUN=1 -e QT_QPA_PLATFORM=xcb "$SMOKE_IMAGE" bash -c '
               apt-get update -qq
               apt-get install -y -qq --no-install-recommends \
-                libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libfontconfig1 >/dev/null
+                libegl1 libgl1 libxkbcommon0 libdbus-1-3 libglib2.0-0 libfontconfig1 \
+                xvfb xauth libx11-xcb1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 \
+                libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+                libxcb-xinerama0 libxcb-xkb1 >/dev/null
+              if dpkg -s libxcb-cursor0 >/dev/null 2>&1; then
+                echo "::error::libxcb-cursor0 is installed in the test container"; exit 1
+              fi
               ldd --version | head -1
               chmod +x "$APPIMAGE_FILE"
-              timeout 20 ./"$APPIMAGE_FILE" --no-latex; rc=$?
-              if [ "$rc" -eq 124 ]; then echo "still running after 20 s: OK"; exit 0; fi
+              xvfb-run -a timeout 20 ./"$APPIMAGE_FILE" --no-latex; rc=$?
+              if [ "$rc" -eq 124 ]; then echo "still running after 20 s on X11: OK"; exit 0; fi
               echo "::error::AppImage exited with code $rc"; exit 1'
 
       # The .dmg is already the single release artifact; just emit its SHA-256
