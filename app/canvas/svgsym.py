@@ -276,7 +276,7 @@ def is_thick(stroke_width: float) -> bool:
 
 
 @lru_cache(maxsize=None)
-def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
+def symbol_paths(kind: str, *, filled: bool = False) -> tuple[SymbolPath, ...]:
     """
     Return the painter paths for *kind*, transformed into local pixel space.
 
@@ -303,17 +303,19 @@ def symbol_paths(kind: str) -> tuple[SymbolPath, ...]:
     xform = _local_transform()
 
     out: list[SymbolPath] = []
-    for p in entry["paths"]:
+    if filled and "filled_paths" not in entry:
+        return symbol_paths(kind)
+    for p in entry["filled_paths" if filled else "paths"]:
         local = xform.map(parse_path(p["d"]))
         # A bare path (default/solid fill) is a filled body; only an explicit
         # ``fill='none'`` is stroked-only. A *white* fill (e.g. ocirc's open interior)
         # is filled with the paper colour so it reads as hollow, not an ink disc.
         fill = p.get("fill", "none").lower()
-        filled = fill != "none"
+        has_fill = fill != "none"
         fill_bg = fill in ("#fff", "#ffffff", "white")
         clip = xform.map(parse_path(p["clip"])) if p.get("clip") else None
         out.append(SymbolPath(path=local, stroke_width=float(p["stroke_width"]),
-                              filled=filled, fill_bg=fill_bg, clip=clip,
+                              filled=has_fill, fill_bg=fill_bg, clip=clip,
                               stroke_color=p.get("stroke", ""),
                               fill_color=p.get("fill", ""),
                               dash=tuple(p.get("dash", ()))))

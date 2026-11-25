@@ -601,10 +601,13 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "R": {
-      "display_name": "Resistor",
+      "display_name": "American resistor",
       "category": "Resistors",
       "emission": "path",
       "tikz": "R",
@@ -639,11 +642,51 @@
           ],
           "anchor": null
         }
+      ]
+    },
+    "european resistor": {
+      "display_name": "European resistor",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european resistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
       ],
-      "style_axis": "resistors"
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
     },
     "vR": {
-      "display_name": "Variable resistor",
+      "display_name": "Variable american resistor",
       "category": "Resistors",
       "emission": "path",
       "tikz": "vR",
@@ -686,11 +729,59 @@
           ],
           "anchor": null
         }
+      ]
+    },
+    "variable european resistor": {
+      "display_name": "Variable european resistor",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "variable european resistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
       ],
-      "style_axis": "resistors"
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "wiper",
+          "offset": [
+            0.72,
+            0.49
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
     },
     "pR": {
-      "display_name": "potentiometer, american style",
+      "display_name": "American potentiometer",
       "category": "Resistors",
       "emission": "path",
       "tikz": "pR",
@@ -733,11 +824,59 @@
           ],
           "anchor": null
         }
+      ]
+    },
+    "european potentiometer": {
+      "display_name": "European potentiometer",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european potentiometer",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
       ],
-      "style_axis": "resistors"
+      "bbox": [
+        0.0,
+        -0.6,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "wiper",
+          "offset": [
+            1.0,
+            -0.56
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
     },
     "sR": {
-      "display_name": "Resistive sensor",
+      "display_name": "American resistive sensor",
       "category": "Resistors",
       "emission": "path",
       "tikz": "sR",
@@ -780,11 +919,59 @@
           ],
           "anchor": null
         }
+      ]
+    },
+    "european resistive sensor": {
+      "display_name": "European resistive sensor",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european resistive sensor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
       ],
-      "style_axis": "resistors"
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "wiper",
+          "offset": [
+            0.44,
+            0.3595
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
     },
     "ldR": {
-      "display_name": "Ligth-Dependent resistor",
+      "display_name": "American light dependent resistor",
       "category": "Resistors",
       "emission": "path",
       "tikz": "ldR",
@@ -819,8 +1006,48 @@
           ],
           "anchor": null
         }
+      ]
+    },
+    "european light dependent resistor": {
+      "display_name": "European light dependent resistor",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "european light dependent resistor",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
       ],
-      "style_axis": "resistors"
+      "bbox": [
+        0.0,
+        -0.8,
+        2.05,
+        0.6
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
     },
     "varistor": {
       "display_name": "Varistor",
@@ -858,6 +1085,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "mov": {
@@ -896,6 +1126,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "phR": {
@@ -934,6 +1167,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "thR": {
@@ -980,6 +1216,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "thRp": {
@@ -1018,6 +1257,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "thRn": {
@@ -1056,6 +1298,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "capacitor": {
@@ -1094,6 +1339,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "curved capacitor": {
@@ -1132,6 +1380,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "ecapacitor": {
@@ -1170,6 +1421,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "variable capacitor": {
@@ -1216,6 +1470,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "capacitive sensor": {
@@ -1262,6 +1519,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "piezoelectric": {
@@ -1338,6 +1598,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "feC": {
@@ -1416,6 +1679,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "L": {
@@ -1657,6 +1923,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty Schottky diode": {
@@ -1695,6 +1964,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty Zener diode": {
@@ -1733,6 +2005,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty ZZener diode": {
@@ -1771,6 +2046,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty tunnel diode": {
@@ -1809,6 +2087,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty photodiode": {
@@ -1847,6 +2128,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty led": {
@@ -1885,6 +2169,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty laser diode": {
@@ -1923,6 +2210,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty varcap": {
@@ -1961,6 +2251,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty TVS diode": {
@@ -1999,6 +2292,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty Shockley diode": {
@@ -2037,6 +2333,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty bidirectionaldiode": {
@@ -2075,6 +2374,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full diode": {
@@ -2569,6 +2871,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke Schottky diode": {
@@ -2607,6 +2912,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke Zener diode": {
@@ -2645,6 +2953,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke ZZener diode": {
@@ -2683,6 +2994,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke tunnel diode": {
@@ -2721,6 +3035,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke photodiode": {
@@ -2759,6 +3076,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke led": {
@@ -2797,6 +3117,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke laser diode": {
@@ -2835,6 +3158,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "stroke varcap": {
@@ -2873,6 +3199,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "triac": {
@@ -2935,6 +3264,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty triac": {
@@ -2981,6 +3313,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full triac": {
@@ -3105,6 +3440,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty thyristor": {
@@ -3167,6 +3505,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full thyristor": {
@@ -3291,6 +3632,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "put": {
@@ -3353,6 +3697,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty put": {
@@ -3415,6 +3762,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full put": {
@@ -3539,6 +3889,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "gto": {
@@ -3601,6 +3954,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty gto": {
@@ -3663,6 +4019,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full gto": {
@@ -3787,6 +4146,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "gtobar": {
@@ -3849,6 +4211,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty gtobar": {
@@ -3911,6 +4276,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full gtobar": {
@@ -4035,6 +4403,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "agtobar": {
@@ -4097,6 +4468,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "empty agtobar": {
@@ -4159,6 +4533,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "full agtobar": {
@@ -4283,6 +4660,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "battery": {
@@ -4739,6 +5119,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "european controlled voltage source": {
@@ -6601,6 +6984,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "inerter": {
@@ -6639,6 +7025,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "spring": {
@@ -6739,6 +7128,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "mass": {
@@ -8911,6 +9303,17 @@
           ],
           "anchor": null
         }
+      ],
+      "variants": [
+        {
+          "name": "box",
+          "token": "box",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_box"
       ]
     },
     "bandpass": {
@@ -9383,6 +9786,17 @@
           ],
           "anchor": null
         }
+      ],
+      "variants": [
+        {
+          "name": "boxed",
+          "token": "boxed",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_boxed"
       ]
     },
     "iamp": {
@@ -9437,6 +9851,17 @@
           ],
           "anchor": null
         }
+      ],
+      "variants": [
+        {
+          "name": "boxed",
+          "token": "boxed",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_boxed"
       ]
     },
     "vamp": {
@@ -9475,6 +9900,17 @@
           ],
           "anchor": null
         }
+      ],
+      "variants": [
+        {
+          "name": "boxed",
+          "token": "boxed",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_boxed"
       ]
     },
     "piattenuator": {
@@ -15506,6 +15942,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "mslstub": {
@@ -18416,6 +18855,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "open jumper": {
@@ -18478,6 +18920,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "closed jumper": {
@@ -18540,6 +18985,9 @@
           ],
           "anchor": null
         }
+      ],
+      "fill_variants": [
+        ""
       ]
     },
     "three-pins jumper": {
@@ -18557,7 +19005,7 @@
       ],
       "bbox": [
         0.0,
-        -0.1,
+        -0.3,
         2.05,
         0.1
       ],
@@ -18617,6 +19065,25 @@
             -0.0
           ],
           "anchor": null
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_tjumper connections=12",
+        "_tjumper connections=S1"
+      ],
+      "variants": [
+        {
+          "name": "tjumper_connections=12",
+          "token": "tjumper connections=12",
+          "mode": "option",
+          "label": "Connections 12"
+        },
+        {
+          "name": "tjumper_connections=S1",
+          "token": "tjumper connections=S1",
+          "mode": "option",
+          "label": "Connections S1"
         }
       ]
     },
@@ -38701,6 +39168,1513 @@
       "text_anchor": [
         0.0,
         0.0
+      ]
+    },
+    "bandpassp": {
+      "display_name": "bandpass, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "bandpassp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "bandstopp": {
+      "display_name": "bandstop, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "bandstopp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "bgenerator": {
+      "display_name": "Block generator (use t=… to specify text)",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "bgenerator",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "biast": {
+      "display_name": "BIAS-T circuit as block",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "biast",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "camera": {
+      "display_name": "Videocamera",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "camera",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.85,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "cgenerator": {
+      "display_name": "Clock generator",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "cgenerator",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "empty igct": {
+      "display_name": "Empty IGCT",
+      "category": "Diodes",
+      "emission": "path",
+      "tikz": "empty igct",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.8,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "G",
+          "offset": [
+            1.7,
+            -0.77
+          ],
+          "anchor": null
+        },
+        {
+          "name": "anode",
+          "offset": [
+            0.3,
+            -0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            1.7,
+            -0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "full igct": {
+      "display_name": "Full IGCT",
+      "category": "Diodes",
+      "emission": "path",
+      "tikz": "full igct",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.8,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "G",
+          "offset": [
+            1.7,
+            -0.77
+          ],
+          "anchor": null
+        },
+        {
+          "name": "anode",
+          "offset": [
+            0.3,
+            -0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            1.7,
+            -0.0
+          ],
+          "anchor": null
+        }
+      ]
+    },
+    "highpassp": {
+      "display_name": "highpass, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "highpassp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "igct": {
+      "display_name": "Standard IGCT",
+      "category": "Diodes",
+      "emission": "path",
+      "tikz": "igct",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.8,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "G",
+          "offset": [
+            1.7,
+            -0.77
+          ],
+          "anchor": null
+        },
+        {
+          "name": "anode",
+          "offset": [
+            0.3,
+            -0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            1.7,
+            -0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "lowpassp": {
+      "display_name": "lowpass, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "lowpassp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "neonlampac": {
+      "display_name": "Neon lamp (anode and cathode style)",
+      "category": "Misc",
+      "emission": "path",
+      "tikz": "neonlampac",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "neonlampcc": {
+      "display_name": "Neon lamp (double cathode style)",
+      "category": "Misc",
+      "emission": "path",
+      "tikz": "neonlampcc",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "ngenerator": {
+      "display_name": "Generic generator (use t=… to specify text)",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "ngenerator",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "notchp": {
+      "display_name": "notch, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "notchp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "oosourceatrans": {
+      "display_name": "auto-transformer source",
+      "category": "Sources",
+      "emission": "path",
+      "tikz": "oosourceatrans",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "centerprim",
+          "offset": [
+            1.098,
+            -0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "primup",
+          "offset": [
+            1.2762,
+            -0.1782
+          ],
+          "anchor": null
+        },
+        {
+          "name": "primdown",
+          "offset": [
+            1.2762,
+            0.1782
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "power": {
+      "display_name": "Power Supply",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "power",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "u1",
+          "offset": [
+            0.3,
+            -0.14
+          ],
+          "anchor": null
+        },
+        {
+          "name": "u2",
+          "offset": [
+            0.3,
+            0.14
+          ],
+          "anchor": null
+        },
+        {
+          "name": "plus",
+          "offset": [
+            1.525,
+            -0.14
+          ],
+          "anchor": null
+        },
+        {
+          "name": "minus",
+          "offset": [
+            1.525,
+            0.14
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "register": {
+      "display_name": "Register (use t=… to specify text)",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "register",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "clk",
+          "offset": [
+            0.51,
+            -0.245
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "relais": {
+      "display_name": "Relais",
+      "category": "Misc",
+      "emission": "path",
+      "tikz": "relais",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.6,
+        2.05,
+        0.6
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "resonantp": {
+      "display_name": "resonant, plot style",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "resonantp",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "ideal_filter",
+          "token": "ideal filter",
+          "mode": "option"
+        }
+      ],
+      "fill_variants": [
+        "",
+        "_ideal filter"
+      ]
+    },
+    "sgeneric": {
+      "display_name": "Slashed generic bipole",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "sgeneric",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "sinetable": {
+      "display_name": "Sine lookup table",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "sinetable",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "singeneric": {
+      "display_name": "Sine generic bipole",
+      "category": "Resistors",
+      "emission": "path",
+      "tikz": "singeneric",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.25,
+        2.05,
+        0.25
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "sparkgap": {
+      "display_name": "Spark gap (unenclosed)",
+      "category": "Misc",
+      "emission": "path",
+      "tikz": "sparkgap",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "variants": [
+        {
+          "name": "sparkgap/circle",
+          "token": "sparkgap/circle",
+          "mode": "option",
+          "label": "Enclosed"
+        },
+        {
+          "name": "sparkgap/circle,_sparkgap/dot",
+          "token": "sparkgap/circle, sparkgap/dot",
+          "mode": "option",
+          "label": "Gas filled"
+        }
+      ],
+      "fill_variants": [
+        "_sparkgap/circle",
+        "_sparkgap/circle, sparkgap/dot"
+      ]
+    },
+    "stroke TVS diode": {
+      "display_name": "Stroke TVS diode, transorb",
+      "category": "Diodes",
+      "emission": "path",
+      "tikz": "stroke TVS diode",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.4,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "stroke igct": {
+      "display_name": "Stroke IGCT",
+      "category": "Diodes",
+      "emission": "path",
+      "tikz": "stroke igct",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.8,
+        2.05,
+        0.4
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "G",
+          "offset": [
+            1.7,
+            -0.77
+          ],
+          "anchor": null
+        },
+        {
+          "name": "anode",
+          "offset": [
+            0.3,
+            -0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "cathode",
+          "offset": [
+            1.7,
+            -0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "swr": {
+      "display_name": "Standing Wave Ratio (SWR) meter",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "swr",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "trx": {
+      "display_name": "Radio tranceiver (HAM-Radio)",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "trx",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.3
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "plus",
+          "offset": [
+            0.3,
+            -0.14
+          ],
+          "anchor": null
+        },
+        {
+          "name": "minus",
+          "offset": [
+            0.3,
+            0.14
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "tvset": {
+      "display_name": "Television (TV)",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "tvset",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.3,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "vallpass": {
+      "display_name": "variable allpass",
+      "category": "Blocks",
+      "emission": "path",
+      "tikz": "vallpass",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.5,
+        2.05,
+        0.5
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
+      ]
+    },
+    "wbulb": {
+      "display_name": "Wiggly bulb shape",
+      "category": "Misc",
+      "emission": "path",
+      "tikz": "wbulb",
+      "labels": [
+        "l",
+        "l_",
+        "v",
+        "v^",
+        "i",
+        "i_"
+      ],
+      "bbox": [
+        0.0,
+        -0.45,
+        2.05,
+        0.45
+      ],
+      "pins": [
+        {
+          "name": "in",
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "anchor": null
+        },
+        {
+          "name": "out",
+          "offset": [
+            2.0,
+            0.0
+          ],
+          "anchor": null
+        }
+      ],
+      "fill_variants": [
+        ""
       ]
     }
   }

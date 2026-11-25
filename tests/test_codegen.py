@@ -398,6 +398,23 @@ def test_node_text_multi_terminal_inline_in_node_braces() -> None:
     assert "(node_" in bare and ") {}" in bare
 
 
+@pytest.mark.parametrize("kind", ["dipchip", "qfpchip"])
+@pytest.mark.parametrize("y_flip, angle", [(False, 90), (True, -90)])
+def test_chip_node_label_counter_rotates(kind, y_flip, angle):
+    comp = _comp(kind, rotation=90, node_text="IC2")
+    source = generate(_schematic(comp), y_flip=y_flip)
+    assert f"rotate={angle}" in source
+    assert rf") {{\rotatebox{{{-angle}}}{{IC2}}}}" in source
+
+    comp.variants["rotated_numbers"] = True
+    source = generate(_schematic(comp), y_flip=y_flip)
+    assert "rotated numbers" in source
+    assert rf") {{\rotatebox{{{-angle}}}{{IC2}}}}" in source
+
+    comp.rotation = 0
+    assert ") {IC2}" in generate(_schematic(comp), y_flip=y_flip)
+
+
 def test_gate_size_setting_emits_height_and_width(monkeypatch) -> None:
     r"""A manual gate with CircuiTikZ size keys emits its body height/width as
     ``\ctikzset{tripoles/<kw>/height=…, …/width=…}`` (default × resize factor), instead
@@ -2382,7 +2399,7 @@ def test_line_width_emitted_for_symbol_component() -> None:
 
 @pytest.mark.parametrize(("kind", "expected"), [
     ("R", "to[R, color=red]"),
-    ("empty diode", "to[empty diode, color=red]"),
+    ("empty diode", "to[empty diode, color=red, fill=yellow]"),
     ("twoport", "to[twoport, dashed, color=red, fill=yellow]"),
     ("op amp", "node[op amp, dashed, color=red, fill=yellow]"),
     ("ground", r"\node[ground, dashed, color=red]"),
@@ -2696,12 +2713,18 @@ def test_text_unflip_table_names_real_kinds() -> None:
 
 
 def test_vertical_mirror_uses_the_flipy_unflip() -> None:
-    """A vertically mirrored flip-flop (effective rotate=180 + mirror) gets the
-    y un-flip; the vertical mirror itself needs no extra emission."""
+    """A vertically mirrored flip-flop uses native yscale and the y un-flip."""
     c = _comp("latch", rotation=180, mirror=True)
     c.mirror_v = True
     src = generate(_schematic(c))
-    assert "xscale=-1, rotate=180, hv unflip y" in src
+    assert "yscale=-1, hv unflip y" in src
+    assert "rotate=" not in src and "xscale=" not in src
+
+
+def test_single_terminal_node_vertical_mirror_uses_yscale():
+    comp = _comp("ground", rotation=180, mirror=True)
+    comp.mirror_v = True
+    assert r"\node[ground, yscale=-1] at" in generate(_schematic(comp))
 
 
 @pytest.mark.slow
@@ -2766,7 +2789,8 @@ def _emitted_opts(comp) -> str:
 @pytest.mark.parametrize("kind", ["op amp", "npn", "nmos", "flipflop D", "latch", "muxdemux"])
 @pytest.mark.parametrize("rotation", [0, 45, 90, 135, 180, 225, 270, 315])
 @pytest.mark.parametrize("mirror", [False, True])
-def test_node_transform_puts_anchors_on_canvas_pins(kind, rotation, mirror) -> None:
+@pytest.mark.parametrize("mirror_v", [False, True])
+def test_node_transform_puts_anchors_on_canvas_pins(kind, rotation, mirror, mirror_v) -> None:
     """The emitted rotate/xscale options must carry each pin's local anchor to
     where the canvas draws that pin. Before the fix a mirrored node emitted
     ``rotate=a, xscale=-1`` (reflect in the node's own frame, then rotate), which
@@ -2774,7 +2798,9 @@ def test_node_transform_puts_anchors_on_canvas_pins(kind, rotation, mirror) -> N
     from app.schematic.model import component_pin_positions
 
     base = _comp(kind)
-    case = _comp(kind, rotation=rotation, mirror=mirror)
+    case = _comp(kind, rotation=(rotation + 180 * mirror_v) % 360,
+                 mirror=mirror != mirror_v)
+    case.mirror_v = mirror_v
     mb = _node_option_matrix(_emitted_opts(base))
     mc = _node_option_matrix(_emitted_opts(case))
     det = mb[0][0] * mb[1][1] - mb[0][1] * mb[1][0]
@@ -2816,3 +2842,19 @@ def test_mirrored_bipole_box_is_centred_between_its_pins(rotation) -> None:
     for mirror in (False, True):
         got, want = centre(mirror)
         assert got == (pytest.approx(want[0], abs=0.01), pytest.approx(want[1], abs=0.01))
+
+
+@pytest.mark.parametrize("kind", ["op amp", "dipchip", "vcc"])
+@pytest.mark.parametrize(("rotation", "mirror", "mirror_v"), [
+    (0, True, False),
+    (180, True, True),
+    (270, False, True),
+])
+def test_mirrored_node_text_uses_an_upright_label(kind, rotation, mirror, mirror_v):
+    comp = _comp(kind, rotation=rotation, mirror=mirror, node_text="$A_1$")
+    comp.mirror_v = mirror_v
+    source = generate(_schematic(comp), y_flip=True)
+    name = f"node_{comp.id[:8]}"
+    assert f"] ({name}) " in source
+    assert f"node[anchor=center] at ({name}.text) {{$A_1$}}" in source
+    assert r"\rotatebox" not in source

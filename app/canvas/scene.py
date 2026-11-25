@@ -945,6 +945,14 @@ class SchematicScene(QGraphicsScene):
                 )
         return merge_cmds
 
+    def edit_arc(self, component_id: str, field: str, value: float | str) -> None:
+        from app.canvas.commands import EditArcCommand
+        from app.components.model import ARC_FIELDS, ArcComponent
+
+        comp = self._component_by_id(component_id)
+        if isinstance(comp, ArcComponent) and field in ARC_FIELDS and getattr(comp, field) != value:
+            self._push(EditArcCommand(comp, field, value))
+
     def edit_component_options(self, component_id: str, new_options: str) -> None:
         """Replace the options string of a component via an undoable EditCommand.
 
@@ -1159,6 +1167,14 @@ class SchematicScene(QGraphicsScene):
         if comp is not None and comp.mirror_v:
             new_mirror = not new_mirror
         self._push(MirrorCommand(component_id, new_mirror))
+
+    def invert_component(self, component_id: str, enabled: bool) -> None:
+        from app.canvas.commands import InvertCommand
+        from app.components.library import supports_invert
+
+        comp = self._component_by_id(component_id)
+        if comp is not None and comp.invert != enabled and supports_invert(comp):
+            self._push(InvertCommand(component_id, enabled, comp.invert))
 
     def mirror_component_vertical(self, component_id: str, on: bool) -> None:
         """Set the user's **vertical** mirror (undoable MirrorVerticalCommand): the

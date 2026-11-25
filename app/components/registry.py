@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from app.components.library import library_component_defs
 from app.components.model import (
+    ArcComponent,
     BipoleComponent,
     CircleComponent,
     ComponentDef,
@@ -134,8 +135,20 @@ _CIRCLE = ComponentDef(
     component_class=CircleComponent,
 )
 
+_ARC = ComponentDef(
+    kind="arc",
+    display_name="Arc",
+    category="Drawing",
+    bbox=(-1.0, -0.5, 0.0, 0.5),
+    pins=[],
+    label_slots=[],
+    tikz_keyword="arc",
+    default_span=(0.0, 0.0),
+    component_class=ArcComponent,
+)
+
 _BESPOKE: dict[str, ComponentDef] = {
-    defn.kind: defn for defn in (_OPEN, _SHORT, _BIPOLE, _RECT, _CIRCLE, _TEXT_NODE)
+    defn.kind: defn for defn in (_OPEN, _SHORT, _BIPOLE, _RECT, _CIRCLE, _ARC, _TEXT_NODE)
 }
 
 # ---------------------------------------------------------------------------

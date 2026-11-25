@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from app.components.model import (
+    ARC_FIELDS,
+    ArcComponent,
     CircleComponent,
     Component,
     CustomComponentSpec,
@@ -335,6 +337,8 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # above are already the effective orientation, so this only records intent.
     if c.mirror_v:
         d["mirror_v"] = True
+    if c.invert:
+        d["invert"] = True
     # Node-style {…} slot text; omitted when empty (the common case).
     if c.node_text:
         d["node_text"] = c.node_text
@@ -364,6 +368,8 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # Per-instance logic-gate size multiplier, omitted at the default (1.0).
     if abs(c.scale - 1.0) > 1e-6:
         d["scale"] = c.scale
+    if isinstance(c, ArcComponent):
+        d.update({field: getattr(c, field) for field in ARC_FIELDS})
     if isinstance(c, (RectComponent, CircleComponent)):
         # Always written (0.12+): a missing key means a legacy file, which loads
         # with block-diagram connections ON so its edge wires stay attached.
@@ -733,6 +739,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "rotation": rotation,
         "mirror": mirror,
         "mirror_v": mirror_v,
+        "invert": bool(data.get("invert", False)),
         "options": options,
         "node_text": node_text,
         "node_side": node_side,
@@ -750,6 +757,15 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if not isinstance(raw_z, int) or isinstance(raw_z, bool):
         raise SchematicLoadError(f"{ctx}.z_order must be an integer")
     kwargs["z_order"] = raw_z
+
+    if issubclass(cls, ArcComponent):
+        for field in ("start_angle", "end_angle", "radius"):
+            try:
+                kwargs[field] = _finite(float(data.get(field, getattr(cls, field))),
+                                        f"{ctx}.{field}")
+            except (TypeError, ValueError) as exc:
+                raise SchematicLoadError(f"{ctx}.{field} must be a finite number") from exc
+        kwargs["arrow_style"] = data.get("arrow_style", cls.arrow_style)
 
     if issubclass(cls, (RectComponent, CircleComponent)):
         # Absent ⇒ a pre-0.12 file, where every box edge was connectable.

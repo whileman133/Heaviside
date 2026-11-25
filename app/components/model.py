@@ -151,6 +151,9 @@ class Component:
     On the Qt canvas this maps directly to ``QGraphicsItem.setZValue()``.
     Persisted (``schematic/io.py``) only when non-zero."""
 
+    invert: bool = False
+    """Reflect a path-style symbol along its local axis about the midpoint."""
+
 
 @dataclass
 class DrawingComponent(Component):
@@ -214,6 +217,20 @@ class StyledComponent:
     line_color: str = ""
     """TikZ colour for the outline (blocks use ``draw=``, symbols use ``color=``), e.g. ``"red"``
     or a custom ``"{rgb,255:red,…;green,…;blue,…}"``. Empty = the default ink."""
+
+
+ARC_ARROW_STYLES = ("Stealth", "Latex", "Triangle", "To", "Bar", "Circle", "Diamond")
+ARC_FIELDS = ("start_angle", "end_angle", "radius", "arrow_style")
+
+
+@dataclass
+class ArcComponent(StyledComponent, DrawingComponent):
+    """Circular arc starting at its placement point, with angles in TikZ degrees."""
+
+    start_angle: float = 0.0
+    end_angle: float = 300.0
+    radius: float = 0.5
+    arrow_style: str = "Stealth"
 
 
 @dataclass

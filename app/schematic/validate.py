@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import math
 
+from app.components.model import ARC_ARROW_STYLES, ArcComponent
 from app.components.registry import REGISTRY
 from app.schematic.model import Schematic, component_connection_points
 
@@ -57,6 +58,13 @@ def validate(schematic: Schematic) -> list[str]:
     # Invariant 2: all Component.rotation values are a 45° multiple (0..315)
     # ------------------------------------------------------------------
     for comp in schematic.components:
+        if isinstance(comp, ArcComponent):
+            if not all(math.isfinite(v) for v in (comp.start_angle, comp.end_angle, comp.radius)):
+                errors.append(f"Arc '{comp.id}': angles and radius must be finite")
+            elif comp.radius <= 0:
+                errors.append(f"Arc '{comp.id}': radius must be positive")
+            if comp.arrow_style not in ARC_ARROW_STYLES:
+                errors.append(f"Arc '{comp.id}': invalid arrow style {comp.arrow_style!r}")
         if comp.rotation not in _VALID_ROTATIONS:
             errors.append(
                 f"Component '{comp.id}': invalid rotation {comp.rotation!r} "

@@ -64,8 +64,11 @@ from app.canvas.scene import SchematicScene
 from app.codegen.circuitikz import is_node_style, is_single_terminal_node
 from app.components.style import split_top_level
 from app.ui import theme
+from app.components.library import supports_invert
 from app.components.shapes import style_capabilities
 from app.components.model import (
+    ARC_ARROW_STYLES,
+    ArcComponent,
     BipoleComponent,
     CircleComponent,
     DrawingComponent,
@@ -432,7 +435,7 @@ def _make_line_edit_combo_row(
 
 def _make_double_spin_row(
     label: str, lo: float, hi: float, step: float, decimals: int,
-    default: float, on_change: Callable[[float], None],
+    default: float, on_change: Callable[[float], None] | None = None,
 ) -> tuple[QHBoxLayout, QDoubleSpinBox]:
     """Build a ``label: [double spinbox]`` row."""
     row = QHBoxLayout()
@@ -443,7 +446,8 @@ def _make_double_spin_row(
     spin.setSingleStep(step)
     spin.setDecimals(decimals)
     spin.setValue(default)
-    spin.valueChanged.connect(on_change)
+    if on_change is not None:
+        spin.valueChanged.connect(on_change)
     row.addWidget(spin, 1)
     return row, spin
 
@@ -1064,7 +1068,7 @@ class VariantSection(InspectorSection):
 
     def applies_to(self, comp: Component) -> bool:
         from app.components import library
-        return bool(library.variant_specs(comp.kind))
+        return library.has_chip_pin_numbers(comp.kind) or bool(library.variant_specs(comp.kind))
 
     def _load(self, comp: Component) -> None:
         from app.components import library
@@ -1072,6 +1076,12 @@ class VariantSection(InspectorSection):
             cb.setParent(None)
             cb.deleteLater()
         self._checks.clear()
+        if library.has_chip_pin_numbers(comp.kind):
+            cb = QCheckBox("Straight numbers")
+            cb.setChecked(not library.rotated_chip_numbers(comp))
+            cb.toggled.connect(lambda checked: self._on_changed("rotated_numbers", not checked))
+            self._container.addWidget(cb)
+            self._checks["straight_numbers"] = cb
         for v in library.variant_specs(comp.kind):
             name = v["name"]
             cb = QCheckBox(v.get("label") or name.replace("_", " ").capitalize())
@@ -1192,6 +1202,40 @@ class FontSection(InspectorSection):
         self._apply("Font style", lambda s, cid: s.set_font_style(cid, bold, italic, family))
 
 
+class ArcSection(InspectorSection):
+    title = "Arc"
+
+    def _build(self) -> None:
+        self._numbers = {}
+        for field, label, low, high, step, decimals in (
+            ("start_angle", "Start angle", -3600, 3600, 5, 2),
+            ("end_angle", "End angle", -3600, 3600, 5, 2),
+            ("radius", "Radius", 0.001, 500, 0.05, 3),
+        ):
+            row, spin = _make_double_spin_row(
+                label, low, high, step, decimals, getattr(ArcComponent, field),
+            )
+            spin.editingFinished.connect(lambda f=field, widget=spin: self._edit(f, widget.value()))
+            self.body.addLayout(row)
+            self._numbers[field] = spin
+        row, self._arrow = _make_combo_row(
+            "Arrow style", list(ARC_ARROW_STYLES),
+            lambda index: self._edit("arrow_style", ARC_ARROW_STYLES[index]),
+        )
+        self.body.addLayout(row)
+
+    def applies_to(self, comp: Component) -> bool:
+        return isinstance(comp, ArcComponent)
+
+    def _load(self, comp: ArcComponent) -> None:
+        for field, spin in self._numbers.items():
+            spin.setValue(getattr(comp, field))
+        _set_combo(self._arrow, comp.arrow_style)
+
+    def _edit(self, field: str, value: float | str) -> None:
+        self._apply("Edit arc", lambda scene, cid: scene.edit_arc(cid, field, value))
+
+
 class FillBorderSection(InspectorSection):
     """Edit the appearance fields supported by the selected components."""
 
@@ -1219,8 +1263,12 @@ class FillBorderSection(InspectorSection):
         self._timer.setInterval(_DEBOUNCE_MS)
         self._timer.timeout.connect(self._commit)
 
-    def applies_to(self, comp: Component) -> bool:
-        return any(style_capabilities(comp))
+    def applies_to(self, comp: Component, scene: SchematicScene | None = None) -> bool:
+        return any(self._capabilities(comp, scene))
+
+    @staticmethod
+    def _capabilities(comp: Component, scene: SchematicScene | None):
+        return style_capabilities(comp, scene.schematic.symbol_style if scene else None)
 
     def _bound(self, representative: Component) -> list[Component]:
         comps = [representative]
@@ -1233,7 +1281,7 @@ class FillBorderSection(InspectorSection):
         return comps
 
     def _load(self, comp: Component) -> None:
-        comps = [(c, style_capabilities(c)) for c in self._bound(comp)]
+        comps = [(c, self._capabilities(c, self._scene)) for c in self._bound(comp)]
         fields = (
             ("line_style", self._ls_row),
             ("line_color", self._lc_row),
@@ -1264,7 +1312,7 @@ class FillBorderSection(InspectorSection):
                 return
             setters = (scene.set_line_style, scene.set_line_color, scene.set_fill_color)
             for setter, value, supported, edited in zip(
-                setters, values, style_capabilities(comp), changed,
+                setters, values, self._capabilities(comp, scene), changed,
             ):
                 if supported and edited:
                     setter(cid, value)
@@ -1653,7 +1701,7 @@ class WireStyleSection(InspectorSection):
 
 
 class TransformSection(InspectorSection):
-    """Rotation buttons + horizontal and vertical mirror checkboxes.
+    """Rotation buttons and controls for inversion and mirroring.
 
     Rotation applies to everything except rect (whose rotation is a codegen
     no-op).  Mirror is only meaningful for path-emitted circuit components and
@@ -1666,6 +1714,11 @@ class TransformSection(InspectorSection):
     def _build(self) -> None:
         rot_row, self._rot_buttons = _make_rotation_row(self, self._on_rotate)
         self.body.addLayout(rot_row)
+
+        self._invert_cb = QCheckBox("Invert")
+        self._invert_cb.setToolTip("Reverse the symbol along its path while keeping its endpoints in place.")
+        self._invert_cb.toggled.connect(self._on_invert)
+        self.body.addWidget(self._invert_cb)
 
         self._mirror_cb = QCheckBox("Mirror (horizontal)")
         self._mirror_cb.stateChanged.connect(self._on_mirror)
@@ -1691,6 +1744,11 @@ class TransformSection(InspectorSection):
             btn.setChecked(angle == (comp.rotation - (180 if comp.mirror_v else 0)) % 360)
             btn.blockSignals(False)
 
+        self._invert_cb.setVisible(supports_invert(comp))
+        self._invert_cb.blockSignals(True)
+        self._invert_cb.setChecked(comp.invert)
+        self._invert_cb.blockSignals(False)
+
         if self._mirror_applies(comp):
             self._mirror_cb.show()
             self._mirror_cb.blockSignals(True)
@@ -1703,6 +1761,9 @@ class TransformSection(InspectorSection):
         else:
             self._mirror_cb.hide()
             self._mirror_v_cb.hide()
+
+    def _on_invert(self, enabled: bool) -> None:
+        self._apply("Invert", lambda s, cid: s.invert_component(cid, enabled))
 
     def _on_rotate(self, angle: int) -> None:
         self._apply("Rotate", lambda s, cid: s.rotate_component(cid, angle))
@@ -1841,8 +1902,7 @@ class DocumentPropertiesPanel(QWidget):
         body.addLayout(form)
 
         # --- Symbol style ---------------------------------------------------
-        # Switches a whole CircuiTikZ family at once (american/european resistors,
-        # cute/american/european inductors). The library carries the per-style
+        # Switches a whole CircuiTikZ family at once (cute/american/european inductors). The library carries the per-style
         # geometry on a style axis per family.
         from app.components import library as _lib
         self._style_combos: dict[str, QComboBox] = {}
@@ -2091,6 +2151,7 @@ class PropertiesPanel(QWidget):
             VariantSection(),
             ParamSection(),
             FontSection(),
+            ArcSection(),
             FillBorderSection(),
             WireConnectionsSection(),
             StrokeWidthSection(),
@@ -2158,7 +2219,9 @@ class PropertiesPanel(QWidget):
 
         first_visible = True
         for sec in self._sections:
-            if sec.applies_to(comp):
+            applies = (sec.applies_to(comp, self._scene) if isinstance(sec, FillBorderSection)
+                       else sec.applies_to(comp))
+            if applies:
                 sec.bind(comp, self._scene)
                 sec.set_top_separator_visible(not first_visible)
                 first_visible = False
@@ -2197,10 +2260,10 @@ class PropertiesPanel(QWidget):
         same_kind = len(kinds) == 1
 
         def applicable(sec: InspectorSection) -> bool:
+            if isinstance(sec, FillBorderSection):
+                return any(sec.applies_to(c, self._scene) for c in comps)
             if same_kind:
                 return sec.applies_to(comps[0])
-            if isinstance(sec, FillBorderSection):
-                return any(sec.applies_to(c) for c in comps)
             return sec.multi_kind_safe and all(sec.applies_to(c) for c in comps)
 
         # A mixed selection with no shared capability has nothing to edit.
