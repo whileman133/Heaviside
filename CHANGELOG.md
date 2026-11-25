@@ -4,6 +4,60 @@ All notable changes to Heaviside are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+# Changelog
+
+All notable changes to Heaviside are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+
+- **Fill support for more circuit symbols.** The canvas and CircuiTikZ export
+  now use the symbol's native fill regions, including open outlines and bodies
+  with multiple fill regions. Coverage includes capacitors, empty and stroke
+  diodes, controlled rectifiers, sources, meters, mechanical elements, jumpers,
+  amplifiers, filters, and other block symbols. The palette also includes
+  additional documented CircuiTikZ symbols and variants, including boxed
+  amplifiers, ideal plot filters, and enclosed spark gaps.
+- **Arcs.** Place an arc from the **TikZ** palette and set its start angle, end
+  angle, radius, and arrow style in Properties. Set its draw colour in
+  **Appearance**. Arrow styles are Stealth (default), Latex, Triangle, To, Bar,
+  Circle, and Diamond.
+- **Invert for path-style symbols.** The **Rotation → Invert** checkbox exports
+  CircuiTikZ's `invert` key. It reverses the symbol along its path while keeping
+  the two endpoints fixed. Wires attached to auxiliary pins follow those pins.
+
+### Changed
+
+- **Separate American and European resistors.** The resistor, variable
+  resistor, potentiometer, resistive sensor, and light-dependent resistor have
+  separate European palette entries with **Line color** and **Fill**. The
+  American entries (`R`, `vR`, `pR`, `sR`, and `ldR`) offer **Line color** only.
+  Existing instances of those kinds use the American shapes. The European
+  entries replace the document-wide resistor style setting.
+- **Chip pin numbers stay upright by default.** DIP and QFP chips have a
+  per-chip **Straight numbers** checkbox in Properties. Clear it to rotate the
+  pin numbers with the chip. The center label counter-rotates independently.
+- **Vertical mirror exports directly.** Node-style components use
+  `yscale=-1` for vertical mirroring and emit any user-selected rotation
+  separately.
+
+### Fixed
+
+- **Diode appearance controls.** The stroke TVS diode and the standard, empty,
+  and stroke IGCT variants offer independent **Line color** and **Fill**.
+  The full IGCT offers **Line color** only.
+- **Mirrored node labels stay upright and centered.** The export places the
+  label in a separate `node[anchor=center]` at the symbol's `.text` anchor.
+  The canvas uses the same centered alignment.
+
+### Known limitations
+
+- `qgenerator` remains unavailable because CircuiTikZ 1.8.5 produces an
+  invalid drawing path for it.
 
 ## [0.9.3] - 2026-11-21
 
