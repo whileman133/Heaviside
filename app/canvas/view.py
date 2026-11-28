@@ -2,7 +2,8 @@
 SchematicView — the QGraphicsView wrapping a SchematicScene (spec §3.4, §6).
 
 Responsibilities:
-  * Continuous zoom via scroll wheel (Ctrl+wheel or plain wheel) and Ctrl+±.
+  * Continuous zoom via plain scroll wheel and Ctrl+±.
+  * Pan vertically with Shift+wheel and horizontally with Ctrl+wheel.
   * Pan via middle-mouse drag or Space+left-drag (spec §6.1).
   * "Fit to schematic" framing all placed items with a margin (spec §3.4).
   * Translating key presses into scene mode changes / commands:
@@ -33,6 +34,7 @@ from app.canvas.geometry import NUDGE_GU
 from app.canvas.items import LabelTextItem
 from app.canvas.scene import Mode, SchematicScene
 
+_WHEEL_PAN_PIXELS = 48
 _ZOOM_STEP = 1.15
 _ZOOM_MIN = 0.1
 _ZOOM_MAX = 8.0
@@ -136,9 +138,20 @@ class SchematicView(QGraphicsView):
             self.zoom_changed.emit(self._zoom)
 
     def wheelEvent(self, event) -> None:  # noqa: N802, ANN001
-        if event.angleDelta().y() > 0:
+        modifiers = event.modifiers()
+        if modifiers & (Qt.ControlModifier | Qt.ShiftModifier):
+            bar = (self.horizontalScrollBar() if modifiers & Qt.ControlModifier
+                   else self.verticalScrollBar())
+            pixels = event.pixelDelta()
+            if not pixels.isNull():
+                distance = pixels.y() or pixels.x()
+            else:
+                delta = event.angleDelta()
+                distance = round((delta.y() or delta.x()) * _WHEEL_PAN_PIXELS / 120)
+            bar.setValue(bar.value() - distance)
+        elif event.angleDelta().y() > 0:
             self.zoom_in()
-        else:
+        elif event.angleDelta().y() < 0:
             self.zoom_out()
         event.accept()
 

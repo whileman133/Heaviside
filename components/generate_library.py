@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling scrapers
 
+import transistor_accessories as ta                     # noqa: E402
 import scrape_manual as sm                               # noqa: E402
 import extract_doc_anchors as eda                        # noqa: E402
 from app.components import generate as gen               # noqa: E402
@@ -832,6 +833,7 @@ def _render_entry(kind: str, entry: dict, origin: tuple) -> tuple[dict, dict] | 
               "glyphs": [g for gm in (base_geom, *extra) for g in gm.get("glyphs", [])]}
     de["bbox"] = gen.compute_bbox(merged, origin, entry["pins"])
     _add_fill_geometry(kind, entry, de, geometry)
+    ta.add_accessories(kind, entry, de, geometry, origin)
     if entry.get("text_anchor"):
         de["text_anchor"] = entry["text_anchor"]
     return de, geometry

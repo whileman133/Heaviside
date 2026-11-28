@@ -87,7 +87,8 @@ from app.canvas import style
 from app.canvas.style import GRID_PX
 from app.canvas.wiregeometry import WireGeometry
 from app.codegen.circuitikz import is_node_style
-from app.components.registry import ITEM_CLASSES, REGISTRY
+from app.components.model import CustomComponentSpec
+from app.components.registry import ITEM_CLASSES, REGISTRY, sync_runtime_components
 from app.schematic.model import (
     Component,
     Schematic,
@@ -186,6 +187,7 @@ class SchematicScene(QGraphicsScene):
     def __init__(self, schematic: Schematic | None = None, parent=None):
         super().__init__(parent)
         self._schematic = schematic or Schematic(version="0.1", name="untitled")
+        self._custom_library: dict[str, CustomComponentSpec] = {}
         self._stack = UndoStack(self._schematic)
         # Keep the canvas label renderer in step with this document's preamble
         # settings from the outset (covers the startup document, which is never
@@ -389,14 +391,21 @@ class SchematicScene(QGraphicsScene):
         self._rebuild_items()
         self.schematic_changed.emit()
 
-    def set_schematic(self, schematic: Schematic) -> None:
+    def available_custom_components(self) -> dict[str, CustomComponentSpec]:
+        return {**self._custom_library, **self._schematic.custom_components}
+
+    def set_custom_library(self, library: dict[str, CustomComponentSpec]) -> None:
+        self._custom_library = dict(library)
+        sync_runtime_components(self._schematic, self._custom_library)
+        self.custom_components_changed.emit()
+
+    def set_schematic(self, schematic: Schematic, *,
+                      custom_library: dict[str, CustomComponentSpec] | None = None) -> None:
         """Replace the document (e.g. after File ▸ Open). Clears undo history."""
         self._schematic = schematic
-        # Make the runtime registry reflect this document's custom components before
-        # rebuilding items (they look up REGISTRY/geometry by kind). Scrubs the prior
-        # document's customs and registers this one's (§custom).
-        from app.components.registry import sync_runtime_components
-        sync_runtime_components(schematic)
+        if custom_library is not None:
+            self._custom_library = dict(custom_library)
+        sync_runtime_components(schematic, self._custom_library)
         self._stack = UndoStack(schematic)
         self.sync_label_preamble()   # before _rebuild_items typesets the labels
         self.set_mode(Mode.SELECT)
@@ -554,6 +563,8 @@ class SchematicScene(QGraphicsScene):
         (used by two-click span placement, §6.2); ``None`` keeps the registry
         ``default_span``."""
         defn = REGISTRY[kind]
+        if kind in self._custom_library and kind not in self._schematic.custom_components:
+            self._schematic.custom_components[kind] = copy.deepcopy(self._custom_library[kind])
         cls = defn.component_class
         extra: dict = {}
         if is_box_kind(kind):
@@ -1187,7 +1198,20 @@ class SchematicScene(QGraphicsScene):
 
     def set_component_variant(self, component_id: str, name: str, value: bool) -> None:
         """Toggle a named boolean variant on a component (undoable, generic)."""
-        self._push(SetVariantCommand(component_id, name, value))
+        from app.components.library import load_library
+
+        comp = self._component_by_id(component_id)
+        if comp is not None and "accessories" in load_library().get(comp.kind, {}):
+            self.set_component_accessories(component_id, {name: value})
+        else:
+            self._push(SetVariantCommand(component_id, name, value))
+
+    def set_component_accessories(self, component_id: str, values: dict[str, bool]) -> None:
+        from app.canvas.commands import SetAccessoriesCommand
+
+        comp = self._component_by_id(component_id)
+        if comp is not None and any(comp.variants.get(name, False) != on for name, on in values.items()):
+            self._push(SetAccessoriesCommand(comp, values))
 
     def set_component_param(self, component_id: str, name: str, value: int) -> None:
         """Set a named integer parameter on a component (undoable, generic)."""

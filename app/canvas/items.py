@@ -58,6 +58,7 @@ from app.canvas.style import (
 )
 from app.canvas.svgsym import (
     PX_PER_PT,
+    SymbolPath,
     body_fill_index,
     dash_for_pen,
     effective_color,
@@ -990,7 +991,7 @@ class ComponentItem(QGraphicsItem):
 
     def _instance_bbox(self) -> tuple:
         from app.components import library
-        nd = library.param_n_data(self._component)
+        nd = library.accessory_record(self._component) or library.param_n_data(self._component)
         bbox = tuple(nd["bbox"]) if nd else self._defn.bbox
         if self._component.invert and library.supports_invert(self._component):
             x0, y0, x1, y1 = bbox
@@ -1107,6 +1108,29 @@ class ComponentItem(QGraphicsItem):
             if value != library.STYLE_DEFAULT.get(axis) and symbol_paths(f"{base}:{value}"):
                 return f"{base}:{value}"
         return base
+
+    def _paths_with_gate_inputs(self, paths: tuple[SymbolPath, ...]) -> tuple[SymbolPath, ...]:
+        data = _library.param_n_data(self._component)
+        if not data or "input_leads" not in data:
+            return paths
+        left = data["input_leads"][0][0] * GRID_PX
+        # The two-input asset includes its leads. Replace just those strokes.
+        body = []
+        for symbol in paths:
+            box = symbol.path.boundingRect()
+            if not symbol.filled and abs(box.left() - left) < 0.05 and box.right() < 0:
+                continue
+            body.append(symbol)
+
+        def strokes(segments, width: float) -> SymbolPath:
+            path = QPainterPath()
+            for x0, y0, x1, y1 in segments:
+                path.moveTo(x0 * GRID_PX, y0 * GRID_PX)
+                path.lineTo(x1 * GRID_PX, y1 * GRID_PX)
+            return SymbolPath(path, width, False)
+
+        return (strokes(data["input_leads"], 0.3985), *body,
+                strokes(data["input_rack"], 0.797))
 
     def _gate_scale(self) -> float:
         """The body size multiplier (``Component.scale``) for a scalable kind — a
@@ -1323,20 +1347,13 @@ class ComponentItem(QGraphicsItem):
         self._layout_node_text(geom, counter)
 
     def _node_text_anchor_rel(self) -> QPointF:
-        """The node's CircuiTikZ ``text`` anchor, screen-relative to the item origin
-        — where the inline ``{…}`` text is **west-anchored** (its left edge sits
-        here, extending right). The per-kind offset from centre is measured into
-        ``ComponentDef.text_anchor`` (``components/generate_library.py``), so the
-        on-canvas label lands exactly where the compiled figure places it (a
-        transistor's just right of the symbol, an op-amp's centred, a transformer's
-        a unit above)."""
+        """The node's measured CircuiTikZ text anchor in screen-relative pixels."""
         tx, ty = self._defn.text_anchor
-        return self.transform().map(QPointF(tx * GRID_PX, ty * GRID_PX))
+        dx, dy = self._node_side_offset_px()
+        return self.transform().map(QPointF(tx * GRID_PX + dx, ty * GRID_PX + dy))
 
     def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
         """Render upright node-style text at the node's ``text`` anchor.
-
-        Chip labels and mirrored node labels are centered at this anchor.
 
         Hidden when there is no node text, while the node-text editor is open, and
         for ghosts (placement previews show the bare symbol). Path-style components
@@ -1344,10 +1361,9 @@ class ComponentItem(QGraphicsItem):
         editing = self._node_text_editor.is_editing
         text = "" if (self._ghost or editing) else (self._component.node_text or "")
         self._node_text_item.setTransform(counter)
-        centered = self._node_text_is_centered()
         self._node_text_item.configure(
             text, QPointF(1.0, 0.0), self._node_text_anchor_rel(),
-            0.0, 0.0, geom["inv"], centered,
+            0.0, 0.0, geom["inv"], centered=True,
         )
         self._node_text_item.setVisible(bool(text))
 
@@ -1476,19 +1492,13 @@ class ComponentItem(QGraphicsItem):
         self._node_text_editor.setVisible(True)
         self._node_text_editor.begin_edit()
 
-    def _node_text_is_centered(self) -> bool:
-        comp = self._component
-        return comp.mirror or comp.mirror_v or _library.has_chip_pin_numbers(comp.kind)
-
     def _node_text_editor_pos(self) -> QPointF:
         """Local position aligning the editor with the rendered node label."""
         t = self.transform()
         inv, _ = t.inverted()
         er = self._node_text_editor.boundingRect()
         target = self._node_text_anchor_rel()
-        centered = self._node_text_is_centered()
-        x = target.x() - er.width() / 2.0 if centered else target.x()
-        return inv.map(QPointF(x, target.y() - er.height() / 2.0))
+        return inv.map(QPointF(target.x() - er.width() / 2.0, target.y() - er.height() / 2.0))
 
     # ------------------------------------------------------------------
     # State helpers
@@ -1685,7 +1695,9 @@ class ComponentItem(QGraphicsItem):
         geometry_kind = self._geometry_kind()
         plain = symbol_paths(geometry_kind)
         syms = symbol_paths(geometry_kind, filled=True) if _fc else plain
-        _fill_idx = body_fill_index(geometry_kind) if _fc and syms is plain else None
+        fill_index = body_fill_index(geometry_kind) if _fc and syms is plain else None
+        fill_path = plain[fill_index] if fill_index is not None else None
+        syms = self._paths_with_gate_inputs(syms)
         # A two-port block's inner symbol stays upright like CircuiTikZ's (the box
         # and leads turn with the item; the A/D diagonal, waves, text do not).
         inner = twoport_inner_paths(self._component.kind, [sp.path for sp in syms],
@@ -1727,7 +1739,7 @@ class ComponentItem(QGraphicsItem):
                 "" if lead else _ls, "" if lead else _lc, color,
                 dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None)
             painter.setPen(pen)
-            if _fc and (sym.fill_color == "user" or _i == _fill_idx):
+            if _fc and (sym.fill_color == "user" or sym is fill_path):
                 painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
             elif sym.filled:
                 fill = (style.COLOR_BACKGROUND if sym.fill_bg
@@ -1830,6 +1842,8 @@ class _MosfetItem(ComponentItem):
     """Base for MOSFET items — extends boundingRect when body_diode is active."""
 
     def boundingRect(self) -> QRectF:
+        if _library.accessory_record(self.component):
+            return super().boundingRect()
         x0, y0, x1, y1 = self._defn.bbox
         if self.component.variants.get("body_diode"):
             x1 = x1 + _BODYDIODE_EXTRA_X
@@ -3910,7 +3924,8 @@ class _ResizableNodeItem(ComponentItem):
         t.scale(wf, hf)
         # Symbol body — scale the path *coordinates* (not the painter) so the pen
         # weight stays uniform under an anisotropic resize.
-        syms = symbol_paths(self._geometry_kind())
+        plain = symbol_paths(self._geometry_kind())
+        syms = self._paths_with_gate_inputs(plain)
         upright: dict[int, QPainterPath] = {}
         # Text (flip-flop letters, chip pin numbers) reads like the rendered output.
         idx = [i for i, sp in enumerate(syms) if sp.glyph]
@@ -3922,13 +3937,14 @@ class _ResizableNodeItem(ComponentItem):
             upright = dict(zip(idx, fixed))
         _ls, _lc, _fc = symbol_style(self._component)
         _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
+        fill_path = plain[_fill_idx] if _fill_idx is not None else None
         _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         for _i, sym in enumerate(syms):
             pen_w = _stroke_px(sym.stroke_width, lw_scale)
             painter.setPen(_styled_symbol_pen(
                 effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
                 dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None))
-            if _fc and _i == _fill_idx:
+            if _fc and sym is fill_path:
                 painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
             elif sym.filled:
                 fill = (style.COLOR_BACKGROUND if sym.fill_bg

@@ -1062,6 +1062,7 @@ class VariantSection(InspectorSection):
 
     def _build(self) -> None:
         self._checks: dict[str, "QCheckBox"] = {}
+        self._accessory_rows: list[QWidget] = []
         self._container = QVBoxLayout()
         self._container.setSpacing(6)
         self.body.addLayout(self._container)
@@ -1076,6 +1077,27 @@ class VariantSection(InspectorSection):
             cb.setParent(None)
             cb.deleteLater()
         self._checks.clear()
+        for widget in self._accessory_rows:
+            widget.setParent(None)
+            widget.deleteLater()
+        self._accessory_rows.clear()
+        grouped = set()
+        for group in library.accessory_groups(comp.kind):
+            choices = group["choices"]
+            names = {name for choice in choices for name in choice["options"]}
+            grouped.update(names)
+            row, combo = _make_combo_row(
+                group["label"], [choice["label"] for choice in choices],
+                lambda index, cs=choices, ns=names: self._pick_accessory(index, cs, ns),
+            )
+            combo.blockSignals(True)
+            combo.setCurrentIndex(choices.index(library.selected_accessory_choice(group, comp.variants)))
+            combo.blockSignals(False)
+            widget = QWidget()
+            row.setContentsMargins(0, 0, 0, 0)
+            widget.setLayout(row)
+            self._container.addWidget(widget)
+            self._accessory_rows.append(widget)
         if library.has_chip_pin_numbers(comp.kind):
             cb = QCheckBox("Straight numbers")
             cb.setChecked(not library.rotated_chip_numbers(comp))
@@ -1084,11 +1106,19 @@ class VariantSection(InspectorSection):
             self._checks["straight_numbers"] = cb
         for v in library.variant_specs(comp.kind):
             name = v["name"]
+            if name in grouped:
+                continue
             cb = QCheckBox(v.get("label") or name.replace("_", " ").capitalize())
             cb.setChecked(bool(comp.variants.get(name)))
             cb.stateChanged.connect(lambda state, n=name: self._on_changed(n, state))
             self._container.addWidget(cb)
             self._checks[name] = cb
+
+    def _pick_accessory(self, index: int, choices: list[dict], names: set[str]) -> None:
+        if 0 <= index < len(choices):
+            selected = choices[index]["options"]
+            values = {name: name in selected for name in names}
+            self._apply("Accessory", lambda s, cid: s.set_component_accessories(cid, values))
 
     def _on_changed(self, name: str, state: int) -> None:
         on = bool(state)
@@ -1123,12 +1153,18 @@ class ParamSection(InspectorSection):
             self._teardown()
             return
         values = library.param_values(comp)
+        if library.supports_inner_inputs(comp.kind):
+            specs = [*specs, {"name": "inner_inputs", "min": 0, "max": values["inputs"]}]
+            values["inner_inputs"] = library.inner_input_count(comp)
         # Same kind: just refresh the values.  Rebuilding on every re-bind (which
         # happens after each spinner step, via the SetParamCommand) would leak
         # duplicate labels/spinboxes each time.
         if self._kind == comp.kind and self._spins:
-            for name, spin in self._spins.items():
+            for spec in specs:
+                name = spec["name"]
+                spin = self._spins[name]
                 spin.blockSignals(True)
+                spin.setMaximum(spec["max"])
                 spin.setValue(values[name])
                 spin.blockSignals(False)
             return
@@ -1139,11 +1175,17 @@ class ParamSection(InspectorSection):
             row_w = QWidget()
             row = QHBoxLayout(row_w)
             row.setContentsMargins(0, 0, 0, 0)
-            row.addWidget(QLabel(name.capitalize()))
+            label = name.replace("_", " ").capitalize()
+            if name == "inputs" and library.is_logic_gate(comp.kind):
+                label = "Number inputs"
+            row.addWidget(QLabel(label))
             spin = QSpinBox()
             spin.setRange(int(spec["min"]), int(spec["max"]))
             spin.setSingleStep(int(spec.get("step", 1)))   # even-only DIP, ×4 QFP, …
             spin.setValue(values[name])
+            if name == "inner_inputs":
+                spin.setSpecialValueText("All")
+                spin.setToolTip("Inputs on the gate body. The rest sit on the input rack.")
             spin.valueChanged.connect(lambda v, nm=name: self._on_changed(nm, v))
             row.addWidget(spin)
             self._container.addWidget(row_w)
@@ -1160,14 +1202,14 @@ class ParamSection(InspectorSection):
 
     def _on_changed(self, name: str, value: int) -> None:
         from app.components import library
-        spec = next(s for s in library.param_specs(self._kind) if s["name"] == name)
-        n = library._clamp_param(spec, value)   # snap typed values to the step grid
+        spec = next((s for s in library.param_specs(self._kind) if s["name"] == name), None)
+        n = library._clamp_param(spec, value) if spec else value   # snap typed values to the step grid
         if n != value and name in self._spins:
             spin = self._spins[name]
             spin.blockSignals(True)
             spin.setValue(n)
             spin.blockSignals(False)
-        self._apply(name.capitalize(),
+        self._apply(name.replace("_", " ").capitalize(),
                     lambda s, cid: s.set_component_param(cid, name, n))
 
 

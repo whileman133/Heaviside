@@ -406,9 +406,10 @@ class ComponentDef:
 
 @dataclass
 class CustomComponentSpec:
-    """Serializable record of one user-defined custom component, stored on the
-    document (:attr:`app.schematic.model.Schematic.custom_components`) so it travels
-    with the ``.hv`` file and re-renders without LaTeX installed.
+    """Serializable user-defined component for the shared library and schematic files.
+
+    A document embeds its own definition so the component travels with the
+    ``.hv`` file and can render without LaTeX installed.
 
     Carries everything needed to rebuild a runtime :class:`ComponentDef` plus its
     drawable geometry: the base kind, the user's scoped ``\\ctikzset`` and extra

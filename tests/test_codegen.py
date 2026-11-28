@@ -387,15 +387,17 @@ def test_opamp_node() -> None:
 # node_text — the node-style {…} slot (§5, #32)
 # ---------------------------------------------------------------------------
 
-def test_node_text_multi_terminal_inline_in_node_braces() -> None:
-    """A multi-terminal node's text goes inline in the node's own {…} — the
-    CircuiTikZ-idiomatic ``node[npn] (id) {$Q_1$}`` form."""
-    src = generate(_schematic(_comp("npn", position=(2.0, 2.0), node_text="$Q_1$")))
-    assert "node[npn" in src and ") {$Q_1$}" in src
-    assert "inner sep=0" not in src              # no separate/chained label node
-    # No node_text → empty braces.
-    bare = generate(_schematic(_comp("npn", position=(2.0, 2.0))))
-    assert "(node_" in bare and ") {}" in bare
+def test_node_text_multi_terminal_uses_separate_centered_label() -> None:
+    comp = _comp("npn", position=(2.0, 2.0), node_text="$Q_1$")
+    src = generate(_schematic(comp))
+    name = f"node_{comp.id[:8]}"
+    assert f"node[npn] ({name}) {{}}" in src
+    assert f"node[anchor=center] at ({name}.text) {{$Q_1$}}" in src
+
+    comp.node_text = ""
+    bare = generate(_schematic(comp))
+    assert f"node[npn] ({name}) {{}}" in bare
+    assert f"({name}.text)" not in bare
 
 
 @pytest.mark.parametrize("kind", ["dipchip", "qfpchip"])
@@ -451,12 +453,11 @@ def test_single_terminal_node_uses_standalone_node_at_syntax() -> None:
 
 
 def test_node_text_on_single_terminal_node() -> None:
-    """A single-terminal node (power rail) is emitted as a standalone ``\\node at``
-    command with node_text in {…} and its options in the node[…] bracket (no l=→label
-    hack)."""
-    src = generate(_schematic(_comp("vcc", node_text="$V_{cc}$", options="color=blue")))
-    assert r"\node[vcc, color=blue] at (0,0) {$V_{cc}$};" in src
-    assert "label=right" not in src                     # legacy hack is gone
+    comp = _comp("vcc", node_text="$V_{cc}$", options="color=blue")
+    src = generate(_schematic(comp))
+    name = f"node_{comp.id[:8]}"
+    assert rf"\node[vcc, color=blue] ({name}) at (0,0) {{}}" in src
+    assert f"node[anchor=center, text=blue] at ({name}.text) {{$V_{{cc}}$}};" in src
 
 
 def test_node_text_ignored_for_path_style() -> None:

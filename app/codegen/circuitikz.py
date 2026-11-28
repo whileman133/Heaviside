@@ -408,10 +408,11 @@ def generate(
         # exactly (see the module docstring), so nothing is lost geometrically.
         if not _in_main_layer(comp):
             continue
-        defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
-        anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(_eff_kind(comp))
+        uses_instance_pins = _library.is_parametric(comp.kind) or _library.accessory_record(comp)
+        anchor_map = (_library._pin_anchor_map(comp) if uses_instance_pins
+                      else _PIN_TO_CTIKZ_ANCHOR.get(_eff_kind(comp)))
         # A path bipole's two axial terminals (pins[0]/pins[1]) are the literal
         # ``to[…]`` endpoints — already explicit coordinates, with no clean named
         # anchor (CircuiTikZ's ``.left``/``.right`` are the body edges, not the wire
@@ -423,7 +424,7 @@ def generate(
         # magnet — is exactly the node anchor and maps to `(node.anchor)` like any
         # other multi-terminal pin.  ``pin_positions`` already carries the scaled
         # (off-grid) coordinate, so the lookup key matches the wire endpoint.
-        for i, pin in enumerate(defn.pins):
+        for i, pin in enumerate(_library.resolved_pins(comp)):
             if i >= len(pin_positions):
                 continue
             px, py = pin_positions[i]
@@ -926,6 +927,8 @@ def _multi_terminal_line(
     _param = _library.param_spec(comp.kind)
     if _param is not None:
         kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
+        if _library.supports_inner_inputs(comp.kind):
+            kind_arg += f", inner inputs={_library.inner_input_count(comp)}"
         if _library.gate_size_keys(comp.kind) is not None:
             # Manual gate sized via the CircuiTikZ body height/width keys (in the local
             # \ctikzset group around the node — see _gate_size_setting). No node-level
@@ -1024,10 +1027,9 @@ def _multi_terminal_line(
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
     text = _node_text_arg(comp)
-    mirrored_label = bool(text and (horizontal or vertical))
-    if mirrored_label:
+    if text and _separate_node_label(comp):
         node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
-        lines = [node_line, _mirrored_node_label(comp, node_id, text)]
+        lines = [node_line, _node_label(comp, node_id, text)]
     else:
         if text and rotation and _library.has_chip_pin_numbers(comp.kind):
             text = rf"\rotatebox{{{-rotation}}}{{{text}}}"
@@ -1090,19 +1092,29 @@ def _node_orientation(comp: Component) -> tuple[bool, bool, int]:
     return horizontal, vertical, rotation
 
 
-def _mirrored_node_label(comp: Component, node_id: str, text: str) -> str:
+def _separate_node_label(comp: Component) -> bool:
+    return not _library.has_chip_pin_numbers(comp.kind) or comp.mirror or comp.mirror_v
+
+
+def _node_label(comp: Component, node_id: str, text: str) -> str:
     """Place upright text at the transformed symbol's text anchor."""
     options = "anchor=center"
-    _, color, _ = symbol_style(comp)
-    if color:
-        options += f", text={color}"
+    colours = {}
+    for option in split_top_level(_label_args(comp)):
+        key, equals, value = option.partition("=")
+        if equals and key.strip() in {"color", "text"}:
+            colours[key.strip()] = value.strip()
+    _, line_color, _ = symbol_style(comp)
+    text_color = colours.get("text") or line_color or colours.get("color")
+    if text_color:
+        options += f", text={text_color}"
     return f"node[{options}] at ({node_id}.text) {{{text}}}"
 
 
 def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
                   pin_coord_to_ref: dict[tuple[float, float], str] | None = None) -> str:
     """Render a single-terminal node as the **standalone** command
-    ``\\node[kind, options] at (x,y) {node_text};``.
+    ``\\node[kind, options] at (x,y) {};``.
 
     A single-point node *is* its own pin and connects to wires purely by coordinate
     (it carries no named anchor), so it needs no place in the shared ``\\draw`` path;
@@ -1115,11 +1127,8 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     — via *pin_coord_to_ref*, the same map wires use. The marker is emitted after the
     shared ``\\draw`` where those nodes are defined, so the reference resolves.
 
-    The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into the
-    trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a ground's
-    label is set as node text, not via a quick key. (Earlier builds special-cased a
-    power-rail ``l=`` slot into ``label=right:…``; that slot is now migrated to
-    ``node_text`` on load, see ``app.schematic.io``.)
+    The user's ``options`` go into the symbol's bracket. Its label is placed
+    separately at the symbol's text anchor.
 
     ``Component.node_side`` (``left``/``right``/``above``/``below``), when set, is added
     as a TikZ placement key right after the kind, so the symbol sits on that side of its
@@ -1148,9 +1157,9 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     if at is None:
         at = f"({_fmt(x)},{_fmt(y_fn(y))})"
     text = _node_text_arg(comp)
-    if text and (horizontal or vertical):
+    if text and _separate_node_label(comp):
         node_id = f"node_{comp.id[:8]}"
-        label = _mirrored_node_label(comp, node_id, text)
+        label = _node_label(comp, node_id, text)
         return rf"\node[{args}] ({node_id}) at {at} {{}} {label};"
     return rf"\node[{args}] at {at} {{{text}}};"
 

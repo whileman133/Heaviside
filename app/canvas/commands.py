@@ -1587,6 +1587,38 @@ class InvertCommand(Command):
         _restore_followed_wires(schematic, self._orig_wires)
 
 
+class SetAccessoriesCommand(Command):
+    """Change transistor accessories together and follow any relocated terminals."""
+
+    label = "Set Accessories"
+
+    def __init__(self, component: Component, values: dict[str, bool]) -> None:
+        self._component_id = component.id
+        self._before = dict(component.variants)
+        self._after = {**self._before, **values}
+        self._wires: dict[str, Wire] = {}
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.library import resolved_pins
+
+        comp = _find_component(schematic, self._component_id)
+        before = dict(zip((p.name for p in resolved_pins(comp)), _component_pin_positions(comp)))
+        comp.variants = dict(self._after)
+        after = dict(zip((p.name for p in resolved_pins(comp)), _component_pin_positions(comp)))
+        moved = {}
+        for name, point in before.items():
+            target = after.get(name, snap_point(point))
+            if target != point:
+                moved[point_key(point)] = target
+        if moved:
+            _follow_pins(schematic, moved, self._wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.variants = dict(self._before)
+        _restore_followed_wires(schematic, self._wires)
+
+
 class SetVariantCommand(Command):
     """Toggle a named boolean variant on a component (e.g. ``filled``,
     ``body_diode``).  Generic over any variant the component's kind declares."""

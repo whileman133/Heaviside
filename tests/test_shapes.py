@@ -286,3 +286,107 @@ def test_chip_numbers_stay_upright_by_default_and_can_rotate(_app, tmp_path, kin
     scene.undo()
     assert "straight numbers" in generate(scene.schematic)
     assert _render(scene, comp.id) == straight
+
+
+def test_ieee_gate_input_rack_from_properties(_app, tmp_path):
+    from PySide6.QtWidgets import QLabel
+    from app.codegen.circuitikz import generate
+    from app.schematic.model import route_pin_aware
+    from app.components import library
+    from app.schematic.io import load, save
+    from app.schematic.model import component_pin_positions
+    from app.ui.properties import ParamSection, PropertiesPanel
+
+    scene = SchematicScene()
+    gate = scene.place_component("ieeestd nor port", (0, 0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(gate.id)
+    section = next(s for s in panel._sections if isinstance(s, ParamSection))
+    assert [label.text() for label in section.findChildren(QLabel)] == [
+        "Number inputs", "Inner inputs",
+    ]
+    section._spins["inputs"].setValue(32)
+    panel.show_component(gate.id)
+    section._spins["inner_inputs"].setValue(2)
+    scene.rotate_component(gate.id, 90)
+    scene.edit_component_node_text(gate.id, "IC1A")
+
+    comp = scene.schematic.components[0]
+    pins = dict(zip((p.name for p in library.resolved_pins(comp)),
+                    component_pin_positions(comp)))
+    assert "in 32" in pins
+    assert pins["in 32"][0] == pytest.approx(-8.68)
+    assert scene.add_wire(route_pin_aware((-10, -1), pins["in 32"]))
+    source = generate(scene.schematic)
+    assert "number inputs=32, inner inputs=2, rotate=90" in source
+    assert rf"node_{gate.id[:8]}.in 32" in source
+    assert f"node[anchor=center] at (node_{gate.id[:8]}.text) {{IC1A}}" in source
+    assert len(library.param_n_data(comp)["input_rack"]) == 2
+    assert scene._comp_items[gate.id].boundingRect().height() > 1000
+
+    path = tmp_path / "rack.hv"
+    save(scene.schematic, path)
+    assert generate(load(path)) == source
+
+
+@pytest.mark.parametrize(("kind", "choices", "toggles", "tokens"), [
+    ("pmos", {
+        "Source arrow": "Source arrow",
+        "Circle": "Transistor circle and empty gate circle",
+        "Gate options": "No gate",
+    }, ("bodydiode", "bulk", "ferroel_gate"),
+        ("arrowmos", "tr circle", "emptycircle", "nogate", "bodydiode", "bulk", "ferroel gate")),
+    ("hemt", {
+        "Source arrow": "−1",
+        "Circle": "Transistor circle",
+        "Gate options": "Split gate and no gate",
+    }, ("bodydiode",),
+        ("circuitikz/tripoles/hemt/source arrow=-1",
+         "circuitikz/tripoles/hemt/split gate=true", "tr circle", "nogate", "bodydiode")),
+    ("nigfete", {
+        "Circle": "Transistor circle",
+        "Gate options": "Double gate",
+    }, ("bodydiode", "ferroel_gate", "solderdot"),
+        ("tr circle", "doublegate", "bodydiode", "ferroel gate", "solderdot")),
+])
+def test_transistor_accessory_dropdowns_compose_and_round_trip(_app, tmp_path, kind,
+                                                            choices, toggles, tokens):
+    from PySide6.QtWidgets import QComboBox, QLabel
+    from app.codegen.circuitikz import generate
+    from app.components import library
+    from app.schematic.io import load, save
+    from app.ui.properties import PropertiesPanel, VariantSection
+
+    scene = SchematicScene()
+    component = scene.place_component(kind, (0, 0))
+    panel = PropertiesPanel()
+    panel.set_scene(scene)
+    panel.show_component(component.id)
+    section = next(s for s in panel._sections if isinstance(s, VariantSection))
+    dropdowns = {row.findChild(QLabel).text(): row.findChild(QComboBox)
+                 for row in section._accessory_rows}
+    assert set(dropdowns) == choices.keys()
+    assert all(combo.currentText() == "Default" for combo in dropdowns.values())
+    before = _render(scene, component.id)
+    for label, choice in choices.items():
+        dropdowns[label].setCurrentText(choice)
+    for name in toggles:
+        section._checks[name].setChecked(True)
+
+    component = scene.schematic.components[0]
+    assert set(library.variant_tikz(kind, component.variants)[1]) == set(tokens)
+    assert library.accessory_record(component)
+    assert _render(scene, component.id) != before
+    if kind == "nigfete":
+        assert "G2" in {pin.name for pin in library.resolved_pins(component)}
+    path = tmp_path / "transistor.hv"
+    save(scene.schematic, path)
+    assert generate(load(path)) == generate(scene.schematic)
+
+    combo = dropdowns["Gate options"]
+    combo.setCurrentText("Default")
+    assert not {"nogate", "doublegate", "circuitikz/tripoles/hemt/split gate=true"}.intersection(
+        library.variant_tikz(kind, scene.schematic.components[0].variants)[1])
+    scene.undo()
+    assert set(library.variant_tikz(kind, scene.schematic.components[0].variants)[1]) == set(tokens)

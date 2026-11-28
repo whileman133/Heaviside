@@ -361,6 +361,34 @@ def test_view_zoom(scene: SchematicScene):
     assert abs(view.zoom - z0) < 1e-9
 
 
+def test_wheel_modifiers_pan_on_requested_axis_without_zoom(scene: SchematicScene):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QWheelEvent
+
+    view = SchematicView(scene)
+    view.resize(640, 480)
+    view.centerOn(0, 0)
+    hbar, vbar = view.horizontalScrollBar(), view.verticalScrollBar()
+    h0, v0, z0 = hbar.value(), vbar.value(), view.zoom
+
+    def scroll(modifiers, angle, pixels=QPoint()):
+        event = QWheelEvent(QPointF(320, 240), QPointF(320, 240), pixels, angle,
+                            Qt.NoButton, modifiers, Qt.ScrollPhase.NoScrollPhase, False)
+        view.wheelEvent(event)
+        assert event.isAccepted()
+
+    scroll(Qt.ShiftModifier, QPoint(0, 120))
+    assert hbar.value() == h0 and vbar.value() < v0
+    v1 = vbar.value()
+
+    scroll(Qt.ControlModifier, QPoint(), QPoint(0, -20))
+    assert hbar.value() == h0 + 20 and vbar.value() == v1
+    assert view.zoom == z0
+
+    scroll(Qt.NoModifier, QPoint(0, 120))
+    assert view.zoom > z0
+
+
 def test_view_fit_empty(scene: SchematicScene):
     view = SchematicView(scene)
     # Fit with no items should not raise and resets to a sane zoom.

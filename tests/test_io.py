@@ -1222,15 +1222,15 @@ def test_plain_component_default_z_order_omitted(tmp_path: Path) -> None:
 
 
 def test_format_version_roundtrips_and_old_versions_load(tmp_path: Path) -> None:
-    """save() writes the current version (0.13); files declaring 0.1–0.12 all load."""
-    assert _FORMAT_VERSION == "0.13"
+    """Current format is written and older versions remain readable."""
+    assert _FORMAT_VERSION == "0.14"
     p = tmp_path / "v.hv"
     save(_empty_schematic(), p)
     assert json.loads(p.read_text(encoding="utf-8"))["version"] == _FORMAT_VERSION
     assert load(p).version == _FORMAT_VERSION
 
     for old in ("0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10",
-                "0.11", "0.12"):
+                "0.11", "0.12", "0.13"):
         q = tmp_path / f"v{old}.hv"
         q.write_text(
             json.dumps({"version": old, "name": "old",
@@ -1303,3 +1303,30 @@ def test_mirror_v_roundtrips_and_is_omitted_when_off(tmp_path: Path) -> None:
     loaded = {c.id: c for c in load(path).components}
     assert (loaded["a"].rotation, loaded["a"].mirror, loaded["a"].mirror_v) == (180, True, True)
     assert loaded["b"].mirror_v is False
+
+
+def test_legacy_european_resistors_migrate_with_wires(tmp_path: Path) -> None:
+    from app.codegen.circuitikz import generate
+    from app.components.library import resolved_pins
+    from app.schematic.model import component_pin_positions, route_pin_aware
+
+    part = Component(id="r", kind="vR", position=(0, 0), rotation=90, options="")
+    pins = dict(zip((p.name for p in resolved_pins(part)), component_pin_positions(part)))
+    wire = Wire(id="w", points=route_pin_aware((-1, -1), pins["wiper"]))
+    original = Schematic(version="0.13", name="legacy", components=[part], wires=[wire],
+                         symbol_style={"resistors": "european", "inductors": "cute"})
+    path = tmp_path / "legacy.hv"
+    save(original, path)
+    data = json.loads(path.read_text())
+    data["version"] = "0.13"
+    path.write_text(json.dumps(data))
+
+    migrated = load(path)
+    part = migrated.components[0]
+    assert part.kind == "variable european resistor"
+    assert migrated.symbol_style == {"inductors": "cute"}
+    pins = dict(zip((p.name for p in resolved_pins(part)), component_pin_positions(part)))
+    assert migrated.wires[0].points[-1] == pins["wiper"]
+    assert "to[variable european resistor" in generate(migrated)
+    save(migrated, path)
+    assert load(path).components[0].kind == part.kind

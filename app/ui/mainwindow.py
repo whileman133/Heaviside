@@ -284,7 +284,7 @@ class _AutoExportTask(QRunnable):
 class MainWindow(QMainWindow):
     """Top-level application window."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, preferences: Preferences | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle(_WINDOW_TITLE)
         self.resize(1280, 800)
@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
         # True) and resolved here, before the UI is built, so chrome/canvas
         # construct with the right tokens. The user's saved choice wins; absent
         # one, the app follows the OS — restored on the next launch.
-        self._prefs = Preferences()
+        self._prefs = preferences if preferences is not None else Preferences()
         _override = self._prefs.dark_override
         self._theme_mode = (
             "system" if _override is None else ("dark" if _override else "light")
@@ -323,6 +323,7 @@ class MainWindow(QMainWindow):
 
         # -- Core objects --------------------------------------------------
         self._scene = SchematicScene()
+        self._scene.set_custom_library(self._prefs.custom_components)
         self._view = SchematicView(self._scene)
         self._preview_worker = PreviewWorker(self, dpi=300)
         self._preview_worker.set_dark(self._dark)  # render the preview dark to match
@@ -1288,7 +1289,8 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Error", f"Unexpected error: {exc}")
             return False
         self._show_canvas()
-        self._scene.set_schematic(schematic)
+        self._prefs.remember_custom_components(schematic.custom_components)
+        self._scene.set_schematic(schematic, custom_library=self._prefs.custom_components)
         self._current_path = Path(path)
         self._modified = False
         self._update_title()
@@ -1553,17 +1555,11 @@ class MainWindow(QMainWindow):
             self._on_auto_compile()
 
     def _on_new_custom_component(self) -> None:
-        """Open the custom-component creator (§5.10).
-
-        On accept, store the captured spec on the document, register it at runtime
-        (so it places/exports like a built-in), refresh the palette, and mark the
-        document modified. The component is document-scoped — it travels with the
-        ``.hv`` file."""
+        """Create a reusable custom component and register it in the palette."""
         from app.ui.custom_component_dialog import CustomComponentDialog
 
-        schematic = self._scene.schematic
         dialog = CustomComponentDialog(
-            dark=self._dark, existing=set(schematic.custom_components), parent=self)
+            dark=self._dark, existing=set(self._scene.available_custom_components()), parent=self)
         if dialog.exec() != QDialog.Accepted:
             return
         spec = dialog.result_spec()
@@ -1578,12 +1574,12 @@ class MainWindow(QMainWindow):
         updated geometry/anchors."""
         from app.ui.custom_component_dialog import CustomComponentDialog
 
-        schematic = self._scene.schematic
-        spec = schematic.custom_components.get(kind)
+        available = self._scene.available_custom_components()
+        spec = available.get(kind)
         if spec is None:
             return
         dialog = CustomComponentDialog(
-            dark=self._dark, existing=set(schematic.custom_components),
+            dark=self._dark, existing=set(available),
             editing=spec, parent=self)
         if dialog.exec() != QDialog.Accepted:
             return
@@ -1592,15 +1588,13 @@ class MainWindow(QMainWindow):
             self._install_custom_component(new_spec, rebuild=True)
 
     def _on_delete_custom_component(self, kind: str) -> None:
-        """Delete a custom component from the document (§5.10).
+        """Remove a custom component from the library and active project.
 
         Blocked when the component is placed on the canvas — the user removes those
         instances first (an undoable canvas edit), keeping the undo history consistent
         (custom-component CRUD is not on the undo stack)."""
-        from app.components.registry import sync_runtime_components
-
         schematic = self._scene.schematic
-        spec = schematic.custom_components.get(kind)
+        spec = self._scene.available_custom_components().get(kind)
         if spec is None:
             return
         in_use = sum(1 for c in schematic.components if c.kind == kind)
@@ -1610,32 +1604,39 @@ class MainWindow(QMainWindow):
                 f"“{spec.display_name}” is used by {in_use} placed component"
                 f"{'s' if in_use != 1 else ''}. Delete those from the canvas first.")
             return
+        shared = self._prefs.custom_components.get(kind)
+        scope = "your library and current project" if shared == spec else "this project"
         if QMessageBox.question(
                 self, "Delete custom component",
-                f"Delete the custom component “{spec.display_name}”?") != QMessageBox.Yes:
+                f"Remove “{spec.display_name}” from {scope}?") != QMessageBox.Yes:
             return
-        del schematic.custom_components[kind]
-        sync_runtime_components(schematic)   # scrub this kind, keep the rest
-        self._palette.refresh_registry()
-        self._modified = True
-        self._update_title()
-        self._scene.schematic_changed.emit()
+        if shared == spec:
+            self._prefs.remove_custom_component(kind)
+        removed = schematic.custom_components.pop(kind, None)
+        self._scene.set_custom_library(self._prefs.custom_components)
+        if removed is not None:
+            self._modified = True
+            self._update_title()
+            self._scene.schematic_changed.emit()
 
     def _install_custom_component(self, spec, *, rebuild: bool) -> None:  # noqa: ANN001
-        """Store *spec* on the document, register it at runtime, refresh the palette,
-        and mark modified. ``rebuild`` recreates placed graphics items (after an edit,
-        whose geometry/anchors may have changed)."""
-        from app.components.custom import spec_to_component_def
-        from app.components.registry import register_runtime_component
-
-        self._scene.schematic.custom_components[spec.name] = spec
-        register_runtime_component(spec_to_component_def(spec))
-        self._palette.refresh_registry()
-        if rebuild:
-            self._scene.reload_components()
-        self._modified = True
-        self._update_title()
-        self._scene.schematic_changed.emit()
+        """Persist a custom definition and update the current project's copy."""
+        project = self._scene.schematic.custom_components
+        previous = project.get(spec.name)
+        shared = self._prefs.custom_components.get(spec.name)
+        if previous is None or shared is None or previous == shared:
+            self._prefs.store_custom_component(spec)
+        embedded = previous is not None or not rebuild
+        if embedded:
+            project[spec.name] = spec
+        self._scene.set_custom_library(self._prefs.custom_components)
+        if embedded:
+            self._modified = True
+            self._update_title()
+            if rebuild:
+                self._scene.reload_components()
+            else:
+                self._scene.schematic_changed.emit()
 
     def _on_export_tex(self) -> None:
         """Export the schematic as an includable CircuiTikZ ``.tex`` snippet.

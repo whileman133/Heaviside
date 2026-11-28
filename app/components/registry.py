@@ -240,14 +240,13 @@ def runtime_component_kinds() -> frozenset[str]:
     return frozenset(_RUNTIME_KINDS)
 
 
-def sync_runtime_components(schematic) -> None:
-    """Make the live registry reflect exactly *schematic*'s custom components:
-    scrub the previous document's customs, then register this document's. The single
-    entry point the UI calls whenever the active document changes."""
+def sync_runtime_components(schematic, shared=None) -> None:
+    """Register shared definitions and overlay the active document's copies."""
     from app.components.custom import spec_to_component_def
 
     reset_runtime_components()
-    for spec in getattr(schematic, "custom_components", {}).values():
+    specs = {**(shared or {}), **getattr(schematic, "custom_components", {})}
+    for spec in specs.values():
         register_runtime_component(spec_to_component_def(spec))
 
 
