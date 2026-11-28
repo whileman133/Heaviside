@@ -58,6 +58,7 @@ from app.canvas.style import (
 )
 from app.canvas.svgsym import (
     PX_PER_PT,
+    SymbolPath,
     body_fill_index,
     dash_for_pen,
     effective_color,
@@ -990,8 +991,13 @@ class ComponentItem(QGraphicsItem):
 
     def _instance_bbox(self) -> tuple:
         from app.components import library
-        nd = library.param_n_data(self._component)
-        return tuple(nd["bbox"]) if nd else self._defn.bbox
+        nd = library.accessory_record(self._component) or library.param_n_data(self._component)
+        bbox = tuple(nd["bbox"]) if nd else self._defn.bbox
+        if self._component.invert and library.supports_invert(self._component):
+            x0, y0, x1, y1 = bbox
+            span = self._defn.default_span[0]
+            return span - x1, y0, span - x0, y1
+        return bbox
 
     def _diode_body_scale(self) -> tuple[float, float, float, float] | None:
         """For a diode whose document ``diode_scale`` differs from the baked
@@ -1102,6 +1108,29 @@ class ComponentItem(QGraphicsItem):
             if value != library.STYLE_DEFAULT.get(axis) and symbol_paths(f"{base}:{value}"):
                 return f"{base}:{value}"
         return base
+
+    def _paths_with_gate_inputs(self, paths: tuple[SymbolPath, ...]) -> tuple[SymbolPath, ...]:
+        data = _library.param_n_data(self._component)
+        if not data or "input_leads" not in data:
+            return paths
+        left = data["input_leads"][0][0] * GRID_PX
+        # The two-input asset includes its leads. Replace just those strokes.
+        body = []
+        for symbol in paths:
+            box = symbol.path.boundingRect()
+            if not symbol.filled and abs(box.left() - left) < 0.05 and box.right() < 0:
+                continue
+            body.append(symbol)
+
+        def strokes(segments, width: float) -> SymbolPath:
+            path = QPainterPath()
+            for x0, y0, x1, y1 in segments:
+                path.moveTo(x0 * GRID_PX, y0 * GRID_PX)
+                path.lineTo(x1 * GRID_PX, y1 * GRID_PX)
+            return SymbolPath(path, width, False)
+
+        return (strokes(data["input_leads"], 0.3985), *body,
+                strokes(data["input_rack"], 0.797))
 
     def _gate_scale(self) -> float:
         """The body size multiplier (``Component.scale``) for a scalable kind — a
@@ -1318,20 +1347,13 @@ class ComponentItem(QGraphicsItem):
         self._layout_node_text(geom, counter)
 
     def _node_text_anchor_rel(self) -> QPointF:
-        """The node's CircuiTikZ ``text`` anchor, screen-relative to the item origin
-        — where the inline ``{…}`` text is **west-anchored** (its left edge sits
-        here, extending right). The per-kind offset from centre is measured into
-        ``ComponentDef.text_anchor`` (``components/generate_library.py``), so the
-        on-canvas label lands exactly where the compiled figure places it (a
-        transistor's just right of the symbol, an op-amp's centred, a transformer's
-        a unit above)."""
+        """The node's measured CircuiTikZ text anchor in screen-relative pixels."""
         tx, ty = self._defn.text_anchor
-        return self.transform().map(QPointF(tx * GRID_PX, ty * GRID_PX))
+        dx, dy = self._node_side_offset_px()
+        return self.transform().map(QPointF(tx * GRID_PX + dx, ty * GRID_PX + dy))
 
     def _layout_node_text(self, geom: dict, counter: QTransform) -> None:
-        """Render the node-style ``{…}`` text (``node_text``) **west-anchored** at the
-        node's ``text`` anchor (left edge there, extending right, upright via the
-        counter-transform) — matching where the compiled figure places it.
+        """Render upright node-style text at the node's ``text`` anchor.
 
         Hidden when there is no node text, while the node-text editor is open, and
         for ghosts (placement previews show the bare symbol). Path-style components
@@ -1339,10 +1361,9 @@ class ComponentItem(QGraphicsItem):
         editing = self._node_text_editor.is_editing
         text = "" if (self._ghost or editing) else (self._component.node_text or "")
         self._node_text_item.setTransform(counter)
-        # centered=False + direction east + base_dist 0 → left edge at the anchor.
         self._node_text_item.configure(
             text, QPointF(1.0, 0.0), self._node_text_anchor_rel(),
-            0.0, 0.0, geom["inv"], False,
+            0.0, 0.0, geom["inv"], centered=True,
         )
         self._node_text_item.setVisible(bool(text))
 
@@ -1472,14 +1493,12 @@ class ComponentItem(QGraphicsItem):
         self._node_text_editor.begin_edit()
 
     def _node_text_editor_pos(self) -> QPointF:
-        """Local pos that west-anchors the node-text editor at the node's text
-        anchor (left-centre there), the same anchor the rendered label uses."""
+        """Local position aligning the editor with the rendered node label."""
         t = self.transform()
         inv, _ = t.inverted()
         er = self._node_text_editor.boundingRect()
         target = self._node_text_anchor_rel()
-        anchor = QPointF(target.x(), target.y() - er.height() / 2.0)
-        return inv.map(anchor)
+        return inv.map(QPointF(target.x() - er.width() / 2.0, target.y() - er.height() / 2.0))
 
     # ------------------------------------------------------------------
     # State helpers
@@ -1672,7 +1691,13 @@ class ComponentItem(QGraphicsItem):
         if s != 1.0:
             painter.scale(s, s)
         diode = self._diode_body_scale()    # (ratio, cx, cy, lead_w) or None
-        syms = symbol_paths(self._geometry_kind())
+        _ls, _lc, _fc = symbol_style(self._component, self._document_symbol_style())
+        geometry_kind = self._geometry_kind()
+        plain = symbol_paths(geometry_kind)
+        syms = symbol_paths(geometry_kind, filled=True) if _fc else plain
+        fill_index = body_fill_index(geometry_kind) if _fc and syms is plain else None
+        fill_path = plain[fill_index] if fill_index is not None else None
+        syms = self._paths_with_gate_inputs(syms)
         # A two-port block's inner symbol stays upright like CircuiTikZ's (the box
         # and leads turn with the item; the A/D diagonal, waves, text do not).
         inner = twoport_inner_paths(self._component.kind, [sp.path for sp in syms],
@@ -1685,17 +1710,21 @@ class ComponentItem(QGraphicsItem):
         # Shape from the upright local glyph, position from the two-port step.
         fixed = readable_glyphs(self._component.kind, [syms[i].path for i in idx],
                                 self.transform(), self._component.rotation,
-                                placed=[base[i] for i in idx]) if idx else None
+                                placed=[base[i] for i in idx],
+                                rotated_numbers=library.rotated_chip_numbers(self._component)
+                                ) if idx else None
         if fixed is not None:
             upright = dict(zip(idx, fixed))
-        _ls, _lc, _fc = symbol_style(self._component)
-        _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
         _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         from app.codegen.circuitikz import is_node_style
 
         base_kind = self._defn.base_kind or self._component.kind
         path_symbol = not is_node_style(base_kind)
         span = self._defn.default_span[0] * GRID_PX
+        inverted = self._component.invert and library.supports_invert(self._component)
+        if inverted:
+            painter.translate(span, 0.0)
+            painter.scale(-1.0, 1.0)
         for _i, sym in enumerate(syms):
             path = upright.get(_i, base[_i])
             pen_w = _stroke_px(sym.stroke_width, lw_scale) / s
@@ -1710,7 +1739,7 @@ class ComponentItem(QGraphicsItem):
                 "" if lead else _ls, "" if lead else _lc, color,
                 dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None)
             painter.setPen(pen)
-            if _fc and _i == _fill_idx:
+            if _fc and (sym.fill_color == "user" or sym is fill_path):
                 painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
             elif sym.filled:
                 fill = (style.COLOR_BACKGROUND if sym.fill_bg
@@ -1759,7 +1788,8 @@ class ComponentItem(QGraphicsItem):
             painter.setBrush(QBrush(QColor(color)))
             for m in marks:
                 dx, dy = m["offset"]
-                painter.drawEllipse(QPointF(dx * GRID_PX * s, dy * GRID_PX * s),
+                x = dx * GRID_PX * s
+                painter.drawEllipse(QPointF(span - x if inverted else x, dy * GRID_PX * s),
                                     PIN_R, PIN_R)
             painter.setPen(Qt.NoPen)
 
@@ -1812,6 +1842,8 @@ class _MosfetItem(ComponentItem):
     """Base for MOSFET items — extends boundingRect when body_diode is active."""
 
     def boundingRect(self) -> QRectF:
+        if _library.accessory_record(self.component):
+            return super().boundingRect()
         x0, y0, x1, y1 = self._defn.bbox
         if self.component.variants.get("body_diode"):
             x1 = x1 + _BODYDIODE_EXTRA_X
@@ -2879,6 +2911,88 @@ class _DrawingAnnotationBase(ComponentItem):
     """
 
 
+class ArcItem(_DrawingAnnotationBase):
+    """A circular annotation with an end marker tangent to the arc."""
+
+    def _paths(self) -> tuple[QPainterPath, QPainterPath]:
+        comp = self._component
+        radius = comp.radius * GRID_PX
+        start = math.radians(comp.start_angle)
+        sweep = comp.end_angle - comp.start_angle
+        cx, cy = -radius * math.cos(start), radius * math.sin(start)
+        circle = QRectF(cx - radius, cy - radius, 2 * radius, 2 * radius)
+        curve = QPainterPath()
+        curve.arcMoveTo(circle, comp.start_angle)
+        if abs(sweep) >= 360:
+            turn = math.copysign(360.0, sweep)
+            curve.arcTo(circle, comp.start_angle, turn)
+            sweep = math.fmod(sweep, 360.0)
+        curve.arcTo(circle, comp.start_angle, sweep)
+
+        tip = QPainterPath()
+        if comp.start_angle == comp.end_angle:
+            return curve, tip
+        size = 7.0 + self._stroke_width()
+        arrow = comp.arrow_style
+        if arrow == "Circle":
+            tip.addEllipse(QRectF(-size, -size / 2, size, size))
+        elif arrow == "Bar":
+            tip.moveTo(0, -size / 2)
+            tip.lineTo(0, size / 2)
+        elif arrow == "To":
+            tip.moveTo(-size * 0.8, -size / 2)
+            tip.quadTo(-size * 0.5, 0, 0, 0)
+            tip.quadTo(-size * 0.5, 0, -size * 0.8, size / 2)
+        else:
+            tip.moveTo(0, 0)
+            if arrow == "Diamond":
+                tip.lineTo(-size / 2, -size * 0.4)
+                tip.lineTo(-size, 0)
+                tip.lineTo(-size / 2, size * 0.4)
+            else:
+                tip.lineTo(-size, -size * 0.4)
+                inset = {"Stealth": 0.59, "Latex": 0.8}.get(arrow, 1.0)
+                tip.lineTo(-size * inset, 0)
+                tip.lineTo(-size, size * 0.4)
+            tip.closeSubpath()
+        tangent = -comp.end_angle + (-90 if comp.end_angle > comp.start_angle else 90)
+        end = curve.currentPosition()
+        transform = QTransform().translate(end.x(), end.y()).rotate(tangent)
+        return curve, transform.map(tip)
+
+    def _stroke_width(self) -> float:
+        return LINE_W * self._component.line_width / 0.4
+
+    def shape(self) -> QPainterPath:
+        curve, tip = self._paths()
+        stroker = QPainterPathStroker()
+        stroker.setWidth(max(8.0, self._stroke_width() + 2.0))
+        hit = stroker.createStroke(curve).united(stroker.createStroke(tip)).united(tip)
+        if hit.isEmpty():
+            hit.addEllipse(QRectF(-4, -4, 8, 8))
+        return hit
+
+    def boundingRect(self) -> QRectF:
+        return self.shape().boundingRect().united(QRectF(-4, -4, 8, 8))
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # noqa: ANN001
+        color = self._body_color()
+        if self._component.line_color and not self._ghost:
+            color = _resolve_tikz_color(self._component.line_color).name()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(_pen(color, self._stroke_width()))
+        painter.setBrush(Qt.NoBrush)
+        curve, tip = self._paths()
+        painter.drawPath(curve)
+        if self._component.arrow_style not in ("To", "Bar"):
+            painter.setBrush(QBrush(QColor(color)))
+        painter.drawPath(tip)
+        if self.isSelected() and not self._ghost:
+            painter.setPen(_pen(style.COLOR_SELECTED, 1.0))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(curve.pointAtPercent(0), 2.5, 2.5)
+
+
 _RECT_STYLE_MAP: dict[str, Qt.PenStyle] = {
     "":               Qt.SolidLine,
     "solid":          Qt.SolidLine,
@@ -3141,14 +3255,15 @@ def unmirrored_glyphs(paths: list[QPainterPath], item_xform: QTransform,
 
 def readable_glyphs(kind: str, paths: list[QPainterPath], item_xform: QTransform,
                     rotation: int,
-                    placed: list[QPainterPath] | None = None) -> list[QPainterPath] | None:
+                    placed: list[QPainterPath] | None = None, *,
+                    rotated_numbers: bool = False) -> list[QPainterPath] | None:
     """Canvas counterpart of the export's text un-flip (issue #49): the glyph
     *paths* re-oriented so *kind*'s text reads like the rendered output, or
     ``None`` when *kind* has no text needing it (:data:`library.TEXT_UNFLIP`).
     *placed*: glyph positions already moved by an earlier step (see
     :func:`upright_glyphs`)."""
     from app.components import library
-    cat = library.text_unflip_category(kind)
+    cat = library.text_unflip_category(kind, rotated_numbers=rotated_numbers)
     if cat == "upright":
         return upright_glyphs(paths, item_xform, placed)
     if cat == "body":
@@ -3809,23 +3924,27 @@ class _ResizableNodeItem(ComponentItem):
         t.scale(wf, hf)
         # Symbol body — scale the path *coordinates* (not the painter) so the pen
         # weight stays uniform under an anisotropic resize.
-        syms = symbol_paths(self._geometry_kind())
+        plain = symbol_paths(self._geometry_kind())
+        syms = self._paths_with_gate_inputs(plain)
         upright: dict[int, QPainterPath] = {}
         # Text (flip-flop letters, chip pin numbers) reads like the rendered output.
         idx = [i for i, sp in enumerate(syms) if sp.glyph]
         fixed = readable_glyphs(self._component.kind, [t.map(syms[i].path) for i in idx],
-                                self.transform(), self._component.rotation) if idx else None
+                                self.transform(), self._component.rotation,
+                                rotated_numbers=_library.rotated_chip_numbers(self._component)
+                                ) if idx else None
         if fixed is not None:
             upright = dict(zip(idx, fixed))
         _ls, _lc, _fc = symbol_style(self._component)
         _fill_idx = body_fill_index(self._geometry_kind()) if _fc else None
+        fill_path = plain[_fill_idx] if _fill_idx is not None else None
         _ink = _resolve_tikz_color(_lc).name() if (_lc and color == style.COLOR_NORMAL) else color
         for _i, sym in enumerate(syms):
             pen_w = _stroke_px(sym.stroke_width, lw_scale)
             painter.setPen(_styled_symbol_pen(
                 effective_color(sym.stroke_color, color), pen_w, _ls, _lc, color,
                 dash_for_pen(sym.dash, PX_PER_PT, pen_w) if sym.dash else None))
-            if _fc and _i == _fill_idx:
+            if _fc and sym is fill_path:
                 painter.setBrush(QBrush(_resolve_tikz_color(_fc)))
             elif sym.filled:
                 fill = (style.COLOR_BACKGROUND if sym.fill_bg
@@ -4004,6 +4123,7 @@ ITEM_CLASSES: dict[str, type[ComponentItem]] = {
     "text_node": TextNodeItem,  # drawing primitives
     "rect":      RectItem,
     "circle":    CircleItem,
+    "arc":       ArcItem,
     "bipole":    BipoleItem,
     "muxdemux":  _ResizableNodeItem,   # 2D (anisotropic) drag-resize (§6.4)
 }

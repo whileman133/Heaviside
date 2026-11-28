@@ -8,7 +8,7 @@ metadata) plus a single ``origin_svg`` placement constant.  It replaces the
 per-component magic numbers that used to live in ``registry.py``, the
 ``circuitikz`` codegen tables, and ``svgsym.py``.
 
-The CircuiTikZ-symbol kinds live in the file; the 6 bespoke kinds (the resizable
+The CircuiTikZ-symbol kinds live in the file; the bespoke kinds (the resizable
 annotations ``open``/``short`` and the drawing primitives) are not
 command-derived and keep their hand-coded ``ComponentDef`` in ``registry.py``.
 
@@ -32,7 +32,7 @@ from app.resources import component_data_path, resource_path
 
 # Kinds NOT in the library (no CircuiTikZ-command symbol) — keep hand-coded defs.
 NON_LIBRARY_KINDS: frozenset[str] = frozenset(
-    {"open", "short", "bipole", "rect", "circle", "text_node"}
+    {"open", "short", "bipole", "rect", "circle", "arc", "text_node"}
 )
 
 #: Body-scale factor applied to every diode-family bipole, in both the emitted
@@ -105,6 +105,37 @@ def node_ctikzset(kind: str) -> list[str]:
     return list(load_library().get(kind, {}).get("ctikzset", []))
 
 
+def accessory_groups(kind: str) -> list[dict]:
+    return load_library().get(kind, {}).get("accessory_groups", [])
+
+
+def selected_accessory_choice(group: dict, variants: dict[str, bool]) -> dict:
+    """Resolve the most specific dropdown choice selected by the stored flags."""
+    return max((choice for choice in group["choices"]
+                if all(variants.get(name) for name in choice["options"])),
+               key=lambda choice: len(choice["options"]))
+
+
+def _active_variant_names(kind: str, variants: dict[str, bool]) -> set[str]:
+    active = {v["name"] for v in variant_specs(kind) if variants.get(v["name"])}
+    for group in accessory_groups(kind):
+        active.difference_update(name for choice in group["choices"] for name in choice["options"])
+        active.update(selected_accessory_choice(group, variants)["options"])
+    return active
+
+
+def accessory_record(comp: "Component") -> dict:
+    return _accessory_record(comp.kind, comp.variants)
+
+
+def _accessory_record(kind: str, variants: dict[str, bool]) -> dict:
+    records = load_library().get(kind, {}).get("accessories")
+    if not records or not variants:
+        return {}
+    key = "|".join(sorted(_active_variant_names(kind, variants)))
+    return records.get(key, {})
+
+
 def variant_tikz(kind: str, variants: dict[str, bool]) -> tuple[str, list[str]]:
     """For a component's active variants, return ``(keyword_suffix, [node_opts])``.
 
@@ -114,8 +145,9 @@ def variant_tikz(kind: str, variants: dict[str, bool]) -> tuple[str, list[str]]:
     """
     suffix = ""
     opts: list[str] = []
+    active = _active_variant_names(kind, variants)
     for v in variant_specs(kind):
-        if variants.get(v["name"]):
+        if v["name"] in active:
             if v["mode"] == "suffix":
                 suffix += v["token"]
             elif v["mode"] == "option":
@@ -131,6 +163,8 @@ def variant_geometry_suffix(kind: str, variants: dict[str, bool]) -> str:
     symbol is rendered and the dots are overlaid), so they are skipped.  Empty
     string when none is active.
     """
+    if "accessories" in load_library().get(kind, {}):
+        return _accessory_record(kind, variants).get("geometry", "")
     for v in variant_specs(kind):
         if v["mode"] != "dot" and variants.get(v["name"]):
             return v["token"] if v["mode"] == "suffix" else "_" + v["token"]
@@ -162,7 +196,21 @@ def param_specs(kind: str) -> list[dict]:
     if "params" in e:
         return list(e["params"])
     p = e.get("param")
+    if p and supports_inner_inputs(kind):
+        return [{**p, "max": 32}]
     return [p] if p else []
+
+
+def supports_inner_inputs(kind: str) -> bool:
+    entry = load_library().get(kind, {})
+    return kind.startswith("ieeestd ") and entry.get("param", {}).get("name") == "inputs"
+
+
+def inner_input_count(comp: "Component") -> int:
+    """Zero is CircuiTikZ's setting for placing every input on the body."""
+    if not supports_inner_inputs(comp.kind):
+        return 0
+    return max(0, min(param_value(comp), comp.params.get("inner_inputs", 0)))
 
 
 def param_spec(kind: str) -> dict | None:
@@ -181,14 +229,12 @@ def is_parametric(kind: str) -> bool:
 # Document symbol style (manual library) — §5.4
 # ---------------------------------------------------------------------------
 #
-# CircuiTikZ styles whole *families* document-wide (american/european resistors,
-# cute/american/european inductors, …) rather than per symbol. Each axis maps a style
+# CircuiTikZ styles whole *families* document-wide (cute/american/european inductors) rather than per symbol. Each axis maps a style
 # value to the ``\ctikzset`` options that select it; the **first** value is the default
 # and matches the ``[american]`` base render, so it carries no options and no extra
 # geometry. A style-sensitive component is tagged ``style_axis`` by the generator and
 # has extra geometry under ``geometry_key(kind):<value>`` for each non-default value.
 STYLE_AXES: dict[str, dict[str, list[str]]] = {
-    "resistors": {"american": [], "european": ["resistor=european"]},
     "inductors": {"american": [], "cute": ["inductor=cute"],
                   "european": ["inductor=european"]},
 }
@@ -196,7 +242,7 @@ STYLE_DEFAULT: dict[str, str] = {axis: next(iter(v)) for axis, v in STYLE_AXES.i
 
 
 def style_axis(kind: str) -> str | None:
-    """The style family a *kind* belongs to (``"resistors"``/``"inductors"``/
+    """The style family a *kind* belongs to (``"inductors"``/
     ``"sources"``), or ``None`` if its symbol doesn't vary with the document style."""
     return load_library().get(kind, {}).get("style_axis")
 
@@ -260,6 +306,14 @@ def param_pins(spec: dict, n: int) -> list[dict]:
     return pins
 
 
+def supports_invert(comp: "Component") -> bool:
+    """Whether the component is emitted as a CircuiTikZ path symbol."""
+    from app.components.registry import REGISTRY
+    definition = REGISTRY.get(comp.kind)
+    kind = (definition.base_kind if definition else None) or comp.kind
+    return load_library().get(kind, {}).get("emission") == "path"
+
+
 def resolved_pins(comp: "Component") -> list[PinDef]:
     """The pins for this instance — for a parametric kind computed from the
     parameter(s), else the kind's static registry pins.
@@ -267,11 +321,19 @@ def resolved_pins(comp: "Component") -> list[PinDef]:
     Multi-parameter kinds (mux/demux) carry their measured pins per value-combo in
     ``n_data[...]["pins"]``; single-parameter logic gates compute theirs from the
     input template (:func:`param_pins`)."""
+    accessory_pins = accessory_record(comp).get("pins")
+    if accessory_pins:
+        return [PinDef(p["name"], tuple(p["offset"])) for p in accessory_pins]
     specs = param_specs(comp.kind)
     if not specs:
         from app.components.registry import REGISTRY
         defn = REGISTRY.get(comp.kind)
-        return list(defn.pins) if defn else []
+        pins = list(defn.pins) if defn else []
+        if defn and comp.invert and supports_invert(comp):
+            span = defn.default_span[0]
+            pins[2:] = [PinDef(pin.name, (span - pin.offset[0], pin.offset[1]))
+                        for pin in pins[2:]]
+        return pins
     nd = param_n_data(comp)
     if nd and "pins" in nd:                      # measured-pins (mux/demux)
         return [PinDef(name=p["name"], offset=tuple(p["offset"])) for p in nd["pins"]]
@@ -283,6 +345,8 @@ def param_geometry_suffix(comp: "Component") -> str:
     """Geometry-key suffix for a parametric instance: one ``":v"`` per parameter in
     declaration order (``":3"`` for a gate, ``":4:2"`` for a mux); ``""`` for fixed
     kinds."""
+    if _needs_ieee_layout(comp):
+        return ":2"  # reuse the native body and replace only the input paths
     vals = param_values(comp)
     return "".join(f":{vals[s['name']]}" for s in param_specs(comp.kind))
 
@@ -293,9 +357,66 @@ def param_n_data(comp: "Component") -> dict | None:
     the entry's ``n_data`` keyed by the comma-joined value combo."""
     if not is_parametric(comp.kind):
         return None
+    if _needs_ieee_layout(comp):
+        total = param_value(comp)
+        return _ieee_gate_data(comp.kind, total, inner_input_count(comp) or total)
     e = load_library().get(comp.kind, {})
     nd = e.get("n_data") or e.get("param", {}).get("n_data", {})
     return nd.get(param_combo_key(comp))
+
+
+def _needs_ieee_layout(comp: "Component") -> bool:
+    if not supports_inner_inputs(comp.kind):
+        return False
+    total = param_value(comp)
+    return total > param_spec(comp.kind)["max"] or 0 < inner_input_count(comp) < total
+
+
+@lru_cache(maxsize=256)
+def _ieee_gate_data(kind: str, total: int, inner: int) -> dict:
+    """Lay out the IEEE input rack around the measured two-input symbol body."""
+    base = param_spec(kind)["n_data"]["2"]
+    pins = {pin["name"]: pin for pin in base["pins"]}
+    tip_x, measured_y = pins["in 1"]["offset"]
+    half_height = 2 * abs(measured_y)
+    pitch = 2 * half_height / inner
+    body_left = -8 * half_height / 6.5
+    curved = kind.split()[1] in {"or", "nor", "xor", "xnor"}
+
+    def bend(y: float) -> float:
+        return 2 * half_height * (1 - 1 / math.hypot(1, y / (2 * half_height)))
+
+    gap = body_left - bend(measured_y) - pins["bin 1"]["offset"][0] if curved else 0
+    rack_x = body_left - (bend(half_height) + gap if curved else 0)
+    outer = (total - inner + 1) // 2
+    inputs = {"in": [], "bin": []}
+    leads = []
+    for index in range(total):
+        y = (index - (total - 1) / 2) * pitch
+        on_rack = index < outer or index >= total - outer
+        lead_x = rack_x if on_rack else body_left - (bend(y) if curved else 0)
+        border_x = lead_x if on_rack else lead_x - gap
+        leads.append((tip_x, y, lead_x, y))
+        for prefix, x in (("in", tip_x), ("bin", border_x)):
+            name = f"{prefix} {index + 1}"
+            inputs[prefix].append({"name": name, "anchor": name, "offset": [x, y]})
+
+    primary = "bin" if base["pins"][0]["name"].startswith("bin ") else "in"
+    order = ("bin", "in") if primary == "bin" else ("in", "bin")
+    all_pins = []
+    for prefix in order:
+        all_pins.extend(inputs[prefix])
+        out = "bout" if prefix == "bin" else "out"
+        if out in pins:
+            all_pins.append(pins[out])
+    rack_height = total * pitch / 2
+    rack = []
+    if outer:
+        rack = [(rack_x, -rack_height, rack_x, -half_height),
+                (rack_x, half_height, rack_x, rack_height)]
+    x0, y0, x1, y1 = base["bbox"]
+    return {"pins": all_pins, "bbox": (x0, min(y0, -rack_height), x1, max(y1, rack_height)),
+            "input_leads": leads, "input_rack": rack}
 
 
 # ── Logic-gate scaling (per-instance Component.scale) ───────────────────────
@@ -349,10 +470,25 @@ TEXT_UNFLIP: dict[str, str] = {
 }
 
 
-def text_unflip_category(kind: str) -> str | None:
+def has_chip_pin_numbers(kind: str) -> bool:
+    """Whether this kind uses CircuiTikZ's chip pin-number options."""
+    from app.components.registry import REGISTRY
+    definition = REGISTRY.get(kind)
+    base = (definition.base_kind if definition else None) or kind
+    return load_library().get(base, {}).get("category") == "Chips"
+
+
+def rotated_chip_numbers(comp: "Component") -> bool:
+    """Chip pin numbers rotate only when explicitly requested."""
+    return has_chip_pin_numbers(comp.kind) and comp.variants.get("rotated_numbers", False)
+
+
+def text_unflip_category(kind: str, *, rotated_numbers: bool = False) -> str | None:
     """``"upright"`` / ``"body"`` for a kind in :data:`TEXT_UNFLIP`, else ``None``."""
     from app.components.registry import REGISTRY
     defn = REGISTRY.get(kind)
+    if rotated_numbers:
+        return "body"
     return TEXT_UNFLIP.get(defn.tikz_keyword) if defn is not None else None
 
 
@@ -362,7 +498,8 @@ def has_upright_letters(kind: str) -> bool:
     return text_unflip_category(kind) == "upright"
 
 
-def text_unflip_option(kind: str, rotation: int, mirrored: bool) -> str:
+def text_unflip_option(kind: str, rotation: int, mirrored: bool, *,
+                       rotated_numbers: bool = False) -> str:
     r"""The ``hv unflip x`` / ``hv unflip y`` node or path option that keeps a
     mirrored part's text readable, or ``""`` when none is needed.
 
@@ -380,7 +517,7 @@ def text_unflip_option(kind: str, rotation: int, mirrored: bool) -> str:
     and ``x`` at 90°/270°; ``"body"`` text turns with the part and needs ``x`` near
     0° and ``y`` otherwise (at the sideways 90°/270° tie ``y`` matches the
     unmirrored orientation). Spec §6.5."""
-    cat = text_unflip_category(kind)
+    cat = text_unflip_category(kind, rotated_numbers=rotated_numbers)
     if not mirrored or cat is None:
         return ""
     r = rotation % 360
@@ -522,7 +659,7 @@ def snap_quarter(v: float) -> float:
 
 def _pin_anchor_map(comp: "Component") -> dict[str, str]:
     """Map each pin name to its CircuiTikZ anchor name for *comp*'s kind."""
-    nd = param_n_data(comp)
+    nd = accessory_record(comp) or param_n_data(comp)
     if nd and "pins" in nd:                  # measured-pins (mux/demux)
         return {p["name"]: p.get("anchor", p["name"]) for p in nd["pins"]}
     spec = param_spec(comp.kind)

@@ -81,6 +81,7 @@ from typing import NamedTuple
 
 from app.components import library as _library
 from app.components.model import (
+    ArcComponent,
     BipoleComponent,
     CircleComponent,
     DrawingComponent,
@@ -330,8 +331,7 @@ def generate(
     if any(c.kind in _DIODE_KINDS for c in schematic.components):
         lines.append(rf"  \ctikzset{{diodes/scale={diode_scale:g}}}")
 
-    # Document symbol style (§5.4): switch a whole family at once (european resistors,
-    # cute/european inductors). Emitted as a picture-scoped `\ctikzset` per axis, but
+    # Document symbol style (§5.4): switch a whole family at once (cute/european inductors). Emitted as a picture-scoped `\ctikzset` per axis, but
     # only when a component of that family is actually placed and the chosen style is
     # non-default — so a curated document (whose kinds carry no style axis) is never
     # restyled and an unused family is never emitted.
@@ -408,10 +408,11 @@ def generate(
         # exactly (see the module docstring), so nothing is lost geometrically.
         if not _in_main_layer(comp):
             continue
-        defn = REGISTRY[comp.kind]
         node_id = f"node_{comp.id[:8]}"
         pin_positions = component_pin_positions(comp)
-        anchor_map = _PIN_TO_CTIKZ_ANCHOR.get(_eff_kind(comp))
+        uses_instance_pins = _library.is_parametric(comp.kind) or _library.accessory_record(comp)
+        anchor_map = (_library._pin_anchor_map(comp) if uses_instance_pins
+                      else _PIN_TO_CTIKZ_ANCHOR.get(_eff_kind(comp)))
         # A path bipole's two axial terminals (pins[0]/pins[1]) are the literal
         # ``to[…]`` endpoints — already explicit coordinates, with no clean named
         # anchor (CircuiTikZ's ``.left``/``.right`` are the body edges, not the wire
@@ -423,7 +424,7 @@ def generate(
         # magnet — is exactly the node anchor and maps to `(node.anchor)` like any
         # other multi-terminal pin.  ``pin_positions`` already carries the scaled
         # (off-grid) coordinate, so the lookup key matches the wire endpoint.
-        for i, pin in enumerate(defn.pins):
+        for i, pin in enumerate(_library.resolved_pins(comp)):
             if i >= len(pin_positions):
                 continue
             px, py = pin_positions[i]
@@ -465,10 +466,11 @@ def generate(
         """Layer-block lines for one component: a drawing annotation via its
         standalone-command path, any other (circuit) kind via its own \\draw."""
         if isinstance(comp, DrawingComponent):
-            return _drawing_component_lines(comp, _y)
+            return _drawing_component_lines(comp, _y, y_flip=y_flip)
         return _component_layer_lines(
             comp, _y, _rot,
             voltage_european=voltage_european, current_european=current_european,
+            document_style=_style,
         )
 
     # Crossing nodes (jump crossings) are emitted up front, before any \draw that
@@ -506,7 +508,7 @@ def generate(
     # block instead, so skip it here.
     for comp in schematic.components:
         if _in_main_layer(comp) and _node_group_ctikzset(comp):
-            lines.extend(_node_group_lines(comp, _y, _rot))
+            lines.extend(_node_group_lines(comp, _y, _rot, document_style=_style))
 
     draw_lines: list[str] = []
     # Single-terminal nodes (grounds, supplies, terminal dots — `_NODE_KINDS`) are
@@ -526,7 +528,7 @@ def generate(
         draw_lines.extend(_component_lines(
             comp, pin_coord_to_ref, _y, _rot,
             voltage_european=voltage_european, current_european=current_european,
-            named_path_devices=named_path_devices,
+            named_path_devices=named_path_devices, document_style=_style,
         ))
 
     # Wires at the default layer (z_order == 0) share the main \draw path;
@@ -647,12 +649,14 @@ def _component_lines(
     voltage_european: bool = False,
     current_european: bool = False,
     named_path_devices: "set[str] | frozenset[str]" = frozenset(),
+    document_style: dict | None = None,
 ) -> list[str]:
     kind = _eff_kind(comp)  # a custom component classifies as its base kind
     style = _annotation_style_opts(comp, voltage_european, current_european)
     if kind in _TWO_TERMINAL_KINDS:
         return [_two_terminal_line(comp, pin_coord_to_ref, y_fn, style,
-                                   named=comp.id in named_path_devices)]
+                                   named=comp.id in named_path_devices,
+                                   document_style=document_style)]
     elif kind in _MULTI_TERMINAL_KINDS:
         return [_multi_terminal_line(comp, y_fn, rot_fn, style)]
     elif kind in _NODE_KINDS:
@@ -676,6 +680,7 @@ def _component_layer_lines(
     *,
     voltage_european: bool = False,
     current_european: bool = False,
+    document_style: dict | None = None,
 ) -> list[str]:
     """Standalone LaTeX statement(s) for one circuit component emitted **in its own
     z-layer** (``z_order != 0``), outside the shared ``\\draw`` block.
@@ -689,7 +694,7 @@ def _component_layer_lines(
     named anchor (see :func:`generate`), and absolute pin coords connect exactly.
     """
     if _node_group_ctikzset(comp):
-        return _node_group_lines(comp, y_fn, rot_fn)
+        return _node_group_lines(comp, y_fn, rot_fn, document_style=document_style)
     if _eff_kind(comp) in _NODE_KINDS:
         # A single-terminal node is its own standalone `\node at` command, even in a
         # layer block (no `\draw` wrapper).
@@ -698,6 +703,7 @@ def _component_layer_lines(
     frags = _component_lines(
         comp, None, y_fn, rot_fn,
         voltage_european=voltage_european, current_european=current_european,
+        document_style=document_style,
     )
     return [rf"  \draw {frag};" for frag in frags]
 
@@ -735,6 +741,7 @@ def _two_terminal_line(
     style: list[str] = (),
     *,
     named: bool = False,
+    document_style: dict | None = None,
 ) -> str:
     """Render a two-terminal component as: (x0,y0) to[KIND, LABELS] (x1,y1)
 
@@ -770,11 +777,11 @@ def _two_terminal_line(
     coord1 = _ref(x1, y1)
 
     label_str = _label_args(comp)
-    appearance = _symbol_style_opts(comp)
+    appearance = _symbol_style_opts(comp, document_style)
     terminals = ""
     if appearance:
         label_str, terminals = _separate_terminal_markers(label_str, coord0, coord1)
-    _suffix, _ = _library.variant_tikz(comp.kind, comp.variants)
+    _suffix, variant_opts = _library.variant_tikz(comp.kind, comp.variants)
     tikz_kind = defn.tikz_keyword + _suffix
 
     # The endpoints above already place the bipole on the canvas Flip-X axis with
@@ -782,7 +789,10 @@ def _two_terminal_line(
     # The CircuiTikZ ``mirror`` key supplies the remaining *perpendicular*
     # reflection, so off-axis features (an LED's emission arrows, a voltage
     # label's side) land where the canvas Flip-X puts them at every rotation.
-    opts = [tikz_kind]
+    # The canvas resolves a single path geometry variant in definition order.
+    opts = [tikz_kind, *variant_opts[:1]]
+    if comp.invert and _library.supports_invert(comp):
+        opts.append("invert")
     _eo = _custom_extra_options(comp)   # custom component appearance options
     if _eo:
         opts.append(_eo)
@@ -862,7 +872,8 @@ def _node_group_ctikzset(comp: Component) -> list[str]:
     return _library.node_ctikzset(comp.kind)
 
 
-def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> list[str]:
+def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r,
+                      *, document_style: dict | None = None) -> list[str]:
     """A component needing a local ``\\ctikzset`` group (gate height, a cute/european
     transformer's inductor style, or a custom component's scoped customisations)
     wrapped so the settings revert after.
@@ -873,7 +884,7 @@ def _node_group_lines(comp: Component, y_fn=lambda y: y, rot_fn=lambda r: r) -> 
     and contributes no named anchor); absolute pin coords connect exactly, so wiring
     is unaffected (see :func:`generate`)."""
     if _eff_kind(comp) in _TWO_TERMINAL_KINDS:
-        frag = _two_terminal_line(comp, None, y_fn)
+        frag = _two_terminal_line(comp, None, y_fn, document_style=document_style)
     else:
         frag = _multi_terminal_line(comp, y_fn, rot_fn)
     sets = [rf"    \ctikzset{{{c}}}" for c in _node_group_ctikzset(comp)]
@@ -916,6 +927,8 @@ def _multi_terminal_line(
     _param = _library.param_spec(comp.kind)
     if _param is not None:
         kind_arg = f"{kind_arg}, {_param['option'].format(n=_library.param_value(comp))}"
+        if _library.supports_inner_inputs(comp.kind):
+            kind_arg += f", inner inputs={_library.inner_input_count(comp)}"
         if _library.gate_size_keys(comp.kind) is not None:
             # Manual gate sized via the CircuiTikZ body height/width keys (in the local
             # \ctikzset group around the node — see _gate_size_setting). No node-level
@@ -961,28 +974,23 @@ def _multi_terminal_line(
             extra_opts = _library._scale_opts([base[0] * s_user, base[1]])
     if extra_opts:
         kind_arg = f"{kind_arg}, {extra_opts}"
-    rotation = rot_fn(comp.rotation)
-    # The mirror must come BEFORE the rotation in the option list. PGF applies a
-    # node's transform options last-listed-first, so ``xscale=-1, rotate=a`` rotates
-    # and *then* reflects — the canvas's global Flip-X after rotation (§7 Mirror).
-    # The reverse order reflects in the node's own frame first, which only agrees at
-    # 0°/180°: at 90°/270°/45° the export was flipped about the other axis, so a
-    # mirrored node's anchors (and wires) landed away from the canvas pins.
-    if comp.mirror:
-        if extra_opts and "xscale=" in extra_opts:
-            kind_arg = re.sub(
-                r"xscale=([\d.]+)",
-                lambda m: f"xscale=-{m.group(1)}",
-                kind_arg,
-                count=1,
-            )
-        else:
-            kind_arg = f"{kind_arg}, xscale=-1"
+    horizontal, vertical, angle = _node_orientation(comp)
+    rotation = rot_fn(angle)
+    # PGF applies the node transforms last-listed-first. Reflections go before
+    # rotate so they act on the same global axes as the canvas.
+    for axis, mirrored in (("xscale", horizontal), ("yscale", vertical)):
+        if mirrored:
+            if f"{axis}=" in extra_opts:
+                kind_arg = re.sub(rf"{axis}=([\d.]+)", rf"{axis}=-\g<1>", kind_arg, count=1)
+            else:
+                kind_arg += f", {axis}=-1"
     if rotation != 0:
         kind_arg = f"{kind_arg}, rotate={rotation}"
     # A mirrored part with text (flip-flop letters, chip pin numbers) would print
     # it mirror-imaged; un-flip it (TEXT_UNFLIP_DEF, issue #49).
-    unflip = _library.text_unflip_option(comp.kind, comp.rotation, comp.mirror)
+    rotated_numbers = _library.rotated_chip_numbers(comp)
+    unflip = _library.text_unflip_option(comp.kind, comp.rotation, comp.mirror,
+                                         rotated_numbers=rotated_numbers)
     if unflip:
         kind_arg = f"{kind_arg}, {unflip}"
     # CircuiTikZ quadpole shapes (transformers) flip their internal coils when the
@@ -990,7 +998,7 @@ def _multi_terminal_line(
     # coils face outward). Drawing the shape under the node transform (``transform
     # shape``) reorients it rigidly — matching the canvas — without that distortion,
     # and leaves the terminal anchors unchanged so connected wires still meet them.
-    if defn.tikz_keyword.startswith("transformer") and (rotation != 0 or comp.mirror):
+    if defn.tikz_keyword.startswith("transformer") and (rotation or horizontal or vertical):
         kind_arg = f"{kind_arg}, transform shape"
 
     # Append user options to the node[] argument.  Logic-port shapes (keyword
@@ -1004,6 +1012,8 @@ def _multi_terminal_line(
         user_opts = _label_args(comp)
     if user_opts:
         kind_arg = f"{kind_arg}, {user_opts}"
+    if _library.has_chip_pin_numbers(comp.kind):
+        kind_arg += ", rotated numbers" if rotated_numbers else ", straight numbers"
     lw = _line_width_opt(comp)
     if lw:
         kind_arg = f"{kind_arg}, {lw}"
@@ -1016,15 +1026,15 @@ def _multi_terminal_line(
     # no lead stubs.
     x, y = comp.position
     coord = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    # Node text goes inline in this node's own ``{…}`` — the CircuiTikZ-idiomatic
-    # form (``node[npn] {$Q_1$}``). Note a multi-terminal symbol has a fixed
-    # bounding box that does NOT grow to fit the text, so a label that overflows the
-    # symbol is clipped by the standalone crop (§8.3) when the node sits at the
-    # figure's edge; the text is anchored at the node centre (= the item origin
-    # where the on-canvas label is drawn), so the two match.
-    node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{_node_text_arg(comp)}}}"
-
-    lines = [node_line]
+    text = _node_text_arg(comp)
+    if text and _separate_node_label(comp):
+        node_line = f"{coord} node[{kind_arg}] ({node_id}) {{}}"
+        lines = [node_line, _node_label(comp, node_id, text)]
+    else:
+        if text and rotation and _library.has_chip_pin_numbers(comp.kind):
+            text = rf"\rotatebox{{{-rotation}}}{{{text}}}"
+        node_line = f"{coord} node[{kind_arg}] ({node_id}) {{{text}}}"
+        lines = [node_line]
     # Transformer polarity dots: a filled circle (CircuiTikZ ``circ``) at each
     # checked inner-dot anchor (the dot variants, §5.4).
     for mark in _library.dot_marks(comp):
@@ -1074,10 +1084,37 @@ _validate_codegen_tables()
 _POWER_RAIL_KINDS: frozenset[str] = frozenset({"vcc", "vdd", "vee", "vss"})
 
 
+def _node_orientation(comp: Component) -> tuple[bool, bool, int]:
+    """Recover the two reflection controls from the folded canvas orientation."""
+    vertical = comp.mirror_v
+    horizontal = comp.mirror != vertical
+    rotation = (comp.rotation - 180) % 360 if vertical else comp.rotation
+    return horizontal, vertical, rotation
+
+
+def _separate_node_label(comp: Component) -> bool:
+    return not _library.has_chip_pin_numbers(comp.kind) or comp.mirror or comp.mirror_v
+
+
+def _node_label(comp: Component, node_id: str, text: str) -> str:
+    """Place upright text at the transformed symbol's text anchor."""
+    options = "anchor=center"
+    colours = {}
+    for option in split_top_level(_label_args(comp)):
+        key, equals, value = option.partition("=")
+        if equals and key.strip() in {"color", "text"}:
+            colours[key.strip()] = value.strip()
+    _, line_color, _ = symbol_style(comp)
+    text_color = colours.get("text") or line_color or colours.get("color")
+    if text_color:
+        options += f", text={text_color}"
+    return f"node[{options}] at ({node_id}.text) {{{text}}}"
+
+
 def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
                   pin_coord_to_ref: dict[tuple[float, float], str] | None = None) -> str:
     """Render a single-terminal node as the **standalone** command
-    ``\\node[kind, options] at (x,y) {node_text};``.
+    ``\\node[kind, options] at (x,y) {};``.
 
     A single-point node *is* its own pin and connects to wires purely by coordinate
     (it carries no named anchor), so it needs no place in the shared ``\\draw`` path;
@@ -1090,11 +1127,8 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     — via *pin_coord_to_ref*, the same map wires use. The marker is emitted after the
     shared ``\\draw`` where those nodes are defined, so the reference resolves.
 
-    The user's ``options`` go into the ``node[…]`` bracket and ``node_text`` into the
-    trailing ``{…}`` slot — so a power rail's voltage name (``$V_{cc}$``) or a ground's
-    label is set as node text, not via a quick key. (Earlier builds special-cased a
-    power-rail ``l=`` slot into ``label=right:…``; that slot is now migrated to
-    ``node_text`` on load, see ``app.schematic.io``.)
+    The user's ``options`` go into the symbol's bracket. Its label is placed
+    separately at the symbol's text anchor.
 
     ``Component.node_side`` (``left``/``right``/``above``/``below``), when set, is added
     as a TikZ placement key right after the kind, so the symbol sits on that side of its
@@ -1107,8 +1141,13 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     side = getattr(comp, "node_side", "")
     if side:
         args += f", {side}"
-    if comp.rotation:
-        args += f", rotate={comp.rotation}"
+    horizontal, vertical, rotation = _node_orientation(comp)
+    if horizontal:
+        args += ", xscale=-1"
+    if vertical:
+        args += ", yscale=-1"
+    if rotation:
+        args += f", rotate={rotation}"
     user = _label_args(comp)
     if user:
         args += f", {user}"
@@ -1117,7 +1156,12 @@ def _node_command(comp: Component, y_fn=lambda y: y, style: list[str] = (),
     at = pin_coord_to_ref.get((round(x, 6), round(y, 6))) if pin_coord_to_ref else None
     if at is None:
         at = f"({_fmt(x)},{_fmt(y_fn(y))})"
-    return rf"\node[{args}] at {at} {{{_node_text_arg(comp)}}};"
+    text = _node_text_arg(comp)
+    if text and _separate_node_label(comp):
+        node_id = f"node_{comp.id[:8]}"
+        label = _node_label(comp, node_id, text)
+        return rf"\node[{args}] ({node_id}) at {at} {{}} {label};"
+    return rf"\node[{args}] at {at} {{{text}}};"
 
 
 # ---------------------------------------------------------------------------
@@ -1264,7 +1308,7 @@ def _wire_draw_statement(
     return rf"\draw[{opts}] {path};" if opts else rf"\draw {path};"
 
 
-def _drawing_component_lines(comp: Component, y_fn) -> list[str]:
+def _drawing_component_lines(comp: Component, y_fn, *, y_flip: bool) -> list[str]:
     """The indented LaTeX line(s) for one DrawingComponent (z-layer block)."""
     out: list[str] = []
     if isinstance(comp, TextNodeComponent):
@@ -1279,9 +1323,25 @@ def _drawing_component_lines(comp: Component, y_fn) -> list[str]:
         tl = _centered_text_line(comp, y_fn)
         if tl:
             out.append("  " + tl)
+    elif isinstance(comp, ArcComponent):
+        out.append("  " + _arc_line(comp, y_fn, y_flip=y_flip))
     elif isinstance(comp, BipoleComponent):
         out.append("  " + _bipole_node_line(comp, y_fn))
     return out
+
+
+def _arc_line(comp: ArcComponent, y_fn, *, y_flip: bool) -> str:
+    x, y = comp.position
+    start = comp.start_angle - comp.rotation
+    end = comp.end_angle - comp.rotation
+    if comp.mirror:
+        start, end = 180 - start, 180 - end
+    if not y_flip:
+        start, end = -start, -end
+    style = compose_style_options(line_width=comp.line_width, line_color=comp.line_color)
+    options = ", ".join(filter(None, (f"-{{{comp.arrow_style}}}", style)))
+    return (rf"\draw[{options}] ({_fmt(x)},{_fmt(y_fn(y))}) arc["
+            f"start angle={_fmt(start)}, end angle={_fmt(end)}, radius={comp.radius:g}];")
 
 
 # Map a custom endpoint marker kind to its TikZ ``arrows.meta`` tip name. These
@@ -1686,9 +1746,9 @@ def _line_width_opt(comp: Component) -> str:
     return f"line width={comp.line_width:g}pt"
 
 
-def _symbol_style_opts(comp: Component) -> list[str]:
+def _symbol_style_opts(comp: Component, document_style: dict | None = None) -> list[str]:
     """Effective appearance options for a symbol’s own to or node bracket."""
-    ls, lc, fc = symbol_style(comp)
+    ls, lc, fc = symbol_style(comp, document_style)
     opts: list[str] = []
     if ls:
         opts.append(ls)

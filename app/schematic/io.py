@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 from app.components.model import (
+    ARC_FIELDS,
+    ArcComponent,
     CircleComponent,
     Component,
     CustomComponentSpec,
@@ -112,12 +114,14 @@ from app.schematic.validate import validate
 #: StyledComponent fields, previously blocks only; each omitted when empty). A 0.12 build
 #: would silently strip them on save, so the bump refuses the newer file; 0.1–0.12 files
 #: load unchanged (absent fields default to empty).
-_FORMAT_VERSION: str = "0.13"
+#: 0.14 records path inversion, arc settings, and the new component options.
+#: Legacy European resistor styles are migrated to explicit component kinds.
+_FORMAT_VERSION: str = "0.14"
 
 # File-format versions this loader accepts. Extend when new versions are defined.
 _KNOWN_VERSIONS: set[str] = {
     "0.1", "0.2", "0.3", "0.4", "0.5", "0.6", "0.7", "0.8", "0.9", "0.10", "0.11",
-    "0.12", "0.13",
+    "0.12", "0.13", "0.14",
 }
 
 # Refuse to parse implausibly large files (a real schematic is a few hundred KB
@@ -291,7 +295,7 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
             "mark_junctions": s.mark_junctions,
             "diode_scale": s.diode_scale,
             "custom_components": {
-                name: _custom_spec_to_dict(spec)
+                name: custom_spec_to_dict(spec)
                 for name, spec in s.custom_components.items()
             },
         },
@@ -301,7 +305,7 @@ def _schematic_to_dict(s: Schematic) -> dict[str, Any]:
     }
 
 
-def _custom_spec_to_dict(spec: CustomComponentSpec) -> dict[str, Any]:
+def custom_spec_to_dict(spec: CustomComponentSpec) -> dict[str, Any]:
     """Serialize one custom-component spec (app.components.custom). The captured
     geometry is stored verbatim so the component re-renders without LaTeX."""
     return {
@@ -335,6 +339,8 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # above are already the effective orientation, so this only records intent.
     if c.mirror_v:
         d["mirror_v"] = True
+    if c.invert:
+        d["invert"] = True
     # Node-style {…} slot text; omitted when empty (the common case).
     if c.node_text:
         d["node_text"] = c.node_text
@@ -364,6 +370,8 @@ def _component_to_dict(c: Component) -> dict[str, Any]:
     # Per-instance logic-gate size multiplier, omitted at the default (1.0).
     if abs(c.scale - 1.0) > 1e-6:
         d["scale"] = c.scale
+    if isinstance(c, ArcComponent):
+        d.update({field: getattr(c, field) for field in ARC_FIELDS})
     if isinstance(c, (RectComponent, CircleComponent)):
         # Always written (0.12+): a missing key means a legacy file, which loads
         # with block-diagram connections ON so its edge wires stay attached.
@@ -530,11 +538,11 @@ def _dict_to_schematic(data: dict) -> Schematic:
     custom_components: dict[str, CustomComponentSpec] = {}
     if isinstance(raw_custom, dict):
         for key, value in raw_custom.items():
-            spec = _dict_to_custom_spec(value)
+            spec = custom_spec_from_dict(value)
             if spec is not None:
                 custom_components[str(key)] = spec
 
-    return Schematic(
+    schematic = Schematic(
         version=version,
         name=name,
         components=components,
@@ -553,8 +561,46 @@ def _dict_to_schematic(data: dict) -> Schematic:
         custom_components=custom_components,
     )
 
+    if version != _FORMAT_VERSION:
+        _migrate_legacy_resistor_style(schematic)
+    return schematic
 
-def _dict_to_custom_spec(data: Any) -> CustomComponentSpec | None:
+
+_LEGACY_EUROPEAN_RESISTORS = {
+    "R": "european resistor",
+    "vR": "variable european resistor",
+    "pR": "european potentiometer",
+    "sR": "european resistive sensor",
+    "ldR": "european light dependent resistor",
+}
+
+
+def _migrate_legacy_resistor_style(schematic: Schematic) -> None:
+    """Replace document-wide European styling with portable component kinds."""
+    if schematic.symbol_style.pop("resistors", None) != "european":
+        return
+
+    from app.canvas.commands import _follow_pins
+    from app.components.library import resolved_pins
+    from app.schematic.model import component_pin_positions, point_key
+
+    moved = {}
+    for comp in schematic.components:
+        kind = _LEGACY_EUROPEAN_RESISTORS.get(comp.kind)
+        if kind is None:
+            continue
+        old = list(zip(resolved_pins(comp), component_pin_positions(comp)))
+        comp.kind = kind
+        new = dict(zip((p.name for p in resolved_pins(comp)), component_pin_positions(comp)))
+        for pin, position in old:
+            target = new.get(pin.name)
+            if target is not None and target != position:
+                moved[point_key(position)] = target
+    if moved:
+        _follow_pins(schematic, moved, {})
+
+
+def custom_spec_from_dict(data: Any) -> CustomComponentSpec | None:
     """Parse one serialized custom-component spec, or ``None`` if malformed.
 
     Permissive (coerce/skip rather than raise): a custom component is recoverable
@@ -733,6 +779,7 @@ def _dict_to_component(data: Any, index: int) -> Component:
         "rotation": rotation,
         "mirror": mirror,
         "mirror_v": mirror_v,
+        "invert": bool(data.get("invert", False)),
         "options": options,
         "node_text": node_text,
         "node_side": node_side,
@@ -750,6 +797,15 @@ def _dict_to_component(data: Any, index: int) -> Component:
     if not isinstance(raw_z, int) or isinstance(raw_z, bool):
         raise SchematicLoadError(f"{ctx}.z_order must be an integer")
     kwargs["z_order"] = raw_z
+
+    if issubclass(cls, ArcComponent):
+        for field in ("start_angle", "end_angle", "radius"):
+            try:
+                kwargs[field] = _finite(float(data.get(field, getattr(cls, field))),
+                                        f"{ctx}.{field}")
+            except (TypeError, ValueError) as exc:
+                raise SchematicLoadError(f"{ctx}.{field} must be a finite number") from exc
+        kwargs["arrow_style"] = data.get("arrow_style", cls.arrow_style)
 
     if issubclass(cls, (RectComponent, CircleComponent)):
         # Absent ⇒ a pre-0.12 file, where every box edge was connectable.

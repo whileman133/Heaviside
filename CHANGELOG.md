@@ -5,6 +5,82 @@ All notable changes to Heaviside are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Fill support for more circuit symbols.** The canvas and CircuiTikZ export
+  now use the symbol's native fill regions, including open outlines and bodies
+  with multiple fill regions. Coverage includes capacitors, empty and stroke
+  diodes, controlled rectifiers, sources, meters, mechanical elements, jumpers,
+  amplifiers, filters, and other block symbols. The palette also includes
+  boxed amplifier, ideal plot filter, enclosed spark-gap, and jumper variants.
+- **36 additional circuit kinds.** The palette gains the following entries.
+  - **Resistors** `european resistor`, `variable european resistor`,
+    `european potentiometer`, `european resistive sensor`,
+    `european light dependent resistor`, `sgeneric`, `singeneric`.
+  - **Diodes** `igct`, `empty igct`, `full igct`, `stroke igct`, `stroke TVS diode`.
+  - **Generators and sources** `bgenerator`, `cgenerator`, `ngenerator`,
+    `oosourceatrans`.
+  - **Plot filters** `lowpassp`, `highpassp`, `bandpassp`, `bandstopp`,
+    `resonantp`, `notchp`.
+  - **Other symbols** `biast`, `camera`, `neonlampac`, `neonlampcc`, `power`,
+    `register`, `relais`, `sinetable`, `sparkgap`, `swr`, `trx`, `tvset`,
+    `vallpass`, `wbulb`.
+- **Arcs.** Place an arc from the **TikZ** palette and set its start angle, end
+  angle, radius, and arrow style in Properties. Set its draw colour in
+  **Appearance**. Arrow styles are Stealth (default), Latex, Triangle, To, Bar,
+  Circle, and Diamond.
+- **Invert for path-style symbols.** The **Rotation → Invert** checkbox exports
+  CircuiTikZ's `invert` key. It reverses the symbol along its path while keeping
+  the two endpoints fixed. Wires attached to auxiliary pins follow those pins.
+
+- **Transistor accessories.** Twenty-nine transistor types expose the supported
+  accessory combinations in Properties. Source arrow, Circle, and Gate options
+  use dropdowns with a Default choice. The canvas uses native geometry for
+  1,019 combinations.
+- **Persistent custom components.** User-defined components are available
+  across projects and application restarts. Opening a legacy project adopts
+  missing library definitions. Projects embed their own definitions for
+  portability.
+- **Wheel panning.** Shift + wheel pans vertically and Ctrl + wheel pans
+  horizontally. The unmodified wheel continues to zoom.
+
+### Changed
+
+- **Schematic format 0.14.** The format records path inversion and arc settings.
+  Older files still load, and all six bundled examples have been re-saved.
+- **Logic-gate inputs.** Variable-input gates expose **Number inputs**. IEEE
+  gates support up to 32 inputs and offer **Inner inputs** to put the remaining
+  inputs on a rack.
+- **Separate American and European resistors.** The resistor, variable
+  resistor, potentiometer, resistive sensor, and light-dependent resistor have
+  separate European palette entries with **Line color** and **Fill**. The
+  American entries (`R`, `vR`, `pR`, `sR`, and `ldR`) offer **Line color** only.
+  Older European-styled projects migrate to the European kinds on load.
+  Wires follow any auxiliary pins that move.
+- **Chip pin numbers stay upright by default.** DIP and QFP chips have a
+  per-chip **Straight numbers** checkbox in Properties. Clear it to rotate the
+  pin numbers with the chip. The center label counter-rotates independently.
+- **Vertical mirror exports directly.** Node-style components use
+  `yscale=-1` for vertical mirroring and emit any user-selected rotation
+  separately.
+
+### Fixed
+
+- **Diode appearance controls.** The stroke TVS diode and the standard, empty,
+  and stroke IGCT variants offer independent **Line color** and **Fill**.
+  The full IGCT offers **Line color** only.
+- **Circuit node labels stay upright and centered.** Non-chip labels export as
+  separate text nodes centered at the symbol's `.text` anchor. Mirrored chips
+  also use centered external labels. Other chip labels counter-rotate inline.
+  The canvas follows the same alignment.
+
+### Known limitations
+
+- `qgenerator` remains unavailable because CircuiTikZ 1.8.5 produces an
+  invalid drawing path for it.
+
 ## [0.9.3] - 2026-11-21
 
 ### Fixed

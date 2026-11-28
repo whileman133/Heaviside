@@ -266,8 +266,7 @@ def _fill_section(panel):
     return next(s for s in panel._sections if isinstance(s, FillBorderSection))
 
 
-def test_resistor_offers_color_only(_app):
-    """CircuiTikZ supports a resistor’s line colour."""
+def test_american_resistor_offers_line_color(_app):
     from app.canvas.scene import SchematicScene
     from app.ui.properties import PropertiesPanel
 
@@ -305,7 +304,7 @@ def test_style_edit_on_mixed_selection_only_writes_applicable_fields(_app):
     from app.ui.properties import PropertiesPanel, _TIKZ_TO_LABEL_STYLE, _set_combo_value
 
     scene = SchematicScene()
-    r = scene.place_component("R", (2.0, 0.0))
+    r = scene.place_component("resistor", (2.0, 0.0))
     amp = scene.place_component("op amp", (6.0, 0.0))
     panel = PropertiesPanel()
     panel.set_scene(scene)

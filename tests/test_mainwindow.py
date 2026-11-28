@@ -109,11 +109,62 @@ def test_delete_custom_component_blocked_when_in_use(tmp_path, monkeypatch):
     assert spec.name in win._scene.schematic.custom_components   # not deleted
 
 
+def test_custom_component_library_survives_new_projects_and_restarts(tmp_path, monkeypatch):
+    from app.components.registry import REGISTRY
+    from app.schematic.io import load, save
+    from PySide6.QtWidgets import QMessageBox
+
+    win = _win(tmp_path)
+    spec = _custom_spec()
+    win._install_custom_component(spec, rebuild=False)
+    monkeypatch.setattr(win, "_confirm_discard", lambda: True)
+    win._on_new()
+    assert spec.name in REGISTRY
+    assert spec.name not in win._scene.schematic.custom_components
+
+    win._scene.place_component(spec.name, (0, 0))
+    path = tmp_path / "portable.hv"
+    save(win._scene.schematic, path)
+    assert load(path).custom_components[spec.name] == spec
+
+    reopened = _win(tmp_path)
+    assert reopened._scene.available_custom_components()[spec.name] == spec
+    assert spec.name in REGISTRY
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Yes)
+    reopened._on_delete_custom_component(spec.name)
+    assert spec.name not in REGISTRY
+    assert reopened.load_path(path)
+    assert reopened._scene.schematic.custom_components[spec.name] == spec
+    monkeypatch.setattr(reopened, "_confirm_discard", lambda: True)
+    reopened._on_new()
+    assert spec.name not in REGISTRY
+
+
+def test_opening_legacy_project_adds_its_custom_definitions_to_library(tmp_path):
+    from dataclasses import replace
+    from app.components.registry import REGISTRY
+    from app.schematic.io import save
+    from app.schematic.model import Schematic
+
+    win = _win(tmp_path)
+    spec = _custom_spec()
+    path = tmp_path / "legacy.hv"
+    save(Schematic(version="0.13", name="legacy", custom_components={spec.name: spec}), path)
+    assert win.load_path(path)
+    assert win._prefs.custom_components[spec.name] == spec
+
+    local = replace(spec, display_name="Different project definition")
+    save(Schematic(version="0.13", name="local", custom_components={spec.name: local}), path)
+    assert win.load_path(path)
+    assert REGISTRY[spec.name].display_name == local.display_name
+    assert _win(tmp_path)._scene.available_custom_components()[spec.name] == spec
+
+
 def _win(tmp_path):
     """A MainWindow whose Preferences are backed by an isolated temp INI."""
-    win = MainWindow()
-    win._prefs = Preferences(QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat))
-    return win
+    return MainWindow(preferences=Preferences(
+        QSettings(str(tmp_path / "settings.ini"), QSettings.IniFormat)
+    ))
 
 
 def _wait_auto_export(win, timeout=10.0):

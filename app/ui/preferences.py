@@ -38,7 +38,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.components.model import CustomComponentSpec
 from app.components.registry import REGISTRY
+from app.schematic.io import custom_spec_from_dict, custom_spec_to_dict
 from app.preview import tools as _tools
 from app.ui import theme
 
@@ -59,6 +61,7 @@ _KEY_DARK_OVERRIDE = "display/dark_override"
 _KEY_FORCE_ZIAMATH = "render/force_ziamath"
 _KEY_CHECK_UPDATES = "updates/check_on_startup"
 _KEY_SKIPPED_VERSION = "updates/skipped_version"
+_KEY_CUSTOM_COMPONENTS = "components/custom_library"
 _KEY_COMPONENT_SHORTCUTS = "keybindings/component_shortcuts"
 
 #: Plain letters the canvas reserves for tools (select/wire/pan), so they can't be
@@ -122,6 +125,48 @@ class Preferences:
 
     def __init__(self, settings: QSettings | None = None) -> None:
         self._settings = settings if settings is not None else QSettings()
+
+    def _custom_library_entries(self) -> dict:
+        self._settings.sync()
+        try:
+            entries = json.loads(self._settings.value(_KEY_CUSTOM_COMPONENTS, "{}", type=str))
+        except (TypeError, ValueError):
+            return {}
+        return entries if isinstance(entries, dict) else {}
+
+    @property
+    def custom_components(self) -> dict[str, CustomComponentSpec]:
+        from app.components.custom import is_custom_kind
+        from app.components.library import load_library
+
+        specs = {}
+        for kind, record in self._custom_library_entries().items():
+            spec = custom_spec_from_dict(record)
+            if (spec is not None and is_custom_kind(kind) and spec.name == kind
+                    and spec.base_kind in load_library()):
+                specs[kind] = spec
+        return specs
+
+    def remember_custom_components(self, specs: dict[str, CustomComponentSpec]) -> None:
+        """Keep existing library definitions when a project declares the same kind."""
+        if not specs:
+            return
+        entries = self._custom_library_entries()
+        new = {kind: custom_spec_to_dict(spec) for kind, spec in specs.items()
+               if kind not in entries}
+        if new:
+            self._settings.setValue(_KEY_CUSTOM_COMPONENTS, json.dumps({**entries, **new}))
+
+    def store_custom_component(self, spec: CustomComponentSpec) -> None:
+        entries = self._custom_library_entries()
+        entries[spec.name] = custom_spec_to_dict(spec)
+        self._settings.setValue(_KEY_CUSTOM_COMPONENTS, json.dumps(entries))
+
+    def remove_custom_component(self, kind: str) -> None:
+        entries = self._custom_library_entries()
+        # A removed entry can still live in an older portable project.
+        entries[kind] = None
+        self._settings.setValue(_KEY_CUSTOM_COMPONENTS, json.dumps(entries))
 
     # -- Auto-export on save -------------------------------------------------
 

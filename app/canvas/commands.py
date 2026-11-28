@@ -37,7 +37,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import TypeVar
 
-from app.components.model import FontedComponent, TextNodeComponent
+from app.components.model import ArcComponent, FontedComponent, TextNodeComponent
 from app.schematic.model import (
     Component,
     Schematic,
@@ -1373,6 +1373,24 @@ class EditCommand(Command):
         comp.options = self._old_options or ""
 
 
+class EditArcCommand(Command):
+    """Change one arc setting without overwriting the other settings."""
+
+    label = "Edit arc"
+
+    def __init__(self, component: ArcComponent, field: str, value: float | str) -> None:
+        self._component_id = component.id
+        self._field = field
+        self._old_value = getattr(component, field)
+        self._new_value = value
+
+    def do(self, schematic: Schematic) -> None:
+        setattr(_find_component(schematic, self._component_id), self._field, self._new_value)
+
+    def undo(self, schematic: Schematic) -> None:
+        setattr(_find_component(schematic, self._component_id), self._field, self._old_value)
+
+
 class EditNodeTextCommand(Command):
     """Replace the ``node_text`` (``{…}`` slot) of a single node-style component.
 
@@ -1541,6 +1559,64 @@ class MirrorVerticalCommand(Command):
         comp = _find_component(schematic, self._component_id)
         assert self._old is not None
         comp.mirror_v, comp.mirror, comp.rotation = self._old
+
+
+class InvertCommand(Command):
+    """Invert a path symbol while keeping wires attached to its pins."""
+
+    label = "Invert"
+
+    def __init__(self, component_id: str, new_value: bool, old_value: bool) -> None:
+        self._component_id = component_id
+        self._new_value = new_value
+        self._old_value = old_value
+        self._orig_wires: dict[str, Wire] = {}
+
+    def do(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        old_pins = _component_pin_positions(comp)
+        comp.invert = self._new_value
+        moved = {point_key(old): new for old, new in zip(old_pins, _component_pin_positions(comp))
+                 if old != new}
+        if moved:
+            _follow_pins(schematic, moved, self._orig_wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.invert = self._old_value
+        _restore_followed_wires(schematic, self._orig_wires)
+
+
+class SetAccessoriesCommand(Command):
+    """Change transistor accessories together and follow any relocated terminals."""
+
+    label = "Set Accessories"
+
+    def __init__(self, component: Component, values: dict[str, bool]) -> None:
+        self._component_id = component.id
+        self._before = dict(component.variants)
+        self._after = {**self._before, **values}
+        self._wires: dict[str, Wire] = {}
+
+    def do(self, schematic: Schematic) -> None:
+        from app.components.library import resolved_pins
+
+        comp = _find_component(schematic, self._component_id)
+        before = dict(zip((p.name for p in resolved_pins(comp)), _component_pin_positions(comp)))
+        comp.variants = dict(self._after)
+        after = dict(zip((p.name for p in resolved_pins(comp)), _component_pin_positions(comp)))
+        moved = {}
+        for name, point in before.items():
+            target = after.get(name, snap_point(point))
+            if target != point:
+                moved[point_key(point)] = target
+        if moved:
+            _follow_pins(schematic, moved, self._wires)
+
+    def undo(self, schematic: Schematic) -> None:
+        comp = _find_component(schematic, self._component_id)
+        comp.variants = dict(self._before)
+        _restore_followed_wires(schematic, self._wires)
 
 
 class SetVariantCommand(Command):

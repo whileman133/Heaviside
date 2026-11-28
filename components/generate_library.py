@@ -41,6 +41,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # sibling scrapers
 
+import transistor_accessories as ta                     # noqa: E402
 import scrape_manual as sm                               # noqa: E402
 import extract_doc_anchors as eda                        # noqa: E402
 from app.components import generate as gen               # noqa: E402
@@ -48,6 +49,129 @@ from app.components import library as lib                # noqa: E402
 from app.components import render                        # noqa: E402
 
 OUT_DIR = ROOT / "components" / "generated"
+
+
+# These manual examples use CircuiTikZ's actual fill geometry, including open
+# outlines, multiple regions and symbols whose document style changes the body.
+_FILL_EXAMPLES = {
+    'agtobar',
+    'amp',
+    'bandpassp',
+    'bandstopp',
+    'bare jumper',
+    'bgenerator',
+    'biast',
+    'camera',
+    'capacitive sensor',
+    'capacitor',
+    'cgenerator',
+    'closed jumper',
+    'cpe',
+    'curved capacitor',
+    'damper',
+    'ecapacitor',
+    'empty Schottky diode',
+    'empty Shockley diode',
+    'empty TVS diode',
+    'empty ZZener diode',
+    'empty Zener diode',
+    'empty agtobar',
+    'empty bidirectionaldiode',
+    'empty diode',
+    'empty gto',
+    'empty gtobar',
+    'empty igct',
+    'empty laser diode',
+    'empty led',
+    'empty photodiode',
+    'empty put',
+    'empty thyristor',
+    'empty triac',
+    'empty tunnel diode',
+    'empty varcap',
+    'feC',
+    'gto',
+    'gtobar',
+    'highpassp',
+    'iamp',
+    'igct',
+    'inerter',
+    'lowpassp',
+    'memristor',
+    'mov',
+    'mstline',
+    'neonlampac',
+    'neonlampcc',
+    'ngenerator',
+    'notchp',
+    'oosourceatrans',
+    'open jumper',
+    'phR',
+    'power',
+    'put',
+    'qgenerator',
+    'register',
+    'relais',
+    'resonantp',
+    'sgeneric',
+    'sinetable',
+    'singeneric',
+    'sinusoidal current source',
+    'sparkgap',
+    'stroke Schottky diode',
+    'stroke TVS diode',
+    'stroke ZZener diode',
+    'stroke Zener diode',
+    'stroke agtobar',
+    'stroke diode',
+    'stroke gto',
+    'stroke gtobar',
+    'stroke igct',
+    'stroke laser diode',
+    'stroke led',
+    'stroke photodiode',
+    'stroke put',
+    'stroke thyristor',
+    'stroke tunnel diode',
+    'stroke varcap',
+    'swr',
+    'thR',
+    'thRn',
+    'thRp',
+    'three-pins jumper',
+    'thyristor',
+    'triac',
+    'trx',
+    'tvset',
+    'vallpass',
+    'vamp',
+    'variable capacitor',
+    'varistor',
+    'vco',
+    'viscoe',
+    'wbulb',
+}
+# The manual lists the fixed European keywords as aliases of its style-dependent examples.
+_EUROPEAN_RESISTORS = {
+    "R": "european resistor",
+    "vR": "variable european resistor",
+    "sR": "european resistive sensor",
+    "pR": "european potentiometer",
+    "ldR": "european light dependent resistor",
+}
+_FILL_EXAMPLES.update(_EUROPEAN_RESISTORS.values())
+
+_PATH_VARIANTS = {
+    "amp": ["boxed"],
+    "iamp": ["boxed"],
+    "vamp": ["boxed"],
+    "vco": ["box"],
+    "sparkgap": ["sparkgap/circle", "sparkgap/circle, sparkgap/dot"],
+    "three-pins jumper": ["tjumper connections=12", "tjumper connections=S1"],
+    **dict.fromkeys(("lowpassp", "highpassp", "bandpassp", "bandstopp",
+                     "resonantp", "notchp"), ["ideal filter"]),
+}
+
 
 # Design note — the manual library bakes **no** grid-alignment scale. Every component
 # is rendered at its true CircuiTikZ size and keeps its natural pin positions (mostly
@@ -81,6 +205,7 @@ _CATEGORY_MAP = {
     "Instruments": "Instruments",
     "Mechanical Analogy": "Mechanical",
     "Miscellaneous bipoles": "Misc",
+    "Miscellaneous bipoles and symbols": "Misc",
     "Multiple wires (buses)": "Buses",
     "Crossings": "Crossings",
     "Arrows": "Arrows",
@@ -238,6 +363,7 @@ def _bipole_entry(c: dict, pool: list[str], conditional: set[str]) -> dict:
         "display_name": sm._demacro(c["description"]) or c["keyword"],
         "category": _category(c), "emission": "path", "tikz": c["keyword"],
         "labels": list(_BIPOLE_LABELS), "pins": pins,
+        "_variant_candidates": _PATH_VARIANTS.get(c["keyword"], []),
     }
 
 
@@ -617,7 +743,7 @@ def _chip_param_entry(c: dict, origin: tuple) -> tuple[dict, dict] | None:
 # document setting (``library.STYLE_AXES``). Only these categories are probed (cheap),
 # and a component that doesn't actually respond stays untagged.
 _STYLE_AXIS_BY_CATEGORY = {
-    "Resistors": "resistors", "Cap/Ind": "inductors", "Transformers": "inductors",
+    "Cap/Ind": "inductors", "Transformers": "inductors",
 }
 
 
@@ -667,12 +793,24 @@ def _render_entry(kind: str, entry: dict, origin: tuple) -> tuple[dict, dict] | 
         if any(v["name"] == name for v in variants):
             continue
         try:
-            vgeom = gen.geometry(entry, option=f", {opt}")
+            if entry["emission"] == "path":
+                vgeom = gen.geometry(entry, suffix=f", {opt}")
+            else:
+                vgeom = gen.geometry(entry, option=f", {opt}")
         except render.RenderError:
             continue
         if vgeom == base_geom:                          # option had no visible effect
             continue
-        variants.append({"name": name, "token": opt, "mode": "option"})
+        variant = {"name": name, "token": opt, "mode": "option"}
+        label = {
+            "sparkgap/circle": "Enclosed",
+            "sparkgap/circle, sparkgap/dot": "Gas filled",
+            "tjumper connections=12": "Connections 12",
+            "tjumper connections=S1": "Connections S1",
+        }.get(opt)
+        if label:
+            variant["label"] = label
+        variants.append(variant)
         # Store under the *sanitized* key the runtime looks up (it maps the
         # variant suffix through ``geometry_key``, spaces → underscores), so a
         # space-token variant (``tr circle``) resolves on the canvas.
@@ -694,9 +832,44 @@ def _render_entry(kind: str, entry: dict, origin: tuple) -> tuple[dict, dict] | 
     merged = {"paths": [p for gm in (base_geom, *extra) for p in gm.get("paths", [])],
               "glyphs": [g for gm in (base_geom, *extra) for g in gm.get("glyphs", [])]}
     de["bbox"] = gen.compute_bbox(merged, origin, entry["pins"])
+    _add_fill_geometry(kind, entry, de, geometry)
+    ta.add_accessories(kind, entry, de, geometry, origin)
     if entry.get("text_anchor"):
         de["text_anchor"] = entry["text_anchor"]
     return de, geometry
+
+
+
+def _add_fill_geometry(kind: str, entry: dict, definition: dict, geometry: dict) -> None:
+    """Record which geometry variants respond to native CircuiTikZ fill."""
+    if kind not in _FILL_EXAMPLES:
+        return
+    key = lib.geometry_key(kind)
+    cases = [("", "", [])]
+    cases.extend(("_" + variant["token"], ", " + variant["token"], [])
+                 for variant in definition.get("variants", []))
+    axis = definition.get("style_axis")
+    if axis:
+        cases.extend((":" + value, "", settings)
+                     for value, settings in lib.STYLE_AXES[axis].items() if settings)
+    supported = []
+    for selector, options, settings in cases:
+        target = geometry.get(lib.geometry_key(key + selector))
+        if target is None:
+            continue
+        styled_entry = {**entry, "ctikzset": [*entry.get("ctikzset", []), *settings]}
+        try:
+            styled = gen.geometry(styled_entry, suffix=options + ", fill=magenta")
+        except render.RenderError:
+            continue
+        if not any(path["fill"] == "#f0f" for path in styled["paths"]):
+            continue
+        for path in styled["paths"]:
+            if path["fill"] == "#f0f":
+                path["fill"] = "user"
+        target["filled_paths"] = styled["paths"]
+        supported.append(selector)
+    definition["fill_variants"] = supported
 
 
 def build(components: list[dict], pool: list[str], conditional: set[str], *,
@@ -840,6 +1013,18 @@ def main() -> int:
     # interleaves them); the palette groups by category, preserving this order.
     comps = [c for c in db["components"].values() if c["keyword"] not in _EXCLUDE]
     comps.sort(key=lambda c: c.get("pos", 0))
+    with_european = []
+    for component in comps:
+        kind = component["keyword"]
+        european = _EUROPEAN_RESISTORS.get(kind)
+        if european:
+            american = european.replace("european", "american")
+            with_european.append({**component, "description": american.capitalize()})
+            if european not in db["components"]:
+                with_european.append({**component, "keyword": european, "description": european.capitalize()})
+        else:
+            with_european.append(component)
+    comps = with_european
     if args.only:
         want = {k.strip() for k in args.only.split(",")}
         comps = [c for c in comps if c["keyword"] in want]
